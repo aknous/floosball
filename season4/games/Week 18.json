@@ -1,0 +1,1258 @@
+{
+    "Game 1": {
+        "score": "30 - 0",
+        "winningTeam": "Tampa Bay Bees",
+        "losingTeam": "Toronto Imaginaries",
+        "Tampa Bay Bees": {
+            "QB": {
+                "name": "Professor TV",
+                "overallRating": 83,
+                "gameStats": {
+                    "passAtt": 37,
+                    "passComp": 22,
+                    "passCompPerc": 59,
+                    "tds": 4,
+                    "ints": 0,
+                    "passYards": 320,
+                    "ypc": 15,
+                    "totalYards": 320
+                }
+            },
+            "RB": {
+                "name": "Hohepa Wikiriwhi",
+                "overallRating": 85,
+                "gameStats": {
+                    "carries": 29,
+                    "receptions": 1,
+                    "passTargets": 1,
+                    "rcvPerc": 100,
+                    "rcvYards": 8,
+                    "runYards": 158,
+                    "ypc": 5,
+                    "tds": 0,
+                    "fumblesLost": 0,
+                    "ypr": 8,
+                    "totalYards": 166
+                }
+            },
+            "WR": {
+                "name": "Vincent Castillo",
+                "overallRating": 81,
+                "gameStats": {
+                    "receptions": 14,
+                    "passTargets": 18,
+                    "rcvPerc": 78,
+                    "rcvYards": 223,
+                    "ypr": 16,
+                    "tds": 3,
+                    "totalYards": 223
+                }
+            },
+            "TE": {
+                "name": "Bernard Sweeney",
+                "overallRating": 88,
+                "gameStats": {
+                    "receptions": 7,
+                    "passTargets": 7,
+                    "rcvPerc": 100,
+                    "rcvYards": 89,
+                    "ypr": 13,
+                    "tds": 1,
+                    "totalYards": 89
+                }
+            },
+            "K": {
+                "name": "Pabllo St. James",
+                "overallRating": 78,
+                "gameStats": {
+                    "fgAtt": 1,
+                    "fgs": 1,
+                    "fgPerc": 100
+                }
+            },
+            "passYards": 320,
+            "rushYards": 158,
+            "totalYards": 478,
+            "overallRating": 82,
+            "offenseRating": 83,
+            "defenseRating": 82,
+            "runDefenseRating": 95,
+            "passDefenseRating": 69
+        },
+        "Toronto Imaginaries": {
+            "QB": {
+                "name": "Darryl Lawson",
+                "overallRating": 86,
+                "gameStats": {
+                    "passAtt": 26,
+                    "passComp": 10,
+                    "passCompPerc": 38,
+                    "tds": 0,
+                    "ints": 1,
+                    "passYards": 82,
+                    "ypc": 8,
+                    "totalYards": 82
+                }
+            },
+            "RB": {
+                "name": "Hatano Akimoro",
+                "overallRating": 79,
+                "gameStats": {
+                    "carries": 14,
+                    "receptions": 2,
+                    "passTargets": 6,
+                    "rcvPerc": 33,
+                    "rcvYards": 12,
+                    "runYards": 24,
+                    "ypc": 2,
+                    "tds": 0,
+                    "fumblesLost": 3,
+                    "ypr": 6,
+                    "totalYards": 36
+                }
+            },
+            "WR": {
+                "name": "Simeon Arronax Tremaine",
+                "overallRating": 82,
+                "gameStats": {
+                    "receptions": 7,
+                    "passTargets": 12,
+                    "rcvPerc": 58,
+                    "rcvYards": 55,
+                    "ypr": 8,
+                    "tds": 0,
+                    "totalYards": 55
+                }
+            },
+            "TE": {
+                "name": "Maki Sada",
+                "overallRating": 80,
+                "gameStats": {
+                    "receptions": 1,
+                    "passTargets": 4,
+                    "rcvPerc": 25,
+                    "rcvYards": 15,
+                    "ypr": 15,
+                    "tds": 0,
+                    "totalYards": 15
+                }
+            },
+            "K": {
+                "name": "Shinobu Kane",
+                "overallRating": 83,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 82,
+            "rushYards": 24,
+            "totalYards": 106,
+            "overallRating": 75,
+            "offenseRating": 82,
+            "defenseRating": 71,
+            "runDefenseRating": 69,
+            "passDefenseRating": 73
+        }
+    },
+    "Game 2": {
+        "score": "14 - 9",
+        "winningTeam": "Phoenix Dry Heat",
+        "losingTeam": "Pittsburgh Melons",
+        "Phoenix Dry Heat": {
+            "QB": {
+                "name": "Fionn Kerrane",
+                "overallRating": 81,
+                "gameStats": {
+                    "passAtt": 27,
+                    "passComp": 15,
+                    "passCompPerc": 56,
+                    "tds": 1,
+                    "ints": 0,
+                    "passYards": 174,
+                    "ypc": 12,
+                    "totalYards": 174
+                }
+            },
+            "RB": {
+                "name": "An Soo Hoo",
+                "overallRating": 74,
+                "gameStats": {
+                    "carries": 19,
+                    "receptions": 2,
+                    "passTargets": 4,
+                    "rcvPerc": 50,
+                    "rcvYards": 16,
+                    "runYards": 64,
+                    "ypc": 3,
+                    "tds": 1,
+                    "fumblesLost": 2,
+                    "ypr": 8,
+                    "totalYards": 80
+                }
+            },
+            "WR": {
+                "name": "Vivian Leblanc",
+                "overallRating": 78,
+                "gameStats": {
+                    "receptions": 9,
+                    "passTargets": 11,
+                    "rcvPerc": 82,
+                    "rcvYards": 107,
+                    "ypr": 12,
+                    "tds": 0,
+                    "totalYards": 107
+                }
+            },
+            "TE": {
+                "name": "Jurj Clemmers",
+                "overallRating": 83,
+                "gameStats": {
+                    "receptions": 4,
+                    "passTargets": 4,
+                    "rcvPerc": 100,
+                    "rcvYards": 51,
+                    "ypr": 13,
+                    "tds": 1,
+                    "totalYards": 51
+                }
+            },
+            "K": {
+                "name": "Artemis Cruz",
+                "overallRating": 81,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 174,
+            "rushYards": 64,
+            "totalYards": 238,
+            "overallRating": 80,
+            "offenseRating": 79,
+            "defenseRating": 80,
+            "runDefenseRating": 75,
+            "passDefenseRating": 86
+        },
+        "Pittsburgh Melons": {
+            "QB": {
+                "name": "Undead Emperor",
+                "overallRating": 79,
+                "gameStats": {
+                    "passAtt": 37,
+                    "passComp": 13,
+                    "passCompPerc": 35,
+                    "tds": 1,
+                    "ints": 0,
+                    "passYards": 159,
+                    "ypc": 12,
+                    "totalYards": 159
+                }
+            },
+            "RB": {
+                "name": "Roid Drill",
+                "overallRating": 84,
+                "gameStats": {
+                    "carries": 22,
+                    "receptions": 3,
+                    "passTargets": 5,
+                    "rcvPerc": 60,
+                    "rcvYards": 25,
+                    "runYards": 100,
+                    "ypc": 5,
+                    "tds": 0,
+                    "fumblesLost": 0,
+                    "ypr": 8,
+                    "totalYards": 125
+                }
+            },
+            "WR": {
+                "name": "Percy 'the Kid' Case",
+                "overallRating": 81,
+                "gameStats": {
+                    "receptions": 4,
+                    "passTargets": 9,
+                    "rcvPerc": 44,
+                    "rcvYards": 45,
+                    "ypr": 11,
+                    "tds": 0,
+                    "totalYards": 45
+                }
+            },
+            "TE": {
+                "name": "Chadwick Pena",
+                "overallRating": 85,
+                "gameStats": {
+                    "receptions": 6,
+                    "passTargets": 7,
+                    "rcvPerc": 86,
+                    "rcvYards": 89,
+                    "ypr": 15,
+                    "tds": 1,
+                    "totalYards": 89
+                }
+            },
+            "K": {
+                "name": "Griffin Star",
+                "overallRating": 78,
+                "gameStats": {
+                    "fgAtt": 2,
+                    "fgs": 1,
+                    "fgPerc": 50
+                }
+            },
+            "passYards": 159,
+            "rushYards": 100,
+            "totalYards": 259,
+            "overallRating": 79,
+            "offenseRating": 81,
+            "defenseRating": 78,
+            "runDefenseRating": 81,
+            "passDefenseRating": 74
+        }
+    },
+    "Game 3": {
+        "score": "28 - 20",
+        "winningTeam": "Miami Jetskis",
+        "losingTeam": "Washington Belts",
+        "Miami Jetskis": {
+            "QB": {
+                "name": "Wolfgang Sykes",
+                "overallRating": 83,
+                "gameStats": {
+                    "passAtt": 30,
+                    "passComp": 17,
+                    "passCompPerc": 57,
+                    "tds": 2,
+                    "ints": 0,
+                    "passYards": 225,
+                    "ypc": 13,
+                    "totalYards": 225
+                }
+            },
+            "RB": {
+                "name": "Misha Duskin",
+                "overallRating": 76,
+                "gameStats": {
+                    "carries": 25,
+                    "receptions": 1,
+                    "passTargets": 3,
+                    "rcvPerc": 33,
+                    "rcvYards": 6,
+                    "runYards": 157,
+                    "ypc": 6,
+                    "tds": 2,
+                    "fumblesLost": 0,
+                    "ypr": 6,
+                    "totalYards": 163
+                }
+            },
+            "WR": {
+                "name": "Donovan Santos",
+                "overallRating": 78,
+                "gameStats": {
+                    "receptions": 14,
+                    "passTargets": 21,
+                    "rcvPerc": 67,
+                    "rcvYards": 142,
+                    "ypr": 10,
+                    "tds": 2,
+                    "totalYards": 142
+                }
+            },
+            "TE": {
+                "name": "Ben 'Gamble' Hawkins",
+                "overallRating": 87,
+                "gameStats": {
+                    "receptions": 2,
+                    "passTargets": 2,
+                    "rcvPerc": 100,
+                    "rcvYards": 77,
+                    "ypr": 38,
+                    "tds": 0,
+                    "totalYards": 77
+                }
+            },
+            "K": {
+                "name": "Sir Sturdy",
+                "overallRating": 82,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 225,
+            "rushYards": 157,
+            "totalYards": 382,
+            "overallRating": 84,
+            "offenseRating": 81,
+            "defenseRating": 86,
+            "runDefenseRating": 82,
+            "passDefenseRating": 90
+        },
+        "Washington Belts": {
+            "QB": {
+                "name": "Si Jae-Sun",
+                "overallRating": 86,
+                "gameStats": {
+                    "passAtt": 33,
+                    "passComp": 21,
+                    "passCompPerc": 64,
+                    "tds": 3,
+                    "ints": 0,
+                    "passYards": 283,
+                    "ypc": 13,
+                    "totalYards": 283
+                }
+            },
+            "RB": {
+                "name": "Spalding Colby",
+                "overallRating": 76,
+                "gameStats": {
+                    "carries": 31,
+                    "receptions": 6,
+                    "passTargets": 10,
+                    "rcvPerc": 60,
+                    "rcvYards": 47,
+                    "runYards": 147,
+                    "ypc": 5,
+                    "tds": 1,
+                    "fumblesLost": 4,
+                    "ypr": 8,
+                    "totalYards": 194
+                }
+            },
+            "WR": {
+                "name": "Rusty Mateo",
+                "overallRating": 87,
+                "gameStats": {
+                    "receptions": 11,
+                    "passTargets": 12,
+                    "rcvPerc": 92,
+                    "rcvYards": 183,
+                    "ypr": 17,
+                    "tds": 2,
+                    "totalYards": 183
+                }
+            },
+            "TE": {
+                "name": "Idina Charlotte Ramsbottom",
+                "overallRating": 90,
+                "gameStats": {
+                    "receptions": 4,
+                    "passTargets": 4,
+                    "rcvPerc": 100,
+                    "rcvYards": 53,
+                    "ypr": 13,
+                    "tds": 0,
+                    "totalYards": 53
+                }
+            },
+            "K": {
+                "name": "Collin Carr",
+                "overallRating": 80,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 283,
+            "rushYards": 147,
+            "totalYards": 430,
+            "overallRating": 83,
+            "offenseRating": 84,
+            "defenseRating": 82,
+            "runDefenseRating": 77,
+            "passDefenseRating": 88
+        }
+    },
+    "Game 4": {
+        "score": "7 - 0",
+        "winningTeam": "Las Vegas Residencies",
+        "losingTeam": "Boston Apples",
+        "Las Vegas Residencies": {
+            "QB": {
+                "name": "Lin Meng",
+                "overallRating": 87,
+                "gameStats": {
+                    "passAtt": 51,
+                    "passComp": 21,
+                    "passCompPerc": 41,
+                    "tds": 0,
+                    "ints": 0,
+                    "passYards": 209,
+                    "ypc": 10,
+                    "totalYards": 209
+                }
+            },
+            "RB": {
+                "name": "Alfie MacGilloway",
+                "overallRating": 77,
+                "gameStats": {
+                    "carries": 27,
+                    "receptions": 3,
+                    "passTargets": 4,
+                    "rcvPerc": 75,
+                    "rcvYards": 29,
+                    "runYards": 172,
+                    "ypc": 6,
+                    "tds": 1,
+                    "fumblesLost": 1,
+                    "ypr": 10,
+                    "totalYards": 201
+                }
+            },
+            "WR": {
+                "name": "Mubarak el-Basa",
+                "overallRating": 74,
+                "gameStats": {
+                    "receptions": 15,
+                    "passTargets": 24,
+                    "rcvPerc": 62,
+                    "rcvYards": 150,
+                    "ypr": 10,
+                    "tds": 0,
+                    "totalYards": 150
+                }
+            },
+            "TE": {
+                "name": "Tender Jordan",
+                "overallRating": 83,
+                "gameStats": {
+                    "receptions": 3,
+                    "passTargets": 7,
+                    "rcvPerc": 43,
+                    "rcvYards": 30,
+                    "ypr": 10,
+                    "tds": 0,
+                    "totalYards": 30
+                }
+            },
+            "K": {
+                "name": "Shen Jeung",
+                "overallRating": 81,
+                "gameStats": {
+                    "fgAtt": 1,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 209,
+            "rushYards": 172,
+            "totalYards": 381,
+            "overallRating": 85,
+            "offenseRating": 80,
+            "defenseRating": 88,
+            "runDefenseRating": 90,
+            "passDefenseRating": 85
+        },
+        "Boston Apples": {
+            "QB": {
+                "name": "Ignacious Pinkerton",
+                "overallRating": 91,
+                "gameStats": {
+                    "passAtt": 39,
+                    "passComp": 20,
+                    "passCompPerc": 51,
+                    "tds": 0,
+                    "ints": 1,
+                    "passYards": 253,
+                    "ypc": 13,
+                    "totalYards": 253
+                }
+            },
+            "RB": {
+                "name": "Avie Gilat",
+                "overallRating": 79,
+                "gameStats": {
+                    "carries": 25,
+                    "receptions": 5,
+                    "passTargets": 6,
+                    "rcvPerc": 83,
+                    "rcvYards": 30,
+                    "runYards": 48,
+                    "ypc": 2,
+                    "tds": 0,
+                    "fumblesLost": 4,
+                    "ypr": 6,
+                    "totalYards": 78
+                }
+            },
+            "WR": {
+                "name": "Korthjar Oath-Singer",
+                "overallRating": 79,
+                "gameStats": {
+                    "receptions": 9,
+                    "passTargets": 16,
+                    "rcvPerc": 56,
+                    "rcvYards": 93,
+                    "ypr": 10,
+                    "tds": 0,
+                    "totalYards": 93
+                }
+            },
+            "TE": {
+                "name": "Karla Berrymore",
+                "overallRating": 90,
+                "gameStats": {
+                    "receptions": 6,
+                    "passTargets": 8,
+                    "rcvPerc": 75,
+                    "rcvYards": 130,
+                    "ypr": 22,
+                    "tds": 0,
+                    "totalYards": 130
+                }
+            },
+            "K": {
+                "name": "Kayden O'Boland",
+                "overallRating": 92,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 253,
+            "rushYards": 48,
+            "totalYards": 301,
+            "overallRating": 83,
+            "offenseRating": 86,
+            "defenseRating": 81,
+            "runDefenseRating": 74,
+            "passDefenseRating": 88
+        }
+    },
+    "Game 5": {
+        "score": "14 - 10",
+        "winningTeam": "Denver Northern Lights",
+        "losingTeam": "Seattle Cranes",
+        "Denver Northern Lights": {
+            "QB": {
+                "name": "Thibaut Swathi",
+                "overallRating": 86,
+                "gameStats": {
+                    "passAtt": 26,
+                    "passComp": 12,
+                    "passCompPerc": 46,
+                    "tds": 2,
+                    "ints": 0,
+                    "passYards": 169,
+                    "ypc": 14,
+                    "totalYards": 169
+                }
+            },
+            "RB": {
+                "name": "Khaled Essa",
+                "overallRating": 82,
+                "gameStats": {
+                    "carries": 30,
+                    "receptions": 3,
+                    "passTargets": 5,
+                    "rcvPerc": 60,
+                    "rcvYards": 30,
+                    "runYards": 148,
+                    "ypc": 5,
+                    "tds": 1,
+                    "fumblesLost": 0,
+                    "ypr": 10,
+                    "totalYards": 178
+                }
+            },
+            "WR": {
+                "name": "Tama Hamutana",
+                "overallRating": 78,
+                "gameStats": {
+                    "receptions": 7,
+                    "passTargets": 11,
+                    "rcvPerc": 64,
+                    "rcvYards": 116,
+                    "ypr": 17,
+                    "tds": 1,
+                    "totalYards": 116
+                }
+            },
+            "TE": {
+                "name": "Xue Tam",
+                "overallRating": 90,
+                "gameStats": {
+                    "receptions": 2,
+                    "passTargets": 4,
+                    "rcvPerc": 50,
+                    "rcvYards": 23,
+                    "ypr": 12,
+                    "tds": 0,
+                    "totalYards": 23
+                }
+            },
+            "K": {
+                "name": "Gootsy Porkins",
+                "overallRating": 78,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 169,
+            "rushYards": 148,
+            "totalYards": 317,
+            "overallRating": 88,
+            "offenseRating": 83,
+            "defenseRating": 90,
+            "runDefenseRating": 97,
+            "passDefenseRating": 84
+        },
+        "Seattle Cranes": {
+            "QB": {
+                "name": "Old Beetle",
+                "overallRating": 85,
+                "gameStats": {
+                    "passAtt": 32,
+                    "passComp": 17,
+                    "passCompPerc": 53,
+                    "tds": 1,
+                    "ints": 0,
+                    "passYards": 169,
+                    "ypc": 10,
+                    "totalYards": 169
+                }
+            },
+            "RB": {
+                "name": "Fenwick Keetes",
+                "overallRating": 89,
+                "gameStats": {
+                    "carries": 21,
+                    "receptions": 1,
+                    "passTargets": 1,
+                    "rcvPerc": 100,
+                    "rcvYards": 7,
+                    "runYards": 60,
+                    "ypc": 3,
+                    "tds": 0,
+                    "fumblesLost": 0,
+                    "ypr": 7,
+                    "totalYards": 67
+                }
+            },
+            "WR": {
+                "name": "Ben Wonder",
+                "overallRating": 76,
+                "gameStats": {
+                    "receptions": 12,
+                    "passTargets": 16,
+                    "rcvPerc": 75,
+                    "rcvYards": 125,
+                    "ypr": 10,
+                    "tds": 0,
+                    "totalYards": 125
+                }
+            },
+            "TE": {
+                "name": "Yulia Popoff",
+                "overallRating": 85,
+                "gameStats": {
+                    "receptions": 4,
+                    "passTargets": 4,
+                    "rcvPerc": 100,
+                    "rcvYards": 37,
+                    "ypr": 9,
+                    "tds": 1,
+                    "totalYards": 37
+                }
+            },
+            "K": {
+                "name": "Heavenly Sparrow",
+                "overallRating": 79,
+                "gameStats": {
+                    "fgAtt": 1,
+                    "fgs": 1,
+                    "fgPerc": 100
+                }
+            },
+            "passYards": 169,
+            "rushYards": 60,
+            "totalYards": 229,
+            "overallRating": 76,
+            "offenseRating": 83,
+            "defenseRating": 72,
+            "runDefenseRating": 71,
+            "passDefenseRating": 74
+        }
+    },
+    "Game 6": {
+        "score": "14 - 7",
+        "winningTeam": "New York Buildings",
+        "losingTeam": "Philadelphia Broads",
+        "New York Buildings": {
+            "QB": {
+                "name": "M\u00e9lodie Mertens",
+                "overallRating": 80,
+                "gameStats": {
+                    "passAtt": 27,
+                    "passComp": 15,
+                    "passCompPerc": 56,
+                    "tds": 2,
+                    "ints": 1,
+                    "passYards": 148,
+                    "ypc": 10,
+                    "totalYards": 148
+                }
+            },
+            "RB": {
+                "name": "Squids Johnson",
+                "overallRating": 85,
+                "gameStats": {
+                    "carries": 34,
+                    "receptions": 2,
+                    "passTargets": 3,
+                    "rcvPerc": 67,
+                    "rcvYards": 40,
+                    "runYards": 194,
+                    "ypc": 6,
+                    "tds": 0,
+                    "fumblesLost": 0,
+                    "ypr": 20,
+                    "totalYards": 234
+                }
+            },
+            "WR": {
+                "name": "Sebasti\u00e1n Molina",
+                "overallRating": 74,
+                "gameStats": {
+                    "receptions": 12,
+                    "passTargets": 15,
+                    "rcvPerc": 80,
+                    "rcvYards": 106,
+                    "ypr": 9,
+                    "tds": 2,
+                    "totalYards": 106
+                }
+            },
+            "TE": {
+                "name": "Parisuz Khosa",
+                "overallRating": 81,
+                "gameStats": {
+                    "receptions": 1,
+                    "passTargets": 1,
+                    "rcvPerc": 100,
+                    "rcvYards": 2,
+                    "ypr": 2,
+                    "tds": 0,
+                    "totalYards": 2
+                }
+            },
+            "K": {
+                "name": "Nicholai Shadowsoul",
+                "overallRating": 79,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 148,
+            "rushYards": 194,
+            "totalYards": 342,
+            "overallRating": 86,
+            "offenseRating": 80,
+            "defenseRating": 89,
+            "runDefenseRating": 86,
+            "passDefenseRating": 92
+        },
+        "Philadelphia Broads": {
+            "QB": {
+                "name": "Groovy Cat",
+                "overallRating": 82,
+                "gameStats": {
+                    "passAtt": 35,
+                    "passComp": 20,
+                    "passCompPerc": 57,
+                    "tds": 1,
+                    "ints": 1,
+                    "passYards": 208,
+                    "ypc": 10,
+                    "totalYards": 208
+                }
+            },
+            "RB": {
+                "name": "Pearl Miller",
+                "overallRating": 78,
+                "gameStats": {
+                    "carries": 28,
+                    "receptions": 1,
+                    "passTargets": 2,
+                    "rcvPerc": 50,
+                    "rcvYards": 4,
+                    "runYards": 76,
+                    "ypc": 3,
+                    "tds": 0,
+                    "fumblesLost": 1,
+                    "ypr": 4,
+                    "totalYards": 80
+                }
+            },
+            "WR": {
+                "name": "Nabeel Mahar",
+                "overallRating": 85,
+                "gameStats": {
+                    "receptions": 12,
+                    "passTargets": 18,
+                    "rcvPerc": 67,
+                    "rcvYards": 143,
+                    "ypr": 12,
+                    "tds": 0,
+                    "totalYards": 143
+                }
+            },
+            "TE": {
+                "name": "Hershel Pruitt",
+                "overallRating": 86,
+                "gameStats": {
+                    "receptions": 7,
+                    "passTargets": 8,
+                    "rcvPerc": 88,
+                    "rcvYards": 61,
+                    "ypr": 9,
+                    "tds": 1,
+                    "totalYards": 61
+                }
+            },
+            "K": {
+                "name": "Osman Awad",
+                "overallRating": 83,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 208,
+            "rushYards": 76,
+            "totalYards": 284,
+            "overallRating": 83,
+            "offenseRating": 83,
+            "defenseRating": 84,
+            "runDefenseRating": 69,
+            "passDefenseRating": 98
+        }
+    },
+    "Game 7": {
+        "score": "7 - 0",
+        "winningTeam": "Cleveland Rocks",
+        "losingTeam": "Baltimore Oldbays",
+        "Cleveland Rocks": {
+            "QB": {
+                "name": "Cornbread Tippins",
+                "overallRating": 82,
+                "gameStats": {
+                    "passAtt": 35,
+                    "passComp": 12,
+                    "passCompPerc": 34,
+                    "tds": 1,
+                    "ints": 0,
+                    "passYards": 141,
+                    "ypc": 12,
+                    "totalYards": 141
+                }
+            },
+            "RB": {
+                "name": "J\u00e9r\u00e9mie De Beys",
+                "overallRating": 85,
+                "gameStats": {
+                    "carries": 29,
+                    "receptions": 2,
+                    "passTargets": 3,
+                    "rcvPerc": 67,
+                    "rcvYards": 21,
+                    "runYards": 123,
+                    "ypc": 4,
+                    "tds": 0,
+                    "fumblesLost": 0,
+                    "ypr": 10,
+                    "totalYards": 144
+                }
+            },
+            "WR": {
+                "name": "Florence Cynthia Dawkins",
+                "overallRating": 83,
+                "gameStats": {
+                    "receptions": 9,
+                    "passTargets": 16,
+                    "rcvPerc": 56,
+                    "rcvYards": 119,
+                    "ypr": 13,
+                    "tds": 1,
+                    "totalYards": 119
+                }
+            },
+            "TE": {
+                "name": "Chicago Houston",
+                "overallRating": 74,
+                "gameStats": {
+                    "receptions": 1,
+                    "passTargets": 4,
+                    "rcvPerc": 25,
+                    "rcvYards": 1,
+                    "ypr": 1,
+                    "tds": 0,
+                    "totalYards": 1
+                }
+            },
+            "K": {
+                "name": "Malachi Brock",
+                "overallRating": 82,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 141,
+            "rushYards": 123,
+            "totalYards": 264,
+            "overallRating": 86,
+            "offenseRating": 81,
+            "defenseRating": 88,
+            "runDefenseRating": 96,
+            "passDefenseRating": 80
+        },
+        "Baltimore Oldbays": {
+            "QB": {
+                "name": "Worms Winterkorn",
+                "overallRating": 77,
+                "gameStats": {
+                    "passAtt": 26,
+                    "passComp": 9,
+                    "passCompPerc": 35,
+                    "tds": 0,
+                    "ints": 0,
+                    "passYards": 77,
+                    "ypc": 9,
+                    "totalYards": 77
+                }
+            },
+            "RB": {
+                "name": "Junior Man",
+                "overallRating": 76,
+                "gameStats": {
+                    "carries": 14,
+                    "receptions": 2,
+                    "passTargets": 4,
+                    "rcvPerc": 50,
+                    "rcvYards": 19,
+                    "runYards": 30,
+                    "ypc": 2,
+                    "tds": 0,
+                    "fumblesLost": 2,
+                    "ypr": 10,
+                    "totalYards": 49
+                }
+            },
+            "WR": {
+                "name": "Ragunath Jogalekar",
+                "overallRating": 82,
+                "gameStats": {
+                    "receptions": 5,
+                    "passTargets": 11,
+                    "rcvPerc": 45,
+                    "rcvYards": 33,
+                    "ypr": 7,
+                    "tds": 0,
+                    "totalYards": 33
+                }
+            },
+            "TE": {
+                "name": "Simmonds Teuteberg",
+                "overallRating": 88,
+                "gameStats": {
+                    "receptions": 2,
+                    "passTargets": 3,
+                    "rcvPerc": 67,
+                    "rcvYards": 25,
+                    "ypr": 12,
+                    "tds": 0,
+                    "totalYards": 25
+                }
+            },
+            "K": {
+                "name": "Juana Palmer",
+                "overallRating": 78,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 77,
+            "rushYards": 30,
+            "totalYards": 107,
+            "overallRating": 84,
+            "offenseRating": 80,
+            "defenseRating": 86,
+            "runDefenseRating": 75,
+            "passDefenseRating": 97
+        }
+    },
+    "Game 8": {
+        "score": "17 - 14",
+        "winningTeam": "Chicago Beans",
+        "losingTeam": "San Diego Sand Dollars",
+        "Chicago Beans": {
+            "QB": {
+                "name": "Coco Mattel",
+                "overallRating": 89,
+                "gameStats": {
+                    "passAtt": 25,
+                    "passComp": 14,
+                    "passCompPerc": 56,
+                    "tds": 1,
+                    "ints": 0,
+                    "passYards": 148,
+                    "ypc": 11,
+                    "totalYards": 148
+                }
+            },
+            "RB": {
+                "name": "Hazelmere Drach",
+                "overallRating": 82,
+                "gameStats": {
+                    "carries": 27,
+                    "receptions": 2,
+                    "passTargets": 3,
+                    "rcvPerc": 67,
+                    "rcvYards": 26,
+                    "runYards": 178,
+                    "ypc": 7,
+                    "tds": 1,
+                    "fumblesLost": 0,
+                    "ypr": 13,
+                    "totalYards": 204
+                }
+            },
+            "WR": {
+                "name": "Junior Gravy",
+                "overallRating": 76,
+                "gameStats": {
+                    "receptions": 11,
+                    "passTargets": 12,
+                    "rcvPerc": 92,
+                    "rcvYards": 107,
+                    "ypr": 10,
+                    "tds": 1,
+                    "totalYards": 107
+                }
+            },
+            "TE": {
+                "name": "Lieze Peleriaux",
+                "overallRating": 87,
+                "gameStats": {
+                    "receptions": 1,
+                    "passTargets": 3,
+                    "rcvPerc": 33,
+                    "rcvYards": 15,
+                    "ypr": 15,
+                    "tds": 0,
+                    "totalYards": 15
+                }
+            },
+            "K": {
+                "name": "Amelia Killoran",
+                "overallRating": 82,
+                "gameStats": {
+                    "fgAtt": 1,
+                    "fgs": 1,
+                    "fgPerc": 100
+                }
+            },
+            "passYards": 148,
+            "rushYards": 178,
+            "totalYards": 326,
+            "overallRating": 79,
+            "offenseRating": 83,
+            "defenseRating": 77,
+            "runDefenseRating": 75,
+            "passDefenseRating": 79
+        },
+        "San Diego Sand Dollars": {
+            "QB": {
+                "name": "Trowbridge Langdon",
+                "overallRating": 79,
+                "gameStats": {
+                    "passAtt": 31,
+                    "passComp": 19,
+                    "passCompPerc": 61,
+                    "tds": 2,
+                    "ints": 0,
+                    "passYards": 240,
+                    "ypc": 13,
+                    "totalYards": 240
+                }
+            },
+            "RB": {
+                "name": "Golden Prince",
+                "overallRating": 76,
+                "gameStats": {
+                    "carries": 32,
+                    "receptions": 2,
+                    "passTargets": 2,
+                    "rcvPerc": 100,
+                    "rcvYards": 4,
+                    "runYards": 127,
+                    "ypc": 4,
+                    "tds": 0,
+                    "fumblesLost": 1,
+                    "ypr": 2,
+                    "totalYards": 131
+                }
+            },
+            "WR": {
+                "name": "Manuela Huerta",
+                "overallRating": 87,
+                "gameStats": {
+                    "receptions": 14,
+                    "passTargets": 17,
+                    "rcvPerc": 82,
+                    "rcvYards": 203,
+                    "ypr": 14,
+                    "tds": 1,
+                    "totalYards": 203
+                }
+            },
+            "TE": {
+                "name": "Callum Laverty",
+                "overallRating": 82,
+                "gameStats": {
+                    "receptions": 3,
+                    "passTargets": 5,
+                    "rcvPerc": 60,
+                    "rcvYards": 33,
+                    "ypr": 11,
+                    "tds": 1,
+                    "totalYards": 33
+                }
+            },
+            "K": {
+                "name": "Chi Chi Eichelberger",
+                "overallRating": 86,
+                "gameStats": {
+                    "fgAtt": 0,
+                    "fgs": 0,
+                    "fgPerc": 0
+                }
+            },
+            "passYards": 240,
+            "rushYards": 127,
+            "totalYards": 367,
+            "overallRating": 81,
+            "offenseRating": 82,
+            "defenseRating": 80,
+            "runDefenseRating": 80,
+            "passDefenseRating": 81
+        }
+    }
+}

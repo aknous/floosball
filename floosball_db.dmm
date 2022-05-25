@@ -1,0 +1,1616 @@
+{
+	"tables": {
+		"d56c47be-f4a4-4da5-a40e-1a6c98fb0e9c": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "d56c47be-f4a4-4da5-a40e-1a6c98fb0e9c",
+			"initautoinc": 1,
+			"name": "division",
+			"relations": [
+				"8f83cfae-59ad-44fb-8018-7c60391be66d"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "56e140ca-83ed-42fe-8dac-65a3b46c6740",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "",
+					"collation": "",
+					"comment": "",
+					"datatype": "VARCHAR",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "cd92de32-762c-4f57-868d-0c8a9cf2991f",
+					"list": false,
+					"name": "name",
+					"nn": true,
+					"param": "50",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "01553a27-014b-4c88-9618-9605577ecf09",
+					"list": false,
+					"name": "standings",
+					"nn": true,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "56e140ca-83ed-42fe-8dac-65a3b46c6740",
+							"id": "df8e5efb-1179-4ad0-92c0-05e03e820b60"
+						}
+					],
+					"id": "18e2719d-f5f5-481c-8813-87cb610df115",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		},
+		"0b89c2f6-009b-440b-81f4-3bc928bf5bd8": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "0b89c2f6-009b-440b-81f4-3bc928bf5bd8",
+			"initautoinc": 1,
+			"name": "game",
+			"relations": [
+				"09a2aaec-ebfa-4830-96bd-90932d04a78f",
+				"6fcd9506-c522-46dc-b704-ad25bf7a9514",
+				"6bd828d1-1b2e-46ed-bd05-78f2264faa64"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "22b10f9a-501e-4f7f-8d25-244a4fa4a28a",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "f0f2aeb0-5a57-417c-83c6-172a2ef220eb",
+					"list": false,
+					"name": "season_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "season",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "3b902c82-0c8c-4f3d-86a7-98c77349c1d9",
+					"list": false,
+					"name": "week_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "week",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "8669c530-57d9-4f92-95e7-26081b36a291",
+					"list": false,
+					"name": "score",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "73f5e040-ed28-4d93-9288-4fa1a30f7a31",
+					"list": false,
+					"name": "homeTeam_data",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "169c85a5-e674-4a20-8905-9a6ce10ed62b",
+					"list": false,
+					"name": "awayTeam_Data",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [
+				{
+					"cols": [
+						{
+							"colid": "f0f2aeb0-5a57-417c-83c6-172a2ef220eb",
+							"id": "fbeeabba-9513-4d4b-b42a-261560ef3ec6"
+						}
+					],
+					"fulltext": false,
+					"id": "13d6e121-6cf4-4888-ab1c-5886bfb506ff",
+					"name": "season_game",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				},
+				{
+					"cols": [
+						{
+							"colid": "3b902c82-0c8c-4f3d-86a7-98c77349c1d9",
+							"id": "455b62a7-1c9f-41fe-b906-15ed502b3620"
+						}
+					],
+					"fulltext": false,
+					"id": "22a1f986-df63-45cb-9cbd-cb1262a54eec",
+					"name": "week_game",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				}
+			],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "22b10f9a-501e-4f7f-8d25-244a4fa4a28a",
+							"id": "c5d54446-8e3c-46d6-aa13-221c29f9b333"
+						}
+					],
+					"id": "c80d9b07-433c-4217-9caf-8901fd0f7ccb",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		},
+		"0fa2e6de-0f63-4c97-9f2b-f506783ffd3f": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "0fa2e6de-0f63-4c97-9f2b-f506783ffd3f",
+			"initautoinc": 1,
+			"name": "play",
+			"relations": [
+				"6bd828d1-1b2e-46ed-bd05-78f2264faa64",
+				"c9eee5c2-8046-4010-ac38-e270c0cfa934",
+				"3039e20b-5d02-4027-8727-5d25071faef1",
+				"35b9dac7-b655-4473-a9c5-2ae290ba5e8d"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "0244a870-1644-4941-ba80-39d06584171f",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "c615fc57-23c1-4dd2-b484-28d63ddecca3",
+					"list": false,
+					"name": "offense_team_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "team",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "9d12e4ce-9d01-4524-9a61-176006330857",
+					"list": false,
+					"name": "game_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "game",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "c07ec586-3f7f-45bc-974e-76ffe1758c54",
+					"list": false,
+					"name": "week_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "week",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "0e85f2d6-ac66-44c8-984a-1b97fe3d82b7",
+					"list": false,
+					"name": "season_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "season",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "c838fb4d-a9b0-4df5-ab9b-6b9c86dc0436",
+					"list": false,
+					"name": "play_data",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [
+				{
+					"cols": [
+						{
+							"colid": "9d12e4ce-9d01-4524-9a61-176006330857",
+							"id": "1efc62ff-8c20-4bea-8704-6d3a493bf472"
+						}
+					],
+					"fulltext": false,
+					"id": "d3e30bf7-2f4f-40bc-9dd8-24cd80feea5f",
+					"name": "game_play",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				},
+				{
+					"cols": [
+						{
+							"colid": "c07ec586-3f7f-45bc-974e-76ffe1758c54",
+							"id": "89fba15f-3fd6-4dfe-83e1-e424501607a5"
+						}
+					],
+					"fulltext": false,
+					"id": "7eafcd94-e727-4d4f-a49f-b96e901901b8",
+					"name": "week_play",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				},
+				{
+					"cols": [
+						{
+							"colid": "0e85f2d6-ac66-44c8-984a-1b97fe3d82b7",
+							"id": "3844d8c7-ba7d-4337-95ef-e61374257b88"
+						}
+					],
+					"fulltext": false,
+					"id": "4784899b-798c-4be4-b82e-14551b7fedd4",
+					"name": "season_play",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				},
+				{
+					"cols": [
+						{
+							"colid": "c615fc57-23c1-4dd2-b484-28d63ddecca3",
+							"id": "370a1eac-864e-4840-ad3c-f6fda0ab28a5"
+						}
+					],
+					"fulltext": false,
+					"id": "cadd4a09-f1de-4314-9b07-a7bc025f1efa",
+					"name": "team_play",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				}
+			],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "0244a870-1644-4941-ba80-39d06584171f",
+							"id": "58c4ba4c-e573-479b-82b7-58ee5d1abc87"
+						}
+					],
+					"id": "fce37aa2-5390-4979-a393-2ffe256fa844",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		},
+		"600bced3-a7a2-4566-b072-77afaf98555f": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "600bced3-a7a2-4566-b072-77afaf98555f",
+			"initautoinc": 2,
+			"name": "player",
+			"relations": [
+				"392ea8a2-f461-4ff5-b756-62a9d0da948f"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "f28aa2f1-fa62-4052-95ee-8a764ad6d89b",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "",
+					"collation": "",
+					"comment": "",
+					"datatype": "VARCHAR",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "96b74d09-0c4d-45de-b976-84d902dbea12",
+					"list": false,
+					"name": "name",
+					"nn": true,
+					"param": "50",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "",
+					"collation": "",
+					"comment": "",
+					"datatype": "VARCHAR",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "59daf0eb-1988-4385-b3e9-e50aa6ef8586",
+					"list": false,
+					"name": "position",
+					"nn": true,
+					"param": "10",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "9f8b3d10-59a6-46df-b594-edbef47c90d2",
+					"list": false,
+					"name": "team_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "team",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "704c60d3-cd4e-460b-a850-3a6af8ca6941",
+					"list": false,
+					"name": "seasonsPlayed",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "648df440-b1a4-4607-a056-401e42a6ec65",
+					"list": false,
+					"name": "attributes",
+					"nn": true,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "3b204634-e258-4b5a-8263-26be81cc18ee",
+					"list": false,
+					"name": "stats_game",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "a206afd5-a615-4fea-a25a-841d65884b12",
+					"list": false,
+					"name": "stats_season",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "9a3f8be7-e68e-49d3-b02c-c8ae5470d37b",
+					"list": false,
+					"name": "stats_career",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [
+				{
+					"cols": [
+						{
+							"colid": "9f8b3d10-59a6-46df-b594-edbef47c90d2",
+							"id": "a0b30a92-ca7c-48ca-814d-4decac1f6076"
+						}
+					],
+					"fulltext": false,
+					"id": "25492e1f-14d3-404f-9b9e-4c9fb0ba7835",
+					"name": "team_player",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				}
+			],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "f28aa2f1-fa62-4052-95ee-8a764ad6d89b",
+							"id": "521508ac-099b-433e-b135-3bbba4d5d31e"
+						}
+					],
+					"id": "8621d2c1-791f-4e90-9b9e-360548d95369",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		},
+		"04678689-52b8-4e86-a236-65e041d48108": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "04678689-52b8-4e86-a236-65e041d48108",
+			"initautoinc": 1,
+			"name": "season",
+			"relations": [
+				"09a2aaec-ebfa-4830-96bd-90932d04a78f",
+				"c9eee5c2-8046-4010-ac38-e270c0cfa934",
+				"c50a3650-5468-4620-b635-d78bfa67a95e",
+				"4bcf7c20-7e77-43ab-b79b-d59d8a33e206"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "e03e05df-3d66-47b7-9ad4-d89e99f9dddc",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "e1e067ce-4e39-4521-ba86-0a0d988179a2",
+					"list": false,
+					"name": "champion_team_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "team",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [
+				{
+					"cols": [
+						{
+							"colid": "e1e067ce-4e39-4521-ba86-0a0d988179a2",
+							"id": "d3395e70-c407-498f-90c6-84b28d4c48b8"
+						}
+					],
+					"fulltext": false,
+					"id": "cea5020f-dc66-4e91-a0c3-71d57ee321cc",
+					"name": "team_season",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				}
+			],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "e03e05df-3d66-47b7-9ad4-d89e99f9dddc",
+							"id": "4bc97b09-0cb5-4b09-b5cb-028182d5b2e8"
+						}
+					],
+					"id": "3fb8c310-a256-4738-9916-a534299ad435",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		},
+		"d7151b8e-3c66-4063-9241-d79ac5fe3c2e": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "d7151b8e-3c66-4063-9241-d79ac5fe3c2e",
+			"initautoinc": 1,
+			"name": "team",
+			"relations": [
+				"3039e20b-5d02-4027-8727-5d25071faef1",
+				"392ea8a2-f461-4ff5-b756-62a9d0da948f",
+				"c50a3650-5468-4620-b635-d78bfa67a95e",
+				"8f83cfae-59ad-44fb-8018-7c60391be66d"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "7d45f999-ea3d-42e9-a9fd-a824b2c39939",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "",
+					"collation": "",
+					"comment": "",
+					"datatype": "VARCHAR",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "b3e71ea7-2371-49da-b9cd-a335cf8b6ee6",
+					"list": false,
+					"name": "name",
+					"nn": true,
+					"param": "50",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "f28310cf-e88f-4ec5-ab58-805d892d33e2",
+					"list": false,
+					"name": "division_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "division",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "a6a02ef3-5c4c-41c2-ac54-c4eeab9f1ae1",
+					"list": false,
+					"name": "overallRating",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "75036610-af7c-4dc1-a183-f9cd5dd7bdc7",
+					"list": false,
+					"name": "offenseRating",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "92ae8994-35e1-4d2a-bb07-78533f72962b",
+					"list": false,
+					"name": "defenseRating",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "c76faff0-7e97-4c29-92ef-220a5bce1297",
+					"list": false,
+					"name": "runDefenseRating",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "0eba5df2-12c9-49c3-80a0-b7ab6cc1a8ab",
+					"list": false,
+					"name": "passDefenseRating",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "c2d54b30-c5ac-4464-af4d-3b063ae9773c",
+					"list": false,
+					"name": "stats_season",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": "utf8mb4",
+					"collation": "utf8mb4_bin",
+					"comment": "",
+					"datatype": "LONGTEXT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "8ed2caa5-c1c8-4d57-8f17-409a4da0c5e6",
+					"list": false,
+					"name": "stats_allTime",
+					"nn": false,
+					"param": "",
+					"pk": false,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [
+				{
+					"cols": [
+						{
+							"colid": "f28310cf-e88f-4ec5-ab58-805d892d33e2",
+							"id": "36a4ffab-94e3-4ae4-b648-da39a51f5354"
+						}
+					],
+					"fulltext": false,
+					"id": "9e33b5db-1365-487f-b11a-295771e578cd",
+					"name": "division_team",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				}
+			],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "7d45f999-ea3d-42e9-a9fd-a824b2c39939",
+							"id": "ee5c8bcc-2557-4302-b31d-9b82d7363b8b"
+						}
+					],
+					"id": "a63f3522-2eeb-4647-a0b0-34866b321fb1",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		},
+		"6b18d820-e3aa-4346-9f3d-a6553c297712": {
+			"collation": "utf8_general_ci",
+			"charset": "utf8",
+			"database": "floosball",
+			"desc": "",
+			"embeddable": false,
+			"id": "6b18d820-e3aa-4346-9f3d-a6553c297712",
+			"initautoinc": 1,
+			"name": "week",
+			"relations": [
+				"6fcd9506-c522-46dc-b704-ad25bf7a9514",
+				"35b9dac7-b655-4473-a9c5-2ae290ba5e8d",
+				"4bcf7c20-7e77-43ab-b79b-d59d8a33e206"
+			],
+			"rowformat": "Dynamic",
+			"tabletype": "InnoDB",
+			"cols": [
+				{
+					"after": "",
+					"autoinc": true,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"id": "7f0a6215-8cc5-46e5-80f1-c00041b25006",
+					"list": false,
+					"name": "id",
+					"nn": true,
+					"param": "11",
+					"pk": true,
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				},
+				{
+					"after": "",
+					"autoinc": false,
+					"charset": null,
+					"collation": null,
+					"comment": "",
+					"datatype": "INT",
+					"defaultvalue": "",
+					"enum": "",
+					"fk": true,
+					"id": "725e2303-256d-459c-9589-6efb620f82be",
+					"list": false,
+					"name": "season_id",
+					"nn": true,
+					"param": "11",
+					"pk": false,
+					"ref": "season",
+					"unsigned": false,
+					"zerofill": false,
+					"isHidden": false
+				}
+			],
+			"indexes": [
+				{
+					"cols": [
+						{
+							"colid": "725e2303-256d-459c-9589-6efb620f82be",
+							"id": "251bb6c0-73bf-46a9-a942-a6702a92b089"
+						}
+					],
+					"fulltext": false,
+					"id": "6f21fd36-4053-4c6e-a2a4-c8b4052a060c",
+					"name": "season_week",
+					"unique": false,
+					"algorithm": "na",
+					"lockoption": "na"
+				}
+			],
+			"keys": [
+				{
+					"cols": [
+						{
+							"colid": "7f0a6215-8cc5-46e5-80f1-c00041b25006",
+							"id": "3ba9c880-9ecb-4536-a592-bcfd85194bbf"
+						}
+					],
+					"id": "57b4911c-dee6-402e-b627-897c2a707f3d",
+					"isPk": true,
+					"name": "PRIMARY",
+					"using": "na"
+				}
+			],
+			"lines": [],
+			"visible": true,
+			"paranoid": false,
+			"timestamps": false,
+			"version": false,
+			"afterScript": "",
+			"generate": true,
+			"generateCustomCode": true,
+			"estimatedSize": ""
+		}
+	},
+	"relations": {
+		"09a2aaec-ebfa-4830-96bd-90932d04a78f": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "0b89c2f6-009b-440b-81f4-3bc928bf5bd8",
+			"id": "09a2aaec-ebfa-4830-96bd-90932d04a78f",
+			"name": "season_game",
+			"parent": "04678689-52b8-4e86-a236-65e041d48108",
+			"parent_key": "3fb8c310-a256-4738-9916-a534299ad435",
+			"cols": [
+				{
+					"childcol": "f0f2aeb0-5a57-417c-83c6-172a2ef220eb",
+					"id": "6334f2b0-ea9f-46a6-9dde-b554a52e225b",
+					"parentcol": "e03e05df-3d66-47b7-9ad4-d89e99f9dddc"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"6fcd9506-c522-46dc-b704-ad25bf7a9514": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "0b89c2f6-009b-440b-81f4-3bc928bf5bd8",
+			"id": "6fcd9506-c522-46dc-b704-ad25bf7a9514",
+			"name": "week_game",
+			"parent": "6b18d820-e3aa-4346-9f3d-a6553c297712",
+			"parent_key": "57b4911c-dee6-402e-b627-897c2a707f3d",
+			"cols": [
+				{
+					"childcol": "3b902c82-0c8c-4f3d-86a7-98c77349c1d9",
+					"id": "96a451cb-ab0f-4dc8-9eb0-2c0c0c370550",
+					"parentcol": "7f0a6215-8cc5-46e5-80f1-c00041b25006"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"6bd828d1-1b2e-46ed-bd05-78f2264faa64": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "0fa2e6de-0f63-4c97-9f2b-f506783ffd3f",
+			"id": "6bd828d1-1b2e-46ed-bd05-78f2264faa64",
+			"name": "game_play",
+			"parent": "0b89c2f6-009b-440b-81f4-3bc928bf5bd8",
+			"parent_key": "c80d9b07-433c-4217-9caf-8901fd0f7ccb",
+			"cols": [
+				{
+					"childcol": "9d12e4ce-9d01-4524-9a61-176006330857",
+					"id": "7993f4be-b382-49ce-b742-2d3177919816",
+					"parentcol": "22b10f9a-501e-4f7f-8d25-244a4fa4a28a"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"c9eee5c2-8046-4010-ac38-e270c0cfa934": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "0fa2e6de-0f63-4c97-9f2b-f506783ffd3f",
+			"id": "c9eee5c2-8046-4010-ac38-e270c0cfa934",
+			"name": "season_play",
+			"parent": "04678689-52b8-4e86-a236-65e041d48108",
+			"parent_key": "3fb8c310-a256-4738-9916-a534299ad435",
+			"cols": [
+				{
+					"childcol": "0e85f2d6-ac66-44c8-984a-1b97fe3d82b7",
+					"id": "db55e23e-38d0-42a8-9d1a-4d5cda4532f7",
+					"parentcol": "e03e05df-3d66-47b7-9ad4-d89e99f9dddc"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"3039e20b-5d02-4027-8727-5d25071faef1": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "0fa2e6de-0f63-4c97-9f2b-f506783ffd3f",
+			"id": "3039e20b-5d02-4027-8727-5d25071faef1",
+			"name": "team_play",
+			"parent": "d7151b8e-3c66-4063-9241-d79ac5fe3c2e",
+			"parent_key": "a63f3522-2eeb-4647-a0b0-34866b321fb1",
+			"cols": [
+				{
+					"childcol": "c615fc57-23c1-4dd2-b484-28d63ddecca3",
+					"id": "1ae0179d-e335-4fc3-91e8-b72a10049207",
+					"parentcol": "7d45f999-ea3d-42e9-a9fd-a824b2c39939"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"35b9dac7-b655-4473-a9c5-2ae290ba5e8d": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "0fa2e6de-0f63-4c97-9f2b-f506783ffd3f",
+			"id": "35b9dac7-b655-4473-a9c5-2ae290ba5e8d",
+			"name": "week_play",
+			"parent": "6b18d820-e3aa-4346-9f3d-a6553c297712",
+			"parent_key": "57b4911c-dee6-402e-b627-897c2a707f3d",
+			"cols": [
+				{
+					"childcol": "c07ec586-3f7f-45bc-974e-76ffe1758c54",
+					"id": "1e9bf403-b223-4b4a-a125-792b0609f75e",
+					"parentcol": "7f0a6215-8cc5-46e5-80f1-c00041b25006"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"392ea8a2-f461-4ff5-b756-62a9d0da948f": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "600bced3-a7a2-4566-b072-77afaf98555f",
+			"id": "392ea8a2-f461-4ff5-b756-62a9d0da948f",
+			"name": "team_player",
+			"parent": "d7151b8e-3c66-4063-9241-d79ac5fe3c2e",
+			"parent_key": "a63f3522-2eeb-4647-a0b0-34866b321fb1",
+			"cols": [
+				{
+					"childcol": "9f8b3d10-59a6-46df-b594-edbef47c90d2",
+					"id": "8b265eb8-dfde-4ebc-a105-bd49dab55872",
+					"parentcol": "7d45f999-ea3d-42e9-a9fd-a824b2c39939"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"c50a3650-5468-4620-b635-d78bfa67a95e": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "04678689-52b8-4e86-a236-65e041d48108",
+			"id": "c50a3650-5468-4620-b635-d78bfa67a95e",
+			"name": "team_season",
+			"parent": "d7151b8e-3c66-4063-9241-d79ac5fe3c2e",
+			"parent_key": "a63f3522-2eeb-4647-a0b0-34866b321fb1",
+			"cols": [
+				{
+					"childcol": "e1e067ce-4e39-4521-ba86-0a0d988179a2",
+					"id": "287ef69c-2056-40d8-b83d-5a5c813530df",
+					"parentcol": "7d45f999-ea3d-42e9-a9fd-a824b2c39939"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"8f83cfae-59ad-44fb-8018-7c60391be66d": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "d7151b8e-3c66-4063-9241-d79ac5fe3c2e",
+			"id": "8f83cfae-59ad-44fb-8018-7c60391be66d",
+			"name": "division_team",
+			"parent": "d56c47be-f4a4-4da5-a40e-1a6c98fb0e9c",
+			"parent_key": "18e2719d-f5f5-481c-8813-87cb610df115",
+			"cols": [
+				{
+					"childcol": "f28310cf-e88f-4ec5-ab58-805d892d33e2",
+					"id": "9bc7c8fb-c981-4125-8181-c6756da2aebf",
+					"parentcol": "56e140ca-83ed-42fe-8dac-65a3b46c6740"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		},
+		"4bcf7c20-7e77-43ab-b79b-d59d8a33e206": {
+			"c_p": "one",
+			"c_cp": "",
+			"c_cch": "",
+			"c_ch": "many",
+			"c_mch": "true",
+			"c_mp": "true",
+			"desc": "",
+			"type": "identifying",
+			"visible": true,
+			"child": "6b18d820-e3aa-4346-9f3d-a6553c297712",
+			"id": "4bcf7c20-7e77-43ab-b79b-d59d8a33e206",
+			"name": "season_week",
+			"parent": "04678689-52b8-4e86-a236-65e041d48108",
+			"parent_key": "3fb8c310-a256-4738-9916-a534299ad435",
+			"cols": [
+				{
+					"childcol": "725e2303-256d-459c-9589-6efb620f82be",
+					"id": "b0cc367c-dbd6-48c4-9b2c-bfe3ccc598b4",
+					"parentcol": "e03e05df-3d66-47b7-9ad4-d89e99f9dddc"
+				}
+			],
+			"ri_pd": "Restrict",
+			"ri_pu": "Restrict",
+			"generate": true,
+			"generateCustomCode": true
+		}
+	},
+	"notes": {},
+	"lines": {},
+	"model": {
+		"color": "transparent",
+		"activeDiagram": "977ee4f8-1210-4946-bb1c-de6f794258ba",
+		"caseConvention": "under",
+		"def_charset": "utf8",
+		"def_collation": "utf8_general_ci",
+		"def_coltopk": true,
+		"def_rowformat": "na",
+		"def_tabletype": "na",
+		"def_database": "floosball",
+		"def_others": "",
+		"desc": "",
+		"id": "493b3aee-d435-495c-901e-7e3adccf40fe",
+		"isDirty": true,
+		"name": "Floosball",
+		"parentTableInFkCols": true,
+		"path": "",
+		"replaceSpace": "_",
+		"sideSelections": true,
+		"storedin": {
+			"major": 4,
+			"minor": 6,
+			"extra": 0
+		},
+		"type": "MARIADB",
+		"version": 1,
+		"lastSaved": "",
+		"beforeScript": "",
+		"afterScript": "",
+		"sqlSettings": {
+			"wrapLines": true,
+			"wrapOffset": 80,
+			"indent": true,
+			"indentationString": "spaces",
+			"indentationSize": 2,
+			"limitItemsOnLine": true,
+			"maxListItemsOnLine": 3,
+			"statementDelimiter": ";",
+			"routineDelimiter": "//",
+			"keywordCase": "upper",
+			"identiferCase": "original",
+			"includeSchema": "always",
+			"quotation": "if_needed"
+		},
+		"embeddedInParentsIsDisplayed": true,
+		"schemaContainerIsDisplayed": false,
+		"cardinalityIsDisplayed": false,
+		"estimatedSizeIsDisplayed": false,
+		"writeFileParam": false
+	},
+	"otherObjects": {},
+	"diagrams": {
+		"977ee4f8-1210-4946-bb1c-de6f794258ba": {
+			"id": "977ee4f8-1210-4946-bb1c-de6f794258ba",
+			"lineColor": "transparent",
+			"description": "",
+			"diagramItems": {
+				"d56c47be-f4a4-4da5-a40e-1a6c98fb0e9c": {
+					"x": 187,
+					"y": 622,
+					"gHeight": 81,
+					"gWidth": 214,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "d56c47be-f4a4-4da5-a40e-1a6c98fb0e9c",
+					"resized": false,
+					"autoExpand": true
+				},
+				"0b89c2f6-009b-440b-81f4-3bc928bf5bd8": {
+					"x": 81,
+					"y": 372,
+					"gHeight": 135,
+					"gWidth": 254,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "0b89c2f6-009b-440b-81f4-3bc928bf5bd8",
+					"resized": false,
+					"autoExpand": true
+				},
+				"0fa2e6de-0f63-4c97-9f2b-f506783ffd3f": {
+					"x": 587,
+					"y": 30,
+					"gHeight": 135,
+					"gWidth": 233,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "0fa2e6de-0f63-4c97-9f2b-f506783ffd3f",
+					"resized": false,
+					"autoExpand": true
+				},
+				"600bced3-a7a2-4566-b072-77afaf98555f": {
+					"x": 902,
+					"y": 568,
+					"gHeight": 189,
+					"gWidth": 232,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "600bced3-a7a2-4566-b072-77afaf98555f",
+					"resized": false,
+					"autoExpand": true
+				},
+				"04678689-52b8-4e86-a236-65e041d48108": {
+					"x": 192,
+					"y": 157,
+					"gHeight": 63,
+					"gWidth": 247,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "04678689-52b8-4e86-a236-65e041d48108",
+					"resized": false,
+					"autoExpand": true
+				},
+				"d7151b8e-3c66-4063-9241-d79ac5fe3c2e": {
+					"x": 1059,
+					"y": 250,
+					"gHeight": 207,
+					"gWidth": 248,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "d7151b8e-3c66-4063-9241-d79ac5fe3c2e",
+					"resized": false,
+					"autoExpand": true
+				},
+				"6b18d820-e3aa-4346-9f3d-a6553c297712": {
+					"x": 532,
+					"y": 390,
+					"gHeight": 63,
+					"gWidth": 197,
+					"background": "#03a9f4",
+					"color": "#ffffff",
+					"referencedItemId": "6b18d820-e3aa-4346-9f3d-a6553c297712",
+					"resized": false,
+					"autoExpand": true
+				}
+			},
+			"isOpen": true,
+			"main": true,
+			"name": "Main Diagram",
+			"keysgraphics": true,
+			"linegraphics": "detailed",
+			"zoom": 1,
+			"background": "transparent",
+			"scroll": {
+				"x": 0,
+				"y": 0
+			},
+			"type": "erd"
+		}
+	},
+	"order": []
+}

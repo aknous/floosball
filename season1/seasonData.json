@@ -1,0 +1,29 @@
+{
+    "standings": {
+        "Indigo": {
+            "Tampa Bay Bees": "14 - 6",
+            "Pittsburgh Melons": "9 - 10",
+            "Phoenix Dry Heat": "9 - 9",
+            "Toronto Imaginaries": "0 - 18"
+        },
+        "Copper": {
+            "Boston Apples": "14 - 6",
+            "Washington Belts": "11 - 8",
+            "Las Vegas Residencies": "10 - 8",
+            "Miami Jetskis": "5 - 13"
+        },
+        "Marble": {
+            "Denver Northern Lights": "21 - 0",
+            "Philadelphia Broads": "9 - 10",
+            "Seattle Cranes": "6 - 12",
+            "New York Buildings": "5 - 13"
+        },
+        "Sterling": {
+            "Cleveland Rocks": "16 - 5",
+            "San Diego Sand Dollars": "9 - 10",
+            "Baltimore Oldbays": "7 - 11",
+            "Chicago Beans": "6 - 12"
+        }
+    },
+    "champion": "Denver Northern Lights"
+}
