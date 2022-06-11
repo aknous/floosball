@@ -1,29 +1,29 @@
 {
     "standings": {
         "Indigo": {
-            "Tampa Bay Bees": "14 - 6",
-            "Pittsburgh Melons": "9 - 10",
-            "Phoenix Dry Heat": "9 - 9",
-            "Toronto Imaginaries": "0 - 18"
+            "Miami Jetskis": "21 - 0",
+            "New York Buildings": "12 - 8",
+            "Denver Northern Lights": "10 - 8",
+            "Phoenix Dry Heat": "4 - 14"
         },
         "Copper": {
-            "Boston Apples": "14 - 6",
-            "Washington Belts": "11 - 8",
-            "Las Vegas Residencies": "10 - 8",
-            "Miami Jetskis": "5 - 13"
+            "Washington Companions": "9 - 10",
+            "Pittsburgh Melons": "8 - 11",
+            "Tampa Bay Bees": "5 - 13",
+            "Toronto Imaginaries": "4 - 14"
         },
         "Marble": {
-            "Denver Northern Lights": "21 - 0",
-            "Philadelphia Broads": "9 - 10",
-            "Seattle Cranes": "6 - 12",
-            "New York Buildings": "5 - 13"
+            "Boston Apples": "17 - 4",
+            "Chicago Beans": "11 - 8",
+            "Cleveland Rocks": "8 - 10",
+            "Seattle Cranes": "5 - 13"
         },
         "Sterling": {
-            "Cleveland Rocks": "16 - 5",
-            "San Diego Sand Dollars": "9 - 10",
-            "Baltimore Oldbays": "7 - 11",
-            "Chicago Beans": "6 - 12"
+            "Philadelphia Broads": "13 - 7",
+            "San Diego Sand Dollars": "10 - 9",
+            "Las Vegas Residents": "8 - 10",
+            "Baltimore Oldbays": "6 - 12"
         }
     },
-    "champion": "Denver Northern Lights"
+    "champion": "Miami Jetskis"
 }
