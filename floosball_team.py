@@ -41,12 +41,12 @@ class Team:
             elif x >= 90 and x < 98:
                 self.runDefenseRating = randint(90, 94)
                 self.passDefenseRating = randint(90, 94)
-            elif x >= 70 and x < 90:
+            elif x >= 60 and x < 90:
                 self.runDefenseRating = randint(80, 89)
                 self.passDefenseRating = randint(80, 89)
             else:
-                self.runDefenseRating = randint(70, 85)
-                self.passDefenseRating = randint(70, 85)
+                self.runDefenseRating = randint(70, 90)
+                self.passDefenseRating = randint(70, 90)
             self.defenseRating = round(statistics.mean([self.runDefenseRating, self.passDefenseRating]))
             self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
 
@@ -60,16 +60,16 @@ class Team:
         self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
 
     def updateDefense(self):
-        self.passDefenseRating += randint(-5, 5)
+        self.passDefenseRating += randint(-10, 10)
         if self.passDefenseRating > 100:
             self.passDefenseRating = 100
-        elif self.passDefenseRating < 0:
-            self.passDefenseRating = 0
-        self.runDefenseRating += randint(-5, 5)
+        elif self.passDefenseRating < 70:
+            self.passDefenseRating = 70
+        self.runDefenseRating += randint(-10, 10)
         if self.runDefenseRating > 100:
             self.runDefenseRating = 100
-        elif self.runDefenseRating < 0:
-            self.runDefenseRating = 0
+        elif self.runDefenseRating < 70:
+            self.runDefenseRating = 70
 
         self.defenseRating = round(statistics.mean([self.runDefenseRating, self.passDefenseRating]))
 

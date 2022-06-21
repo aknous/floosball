@@ -31,55 +31,43 @@ class Player:
         self.playerTier = None
         self.seasonsPlayed = 0
 
-    def updateTier(self):
-        if self.attributes.overallRating >= 93:
-            self.playerTier = PlayerTier.SuperStar
-        elif self.attributes.overallRating >= 88 and self.attributes.overallRating < 93:
-            self.playerTier = PlayerTier.Elite
-        elif self.attributes.overallRating >= 83 and self.attributes.overallRating < 88:
-            self.playerTier = PlayerTier.AboveAverage
-        elif self.attributes.overallRating >= 78 and self.attributes.overallRating < 83:
-            self.playerTier = PlayerTier.Average
-        else:
-            self.playerTier = PlayerTier.BelowAverage
-
 
     def offseasonTraining(self):
         self.attributes.armStrength += randint(-5, 5)
         if self.attributes.armStrength > 100:
             self.attributes.armStrength = 100
-        elif self.attributes.armStrength < 0:
-            self.attributes.armStrength = 0
+        elif self.attributes.armStrength < 70:
+            self.attributes.armStrength = 70
         self.attributes.accuracy += randint(-5, 5)
         if self.attributes.accuracy > 100:
             self.attributes.accuracy = 100
-        elif self.attributes.accuracy < 0:
-            self.attributes.accuracy = 0
+        elif self.attributes.accuracy < 70:
+            self.attributes.accuracy = 70
         self.attributes.agility += randint(-5, 5)
         if self.attributes.agility > 100:
             self.attributes.agility = 100
-        elif self.attributes.agility < 0:
-            self.attributes.agility = 0
+        elif self.attributes.agility < 70:
+            self.attributes.agility = 70
         self.attributes.speed += randint(-5, 5)
         if self.attributes.speed > 100:
             self.attributes.speed = 100
-        elif self.attributes.speed < 0:
-            self.attributes.speed = 0
+        elif self.attributes.speed < 70:
+            self.attributes.speed = 70
         self.attributes.power += randint(-5, 5)
         if self.attributes.power > 100:
             self.attributes.power = 100
-        elif self.attributes.power < 0:
-            self.attributes.power = 0
+        elif self.attributes.power < 70:
+            self.attributes.power = 70
         self.attributes.hands += randint(-5, 5)
         if self.attributes.hands > 100:
             self.attributes.hands = 100
-        elif self.attributes.hands < 0:
-            self.attributes.hands = 0
+        elif self.attributes.hands < 70:
+            self.attributes.hands = 70
         self.attributes.legStrength += randint(-5, 5)
         if self.attributes.legStrength > 100:
             self.attributes.legStrength = 100
-        elif self.attributes.legStrength < 0:
-            self.attributes.legStrength = 0
+        elif self.attributes.legStrength < 70:
+            self.attributes.legStrength = 70
         
         if self.team != 'Free Agent':
             if self.team.seasonTeamStats['winPerc'] > .8:
@@ -175,14 +163,14 @@ class PlayerAttributes:
         if x >= 95:
             # SuperStar array
            for y in range(12):
-                if y <= 9:
+                if y <= 10:
                     skillValList.append(randint(90, 100))
                 else:
                     skillValList.append(randint(80, 89))
         elif x >= 85 and x < 95:
             # Elite array
            for y in range(12):
-                if y <= 5:
+                if y <= 6:
                     skillValList.append(randint(90, 100))
                 else:
                     skillValList.append(randint(80, 89))
@@ -244,7 +232,6 @@ class PlayerQB(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*1.2) + (self.attributes.playMakingAbility*.8))/2)
-        self.updateTier()
 
 
 
@@ -266,7 +253,6 @@ class PlayerRB(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round((self.attributes.speed + self.attributes.power + self.attributes.agility)/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*1.2) + (self.attributes.playMakingAbility*.8))/2)
-        self.updateTier()
         
 
 class PlayerWR(Player):
@@ -286,7 +272,6 @@ class PlayerWR(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round((self.attributes.speed + self.attributes.hands + self.attributes.agility)/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*1.2) + (self.attributes.playMakingAbility*.8))/2)
-        self.updateTier()
 
 class PlayerTE(Player):
     def __init__(self):
@@ -305,7 +290,6 @@ class PlayerTE(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round((self.attributes.power + self.attributes.hands + self.attributes.agility)/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*1.2) + (self.attributes.playMakingAbility*.8))/2)
-        self.updateTier()
 
 class PlayerK(Player):
     def __init__(self):
@@ -322,5 +306,4 @@ class PlayerK(Player):
             self.attributes.confidence = 100
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round((self.attributes.legStrength + self.attributes.power + self.attributes.accuracy)/3)
-        self.attributes.overallRating = round(((self.attributes.skillRating*1.2) + (self.attributes.playMakingAbility*.8))/2)  
-        self.updateTier()
+        self.attributes.overallRating = round(((self.attributes.skillRating*1.2) + (self.attributes.playMakingAbility*.8))/2)

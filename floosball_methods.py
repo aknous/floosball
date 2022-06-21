@@ -1,10 +1,32 @@
 from random import randint
+import json
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
 import floosball_game as FloosGame
 import floosball_player as FloosPlayer
 
 
+def getConfig():
+    fileObjext = open("config.json", "r")
+    jsonContent = fileObjext.read()
+    config = json.loads(jsonContent)
+    fileObjext.close()
+    return config
+
+def saveConfig(value, key1, key2):
+    fileObjext = open("config.json", "r")
+    jsonContent = fileObjext.read()
+    config = json.loads(jsonContent)
+    fileObjext.close()
+
+    if key2 is None:
+        config[key1] = value
+    else:
+        config[key1][key2] = value
+
+    fileObjext = open("config.json", "w+")
+    fileObjext.write(json.dumps(config, indent=4))
+    fileObjext.close()
 
 def _prepare_for_serialization(obj):
     serialized_dict = dict()

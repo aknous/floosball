@@ -1,9 +1,9 @@
 {
     "leagueConfig": {
-        "totalSeasons": 4,
-        "deleteDataOnRestart": false,
+        "totalSeasons": 10,
+        "deleteDataOnRestart": true,
         "freeAgencyRounds": 2,
-        "saveSeasonProgress": true,
+        "saveSeasonProgress": false,
         "lastSeason": 0
     },
     "divisions": [
@@ -29,7 +29,6 @@
         "San Diego Sand Dollars",
         "Phoenix Dry Heat",
         "Las Vegas Residents"
-
     ],
     "players": [
         "Ovaltine Vinaigrette",
@@ -94,8 +93,8 @@
         "Sandie Pip",
         "Sigi Allison",
         "Ignacious Pinkerton",
-        "Chad Kingfish",
-        "Hershel Pruitt",
+        "Chandler Kingfish",
+        "Hersh Pruitt",
         "Kitty Jacobson",
         "Vivian Leblanc",
         "Griffin Star",
@@ -122,8 +121,7 @@
         "Fenwick Keetes",
         "Ergarr Wet-Sage",
         "Korthjar Oath-Singer",
-        "Hredic Milk-Hair",
-        "Vongrid Mjorornsson",
+        "Vongrid Mjornsson",
         "Stalae Warlock",
         "Tender Jordan",
         "Slightly Maybe",
@@ -139,11 +137,9 @@
         "Artemis Cruz",
         "Astro Jess",
         "Heavenly Sparrow",
-        "Old Beetle",
         "The Duchess",
         "Lambert Puddlefoot",
         "Derric the Harbinger",
-        "Captain Giant Trident",
         "Cra Z Clawz",
         "Groovy Cat",
         "Idina Charlotte Ramsbottom",
@@ -152,7 +148,6 @@
         "Ben 'Gamble' Hawkins",
         "Elijah 'Shotgun' Norris",
         "Talon Roseberg",
-        "Nicholai Shadowsoul",
         "Naitou Ujitsune",
         "Hatano Akimoro",
         "Willow O'Hanlon",
@@ -166,21 +161,11 @@
         "Inne Blomme",
         "Toon Van Laethem",
         "Pierre Younger",
-        "Ariki Taimana",
-        "Tama Hamutana",
-        "Hohepa Wikiriwhi",
         "Doctor Small Queen",
         "Loaded Gun",
         "Rich Flavor",
-        "Greasy Jim",
         "TeeTee Moonshine",
         "Bud 'Lite' Rainwater",
-        "Generic Mann",
-        "Ultimate Android",
-        "SuperFootballTron-01",
-        "SuperFootballTron-02",
-        "SuperFootballTron-07",
-        "UltraFootballTron-12",
         "Zealous Tiger",
         "Donnie Fame",
         "Round Robin",
@@ -188,6 +173,8 @@
         "Chainsaw Bradley",
         "Leslie Waterguns",
         "Danielle Treasures",
-        "Bonino SpeaksTooSoftly"
+        "Supernintendo Chalmers",
+        "Golly G. Hoverboard",
+        "Tackling Dummy"
     ]
 }

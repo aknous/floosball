@@ -3,14 +3,16 @@ import os
 from random import randint
 import copy
 import asyncio
-import statistics
-import matplotlib.pyplot as plt
 import numpy as np
+import statistics
 import floosball_game as FloosGame
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
 import floosball_methods as FloosMethods
  
+
+__version__ = '0.0.3_alpha'
+
 config = None
 totalSeasons = 0
 seasonsPlayed = 0
@@ -19,6 +21,7 @@ freeAgentList = []
 teamList = []
 divisionList = []   
 scheduleList = []
+seasonList = []
 activeSeason = None
 scheduleScheme = [
     ('1112','1314','2122','2324','3132','3334','4142','4344'),
@@ -69,7 +72,7 @@ class Season:
                 homeTeam = divisionList[int(game[0]) - 1].teamList[int(game[1]) - 1]
                 awayTeam = divisionList[int(game[2]) - 1].teamList[int(game[3]) - 1]
                 newGame = FloosGame.Game(homeTeam,awayTeam)
-                newGame.id = '{0}0{1}0{2}'.format(self.currentSeason, week+1, x+1)
+                newGame.id = 's{0}w{1}g{2}'.format(self.currentSeason, week+1, x+1)
                 newGame.status = FloosGame.GameStatus.Scheduled
                 gameList.append(newGame)
                 # print("{0} v. {1}".format(awayTeam.name, homeTeam.name))
@@ -127,21 +130,22 @@ class Season:
 
 
 
-        team.seasonTeamStats['Offense']['totalYards'] = team.seasonTeamStats['Offense']['passYards'] + team.seasonTeamStats['Offense']['runYards']
-        team.allTimeTeamStats['wins'] += team.seasonTeamStats['wins']
-        team.allTimeTeamStats['losses'] += team.seasonTeamStats['losses']
-        team.allTimeTeamStats['Offense']['tds'] += team.seasonTeamStats['Offense']['tds']
-        team.allTimeTeamStats['Offense']['passYards'] += team.seasonTeamStats['Offense']['passYards']
-        team.allTimeTeamStats['Offense']['runYards'] += team.seasonTeamStats['Offense']['runYards']
-        team.allTimeTeamStats['Offense']['totalYards'] += team.seasonTeamStats['Offense']['totalYards']
-        team.allTimeTeamStats['Defense']['sacks'] += team.seasonTeamStats['Defense']['sacks']
-        team.allTimeTeamStats['Defense']['ints'] += team.seasonTeamStats['Defense']['ints']
-        team.allTimeTeamStats['Defense']['fumRec'] += team.seasonTeamStats['Defense']['fumRec']
-        team.allTimeTeamStats['winPerc'] = round(team.allTimeTeamStats['wins']/(team.allTimeTeamStats['wins']+team.allTimeTeamStats['losses']),3)
+            team.seasonTeamStats['Offense']['totalYards'] = team.seasonTeamStats['Offense']['passYards'] + team.seasonTeamStats['Offense']['runYards']
+            team.seasonTeamStats['winPerc'] = round(team.seasonTeamStats['wins']/(team.seasonTeamStats['wins']+team.seasonTeamStats['losses']),3)
+            team.allTimeTeamStats['wins'] += team.seasonTeamStats['wins']
+            team.allTimeTeamStats['losses'] += team.seasonTeamStats['losses']
+            team.allTimeTeamStats['Offense']['tds'] += team.seasonTeamStats['Offense']['tds']
+            team.allTimeTeamStats['Offense']['passYards'] += team.seasonTeamStats['Offense']['passYards']
+            team.allTimeTeamStats['Offense']['runYards'] += team.seasonTeamStats['Offense']['runYards']
+            team.allTimeTeamStats['Offense']['totalYards'] += team.seasonTeamStats['Offense']['totalYards']
+            team.allTimeTeamStats['Defense']['sacks'] += team.seasonTeamStats['Defense']['sacks']
+            team.allTimeTeamStats['Defense']['ints'] += team.seasonTeamStats['Defense']['ints']
+            team.allTimeTeamStats['Defense']['fumRec'] += team.seasonTeamStats['Defense']['fumRec']
+            team.allTimeTeamStats['winPerc'] = round(team.allTimeTeamStats['wins']/(team.allTimeTeamStats['wins']+team.allTimeTeamStats['losses']),3)
 
 
-        y += 1
-        dict[y] = FloosMethods._prepare_for_serialization(team)
+            y += 1
+            dict[y] = FloosMethods._prepare_for_serialization(team)
 
         jsonFile.write(json.dumps(dict, indent=4))
         jsonFile.close()
@@ -169,7 +173,11 @@ class Season:
             for f in os.listdir(weekFilePath):
                 os.remove(os.path.join(weekFilePath, f))
         else:
-            os.mkdir(weekFilePath)
+            if not os.path.isdir(strCurrentSeason):
+                os.mkdir(strCurrentSeason)
+                os.mkdir('{}/games'.format(strCurrentSeason))
+            else:
+                os.mkdir('{}/games'.format(strCurrentSeason))
 
         for week in scheduleList:
             #print("\n-------------------------------------------------\n")
@@ -185,16 +193,17 @@ class Season:
             for game in range(0,len(week)):
                 strGame = 'Game {}'.format(game + 1)
                 week[game].postgame()
-                week[game].saveGameData()
                 gameResults = week[game].gameDict
                 gameDict[strGame] = gameResults
             weekDict = FloosMethods._prepare_for_serialization(gameDict)
             jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(currentWeekText)), "w+")
             jsonFile.write(json.dumps(weekDict, indent=4))
             jsonFile.close()
-
-        for team in teamList:
-            team.seasonTeamStats['winPerc'] = round((team.seasonTeamStats['wins']/(team.seasonTeamStats['wins'] + team.seasonTeamStats['losses'])),3)
+            
+            for division in divisionList:
+                list.sort(division.teamList, key=lambda team: team.seasonTeamStats['winPerc'], reverse=True)
+            sortPlayers()
+            await asyncio.sleep(60)
 
         #seasonDict['games'] = weekDict
         leagueChampion = await self.playPlayoffs()
@@ -269,18 +278,24 @@ class Season:
 
             while lowSeed > hiSeed:
                 newGame = FloosGame.Game(playoffTeamsList[hiSeed], playoffTeamsList[lowSeed])
-                newGame.id = 'PO{0}{1}{2}'.format(self.currentSeason, currentRound, gameNumber)
+                newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
+                newGame.status = FloosGame.GameStatus.Scheduled
                 playoffGamesList.append(newGame)
                 playoffGamesTaskList.append(newGame.playGame())
                 hiSeed += 1
                 lowSeed -= 1
                 gameNumber += 1
+            
+            scheduleList.append(playoffGamesList)
 
             self.activeGames = playoffGamesList
+            if x < numOfRounds - 1:
+                self.currentWeek = 'Playoffs Round {}'.format(x+1)
+            else:
+                self.currentWeek = 'Championship'
             await asyncio.wait(playoffGamesTaskList)
 
             for game in playoffGamesList:
-                game.saveGameData()
                 gameResults = game.gameDict
                 if len(playoffGamesList) == 1:
                     playoffTeamsList.clear()
@@ -297,6 +312,9 @@ class Season:
             jsonFile = open(os.path.join('{}/games'.format(strCurrentSeason), 'postseason.json'), "w+")
             jsonFile.write(json.dumps(playoffDict, indent=4))
             jsonFile.close()
+            if x < numOfRounds - 1:
+                sortPlayers()
+                await asyncio.sleep(60)
 
         return champ
 
@@ -617,32 +635,49 @@ def getPlayers(_config):
                 player = playerData[x]
                 if player['position'] == 'QB':
                     newPlayer = FloosPlayer.PlayerQB()
-                    newPlayer.attributes.skillRating = player['skillRating']
-                    newPlayer.attributes.armStrength = player['armStrength']
-                    newPlayer.attributes.accuracy = player['accuracy']
+                    newPlayer.attributes.skillRating = player['attributes']['skillRating']
+                    newPlayer.attributes.armStrength = player['attributes']['armStrength']
+                    newPlayer.attributes.accuracy = player['attributes']['accuracy']
                 elif player['position'] == 'RB':
                     newPlayer = FloosPlayer.PlayerRB()
-                    newPlayer.attributes.skillRating = player['skillRating']
+                    newPlayer.attributes.skillRating = player['attributes']['skillRating']
                 elif player['position'] == 'WR':
                     newPlayer = FloosPlayer.PlayerWR()
-                    newPlayer.attributes.skillRating = player['skillRating']
+                    newPlayer.attributes.skillRating = player['attributes']['skillRating']
                 elif player['position'] == 'TE':
                     newPlayer = FloosPlayer.PlayerTE()
-                    newPlayer.attributes.skillRating = player['skillRating']
+                    newPlayer.attributes.skillRating = player['attributes']['skillRating']
                 elif player['position'] == 'K':
                     newPlayer = FloosPlayer.PlayerK()
-                    newPlayer.attributes.skillRating = player['skillRating']
-                    newPlayer.attributes.legStrength = player['legStrength']
-                    newPlayer.attributes.accuracy = player['accuracy']
+                    newPlayer.attributes.skillRating = player['attributes']['skillRating']
+                    newPlayer.attributes.legStrength = player['attributes']['legStrength']
+                    newPlayer.attributes.accuracy = player['attributes']['accuracy']
 
                 newPlayer.name = player['name']
                 newPlayer.id = player['id']
-                newPlayer.attributes.overallRating = player['overallRating']
-                newPlayer.attributes.speed = player['speed']
-                newPlayer.attributes.hands = player['hands']
-                newPlayer.attributes.agility = player['agility']
-                newPlayer.attributes.power = player['power']
+                newPlayer.team = player['team']
+                newPlayer.seasonsPlayed = player['seasonsPlayed']
+                newPlayer.attributes.overallRating = player['attributes']['overallRating']
+                newPlayer.attributes.speed = player['attributes']['speed']
+                newPlayer.attributes.hands = player['attributes']['hands']
+                newPlayer.attributes.agility = player['attributes']['agility']
+                newPlayer.attributes.power = player['attributes']['power']
+
+                newPlayer.attributes.confidence = player['attributes']['confidence']
+                newPlayer.attributes.determination = player['attributes']['determination']
+                newPlayer.attributes.discipline = player['attributes']['discipline']
+                newPlayer.attributes.focus = player['attributes']['focus']
+                newPlayer.attributes.instinct = player['attributes']['instinct']
+                newPlayer.attributes.creativity = player['attributes']['creativity']
+                newPlayer.attributes.luck = player['attributes']['luck']
+                newPlayer.attributes.attitude = player['attributes']['attitude']
+                newPlayer.attributes.influence = player['attributes']['influence']
+                newPlayer.attributes.leadershipRating = player['attributes']['leadershipRating']
+                newPlayer.attributes.playMakingAbility = player['attributes']['playMakingAbility']
+
                 newPlayer.careerStatsDict = player['careerStats']
+                newPlayer.updateTier()
+
 
                 playerList.append(newPlayer)
         jsonFile.close()
@@ -746,6 +781,41 @@ def initTeams():
         
     jsonFile.write(json.dumps(dict, indent=4))
     jsonFile.close()
+
+
+def initPlayers():
+    for player in playerList:
+        if player.team is not None:
+            if player.team == 'Free Agent':
+                freeAgentList.append(player)
+        else:
+            player.Team = 'Free Agent'
+            freeAgentList.append(player)
+
+    sortPlayers()
+
+def sortPlayers():
+    ratingList = []
+    for player in playerList:
+        ratingList.append(player.attributes.overallRating)
+
+    starPerc = np.percentile(ratingList, 99)
+    elitePerc = np.percentile(ratingList, 90)
+    aboveAvgPerc = np.percentile(ratingList, 70)
+    avgPerc = np.percentile(ratingList, 40)
+
+    for player in playerList:
+        if player.attributes.overallRating >= starPerc:
+            player.playerTier = FloosPlayer.PlayerTier.SuperStar
+        elif player.attributes.overallRating >= elitePerc:
+            player.playerTier = FloosPlayer.PlayerTier.Elite
+        elif player.attributes.overallRating >= aboveAvgPerc:
+            player.playerTier = FloosPlayer.PlayerTier.AboveAverage
+        elif player.attributes.overallRating >= avgPerc:
+            player.playerTier = FloosPlayer.PlayerTier.Average
+        else:
+            player.playerTier = FloosPlayer.PlayerTier.BelowAverage
+
         
 def initDivisions():
     tempTeamList = teamList.copy()
@@ -772,6 +842,7 @@ def offseason():
         player.offseasonTraining()
         player.attributes.calculateIntangibles()
         player.updateRating()
+    sortPlayers()
 
     list.sort(teamList, key=lambda team: team.seasonTeamStats['winPerc'], reverse=False)
 
@@ -786,49 +857,76 @@ def offseason():
             team.updateRating()
     
 
-def getConfig():
-    fileObjext = open("config.json", "r")
-    jsonContent = fileObjext.read()
-    config = json.loads(jsonContent)
-    fileObjext.close()
-    return config
-
 async def startLeague():
     global seasonsPlayed
     global totalSeasons
     global config
     global activeSeason
+    global seasonList
 
-    config = getConfig()
-    totalSeasons = config['leagueConfig']['seasons']
-    deleteDataOnStart = config['leagueConfig']['deleteDataOnRestart']
+    print('Floosball v{}'.format(__version__))
+    print('Reading config...')
+    config = FloosMethods.getConfig()
+    leagueConfig = config['leagueConfig']
+    totalSeasons = leagueConfig['totalSeasons']
+    deleteDataOnStart = leagueConfig['deleteDataOnRestart']
+    saveSeasonProgress = leagueConfig['saveSeasonProgress']
+    print('Config done')
+
+    if saveSeasonProgress:
+        print('Save Season Progress enabled')
+        seasonsPlayed = config['leagueConfig']['lastSeason']
+        totalSeasons += seasonsPlayed
 
     if os.path.isdir('data'):
         if deleteDataOnStart:
+            print('Deleting previous data...')
             for f in os.listdir('data'):
                 os.remove(os.path.join('data', f))
+            print('Previous data deleted')
     else:
+        print('Creating data directory')
         os.mkdir('data')
 
+    print('Creating players...')
     getPlayers(config)
+    print('Player creation done')
+    print('Creating teams...')
     getTeams(config)
+    print('Team creation done')
 
     if not os.path.exists("data/teamData.json"):
+        print('Starting player draft...')
         draft()
+        print('Draft complete')
+    else:
+        print('Skipping draft')
 
+    print('Initializing teams...')
     initTeams()
+    print('Cleaning up players...')
+    initPlayers()
+    print('Saving player data...')
     savePlayerData()
+    print('Creating divisions...')
     getDivisons(config)
     if not os.path.exists("data/divisionData.json"):
         initDivisions()
 
-    
+    print('Initialization complete!')
     while seasonsPlayed < totalSeasons:
+        print('Season {} start'.format(seasonsPlayed+1))
         activeSeason = Season()
+        seasonList.append(activeSeason)
         activeSeason.createSchedule()
         await activeSeason.startSeason()
         offseason()
         seasonsPlayed += 1
+
+        if saveSeasonProgress:
+            print('Updating config after season end...')
+            FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
+        await asyncio.sleep(120)
 
 
 """ def startLeague():
@@ -837,9 +935,17 @@ async def startLeague():
     global config
     global activeSeason
 
-    config = getConfig()
-    totalSeasons = config['leagueConfig']['seasons']
-    deleteDataOnStart = config['leagueConfig']['deleteDataOnRestart']
+    print(__version__)
+
+    config = FloosMethods.getConfig()
+    leagueConfig = config['leagueConfig']
+    totalSeasons = leagueConfig['totalSeasons']
+    deleteDataOnStart = leagueConfig['deleteDataOnRestart']
+    saveSeasonProgress = leagueConfig['saveSeasonProgress']
+
+    if saveSeasonProgress:
+        seasonsPlayed = config['leagueConfig']['lastSeason']
+        totalSeasons += seasonsPlayed
 
     if os.path.isdir('data'):
         if deleteDataOnStart:
@@ -879,6 +985,7 @@ async def startLeague():
         draft()
 
     initTeams()
+    cleanUpPlayers()
     savePlayerData()
     getDivisons(config)
     if not os.path.exists("data/divisionData.json"):
@@ -889,8 +996,11 @@ async def startLeague():
         activeSeason = Season()
         activeSeason.createSchedule()
         asyncio.run(activeSeason.startSeason())
-        #activeSeason.startSeason()
         offseason()
         seasonsPlayed += 1
+
+        if saveSeasonProgress:
+            FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
+
 
 startLeague() """
