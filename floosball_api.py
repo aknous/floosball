@@ -1,4 +1,5 @@
 from random import randint
+from re import T
 import floosball
 import floosball_game as FloosGame
 from fastapi import FastAPI
@@ -7,6 +8,9 @@ import asyncio
 import os
 import json
 import uvicorn
+from floosball_player import Player, Position
+
+from floosball_team import Team
 
 app = FastAPI()
 
@@ -45,6 +49,8 @@ async def returnTeams(id = None):
                 dict['rating'] = team.overallRating
                 dict['offense'] = team.offenseRating
                 dict['defense'] = team.defenseRating
+                dict['runDefense'] = team.runDefenseRating
+                dict['passDefense'] = team.passDefenseRating
                 dict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
                 rosterDict = {}
                 for pos, player in team.rosterDict.items():
@@ -52,7 +58,10 @@ async def returnTeams(id = None):
                     playerDict['name'] = player.name
                     playerDict['id'] = player.id
                     playerDict['rating'] = player.attributes.overallRating
-                    playerDict['tier'] = player.playerTier.name
+                    playerDict['stars'] = player.playerTier.value
+                    playerDict['term'] = player.term
+                    playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
+                    playerDict['seasonStats'] = player.seasonStatsDict
                     rosterDict[pos] = playerDict
                 dict['roster'] = rosterDict
     return dict
@@ -61,11 +70,12 @@ async def returnTeams(id = None):
 async def returnPlayers(id = None):
     dict = {}
     if id is None:
-        for player in floosball.playerList:
+        for player in floosball.activePlayerList:
             playerDict = {}
             playerDict['id'] = player.id
             playerDict['position'] = player.position.name
-            playerDict['tier'] = player.playerTier.name
+            playerDict['stars'] = player.playerTier.value
+            playerDict['term'] = player.term
             playerDict['rating'] = player.attributes.overallRating
             if isinstance(player.team, str):
                 playerDict['team'] = player.team
@@ -76,7 +86,8 @@ async def returnPlayers(id = None):
             dict[player.name] = playerDict
     else:
         id = int(id)
-        for player in floosball.playerList:
+        for player in floosball.activePlayerList:
+            player: Player
             if player.id == id:
                 dict['name'] = player.name
                 if isinstance(player.team, str):
@@ -87,6 +98,31 @@ async def returnPlayers(id = None):
                     dict['team'] = player.team.name
                 dict['position'] = player.position.name
                 dict['rating'] = player.attributes.overallRating
+                dict['stars'] = player.playerTier.value
+                dict['term'] = player.term
+                attDict = {}
+                if player.position is Position.QB:
+                    attDict['armStrength'] = player.attributes.armStrength
+                    attDict['accuracy'] = player.attributes.accuracy
+                    attDict['agility'] = player.attributes.agility
+                elif player.position is Position.RB:
+                    attDict['speed'] = player.attributes.speed
+                    attDict['power'] = player.attributes.power
+                    attDict['agility'] = player.attributes.agility
+                elif player.position is Position.WR:
+                    attDict['speed'] = player.attributes.speed
+                    attDict['hands'] = player.attributes.hands
+                    attDict['agility'] = player.attributes.agility
+                elif player.position is Position.TE:
+                    attDict['speed'] = player.attributes.hands
+                    attDict['power'] = player.attributes.power
+                    attDict['agility'] = player.attributes.agility
+                elif player.position is Position.K:
+                    attDict['legStrength'] = player.attributes.legStrength
+                    attDict['accuracy'] = player.attributes.accuracy
+                dict['attributes'] = attDict
+                if player.seasonPerformanceRating > 0:
+                    dict['seasonPerformanceRating'] = player.seasonPerformanceRating
                 dict['season stats'] = player.seasonStatsDict
                 dict['career stats'] = player.careerStatsDict
 
@@ -180,7 +216,13 @@ async def returnGame(id = None):
                             scoreDict['yardsTo1stDwn'] = game.yardsToFirstDown
                         scoreDict['yardsToEZ'] = game.yardsToEndzone
                         if game.totalPlays > 0:
-                            scoreDict['lastPlay'] = game.playsDict[str(game.totalPlays)]['playText']
+                            playDict = {}
+                            if game.totalPlays >= 3:
+                                playDict[game.totalPlays - 2] = game.playsDict[str(game.totalPlays-2)]['playText']
+                            if game.totalPlays >= 2:
+                                playDict[game.totalPlays - 1] = game.playsDict[str(game.totalPlays-1)]['playText']
+                            playDict[game.totalPlays] = game.playsDict[str(game.totalPlays)]['playText']
+                            scoreDict['lastPlay'] = playDict
                         dict[game.id] = scoreDict
                     elif game.status is FloosGame.GameStatus.Final:
                         resultsDict = {}
@@ -221,7 +263,13 @@ async def returnActiveGames():
                 gameDict['yardsTo1stDwn'] = game.yardsToFirstDown
             gameDict['yardsToEZ'] = game.yardsToEndzone
             if game.totalPlays > 0:
-                gameDict['lastPlay'] = game.playsDict[str(game.totalPlays)]['playText']
+                playDict = {}
+                if game.totalPlays >= 3:
+                    playDict[game.totalPlays - 2] = game.playsDict[str(game.totalPlays-2)]['playText']
+                if game.totalPlays >= 2:
+                    playDict[game.totalPlays - 1] = game.playsDict[str(game.totalPlays-1)]['playText']
+                playDict[game.totalPlays] = game.playsDict[str(game.totalPlays)]['playText']
+                gameDict['lastPlay'] = playDict
         elif game.status is FloosGame.GameStatus.Final:
             gameDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
             gameDict['id'] = game.id
@@ -329,9 +377,56 @@ async def returnGameStats(id = None):
         else:
             return 'Game Not Found'
 
+@app.get('/draftResults')
+async def returnDraftResults(season = None):
+    if season is None:
+        return floosball.rookieDraftHistoryDict
+    else:
+        return floosball.rookieDraftHistoryDict['offseason {}'.format(season)]
+
+@app.get('/freeAgency')
+async def returnDraftResults(season = None):
+    if season is None:
+        return floosball.freeAgencyHistoryDict
+    else:
+        return floosball.freeAgencyHistoryDict['offseason {}'.format(season)]
+
+@app.get('/roster')
+async def returnTeamRosters(id = None, season = None):
+    rosterDict = {}
+    if id is None and season is None:
+        team: Team
+        for team in floosball.teamList:
+            rosterDict[team.name] = team.rosterHistoryList[len(team.rosterHistoryList)-1]
+        return rosterDict
+    elif id is None:
+        team: Team
+        for team in floosball.teamList:
+            rosterDict[team.name] = team.rosterHistoryList[int(season)-1]
+        return rosterDict
+    elif season is None:
+        team: Team
+        for team in floosball.teamList:
+            if team.id == int(id):
+                rosterDict[team.name] = team.rosterHistoryList
+                break
+        return rosterDict
+    else:
+        team: Team
+        for team in floosball.teamList:
+            if team.id == int(id):
+                rosterDict[team.name] = team.rosterHistoryList[int(season)-1]
+                break
+        return rosterDict
+
+
+
+            
+
 @app.get('/info')
 async def returnInfo():
     return floosball.__version__
 
-uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+
+uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
