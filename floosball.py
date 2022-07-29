@@ -33,6 +33,7 @@ activeKList = []
 playerLists = [activeQbList, activeRbList, activeWrList, activeTeList, activeKList]
 
 rookieDraftHistoryDict = {}
+rookieDraftOrder = []
 freeAgencyHistoryDict = {}
 teamList = []
 divisionList = []   
@@ -99,8 +100,9 @@ class Season:
         y = 0
         jsonFile = open("data/teamData.json", "w+")
         for team in teamList:
-
+            team: FloosTeam.Team
             for player in team.rosterDict.values():
+                player: FloosPlayer.Player
                 player.seasonsPlayed += 1
                 if 'passComp' in player.seasonStatsDict and player.seasonStatsDict['passYards'] > 0:
                     player.careerStatsDict['passAtt'] += player.seasonStatsDict['passAtt']
@@ -144,6 +146,52 @@ class Season:
                 if 'tds' in player.seasonStatsDict:
                     team.seasonTeamStats['Offense']['tds'] += player.seasonStatsDict['tds']
 
+            for player in team.reserveRosterDict.values():
+                player: FloosPlayer.Player
+                if player is not None and player.gamesPlayed > 0:
+                    player.seasonsPlayed += 1
+                    if 'passComp' in player.seasonStatsDict and player.seasonStatsDict['passYards'] > 0:
+                        player.careerStatsDict['passAtt'] += player.seasonStatsDict['passAtt']
+                        player.careerStatsDict['passComp'] += player.seasonStatsDict['passComp']
+                        player.careerStatsDict['tds'] += player.seasonStatsDict['tds']
+                        player.careerStatsDict['ints'] += player.seasonStatsDict['ints']
+                        player.careerStatsDict['passYards'] += player.seasonStatsDict['passYards']
+                        player.careerStatsDict['totalYards'] += player.seasonStatsDict['passYards']
+                        player.careerStatsDict['ypc'] = round(player.careerStatsDict['passYards']/player.careerStatsDict['passComp'])
+                        player.careerStatsDict['passCompPerc'] = round((player.careerStatsDict['passComp']/player.careerStatsDict['passAtt'])*100)
+                        team.seasonTeamStats['Offense']['passYards'] += player.seasonStatsDict['passYards']
+                    if 'receptions' in player.seasonStatsDict and player.seasonStatsDict['rcvYards'] > 0:
+                        player.careerStatsDict['receptions'] += player.seasonStatsDict['receptions']
+                        player.careerStatsDict['passTargets'] += player.seasonStatsDict['passTargets']
+                        player.careerStatsDict['rcvYards'] += player.seasonStatsDict['rcvYards']
+                        player.careerStatsDict['tds'] += player.seasonStatsDict['tds']
+                        player.careerStatsDict['totalYards'] += player.seasonStatsDict['rcvYards']
+                        if player.careerStatsDict['receptions'] > 0:
+                            player.careerStatsDict['ypr'] = round(player.careerStatsDict['rcvYards']/player.careerStatsDict['receptions'])
+                            player.careerStatsDict['rcvPerc'] = round((player.careerStatsDict['receptions']/player.careerStatsDict['passTargets'])*100)
+                    if 'carries' in player.seasonStatsDict and player.seasonStatsDict['runYards'] > 0:
+                        player.careerStatsDict['carries'] += player.seasonStatsDict['carries']
+                        player.careerStatsDict['runYards'] += player.seasonStatsDict['runYards']
+                        player.careerStatsDict['tds'] += player.seasonStatsDict['tds']
+                        player.careerStatsDict['fumblesLost'] += player.seasonStatsDict['fumblesLost']
+                        player.careerStatsDict['totalYards'] += player.seasonStatsDict['runYards']
+                        player.careerStatsDict['ypc'] = round(player.careerStatsDict['runYards']/player.careerStatsDict['carries'])
+                        team.seasonTeamStats['Offense']['runYards'] += player.seasonStatsDict['runYards']
+                    if 'fgs' in player.seasonStatsDict:
+                        if player.seasonStatsDict['fgs'] > 0:
+                            player.seasonStatsDict['fgPerc'] = round((player.seasonStatsDict['fgs']/player.seasonStatsDict['fgAtt'])*100)
+                        else:
+                            player.seasonStatsDict['fgPerc'] = 0
+
+                        player.careerStatsDict['fgAtt'] += player.seasonStatsDict['fgAtt']
+                        player.careerStatsDict['fgs'] += player.seasonStatsDict['fgs']
+                        if player.careerStatsDict['fgs'] > 0:
+                            player.careerStatsDict['fgPerc'] = round((player.careerStatsDict['fgs']/player.careerStatsDict['fgAtt'])*100)
+                        else:
+                            player.careerStatsDict['fgPerc'] = 0
+                    if 'tds' in player.seasonStatsDict:
+                        team.seasonTeamStats['Offense']['tds'] += player.seasonStatsDict['tds']
+
 
 
             team.seasonTeamStats['Offense']['totalYards'] = team.seasonTeamStats['Offense']['passYards'] + team.seasonTeamStats['Offense']['runYards']
@@ -177,6 +225,28 @@ class Season:
             team.rosterDict['wr'].seasonStatsDict = copy.deepcopy(FloosPlayer.wrStatsDict)
             team.rosterDict['te'].seasonStatsDict = copy.deepcopy(FloosPlayer.wrStatsDict)
             team.rosterDict['k'].seasonStatsDict = copy.deepcopy(FloosPlayer.kStatsDict)
+            team.rosterDict['qb'].gamesPlayed = 0
+            team.rosterDict['rb'].gamesPlayed = 0
+            team.rosterDict['wr'].gamesPlayed = 0
+            team.rosterDict['te'].gamesPlayed = 0
+            team.rosterDict['k'].gamesPlayed = 0
+
+            if team.reserveRosterDict['qb'] is not None:
+                team.reserveRosterDict['qb'].seasonStatsDict = copy.deepcopy(FloosPlayer.qbStatsDict)
+                team.reserveRosterDict['qb'].gamesPlayed = 0
+            if team.reserveRosterDict['rb'] is not None:
+                team.reserveRosterDict['rb'].seasonStatsDict = copy.deepcopy(FloosPlayer.rbStatsDict)
+                team.reserveRosterDict['rb'].gamesPlayed = 0
+            if team.reserveRosterDict['wr'] is not None:
+                team.reserveRosterDict['wr'].seasonStatsDict = copy.deepcopy(FloosPlayer.wrStatsDict)
+                team.reserveRosterDict['wr'].gamesPlayed = 0
+            if team.reserveRosterDict['te'] is not None:
+                team.reserveRosterDict['te'].seasonStatsDict = copy.deepcopy(FloosPlayer.wrStatsDict)
+                team.reserveRosterDict['te'].gamesPlayed = 0
+            if team.reserveRosterDict['k'] is not None:
+                team.reserveRosterDict['k'].seasonStatsDict = copy.deepcopy(FloosPlayer.kStatsDict)
+                team.reserveRosterDict['k'].gamesPlayed = 0
+ 
 
     async def startSeason(self):
         weekDict = {}
@@ -220,7 +290,7 @@ class Season:
                 list.sort(division.teamList, key=lambda team: team.seasonTeamStats['winPerc'], reverse=True)
             getPerformanceRating()
             sortPlayers()
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
 
         #seasonDict['games'] = weekDict
         leagueChampion = await self.playPlayoffs()
@@ -304,6 +374,10 @@ class Season:
             division.teamList[1].playoffAppearances += 1
             playoffTeamsList.append(division.teamList[0])
             playoffTeamsList.append(division.teamList[1])
+            rookieDraftOrder.append(division.teamList[2])
+            rookieDraftOrder.append(division.teamList[3])
+
+        list.sort(rookieDraftOrder, key=lambda team: team.seasonTeamStats['winPerc'], reverse=False)
 
         numOfRounds = FloosMethods.getPower(2, len(playoffTeamsList))
 
@@ -353,12 +427,15 @@ class Season:
                 if len(playoffGamesList) == 1:
                     playoffTeamsList.clear()
                     game.winningTeam.leagueChampionships += 1
-                    champ = newGame.winningTeam
+                    champ = game.winningTeam
                     playoffDict['Championship'] = gameResults
+                    rookieDraftOrder.append(game.losingTeam)
+                    rookieDraftOrder.append(champ)
                 else:
                     playoffDict[game.id] = gameResults
                     for team in playoffTeamsList:
                         if team.name == gameResults['losingTeam']:
+                            rookieDraftOrder.append(team)
                             playoffTeamsList.remove(team)
                             break
 
@@ -367,21 +444,19 @@ class Season:
             jsonFile.close()
             if x < numOfRounds - 1:
                 sortPlayers()
-                await asyncio.sleep(15)
+                await asyncio.sleep(30)
 
         return champ
 
 def getPlayerTerm(tier: FloosPlayer.PlayerTier):
         if tier is FloosPlayer.PlayerTier.SuperStar:
-            return randint(7,10)
+            return randint(4,6)
         elif tier is FloosPlayer.PlayerTier.Elite:
-            return randint(5,7)
-        elif tier is FloosPlayer.PlayerTier.AboveAverage:
             return randint(3,5)
+        elif tier is FloosPlayer.PlayerTier.AboveAverage:
+            return randint(2,4)
         elif tier is FloosPlayer.PlayerTier.Average:
-            return randint(2,3)
-        elif tier is FloosPlayer.PlayerTier.BelowAverage:
-            return randint(1,2)
+            return randint(1,3)
         else:
             return 1
 
@@ -409,12 +484,12 @@ def playerDraft():
         elif player.position.value == 5:
             draftKList.append(player)
     
-    list.sort(draftQbList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftRbList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftWrList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftTeList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftKList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(playerDraftList, key=lambda player: player.attributes.skillRating, reverse=True)
+    list.sort(draftQbList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(draftRbList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(draftWrList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(draftTeList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(draftKList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(playerDraftList, key=lambda player: player.attributes.overallRating, reverse=True)
 
 
     for x in range(len(teamList)):
@@ -487,14 +562,19 @@ def playerDraft():
                 
     for player in draftQbList:
         player.team = 'Free Agent'
+        freeAgentList.append(player)
     for player in draftRbList:
         player.team = 'Free Agent'
+        freeAgentList.append(player)
     for player in draftWrList:
         player.team = 'Free Agent'
+        freeAgentList.append(player)
     for player in draftTeList:
         player.team = 'Free Agent'
+        freeAgentList.append(player)
     for player in draftKList:
         player.team = 'Free Agent'
+        freeAgentList.append(player)
 
 
 def savePlayerData():
@@ -569,13 +649,9 @@ def getPlayers(_config):
                 newPlayer.attributes.creativity = player['attributes']['creativity']
                 newPlayer.attributes.luck = player['attributes']['luck']
                 newPlayer.attributes.attitude = player['attributes']['attitude']
-                newPlayer.attributes.influence = player['attributes']['influence']
-                newPlayer.attributes.leadershipRating = player['attributes']['leadershipRating']
                 newPlayer.attributes.playMakingAbility = player['attributes']['playMakingAbility']
 
                 newPlayer.careerStatsDict = player['careerStats']
-                newPlayer.updateTier()
-
 
                 newPlayer.careerStatsDict = player['careerStats']
                 activePlayerList.append(newPlayer)
@@ -583,7 +659,7 @@ def getPlayers(_config):
         jsonFile.close()
 
     else:
-        numOfPlayers = 160
+        numOfPlayers = 100
         id = 1
         for x in _config['players']:
             unusedNamesList.append(x)
@@ -635,19 +711,19 @@ def getTeams(_config):
 
 
                 teamRoster = team['rosterDict']
-                for player in teamRoster.values():
+                for pos, player in teamRoster.items():
                     for z in activePlayerList:
+                        z:FloosPlayer.Player
                         if z.name == player['name']:
-                            if z.position.value == 1:
-                                newTeam.rosterDict['qb'] = z
-                            elif z.position.value == 2:
-                                newTeam.rosterDict['rb'] = z
-                            elif z.position.value == 3:
-                                newTeam.rosterDict['wr'] = z
-                            elif z.position.value == 4:
-                                newTeam.rosterDict['te'] = z
-                            elif z.position.value == 5:
-                                newTeam.rosterDict['k'] = z
+                            newTeam.rosterDict[pos] = z
+                            break
+
+                teamReserveRoster = team['reserveRosterDict']
+                for pos, player in teamReserveRoster.items():
+                    for z in activePlayerList:
+                        z:FloosPlayer.Player
+                        if z.name == player['name']:
+                            newTeam.reserveRosterDict[pos] = z
                             break
 
                 teamList.append(newTeam)
@@ -686,9 +762,55 @@ def initTeams():
     y = 0
     jsonFile = open("data/teamData.json", "w+")
     for team in teamList:
+        team: FloosTeam.Team
         team.setupTeam()
+        teamDict = {}
+        teamDict['name'] = team.name
+        teamDict['id'] = team.id
+        teamDict['offenseRating'] = team.offenseRating
+        teamDict['runDefenseRating'] = team.runDefenseRating
+        teamDict['passDefenseRating'] = team.passDefenseRating
+        teamDict['defenseRating'] = team.defenseRating
+        teamDict['defenseLuck'] = team.defenseLuck
+        teamDict['defenseDiscipline'] = team.defenseDiscipline
+        teamDict['overallRating'] = team.overallRating
+        teamDict['allTimeTeamStats'] = team.allTimeTeamStats
+        teamDict['leagueChampionships'] = team.leagueChampionships
+        teamDict['playoffAppearances'] = team.playoffAppearances
+
+        rosterDict = {}
+        
+        for pos, player in team.rosterDict.items():
+            player:FloosPlayer.Player
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['id'] = player.id
+            playerDict['tier'] = player.playerTier.name
+            playerDict['overallRating'] = player.attributes.overallRating
+            playerDict['term'] = player.term
+            playerDict['seasonsPlayed'] = player.seasonsPlayed
+            playerDict['careerStatsDict'] = player.careerStatsDict
+            rosterDict[pos] = playerDict
+
+        reserveRosterDict = {}
+        
+        for pos, player in team.reserveRosterDict.items():
+            if player is not None:
+                player:FloosPlayer.Player
+                playerDict = {}
+                playerDict['name'] = player.name
+                playerDict['id'] = player.id
+                playerDict['tier'] = player.playerTier.name
+                playerDict['overallRating'] = player.attributes.overallRating
+                playerDict['term'] = player.term
+                playerDict['seasonsPlayed'] = player.seasonsPlayed
+                playerDict['careerStatsDict'] = player.careerStatsDict
+                reserveRosterDict[pos] = playerDict
+        teamDict['rosterDict'] = rosterDict
+        teamDict['reserveRosterDict'] = reserveRosterDict
+
         y += 1
-        dict[y] = FloosMethods._prepare_for_serialization(team)
+        dict[y] = teamDict
 
     jsonFile.write(json.dumps(dict, indent=4))
     jsonFile.close()
@@ -742,6 +864,44 @@ def initDivisions():
 
 def offseason():
     freeAgencyDict = {}
+    for player in freeAgentList:
+        player: FloosPlayer.Player
+        player.freeAgentYears += 1
+
+        if player.freeAgentYears > 5:
+            x = randint(1,10)
+            if x > 6:
+                player.team = 'Retired'
+                retiredPlayersList.append(player)
+                freeAgentList.remove(player)
+                activePlayerList.remove(player)
+                if player.position is FloosPlayer.Position.QB:
+                    activeQbList.remove(player)
+                elif player.position is FloosPlayer.Position.RB:
+                    activeRbList.remove(player)
+                elif player.position is FloosPlayer.Position.WR:
+                    activeWrList.remove(player)
+                elif player.position is FloosPlayer.Position.TE:
+                    activeTeList.remove(player)
+                elif player.position is FloosPlayer.Position.K:
+                    activeKList.remove(player)
+
+                name = player.name
+                if name.endswith('IV'):
+                    name = name.replace('IV', 'V')
+                elif name.endswith('VIII'):
+                    name = name.replace('VIII', 'IX')
+                elif name.endswith('IX'):
+                    name = name.replace('IX', 'X')
+                elif name.endswith('III'):
+                    name = name.replace('III', 'IV')
+                elif name.endswith('V') or name.endswith('II') or name.endswith('X'):
+                    name += 'I'
+                else:
+                    name += ' II'
+                unusedNamesList.append(name)
+
+
     for team in teamList:
 
         for k,v in team.rosterDict.items():
@@ -780,6 +940,21 @@ def offseason():
                     elif v.position is FloosPlayer.Position.K:
                         activeKList.remove(v)
                     team.rosterDict[k] = None
+
+                    name = v.name
+                    if name.endswith('IV'):
+                        name = name.replace('IV', 'V')
+                    elif name.endswith('VIII'):
+                        name = name.replace('VIII', 'IX')
+                    elif name.endswith('IX'):
+                        name = name.replace('IX', 'X')
+                    elif name.endswith('III'):
+                        name = name.replace('III', 'IV')
+                    elif name.endswith('V') or name.endswith('II') or name.endswith('X'):
+                        name += 'I'
+                    else:
+                        name += ' II'
+                    unusedNamesList.append(name)
                 else:
                     x = randint(1,100)
                     if v.playerTier is FloosPlayer.PlayerTier.SuperStar:
@@ -822,33 +997,127 @@ def offseason():
                             team.rosterDict[k] = None
                         else:
                             v.term = getPlayerTerm(v.playerTier)
+
+        for k,v in team.reserveRosterDict.items():
+            if v is not None:
+                v: FloosPlayer.Player
+                v.term -= 1
+                if v.term == 0:
+                    retirePlayerBool = None
+                    if v.seasonsPlayed > 15:
+                        x = randint(1,10)
+                        if x > 4:
+                            retirePlayerBool = True
+                    elif v.seasonsPlayed > 10:
+                        x = randint(1,10)
+                        if x > 6:
+                            retirePlayerBool = True
+                    elif v.seasonsPlayed >= 7:
+                        x = randint(1,10)
+                        if x > 8:
+                            retirePlayerBool = True
+                    else:
+                        retirePlayerBool = False
+
+                    if retirePlayerBool:
+                        v.previousTeam = team.name
+                        v.team = 'Retired'
+                        retiredPlayersList.append(v)
+                        activePlayerList.remove(v)
+                        if v.position is FloosPlayer.Position.QB:
+                            activeQbList.remove(v)
+                        elif v.position is FloosPlayer.Position.RB:
+                            activeRbList.remove(v)
+                        elif v.position is FloosPlayer.Position.WR:
+                            activeWrList.remove(v)
+                        elif v.position is FloosPlayer.Position.TE:
+                            activeTeList.remove(v)
+                        elif v.position is FloosPlayer.Position.K:
+                            activeKList.remove(v)
+                        team.reserveRosterDict[k] = None
+
+                        name = v.name
+                        if name.endswith('IV'):
+                            name = name.replace('IV', 'V')
+                        elif name.endswith('VIII'):
+                            name = name.replace('VIII', 'IX')
+                        elif name.endswith('IX'):
+                            name = name.replace('IX', 'X')
+                        elif name.endswith('III'):
+                            name = name.replace('III', 'IV')
+                        elif name.endswith('V') or name.endswith('II') or name.endswith('X'):
+                            name += 'I'
+                        else:
+                            name += ' II'
+                        unusedNamesList.append(name)
+                    else:
+                        x = randint(1,100)
+                        if v.playerTier is FloosPlayer.PlayerTier.SuperStar:
+                            if x > 99:
+                                v.previousTeam = team.name
+                                v.team = 'Free Agent'
+                                freeAgentList.append(v)
+                                team.reserveRosterDict[k] = None
+                            else:
+                                v.term = getPlayerTerm(v.playerTier)
+                        elif v.playerTier is FloosPlayer.PlayerTier.Elite:
+                            if x > 90:
+                                v.previousTeam = team.name
+                                v.team = 'Free Agent'
+                                freeAgentList.append(v)
+                                team.reserveRosterDict[k] = None
+                            else:
+                                v.term = getPlayerTerm(v.playerTier)
+                        elif v.playerTier is FloosPlayer.PlayerTier.AboveAverage:
+                            if x > 65:
+                                v.previousTeam = team.name
+                                v.team = 'Free Agent'
+                                freeAgentList.append(v)
+                                team.reserveRosterDict[k] = None
+                            else:
+                                v.term = getPlayerTerm(v.playerTier)
+                        elif v.playerTier is FloosPlayer.PlayerTier.Average:
+                            if x > 40:
+                                v.previousTeam = team.name
+                                v.team = 'Free Agent'
+                                freeAgentList.append(v)
+                                team.reserveRosterDict[k] = None
+                            else:
+                                v.term = getPlayerTerm(v.playerTier)
+                        elif v.playerTier is FloosPlayer.PlayerTier.BelowAverage:
+                            if x > 15:
+                                v.previousTeam = team.name
+                                v.team = 'Free Agent'
+                                freeAgentList.append(v)
+                                team.reserveRosterDict[k] = None
+                            else:
+                                v.term = getPlayerTerm(v.playerTier)
                     
     for player in activePlayerList:
         if player.team is None:
             pass
         player.offseasonTraining()
-        player.attributes.calculateIntangibles()
-        player.updateRating()
 
     rookieDraftList = []
 
     for x in range(len(teamList)):
         player = None
+        seed = randint(50,100)
         y = randint(0,4)
         if y == 0:
-            player = FloosPlayer.PlayerQB()
+            player = FloosPlayer.PlayerQB(seed)
             activeQbList.append(player)
         elif y == 1:
-            player = FloosPlayer.PlayerRB()
+            player = FloosPlayer.PlayerRB(seed)
             activeRbList.append(player)
         elif y == 2:
-            player = FloosPlayer.PlayerWR()
+            player = FloosPlayer.PlayerWR(seed)
             activeWrList.append(player)
         elif y == 3:
-            player = FloosPlayer.PlayerTE()
+            player = FloosPlayer.PlayerTE(seed)
             activeTeList.append(player)
         elif y == 4:
-            player = FloosPlayer.PlayerK()
+            player = FloosPlayer.PlayerK(seed)
             activeKList.append(player)
         player.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
         player.id = (len(activePlayerList) + len(retiredPlayersList) + 1)
@@ -856,44 +1125,81 @@ def offseason():
         rookieDraftList.append(player)
 
     sortPlayers()
-    list.sort(rookieDraftList, key=lambda player: player.attributes.skillRating, reverse=True)
+    list.sort(rookieDraftList, key=lambda player: player.attributes.overallRating, reverse=True)
     draftSelectionDict = {}
-    for team in teamList:
+    for team in rookieDraftOrder:
+        team: FloosTeam.Team
         draftSelection: FloosPlayer.Player = None
         for player in rookieDraftList:
+            player: FloosPlayer.Player
             if player.position is FloosPlayer.Position.QB:
-                if team.rosterDict['qb'] is None:
-                    draftSelection = player
-                    team.rosterDict['qb'] = draftSelection
-                    break
+                if team.rosterDict['qb'] is None or team.reserveRosterDict['qb'] is None:
+                    if team.rosterDict['qb'] is None:
+                        draftSelection = player
+                        team.rosterDict['qb'] = draftSelection
+                        break
+                    elif player.attributes.overallRating > team.rosterDict['qb'].attributes.overallRating:
+                        draftSelection = player
+                        team.reserveRosterDict['qb'] = draftSelection
+                        break
+                    else:
+                        continue
                 else:
                     continue
             elif player.position is FloosPlayer.Position.RB:
-                if team.rosterDict['rb'] is None:
-                    draftSelection = player
-                    team.rosterDict['rb'] = draftSelection
-                    break
+                if team.rosterDict['rb'] is None or team.reserveRosterDict['rb'] is None:
+                    if team.rosterDict['rb'] is None:
+                        draftSelection = player
+                        team.rosterDict['rb'] = draftSelection
+                        break
+                    elif player.attributes.overallRating > team.rosterDict['rb'].attributes.overallRating:
+                        draftSelection = player
+                        team.reserveRosterDict['rb'] = draftSelection
+                        break
+                    else:
+                        continue
                 else:
                     continue
             elif player.position is FloosPlayer.Position.WR:
-                if team.rosterDict['wr'] is None:
-                    draftSelection = player
-                    team.rosterDict['wr'] = draftSelection
-                    break
+                if team.rosterDict['wr'] is None or team.reserveRosterDict['wr'] is None:
+                    if team.rosterDict['wr'] is None:
+                        draftSelection = player
+                        team.rosterDict['wr'] = draftSelection
+                        break
+                    elif player.attributes.overallRating > team.rosterDict['wr'].attributes.overallRating:
+                        draftSelection = player
+                        team.reserveRosterDict['wr'] = draftSelection
+                        break
+                    else:
+                        continue
                 else:
                     continue
             elif player.position is FloosPlayer.Position.TE:
-                if team.rosterDict['te'] is None:
-                    draftSelection = player
-                    team.rosterDict['te'] = draftSelection
-                    break
+                if team.rosterDict['te'] is None or team.reserveRosterDict['te'] is None:
+                    if team.rosterDict['te'] is None:
+                        draftSelection = player
+                        team.rosterDict['te'] = draftSelection
+                        break
+                    elif player.attributes.overallRating > team.rosterDict['te'].attributes.overallRating:
+                        draftSelection = player
+                        team.reserveRosterDict['te'] = draftSelection
+                        break
+                    else:
+                        continue
                 else:
                     continue
             elif player.position is FloosPlayer.Position.K:
-                if team.rosterDict['k'] is None:
-                    draftSelection = player
-                    team.rosterDict['k'] = draftSelection
-                    break
+                if team.rosterDict['k'] is None or team.reserveRosterDict['k'] is None:
+                    if team.rosterDict['k'] is None:
+                        draftSelection = player
+                        team.rosterDict['k'] = draftSelection
+                        break
+                    elif player.attributes.overallRating > team.rosterDict['k'].attributes.overallRating:
+                        draftSelection = player
+                        team.reserveRosterDict['k'] = draftSelection
+                        break
+                    else:
+                        continue
                 else:
                     continue
 
@@ -930,12 +1236,12 @@ def offseason():
         elif player.position.value == 5:
             freeAgentKList.append(player)
 
-    list.sort(freeAgentQbList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(freeAgentRbList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(freeAgentWrList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(freeAgentTeList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(freeAgentKList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(freeAgentList, key=lambda player: player.attributes.skillRating, reverse=True)
+    list.sort(freeAgentQbList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(freeAgentRbList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(freeAgentWrList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(freeAgentTeList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(freeAgentKList, key=lambda player: player.attributes.overallRating, reverse=True)
+    list.sort(freeAgentList, key=lambda player: player.attributes.overallRating, reverse=True)
 
     teamsComplete = 0
     while teamsComplete < len(teamList):
@@ -943,12 +1249,16 @@ def offseason():
         team: FloosTeam.Team
         for team in teamList:
             selectedPlayer = None
-            openPosList = []
+            openRosterPosList = []
+            openReservePosList = []
             for k,v in team.rosterDict.items():
                 if v is None:
-                    openPosList.append(k)
-            if len(openPosList) > 0:
-                pos = choice(openPosList)
+                    openRosterPosList.append(k)
+            for k,v in team.reserveRosterDict.items():
+                if v is None:
+                    openReservePosList.append(k)
+            if len(openRosterPosList) > 0:
+                pos = choice(openRosterPosList)
                 if pos == 'qb':
                     selectedPlayer = freeAgentQbList.pop(0)
                 elif pos == 'rb':
@@ -964,8 +1274,31 @@ def offseason():
                 selectedPlayer.team = team
                 team.rosterDict[pos] = selectedPlayer
                 selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
-                freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.overallRating, 'tier': selectedPlayer.playerTier.name, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam}
+                freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.overallRating, 'tier': selectedPlayer.playerTier.name, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "starting"}
                 continue
+            elif len(openReservePosList) > 0 and len(freeAgentList) > 0:
+                pos = choice(openReservePosList)
+                if pos == 'qb' and len(freeAgentQbList) > 0 and freeAgentQbList[0].attributes.overallRating > team.rosterDict['qb'].attributes.overallRating:
+                    selectedPlayer = freeAgentQbList.pop(0)
+                elif pos == 'rb' and len(freeAgentRbList) > 0 and freeAgentRbList[0].attributes.overallRating > team.rosterDict['rb'].attributes.overallRating:
+                    selectedPlayer = freeAgentRbList.pop(0)
+                elif pos == 'wr' and len(freeAgentWrList) > 0 and freeAgentWrList[0].attributes.overallRating > team.rosterDict['wr'].attributes.overallRating:
+                    selectedPlayer = freeAgentWrList.pop(0)
+                elif pos == 'te' and len(freeAgentTeList) > 0 and freeAgentTeList[0].attributes.overallRating > team.rosterDict['te'].attributes.overallRating:
+                    selectedPlayer = freeAgentTeList.pop(0)
+                elif pos == 'k' and len(freeAgentKList) > 0 and freeAgentKList[0].attributes.overallRating > team.rosterDict['k'].attributes.overallRating:
+                    selectedPlayer = freeAgentKList.pop(0)
+                
+                if selectedPlayer is not None:
+                    freeAgentList.remove(selectedPlayer)
+                    selectedPlayer.team = team
+                    team.reserveRosterDict[pos] = selectedPlayer
+                    selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
+                    freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.overallRating, 'tier': selectedPlayer.playerTier.name, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "reserve"}
+                    continue
+                else:
+                    teamsComplete += 1
+                    continue
             else:
                 teamsComplete += 1
                 continue
@@ -976,7 +1309,6 @@ def offseason():
 
     for team in teamList:
             team.updateDefense()
-            team.updateRating()
     
 def getPerformanceRating():
     qbStatsPassCompList = []
@@ -1072,6 +1404,42 @@ def getPerformanceRating():
             fgsRating = stats.percentileofscore(kStatsFgsList, k.seasonStatsDict['fgs'], 'rank')
             k.seasonPerformanceRating = round(((fgPercRating*1.5)+(fgsRating*.5))/2)
 
+    defenseStatsSacksList = []
+    defenseStatsIntsList = []
+    defenseStatsFumblesList = []
+    defenseStatsPassYardsList = []
+    defenseStatsRunYardsList = []
+    defenseStatsTotalYardsList = []
+    defenseStatsPassTdsList = []
+    defenseStatsRunTdsList = []
+    defenseStatsTotalTdsList = []
+    
+    for team in teamList:
+        team: FloosTeam.Team
+        defenseStatsSacksList.append(team.seasonTeamStats['Defense']['sacks'])
+        defenseStatsIntsList.append(team.seasonTeamStats['Defense']['ints'])
+        defenseStatsFumblesList.append(team.seasonTeamStats['Defense']['fumRec'])
+        defenseStatsPassYardsList.append(team.seasonTeamStats['Defense']['passYardsAlwd'])
+        defenseStatsRunYardsList.append(team.seasonTeamStats['Defense']['runYardsAlwd'])
+        defenseStatsTotalYardsList.append(team.seasonTeamStats['Defense']['totalYardsAlwd'])
+        defenseStatsPassTdsList.append(team.seasonTeamStats['Defense']['passTdsAlwd'])
+        defenseStatsRunTdsList.append(team.seasonTeamStats['Defense']['runTdsAlwd'])
+        defenseStatsTotalTdsList.append(team.seasonTeamStats['Defense']['tdsAlwd'])
+
+    for team in teamList:
+        team: FloosTeam.Team
+        sacksRating = stats.percentileofscore(defenseStatsSacksList, team.seasonTeamStats['Defense']['sacks'], 'rank')
+        intsRating = stats.percentileofscore(defenseStatsIntsList, team.seasonTeamStats['Defense']['ints'], 'rank')
+        fumblesRating = 100 - stats.percentileofscore(defenseStatsFumblesList, team.seasonTeamStats['Defense']['fumRec'], 'rank')
+        passYardsRating = stats.percentileofscore(defenseStatsPassYardsList, team.seasonTeamStats['Defense']['passYardsAlwd'], 'rank')
+        runYardsRating = stats.percentileofscore(defenseStatsRunYardsList, team.seasonTeamStats['Defense']['runYardsAlwd'], 'rank')
+        totalYardsRating = stats.percentileofscore(defenseStatsTotalYardsList, team.seasonTeamStats['Defense']['totalYardsAlwd'], 'rank')
+        passTdsRating = stats.percentileofscore(defenseStatsPassTdsList, team.seasonTeamStats['Defense']['passTdsAlwd'], 'rank')
+        runTdsRating = stats.percentileofscore(defenseStatsRunTdsList, team.seasonTeamStats['Defense']['runTdsAlwd'], 'rank')
+        totalTdsRating = stats.percentileofscore(defenseStatsTotalTdsList, team.seasonTeamStats['Defense']['tdsAlwd'], 'rank')
+        
+        team.defenseSeasonPerformanceRating = round(((sacksRating*.6)+(intsRating*.8)+(fumblesRating*.8)+(passYardsRating*1.1)+(runYardsRating*1.1)+(totalYardsRating*1.2)+(passTdsRating*1.1)+(runTdsRating*1.1)+(totalTdsRating*1.2))/9)
+
 
 async def startLeague():
     global seasonsPlayed
@@ -1142,4 +1510,4 @@ async def startLeague():
         if saveSeasonProgress:
             print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)

@@ -17,6 +17,7 @@ app = FastAPI()
 origins = [
     "http://localhost",
     "http://localhost:3000",
+    "http://localhost:3001",
 ]
 
 app.add_middleware(
@@ -34,24 +35,36 @@ async def startup_event():
 
 @app.get('/teams')
 async def returnTeams(id = None):
-    dict = {}
+    teamList = []
     if id is None:
         for team in floosball.teamList:
+            team: Team
             teamDict = {}
+            teamDict['name'] = team.name
             teamDict['id'] = team.id
             teamDict['rating'] = team.overallRating
-            teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-            dict[team.name] = teamDict
+            teamDict['offenseRating'] = team.offenseRating
+            teamDict['defenseRating'] = team.defenseRating
+            teamDict['runDefenseRating'] = team.runDefenseRating
+            teamDict['passDefenseRating'] = team.passDefenseRating
+            teamDict['wins'] = team.seasonTeamStats['wins']
+            teamDict['losses'] = team.seasonTeamStats['losses']
+            teamList.append(teamDict)
+        return teamList
     else:
         for team in floosball.teamList:
             if team.id == int(id):
-                dict['name'] = team.name
-                dict['rating'] = team.overallRating
-                dict['offense'] = team.offenseRating
-                dict['defense'] = team.defenseRating
-                dict['runDefense'] = team.runDefenseRating
-                dict['passDefense'] = team.passDefenseRating
-                dict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
+                teamDict = {}
+                teamDict['name'] = team.name
+                teamDict['id'] = team.id
+                teamDict['rating'] = team.overallRating
+                teamDict['offenseRating'] = team.offenseRating
+                teamDict['defenseRating'] = team.defenseRating
+                teamDict['runDefenseRating'] = team.runDefenseRating
+                teamDict['passDefenseRating'] = team.passDefenseRating
+                teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
+                teamDict['wins'] = team.seasonTeamStats['wins']
+                teamDict['losses'] = team.seasonTeamStats['losses']
                 rosterDict = {}
                 for pos, player in team.rosterDict.items():
                     playerDict = {}
@@ -63,15 +76,16 @@ async def returnTeams(id = None):
                     playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
                     playerDict['seasonStats'] = player.seasonStatsDict
                     rosterDict[pos] = playerDict
-                dict['roster'] = rosterDict
-    return dict
+                teamDict['roster'] = rosterDict
+                return teamDict
 
 @app.get('/players')
 async def returnPlayers(id = None):
-    dict = {}
+    playerList = []
     if id is None:
         for player in floosball.activePlayerList:
             playerDict = {}
+            playerDict['name'] = player.name
             playerDict['id'] = player.id
             playerDict['position'] = player.position.name
             playerDict['stars'] = player.playerTier.value
@@ -83,11 +97,13 @@ async def returnPlayers(id = None):
                 playerDict['team'] = 'Free Agent'
             else:
                 playerDict['team'] = player.team.name
-            dict[player.name] = playerDict
+            playerList.append(playerDict)
+        return playerList
     else:
         id = int(id)
         for player in floosball.activePlayerList:
             player: Player
+            dict = {}
             if player.id == id:
                 dict['name'] = player.name
                 if isinstance(player.team, str):
@@ -125,65 +141,57 @@ async def returnPlayers(id = None):
                     dict['seasonPerformanceRating'] = player.seasonPerformanceRating
                 dict['season stats'] = player.seasonStatsDict
                 dict['career stats'] = player.careerStatsDict
-
-    return dict
+        return dict
 
 @app.get('/standings')
 async def returnStandings():
-    dict = {}
+    standingsList = []
     for division in floosball.divisionList:
-        teamDict = {}
+        division: floosball.Division
+        divDict = {}
+        teamsList = []
+        divDict['name'] = division.name
         for team in division.teamList:
-            teamDict[team.name] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-        dict[division.name] = teamDict
-    return dict
+            team: Team
+            teamDict = {}
+            teamDict['name'] = team.name
+            teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
+            teamsList.append(teamDict)
+            divDict['standings'] = teamsList
+        standingsList.append(divDict)
+    return standingsList
 
 @app.get('/schedule')
 async def returnSchedule(week = None):
-    dict = {}
+    scheduleList = []
     if week is None:
+        weekDict = {}
         for y in range(len(floosball.scheduleList)):
             weekGameList = floosball.scheduleList[y]
-            gameDict = {}
+            gameList = []
             for x in range(0,len(weekGameList)):
-                game = weekGameList[x]
-                if game.status is FloosGame.GameStatus.Scheduled:
-                    gameDict[game.id] = '{0} {1}-{2} vs. {3} {4}-{5}'.format(game.awayTeam.name, game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'], game.homeTeam.name, game.homeTeam.seasonTeamStats['wins'], game.homeTeam.seasonTeamStats['losses'])
-                elif game.status is FloosGame.GameStatus.Active:
-                    scoreDict = {}
-                    scoreDict['teams'] = '{0} vs. {1}'.format(game.awayTeam.name, game.homeTeam.name)
-                    scoreDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                    gameDict[game.id] = scoreDict
-                elif game.status is FloosGame.GameStatus.Final:
-                    resultsDict = {}
-                    resultsDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
-                    if game.homeTeam.name == game.winningTeam.name:
-                        resultsDict['score'] = '{0}-{1}'.format(game.homeScore, game.awayScore)
-                    elif game.awayTeam.name == game.winningTeam.name:
-                        resultsDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                    gameDict[game.id] = resultsDict
-            dict['Week {}'.format(y+1)] = gameDict
+                game: FloosGame.Game = weekGameList[x]
+                gameDict = {}
+                gameDict['id'] = game.id
+                gameDict['homeTeam'] = game.homeTeam
+                gameDict['awayTeam'] = game.awayTeam
+                gameDict['status'] = game.status.name
+                gameList.append(gameDict)
+            weekDict['Week {}'.format(y+1)] = gameDict
+            scheduleList.append(weekDict)
+        return scheduleList
     else:
-        dict['week'] = week
+        gameDict = {}
         weekGameList = floosball.scheduleList[int(week)-1]
         for x in range(0,len(weekGameList)):
-            game = weekGameList[x]
-            if game.status is FloosGame.GameStatus.Scheduled:
-                dict[game.id] = '{0} {1}-{2} vs. {3} {4}-{5}'.format(game.awayTeam.name, game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'], game.homeTeam.name, game.homeTeam.seasonTeamStats['wins'], game.homeTeam.seasonTeamStats['losses'])
-            elif game.status is FloosGame.GameStatus.Active:
-                scoreDict = {}
-                scoreDict['teams'] = '{0} vs. {1}'.format(game.awayTeam.name, game.homeTeam.name)
-                scoreDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                dict[game.id] = scoreDict
-            elif game.status is FloosGame.GameStatus.Final:
-                resultsDict = {}
-                resultsDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
-                if game.homeTeam.name == game.winningTeam.name:
-                    resultsDict['score'] = '{0}-{1}'.format(game.homeScore, game.awayScore)
-                elif game.awayTeam.name == game.winningTeam.name:
-                    resultsDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                dict[game.id] = resultsDict
-    return dict
+            game: FloosGame.Game = weekGameList[x]
+            gameDict = {}
+            gameDict['id'] = game.id
+            gameDict['homeTeam'] = game.homeTeam
+            gameDict['awayTeam'] = game.awayTeam
+            gameDict['status'] = game.status.name
+            scheduleList.append(gameDict)
+        return scheduleList
 
 @app.get('/game')
 async def returnGame(id = None):
@@ -196,13 +204,13 @@ async def returnGame(id = None):
             for x in range(0,len(weekGameList)):
                 game = weekGameList[x]
                 if id == game.id:
-                    if game.status is FloosGame.GameStatus.Scheduled:
-                        dict[game.id] = '{0} {1}-{2} vs. {3} {4}-{5}'.format(game.awayTeam.name, game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'], game.homeTeam.name, game.homeTeam.seasonTeamStats['wins'], game.homeTeam.seasonTeamStats['losses'])
-                    elif game.status is FloosGame.GameStatus.Active:
+                    if game.status is FloosGame.GameStatus.Active:
                         scoreDict = {}
-                        scoreDict['teams'] = '{0} vs. {1}'.format(game.awayTeam.name, game.homeTeam.name)
                         scoreDict['status'] = game.status.name
-                        scoreDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
+                        scoreDict['homeTeam'] = game.homeTeam.name
+                        scoreDict['awayTeam'] = game.awayTeam.name
+                        scoreDict['homeScore'] = game.homeScore
+                        scoreDict['awayScore'] = game.awayScore
                         if game.currentQuarter == 5:
                             scoreDict['quarter'] = 'OT'
                         else:
@@ -224,15 +232,21 @@ async def returnGame(id = None):
                             playDict[game.totalPlays] = game.playsDict[str(game.totalPlays)]['playText']
                             scoreDict['lastPlay'] = playDict
                         dict[game.id] = scoreDict
-                    elif game.status is FloosGame.GameStatus.Final:
-                        resultsDict = {}
-                        resultsDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
-                        resultsDict['status'] = game.status.name
-                        if game.homeTeam.name == game.winningTeam.name:
-                            resultsDict['score'] = '{0}-{1}'.format(game.homeScore, game.awayScore)
-                        elif game.awayTeam.name == game.winningTeam.name:
-                            resultsDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                        dict[game.id] = resultsDict
+                    else:
+                        gameDict = {}
+                        gameDict['status'] = game.status.name
+                        gameDict['homeTeam'] = game.homeTeam.name
+                        gameDict['awayTeam'] = game.awayTeam.name
+                        gameDict['homeScore'] = game.homeScore
+                        gameDict['awayScore'] = game.awayScore
+                        gameDict['quarter'] = ''
+                        gameDict['plays'] = ''
+                        gameDict['poss'] = ''
+                        gameDict['down'] = ''
+                        gameDict['yardsTo1stDwn'] = ''
+                        gameDict['yardsToEZ'] = ''
+                        gameDict['lastPlay'] = ''
+                        dict[game.id] = gameDict
                     break
         if len(dict) == 0:
             return 'Game Not Found'
@@ -246,10 +260,11 @@ async def returnActiveGames():
         gameDict = {}
         game = activeGameList[x]
         if game.status is FloosGame.GameStatus.Active:
-            gameDict['teams'] = '{0} vs. {1}'.format(game.awayTeam.name, game.homeTeam.name)
             gameDict['id'] = game.id
-            gameDict['status'] = game.status.name
-            gameDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
+            gameDict['homeTeam'] = game.homeTeam.name
+            gameDict['awayTeam'] = game.awayTeam.name
+            gameDict['homeScore'] = game.homeScore
+            gameDict['awayScore'] = game.awayScore
             if game.currentQuarter == 5:
                 gameDict['quarter'] = 'OT'
             else:
@@ -257,28 +272,17 @@ async def returnActiveGames():
             gameDict['plays'] = game.totalPlays
             gameDict['poss'] = game.offensiveTeam.name
             gameDict['down'] = game.down
+            gameDict['playsLeft'] = 132 - game.totalPlays
             if game.yardsToEndzone < 10:
                 gameDict['yardsTo1stDwn'] = game.yardsToEndzone
             else:
                 gameDict['yardsTo1stDwn'] = game.yardsToFirstDown
             gameDict['yardsToEZ'] = game.yardsToEndzone
             if game.totalPlays > 0:
-                playDict = {}
-                if game.totalPlays >= 3:
-                    playDict[game.totalPlays - 2] = game.playsDict[str(game.totalPlays-2)]['playText']
-                if game.totalPlays >= 2:
-                    playDict[game.totalPlays - 1] = game.playsDict[str(game.totalPlays-1)]['playText']
-                playDict[game.totalPlays] = game.playsDict[str(game.totalPlays)]['playText']
-                gameDict['lastPlay'] = playDict
-        elif game.status is FloosGame.GameStatus.Final:
-            gameDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
-            gameDict['id'] = game.id
-            gameDict['status'] = game.status.name
-            if game.homeTeam.name == game.winningTeam.name:
-                gameDict['score'] = '{0}-{1}'.format(game.homeScore, game.awayScore)
-            elif game.awayTeam.name == game.winningTeam.name:
-                gameDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-        gameList.append(gameDict)
+                gameDict['lastPlay'] = game.playsDict[str(game.totalPlays)]['playText']
+            else:
+                gameDict['lastPlay'] = ''
+            gameList.append(gameDict)
     return gameList
 
 @app.get('/results')

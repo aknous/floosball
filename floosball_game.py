@@ -330,7 +330,7 @@ class Game:
         fumbleResist = round(((runner.gameAttributes.power*1) + (runner.gameAttributes.luck*.7) + (runner.gameAttributes.discipline*1.3))/3)
         playStrength = ((runner.gameAttributes.overallRating*1.3) + (blocker.gameAttributes.power*.7))/2
         if (defense.runDefenseRating + randint(-3,3)) >= (playStrength + randint(-3,3)):
-            if fumbleRoll/fumbleResist < 1.2:
+            if fumbleRoll/fumbleResist < 1.15:
                 if x < 20:
                     yardage = randint(-2,0)
                     runner.updateInGameConfidence(-.005)
@@ -350,14 +350,15 @@ class Game:
                 runner.gameStatsDict['carries'] += 1
                 runner.gameStatsDict['fumblesLost'] += 1
                 runner.updateInGameConfidence(-.02)
-                defense.seasonTeamStats['Defense']['fumRec'] += 1
+                defense.updateGameConfidence(.02)
+                defense.gameDefenseStats['fumRec'] += 1
                 self.lastPlayDict['play'] = PlayType.Run.name
                 self.lastPlayDict['runner'] = runner
                 self.lastPlayDict['result'] = PlayResult.Fumble.value
                 return yardage
 
         else:
-            if (fumbleRoll/fumbleResist) < 1.27:
+            if (fumbleRoll/fumbleResist) < 1.2:
                 if x < 50:
                     yardage = randint(0,3)
                 elif x >= 50 and x < 85:
@@ -378,8 +379,9 @@ class Game:
                 yardage = 1004
                 runner.gameStatsDict['carries'] += 1
                 runner.gameStatsDict['fumblesLost'] += 1
+                defense.gameDefenseStats['fumRec'] += 1
                 runner.updateInGameConfidence(-.02)
-                defense.seasonTeamStats['Defense']['fumRec'] += 1
+                defense.updateGameConfidence(.02)
                 self.lastPlayDict['play'] = PlayType.Run.name
                 self.lastPlayDict['runner'] = runner
                 self.lastPlayDict['result'] = PlayResult.Fumble.value
@@ -390,6 +392,8 @@ class Game:
 
         runner.gameStatsDict['runYards'] += yardage
         runner.gameStatsDict['carries'] += 1
+        defense.gameDefenseStats['runYardsAlwd'] += yardage
+        defense.gameDefenseStats['totalYardsAlwd'] += yardage
         self.lastPlayDict['play'] = PlayType.Run.name
         self.lastPlayDict['runner'] = runner
         self.lastPlayDict['yardage'] = yardage
@@ -406,7 +410,7 @@ class Game:
 
         if sackRoll < round(100 * (sackModifyer)):
             yardage = round(-(randint(0,5) * sackModifyer))
-            defense.seasonTeamStats['Defense']['sacks'] += 1
+            defense.gameDefenseStats['sacks'] += 1
             self.lastPlayDict['play'] = PlayType.Pass.name
             self.lastPlayDict['passer'] = passer
             self.lastPlayDict['yardage'] = yardage
@@ -455,6 +459,8 @@ class Game:
                         receiver.gameStatsDict['passTargets'] += 1
                         receiver.gameStatsDict['receptions'] += 1
                         receiver.gameStatsDict['rcvYards'] += yardage
+                        defense.gameDefenseStats['passYardsAlwd'] += yardage
+                        defense.gameDefenseStats['totalYardsAlwd'] += yardage
                         passer.updateInGameConfidence(0.005)
                         receiver.updateInGameConfidence(0.005)
                         self.lastPlayDict['play'] = PlayType.Pass.name
@@ -476,11 +482,12 @@ class Game:
 
                 else:
                     interceptRoll = randint(1,100)
-                    if interceptRoll <= 5:
+                    if interceptRoll <= 8:
                         yardage = 1003
                         passer.gameStatsDict['ints'] += 1
                         passer.updateInGameConfidence(-.02)
-                        defense.seasonTeamStats['Defense']['ints'] += 1
+                        defense.updateGameConfidence(.02)
+                        defense.gameDefenseStats['ints'] += 1
                         self.lastPlayDict['play'] = PlayType.Pass.name
                         self.lastPlayDict['passer'] = passer
                         self.lastPlayDict['receiver'] = receiver
@@ -535,6 +542,8 @@ class Game:
                         receiver.gameStatsDict['passTargets'] += 1
                         receiver.gameStatsDict['receptions'] += 1
                         receiver.gameStatsDict['rcvYards'] += yardage
+                        defense.gameDefenseStats['passYardsAlwd'] += yardage
+                        defense.gameDefenseStats['totalYardsAlwd'] += yardage
                         passer.updateInGameConfidence(.005)
                         receiver.updateInGameConfidence(.005)
                         self.lastPlayDict['play'] = PlayType.Pass.name
@@ -555,11 +564,12 @@ class Game:
                         return yardage
                 else:
                     interceptRoll = randint(1,100)
-                    if interceptRoll <= 5:
+                    if interceptRoll <= 10:
                         yardage = 1003
                         passer.gameStatsDict['ints'] += 1 
                         passer.updateInGameConfidence(-.02)
-                        defense.seasonTeamStats['Defense']['ints'] += 5
+                        defense.updateGameConfidence(.02)
+                        defense.gameDefenseStats['ints'] += 1
                         self.lastPlayDict['play'] = PlayType.Pass.name
                         self.lastPlayDict['passer'] = passer
                         self.lastPlayDict['receiver'] = receiver
@@ -612,6 +622,8 @@ class Game:
                         receiver.gameStatsDict['passTargets'] += 1
                         receiver.gameStatsDict['receptions'] += 1
                         receiver.gameStatsDict['rcvYards'] += yardage
+                        defense.gameDefenseStats['passYardsAlwd'] += yardage
+                        defense.gameDefenseStats['totalYardsAlwd'] += yardage
                         passer.updateInGameConfidence(.01)
                         receiver.updateInGameConfidence(.01)
                         self.lastPlayDict['play'] = PlayType.Pass.name
@@ -632,11 +644,12 @@ class Game:
                         return yardage
                 else:
                     interceptRoll = randint(1,100)
-                    if interceptRoll <= 5:
+                    if interceptRoll <= 15:
                         yardage = 1003
                         passer.gameStatsDict['ints'] += 1 
                         passer.updateInGameConfidence(-.02)
-                        defense.seasonTeamStats['Defense']['ints'] += 1
+                        defense.updateGameConfidence(.02)
+                        defense.gameDefenseStats['ints'] += 1
                         self.lastPlayDict['play'] = PlayType.Pass.name
                         self.lastPlayDict['passer'] = passer
                         self.lastPlayDict['receiver'] = receiver
@@ -685,18 +698,18 @@ class Game:
                 if self.homeTeam == offense and self.homeScore < self.awayScore:
                     scoreDiff = self.awayScore - self.homeScore
                     x = randint(1,10)
-                    if x < 3:
+                    if x < 4:
                         return self.runPlay(offense, defense)
-                    elif x >= 3 and x < 7:
+                    elif x >= 4 and x < 9:
                         return self.passPlay(offense, defense, PassType.medium)
                     else:
                         return self.passPlay(offense, defense, PassType.long)
                 elif self.awayTeam == offense and self.awayScore < self.homeScore:
                     scoreDiff = self.homeScore - self.awayScore
                     x = randint(1,10)
-                    if x < 3:
+                    if x < 4:
                         return self.runPlay(offense, defense)
-                    elif x >= 3 and x < 7:
+                    elif x >= 4 and x < 9:
                         return self.passPlay(offense, defense, PassType.medium)
                     else:
                         return self.passPlay(offense, defense, PassType.long)
@@ -868,7 +881,18 @@ class Game:
                             return self.passPlay(offense, defense, PassType.medium)
                     else:
                         return self.passPlay(offense, defense, PassType.medium)
-
+            elif self.currentQuarter == 4 and self.homeTeam == offense and self.homeScore > self.awayScore:
+                if self.yardsToEndzone < 40:
+                    return 1001
+                else:
+                    self.lastPlayDict['play'] = PlayType.Punt.name
+                    return 1002
+            elif self.currentQuarter == 4 and self.awayTeam == offense and self.awayScore > self.homeScore:
+                if self.yardsToEndzone < 40:
+                    return 1001
+                else:
+                    self.lastPlayDict['play'] = PlayType.Punt.name
+                    return 1002
             elif self.yardsToEndzone <= 5:
                     x = randint(1,10)
                     if x < 6:
@@ -989,15 +1013,35 @@ class Game:
         play['playText'] = text
 
     def postgame(self):    
-        # print('\n{0} Player Stats'.format(self.homeTeam.name))   
-
+        self.winningTeam.seasonTeamStats['Defense']['ints'] += self.winningTeam.gameDefenseStats['ints']
+        self.winningTeam.seasonTeamStats['Defense']['fumRec'] += self.winningTeam.gameDefenseStats['fumRec']
+        self.winningTeam.seasonTeamStats['Defense']['sacks'] += self.winningTeam.gameDefenseStats['sacks']
+        self.winningTeam.seasonTeamStats['Defense']['runYardsAlwd'] += self.winningTeam.gameDefenseStats['runYardsAlwd']
+        self.winningTeam.seasonTeamStats['Defense']['passYardsAlwd'] += self.winningTeam.gameDefenseStats['passYardsAlwd']
+        self.winningTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += self.winningTeam.gameDefenseStats['totalYardsAlwd']
+        self.winningTeam.seasonTeamStats['Defense']['runTdsAlwd'] += self.winningTeam.gameDefenseStats['runTdsAlwd']
+        self.winningTeam.seasonTeamStats['Defense']['passTdsAlwd'] += self.winningTeam.gameDefenseStats['passTdsAlwd']
+        self.winningTeam.seasonTeamStats['Defense']['tdsAlwd'] += self.winningTeam.gameDefenseStats['tdsAlwd']
         self.winningTeam.seasonTeamStats['winPerc'] = round(self.winningTeam.seasonTeamStats['wins']/(self.winningTeam.seasonTeamStats['wins']+self.winningTeam.seasonTeamStats['losses']),3)
         self.winningTeam.seasonTeamStats['divWinPerc'] = round(self.winningTeam.seasonTeamStats['divWins']/(self.winningTeam.seasonTeamStats['divWins']+self.winningTeam.seasonTeamStats['divLosses']),3)
+        self.winningTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
+
+        self.losingTeam.seasonTeamStats['Defense']['ints'] += self.losingTeam.gameDefenseStats['ints']
+        self.losingTeam.seasonTeamStats['Defense']['fumRec'] += self.losingTeam.gameDefenseStats['fumRec']
+        self.losingTeam.seasonTeamStats['Defense']['sacks'] += self.losingTeam.gameDefenseStats['sacks']
+        self.losingTeam.seasonTeamStats['Defense']['runYardsAlwd'] += self.losingTeam.gameDefenseStats['runYardsAlwd']
+        self.losingTeam.seasonTeamStats['Defense']['passYardsAlwd'] += self.losingTeam.gameDefenseStats['passYardsAlwd']
+        self.losingTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += self.losingTeam.gameDefenseStats['totalYardsAlwd']
+        self.losingTeam.seasonTeamStats['Defense']['runTdsAlwd'] += self.losingTeam.gameDefenseStats['runTdsAlwd']
+        self.losingTeam.seasonTeamStats['Defense']['passTdsAlwd'] += self.losingTeam.gameDefenseStats['passTdsAlwd']
+        self.losingTeam.seasonTeamStats['Defense']['tdsAlwd'] += self.losingTeam.gameDefenseStats['tdsAlwd']
         self.losingTeam.seasonTeamStats['winPerc'] = round(self.losingTeam.seasonTeamStats['wins']/(self.losingTeam.seasonTeamStats['wins']+self.losingTeam.seasonTeamStats['losses']),3)
         self.losingTeam.seasonTeamStats['divWinPerc'] = round(self.losingTeam.seasonTeamStats['divWins']/(self.losingTeam.seasonTeamStats['divWins']+self.losingTeam.seasonTeamStats['divLosses']),3)
+        self.losingTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
 
         for player in self.homeTeam.rosterDict.values():
-            # print('\n{0} | {1} | {2}'.format(player.name, player.position.name, player.overallRating))
+            player.postgameChanges()
+
             if 'passComp' in player.gameStatsDict:
                 player.gameStatsDict['totalYards'] = player.gameStatsDict['passYards']
 
@@ -1062,10 +1106,8 @@ class Game:
 
             for k in player.gameStatsDict.keys():
                 player.gameStatsDict[k] = 0
-
-        # print('\n{0} Player Stats'.format(self.awayTeam.name))    
         for player in self.awayTeam.rosterDict.values():
-            # print('\n{0} | {1} | {2}'.format(player.name, player.position.name, player.overallRating))
+            player.postgameChanges()
 
             if 'passComp' in player.gameStatsDict:
                 player.gameStatsDict['totalYards'] = player.gameStatsDict['passYards']
@@ -1137,7 +1179,6 @@ class Game:
             self.losingTeam.resetDetermination()
 
     async def playGame(self):
-        # print("\nGame {0} Start: {1} v. {2}".format(self.id, self.awayTeam.name, self.homeTeam.name))
         self.status = GameStatus.Active
         self.totalPlays = 0
         possReset = 80
@@ -1149,6 +1190,8 @@ class Game:
             self.offensiveTeam = self.awayTeam
             self.defensiveTeam = self.homeTeam
 
+        self.homeTeam.setRoster()
+        self.awayTeam.setRoster()
         self.homeTeam.gameDefenseRating = self.homeTeam.defenseRating
         self.homeTeam.gameRunDefenseRating = self.homeTeam.runDefenseRating
         self.homeTeam.gamePassDefenseRating = self.homeTeam.passDefenseRating
@@ -1160,10 +1203,10 @@ class Game:
 
         for player in self.homeTeam.rosterDict.values():
             player: FloosPlayer.Player
-            player.gameAttributes = player.attributes
+            player.gameAttributes = copy.deepcopy(player.attributes)
         for player in self.awayTeam.rosterDict.values():
             player: FloosPlayer.Player
-            player.gameAttributes = player.attributes
+            player.gameAttributes = copy.deepcopy(player.attributes)
 
         while self.totalPlays < 132 or self.homeScore == self.awayScore:
 
@@ -1174,7 +1217,6 @@ class Game:
 
             self.down = 1
             self.driveLength = 0
-            # print("\nGame {0}: {1} is on offense. {2} yard(s) to the endzone".format(self.id, self.offensiveTeam.name, self.yardsToEndzone))
 
             while self.down <= 4:
 
@@ -1197,6 +1239,8 @@ class Game:
                 elif self.totalPlays >= 66 and self.totalPlays < 100:
                     if self.currentQuarter != 3:
                         self.currentQuarter = 3
+                        self.homeTeam.updateGameEnergy(10)
+                        self.awayTeam.updateGameEnergy(10)
                         x = randint(1,100)
                         y = randint(1,100)
                         if x >= 95:
@@ -1214,14 +1258,15 @@ class Game:
                 elif self.totalPlays >= 100 and self.totalPlays < 132:
                     if self.currentQuarter != 4:
                         self.currentQuarter = 4
-                        if self.homeScore > self.awayScore and (self.homeScore - self.awayScore) <= 14:
-                            x = randint(1,10)
-                            if x > 6:
-                                self.awayTeam.inGamePush()
+                    if self.homeScore > self.awayScore and (self.homeScore - self.awayScore) <= 14:
+                        x = randint(1,10)
+                        if x > 6:
+                            self.awayTeam.resetDetermination()
+                            self.awayTeam.inGamePush()
                         elif self.awayScore > self.homeScore and (self.awayScore - self.homeScore) <= 14:
-                            self.homeTeam.inGamePush()
                             x = randint(1,10)
                             if x > 6:
+                                self.homeTeam.resetDetermination()
                                 self.homeTeam.inGamePush()
                 elif self.totalPlays >= 132:
                     if self.currentQuarter != 5:
@@ -1245,13 +1290,11 @@ class Game:
                 self.lastPlayDict['defense'] = self.defensiveTeam
                 self.lastPlayDict['down'] = self.down
                 self.lastPlayDict['yardsTo1st'] = self.yardsToFirstDown
-
-                # print("\nDOWN: {0}".format(self.down))
-                await asyncio.sleep(randint(2, 5))
+                await asyncio.sleep(randint(5, 10))
                 yardsGained = self.playCaller(self.offensiveTeam, self.defensiveTeam)
                 self.totalPlays += 1
                 self.driveLength += 1
-                self.defensiveTeam.updateGameEnergy(-.5)
+                self.defensiveTeam.updateGameEnergy(-.75)
 
 
                 if yardsGained == 1001:
@@ -1260,8 +1303,6 @@ class Game:
                             self.homeScore += 3
                         elif self.offensiveTeam == self.awayTeam:
                             self.awayScore += 3
-                        # print("\n{0} field goal is GOOD. KICKER: {1}".format(self.offensiveTeam.name,self.lastPlay[1].name))
-                        #self.scoreChange()
                         self.lastPlayDict['result'] = '{0} {1}-{2}'.format(PlayResult.FieldGoalGood.value, self.awayScore, self.homeScore)
                         if self.currentQuarter == 5 and self.homeScore != self.awayScore:
                             break
@@ -1269,14 +1310,10 @@ class Game:
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                             break
                     else:
-                        # print("\n{0} field goal is NO GOOD. KICKER: {1}".format(self.offensiveTeam.name,self.lastPlay[1].name))
-                        # print("Turnover")
                         self.lastPlayDict['result'] = PlayResult.FieldGoalNoGood.value
                         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                         break
                 elif yardsGained == 1002:
-                    # print("\n{0} punt.".format(self.offensiveTeam.name))
-                    # print("Turnover")
                     self.lastPlayDict['result'] = PlayResult.Punt.value
                     puntDistance = randint(30, 60)
                     if puntDistance >= self.yardsToEndzone:
@@ -1285,7 +1322,6 @@ class Game:
                     self.turnover(self.offensiveTeam, self.defensiveTeam, newYards)
                     break
                 elif yardsGained == 1003 or yardsGained == 1004:
-                    # print("Turnover")
                     self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                     break
                 else:
@@ -1293,9 +1329,13 @@ class Game:
                         if self.lastPlayDict['play'] == 'Run':
                             self.lastPlayDict['runner'].gameStatsDict['tds'] += 1
                             self.lastPlayDict['runner'].updateInGameConfidence(.01)
+                            self.lastPlayDict['defense'].gameDefenseStats['runTdsAlwd'] += 1
+                            self.lastPlayDict['defense'].gameDefenseStats['tdsAlwd'] += 1
                         elif self.lastPlayDict['play'] == 'Pass':
                             self.lastPlayDict['passer'].gameStatsDict['tds'] += 1
                             self.lastPlayDict['receiver'].gameStatsDict['tds'] += 1
+                            self.lastPlayDict['defense'].gameDefenseStats['passTdsAlwd'] += 1
+                            self.lastPlayDict['defense'].gameDefenseStats['tdsAlwd'] += 1
                             self.lastPlayDict['passer'].updateInGameConfidence(.01)
                             self.lastPlayDict['receiver'].updateInGameConfidence(.01)
 
@@ -1311,8 +1351,6 @@ class Game:
                                 self.homeScore += 1
                             elif self.offensiveTeam == self.awayTeam:
                                 self.awayScore += 1
-                            # print("\n{0} extra point is GOOD.".format(self.offensiveTeam.name))
-                            #self.scoreChange()
                         else:
                             pass
                             # print("\n{0} extra point is NO GOOD.".format(self.offensiveTeam.name))    
