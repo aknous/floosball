@@ -249,9 +249,11 @@ class Season:
  
 
     async def startSeason(self):
+        global rookieDraftOrder
         weekDict = {}
         seasonDict = {}
         gameDictTemp = {}
+        rookieDraftOrder = []
         strCurrentSeason = 'season{}'.format(self.currentSeason)
 
         weekFilePath = '{}/games'.format(strCurrentSeason)
