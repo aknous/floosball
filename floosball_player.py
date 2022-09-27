@@ -12,14 +12,14 @@ class Position(enum.Enum):
     K = 5
 
 class PlayerTier(enum.Enum):
-    SuperStar = 5
-    Elite = 4
-    AboveAverage = 3
-    Average = 2
-    BelowAverage = 1
+    SuperStar = 'Super Star'
+    Elite = 'Elite'
+    AboveAverage = 'Above Average'
+    Average = 'Average'
+    BelowAverage = 'Below Average'
 
 qbStatsDict = {'passAtt': 0, 'passComp': 0, 'passCompPerc': 0, 'tds': 0, 'ints': 0, 'passYards': 0, 'ypc': 0, 'totalYards': 0}
-rbStatsDict = {'carries': 0, 'receptions': 0, 'passTargets': 0, 'rcvPerc': 0, 'rcvYards': 0, 'runYards': 0, 'ypc': 0, 'tds': 0, 'fumblesLost': 0, 'ypr': 0, 'totalYards': 0}
+rbStatsDict = {'carries': 0, 'receptions': 0, 'passTargets': 0, 'rcvPerc': 0, 'rcvYards': 0, 'runYards': 0, 'ypc': 0, 'runTds': 0, 'rcvTds': 0, 'tds': 0, 'fumblesLost': 0, 'ypr': 0, 'totalYards': 0}
 wrStatsDict = {'receptions': 0, 'passTargets': 0, 'rcvPerc': 0, 'rcvYards': 0, 'ypr': 0, 'tds': 0, 'totalYards': 0}
 kStatsDict = {'fgAtt': 0, 'fgs': 0, 'fgPerc': 0}
 

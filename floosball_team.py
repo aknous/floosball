@@ -6,11 +6,14 @@ import floosball_player as FloosPlayer
 
 
 
-teamStatsDict = {'wins': 0, 'losses': 0, 'winPerc': 0, 'divWins': 0, 'divLosses': 0, 'divWinPerc': 0, 'Offense': {'tds': 0, 'passYards': 0, 'runYards': 0, 'totalYards': 0}, 'Defense': {'sacks': 0, 'ints': 0, 'fumRec': 0, 'passYardsAlwd': 0, 'runYardsAlwd': 0, 'totalYardsAlwd': 0, 'runTdsAlwd': 0, 'passTdsAlwd': 0, 'tdsAlwd': 0}}
+teamStatsDict = {'wins': 0, 'losses': 0, 'winPerc': 0, 'streak': 0, 'divWins': 0, 'divLosses': 0, 'divWinPerc': 0, 'Offense': {'tds': 0, 'passYards': 0, 'runYards': 0, 'totalYards': 0}, 'Defense': {'sacks': 0, 'ints': 0, 'fumRec': 0, 'passYardsAlwd': 0, 'runYardsAlwd': 0, 'totalYardsAlwd': 0, 'runTdsAlwd': 0, 'passTdsAlwd': 0, 'tdsAlwd': 0}}
 class Team:
     def __init__(self, name):
         self.name = name
         self.id = 0
+        self.city = None
+        self.abbr = None
+        self.color = None
         self.division = None
         self.offenseRating = 0
         self.runDefenseRating = 0
@@ -28,6 +31,7 @@ class Team:
         self.leagueChampionships = 0
         self.playoffAppearances = 0
         self.defenseSeasonPerformanceRating = 0
+        self.schedule = []
 
         self.gameDefenseStats = copy.deepcopy(teamStatsDict['Defense'])
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
@@ -154,22 +158,22 @@ class Team:
 
     def inGamePush(self):
         for player in self.rosterDict.values():
-            player.updateInGameDetermination(.03)
-        self.updateGameDetermination(.03)
+            player.updateInGameDetermination(.02)
+        self.updateGameDetermination(.02)
 
     def teamUnderPerform(self):
         for player in self.rosterDict.values():
-            player.updateInGameDetermination(-.03)
-            player.updateInGameConfidence(-.03)
-        self.updateGameDetermination(-.03)
-        self.updateGameConfidence(-.03)
+            player.updateInGameDetermination(-.02)
+            player.updateInGameConfidence(-.02)
+        self.updateGameDetermination(-.02)
+        self.updateGameConfidence(-.02)
 
     def teamOverPerform(self):
         for player in self.rosterDict.values():
-            player.updateInGameDetermination(.03)
-            player.updateInGameConfidence(.03)
-        self.updateGameDetermination(.03)
-        self.updateGameConfidence(.03)
+            player.updateInGameDetermination(.02)
+            player.updateInGameConfidence(.02)
+        self.updateGameDetermination(.02)
+        self.updateGameConfidence(.02)
 
     def resetConfidence(self):
         for player in self.rosterDict.values():
