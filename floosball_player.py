@@ -12,16 +12,59 @@ class Position(enum.Enum):
     K = 5
 
 class PlayerTier(enum.Enum):
-    SuperStar = 'Super Star'
-    Elite = 'Elite'
-    AboveAverage = 'Above Average'
-    Average = 'Average'
-    BelowAverage = 'Below Average'
+    SuperStar = 5
+    Elite = 4
+    AboveAverage = 3
+    Average = 2
+    BelowAverage = 1
 
-qbStatsDict = {'passAtt': 0, 'passComp': 0, 'passCompPerc': 0, 'tds': 0, 'ints': 0, 'passYards': 0, 'ypc': 0, 'totalYards': 0}
-rbStatsDict = {'carries': 0, 'receptions': 0, 'passTargets': 0, 'rcvPerc': 0, 'rcvYards': 0, 'runYards': 0, 'ypc': 0, 'runTds': 0, 'rcvTds': 0, 'tds': 0, 'fumblesLost': 0, 'ypr': 0, 'totalYards': 0}
-wrStatsDict = {'receptions': 0, 'passTargets': 0, 'rcvPerc': 0, 'rcvYards': 0, 'ypr': 0, 'tds': 0, 'totalYards': 0}
-kStatsDict = {'fgAtt': 0, 'fgs': 0, 'fgPerc': 0}
+qbStatsDict = {
+                'passAtt': 0, 
+                'passComp': 0, 
+                'passCompPerc': 0, 
+                'tds': 0, 
+                'ints': 0, 
+                'passYards': 0, 
+                'ypc': 0, 
+                'totalYards': 0,
+                'pass20+': 0,
+                'longest': 0
+            }
+rbStatsDict = {
+                'carries': 0, 
+                'receptions': 0, 
+                'passTargets': 0, 
+                'rcvPerc': 0, 
+                'rcvYards': 0, 
+                'runYards': 0, 
+                'ypc': 0, 
+                'runTds': 0, 
+                'rcvTds': 0, 
+                'fumblesLost': 0, 
+                'ypr': 0, 
+                'totalYards': 0,
+                'run20+': 0,
+                'pass20+': 0,
+                'longest': 0
+            }
+wrStatsDict = {
+                'receptions': 0, 
+                'passTargets': 0, 
+                'rcvPerc': 0, 
+                'rcvYards': 0, 
+                'ypr': 0, 
+                'rcvTds': 0, 
+                'totalYards': 0,
+                'pass20+': 0,
+                'longest': 0
+            }
+kStatsDict = {
+                'fgAtt': 0, 
+                'fgs': 0, 
+                'fgPerc': 0,
+                'fg45+': 0,
+                'longest': 0
+            }
 
 class Player:
     def __init__(self, seed = None):
@@ -37,6 +80,7 @@ class Player:
         self.gamesPlayed = 0
         self.term = 0
         self.seasonPerformanceRating = 0
+        self.playerRating = 0
         self.freeAgentYears = 0
 
         self.gameStatsDict = None
@@ -234,6 +278,10 @@ class PlayerQB(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        if self.seasonPerformanceRating > 0:
+            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+        else:
+            self.playerRating = self.attributes.overallRating
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
@@ -349,6 +397,10 @@ class PlayerRB(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.power*1.3) + (self.attributes.agility*1))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        if self.seasonPerformanceRating > 0:
+            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+        else:
+            self.playerRating = self.attributes.overallRating
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
@@ -464,6 +516,10 @@ class PlayerWR(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.hands*1.5) + (self.attributes.agility*.8))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        if self.seasonPerformanceRating > 0:
+            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+        else:
+            self.playerRating = self.attributes.overallRating
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
@@ -579,6 +635,10 @@ class PlayerTE(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round(((self.attributes.power*1.3) + (self.attributes.hands*1) + (self.attributes.agility*.7))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        if self.seasonPerformanceRating > 0:
+            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+        else:
+            self.playerRating = self.attributes.overallRating
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
@@ -693,6 +753,10 @@ class PlayerK(Player):
         self.attributes.calculateIntangibles()
         self.attributes.skillRating = round((self.attributes.legStrength + self.attributes.accuracy)/2)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        if self.seasonPerformanceRating > 0:
+            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+        else:
+            self.playerRating = self.attributes.overallRating
 
     def offseasonTraining(self):
         self.attributes.accuracy += randint(-5, 5)

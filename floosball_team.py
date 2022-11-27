@@ -1,3 +1,4 @@
+from os import stat
 from random import randint
 import statistics
 import copy
@@ -6,7 +7,53 @@ import floosball_player as FloosPlayer
 
 
 
-teamStatsDict = {'wins': 0, 'losses': 0, 'winPerc': 0, 'streak': 0, 'divWins': 0, 'divLosses': 0, 'divWinPerc': 0, 'Offense': {'tds': 0, 'passYards': 0, 'runYards': 0, 'totalYards': 0}, 'Defense': {'sacks': 0, 'ints': 0, 'fumRec': 0, 'passYardsAlwd': 0, 'runYardsAlwd': 0, 'totalYardsAlwd': 0, 'runTdsAlwd': 0, 'passTdsAlwd': 0, 'tdsAlwd': 0}}
+teamStatsDict = {   
+                    'wins': 0, 
+                    'losses': 0, 
+                    'winPerc': 0, 
+                    'streak': 0, 
+                    'divWins': 0, 
+                    'divLosses': 0, 
+                    'divWinPerc': 0, 
+                    'scoreDiff': 0,
+                    'Offense': {
+                        'tds': 0, 
+                        'fgs': 0,
+                        'pts': 0,
+                        'passYards': 0, 
+                        'runYards': 0, 
+                        'totalYards': 0,
+                        'avgRunYards': 0,
+                        'avgPassYards': 0,
+                        'avgYards': 0,
+                        'avgTds': 0,
+                        'avgFgs': 0,
+                        'avgPts': 0
+                    }, 
+                    'Defense': {
+                        'sacks': 0, 
+                        'ints': 0, 
+                        'fumRec': 0, 
+                        'safeties': 0, 
+                        'passYardsAlwd': 0, 
+                        'runYardsAlwd': 0, 
+                        'totalYardsAlwd': 0, 
+                        'runTdsAlwd': 0, 
+                        'passTdsAlwd': 0, 
+                        'tdsAlwd': 0, 
+                        'ptsAlwd': 0,
+                        'avgSacks': 0,
+                        'avgInts': 0,
+                        'avgFumRec': 0,
+                        'avgPassYardsAlwd': 0,
+                        'avgRunYardsAlwd': 0,
+                        'avgYardsAlwd': 0,
+                        'avgPassTdsAlwd': 0,
+                        'avgRunTdsAlwd': 0,
+                        'avgTdsAlwd': 0,
+                        'avgPtsAlwd': 0
+                    }
+                }
 class Team:
     def __init__(self, name):
         self.name = name
@@ -27,22 +74,28 @@ class Team:
         self.defenseDiscipline = FloosMethods.getStat(1,100,1)
         self._gameDefenseEnergy = 100
         self.defenseRating = 0
+        self.defenseOverallRating = 0
+        self.defenseTier = 0
         self.overallRating = 0
-        self.leagueChampionships = 0
+        self.leagueChampionships = []
         self.playoffAppearances = 0
         self.defenseSeasonPerformanceRating = 0
+        self.gmScore = randint(0,20)
+        self.eliminated = False
         self.schedule = []
+        self.draftHistory = []
+        self.freeAgentHistory = []
+        self.rosterHistory = []
 
         self.gameDefenseStats = copy.deepcopy(teamStatsDict['Defense'])
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
         self.allTimeTeamStats = copy.deepcopy(teamStatsDict)
-        self.rosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr': None, 'te': None, 'k': None}
-        self.reserveRosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr': None, 'te': None, 'k': None}
-        self.rosterHistoryList = []
+        self.rosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None}
+        self.reserveRosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None}
 
     def setupTeam(self):
         if self.overallRating == 0:
-            self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr'].attributes.overallRating*1)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
+            self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
             x = randint(1, 100)
             if x >= 99:
                 self.runDefenseRating = randint(90, 100)
@@ -59,30 +112,47 @@ class Team:
                 
             self.defenseRating = round(((self.runDefenseRating*1.8)+(self.passDefenseRating*2.2))/4)
             self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
+            if self.defenseSeasonPerformanceRating > 0:
+                self.defenseOverallRating = round(((self.defenseRating*1.2)+(self.defenseSeasonPerformanceRating*.8))/2)
+            else:
+                self.defenseOverallRating = self.defenseRating
 
     def setRoster(self):
         if self.reserveRosterDict['qb'] is not None:
-            if self.reserveRosterDict['qb'].attributes.overallRating > self.rosterDict['qb'].attributes.overallRating:
+            if self.reserveRosterDict['qb'].playerRating> self.rosterDict['qb'].playerRating:
                 replacedPlayer = self.rosterDict['qb']
                 self.rosterDict['qb'] = self.reserveRosterDict['qb']
                 self.reserveRosterDict['qb'] = replacedPlayer
         if self.reserveRosterDict['rb'] is not None:
-            if self.reserveRosterDict['rb'].attributes.overallRating > self.rosterDict['rb'].attributes.overallRating:
+            if self.reserveRosterDict['rb'].playerRating > self.rosterDict['rb'].playerRating:
                 replacedPlayer = self.rosterDict['rb']
                 self.rosterDict['rb'] = self.reserveRosterDict['rb']
                 self.reserveRosterDict['rb'] = replacedPlayer
-        if self.reserveRosterDict['wr'] is not None:
-            if self.reserveRosterDict['wr'].attributes.overallRating > self.rosterDict['wr'].attributes.overallRating:
-                replacedPlayer = self.rosterDict['wr']
-                self.rosterDict['wr'] = self.reserveRosterDict['wr']
-                self.reserveRosterDict['wr'] = replacedPlayer
+        if self.reserveRosterDict['wr1'] is not None:
+            if self.reserveRosterDict['wr1'].playerRating > self.rosterDict['wr1'].playerRating:
+                replacedPlayer = self.rosterDict['wr1']
+                self.rosterDict['wr1'] = self.reserveRosterDict['wr1']
+                self.reserveRosterDict['wr1'] = replacedPlayer
+            elif self.reserveRosterDict['wr1'].playerRating > self.rosterDict['wr2'].playerRating:
+                replacedPlayer = self.rosterDict['wr2']
+                self.rosterDict['wr2'] = self.reserveRosterDict['wr1']
+                self.reserveRosterDict['wr1'] = replacedPlayer
+        if self.reserveRosterDict['wr2'] is not None:
+            if self.reserveRosterDict['wr2'].playerRating > self.rosterDict['wr2'].playerRating:
+                replacedPlayer = self.rosterDict['wr2']
+                self.rosterDict['wr2'] = self.reserveRosterDict['wr2']
+                self.reserveRosterDict['wr2'] = replacedPlayer
+            elif self.reserveRosterDict['wr2'].playerRating > self.rosterDict['wr1'].playerRating:
+                replacedPlayer = self.rosterDict['wr1']
+                self.rosterDict['wr1'] = self.reserveRosterDict['wr2']
+                self.reserveRosterDict['wr2'] = replacedPlayer
         if self.reserveRosterDict['te'] is not None:
-            if self.reserveRosterDict['te'].attributes.overallRating > self.rosterDict['te'].attributes.overallRating:
+            if self.reserveRosterDict['te'].playerRating > self.rosterDict['te'].playerRating:
                 replacedPlayer = self.rosterDict['te']
                 self.rosterDict['te'] = self.reserveRosterDict['te']
                 self.reserveRosterDict['te'] = replacedPlayer
         if self.reserveRosterDict['k'] is not None:
-            if self.reserveRosterDict['k'].attributes.overallRating > self.rosterDict['k'].attributes.overallRating:
+            if self.reserveRosterDict['k'].playerRating > self.rosterDict['k'].playerRating:
                 replacedPlayer = self.rosterDict['k']
                 self.rosterDict['k'] = self.reserveRosterDict['k']
                 self.reserveRosterDict['k'] = replacedPlayer
@@ -92,9 +162,13 @@ class Team:
 
     def updateRating(self):
         self.defenseRating = round(((self.runDefenseRating*1.8)+(self.passDefenseRating*2.2))/4)
-        self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr'].attributes.overallRating*1)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
+        self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
         self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
         self.gameDefenseRating = round(((self.gameRunDefenseRating*1.5)+(self.gamePassDefenseRating*1.7)+(self.defenseDiscipline*1)+(self.defenseLuck*.8))/5)
+        if self.defenseSeasonPerformanceRating > 0:
+            self.defenseOverallRating = round(((self.defenseRating*.8)+(self.defenseSeasonPerformanceRating*1.2))/2)
+        else:
+            self.defenseOverallRating = self.defenseRating
 
     def updateInGameDefenseRating(self):
         rating = round(((self.gameRunDefenseRating*1.5)+(self.gamePassDefenseRating*1.7)+(self.defenseDiscipline*1)+(self.defenseLuck*.8))/5)
@@ -134,13 +208,83 @@ class Team:
 
         self.updateRating()
 
+    def getAverages(self):
+        from floosball_game import Game, GameStatus
+        offenseRunTdsList = []
+        offensePassTdsList = []
+        offenseTdsList = []
+        offenseFgsList = []
+        offensePtsList = []
+        offensePassYardsList = []
+        offenseRunYardsList = []
+        offenseTotalYardsList = []
+        defenseSacksList = []
+        defenseIntsList = []
+        defenseFumRecList = []
+        defensePassYardsAlwdList = []
+        defenseRunYardsAlwdList = []
+        defenseTotalYardsAlwdList = []
+        defenseRunTdsAlwdList = []
+        defensePassTdsAlwdList = []
+        defenseTotalTdsAlwdList = []
+        defensePtsAlwdList = []
+
+        for game in self.schedule:
+            game: Game
+            if game.status is GameStatus.Final:
+                if game.homeTeam.name == self.name:
+                    offenseStatsDict = game.gameDict['gameStats']['homeTeam']['offense']
+                    defenseStatsDict = game.gameDict['gameStats']['homeTeam']['defense']
+                else:
+                    offenseStatsDict = game.gameDict['gameStats']['awayTeam']['offense']
+                    defenseStatsDict = game.gameDict['gameStats']['awayTeam']['defense']
+                offenseRunTdsList.append(offenseStatsDict['runTds'])
+                offensePassTdsList.append(offenseStatsDict['passTds'])
+                offenseTdsList.append(offenseStatsDict['tds'])
+                offenseRunYardsList.append(offenseStatsDict['rushYards'])
+                offensePassYardsList.append(offenseStatsDict['passYards'])
+                offenseTotalYardsList.append(offenseStatsDict['totalYards'])
+                offenseFgsList.append(offenseStatsDict['fgs'])
+                offensePtsList.append(offenseStatsDict['score'])
+
+                defenseSacksList.append(defenseStatsDict['sacks'])
+                defenseIntsList.append(defenseStatsDict['ints'])
+                defenseFumRecList.append(defenseStatsDict['fumRec'])
+                defensePassYardsAlwdList.append(defenseStatsDict['passYardsAlwd'])
+                defenseRunYardsAlwdList.append(defenseStatsDict['runYardsAlwd'])
+                defenseTotalYardsAlwdList.append(defenseStatsDict['totalYardsAlwd'])
+                defenseRunTdsAlwdList.append(defenseStatsDict['runTdsAlwd'])
+                defensePassTdsAlwdList.append(defenseStatsDict['passTdsAlwd'])
+                defenseTotalTdsAlwdList.append(defenseStatsDict['tdsAlwd'])
+                defensePtsAlwdList.append(defenseStatsDict['ptsAlwd'])
+            elif game.status is GameStatus.Scheduled:
+                break
+
+        self.seasonTeamStats['Offense']['avgRunYards'] = round(statistics.mean(offenseRunYardsList),2)
+        self.seasonTeamStats['Offense']['avgPassYards'] = round(statistics.mean(offensePassYardsList),2)
+        self.seasonTeamStats['Offense']['avgYards'] = round(statistics.mean(offenseTotalYardsList),2)
+        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2)
+        self.seasonTeamStats['Offense']['avgFgs'] = round(statistics.mean(offenseFgsList),2)
+        self.seasonTeamStats['Offense']['avgPts'] = round(statistics.mean(offensePtsList),2)
+
+        self.seasonTeamStats['Defense']['avgSacks'] = round(statistics.mean(defenseSacksList),2)
+        self.seasonTeamStats['Defense']['avgInts'] = round(statistics.mean(defenseIntsList),2)
+        self.seasonTeamStats['Defense']['avgFumRec'] = round(statistics.mean(defenseFumRecList),2)
+        self.seasonTeamStats['Defense']['avgPassYardsAlwd'] = round(statistics.mean(defensePassYardsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgRunYardsAlwd'] = round(statistics.mean(defenseRunYardsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgYardsAlwd'] = round(statistics.mean(defenseTotalYardsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgPassTdsAlwd'] = round(statistics.mean(defensePassTdsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgRunTdsAlwd'] = round(statistics.mean(defenseRunTdsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgTdsAlwd'] = round(statistics.mean(defenseTotalTdsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgPtsAlwd'] = round(statistics.mean(defensePtsAlwdList),2)
+
+
     def saveRoster(self):
         seasonRosterDict = {}
         for k,v in self.rosterDict.items():
             seasonRosterDict[k] = {'name': v.name, 'rating': v.attributes.overallRating, 'tier': v.playerTier.name, 'term': v.term, 'seasonStats': v.seasonStatsDict}
         seasonRosterDict['runDefense'] = self.runDefenseRating
         seasonRosterDict['passDefense'] = self.passDefenseRating
-        self.rosterHistoryList.append(seasonRosterDict)
 
     def updateGameConfidence(self, value):
         self._gameDefenseConfidence = round(self._gameDefenseConfidence + value, 2)
