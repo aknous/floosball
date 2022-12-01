@@ -18,6 +18,12 @@ class PlayerTier(enum.Enum):
     Average = 2
     BelowAverage = 1
 
+class PlayerServiceTime(enum.Enum):
+    Rookie = 'Rookie'
+    Intermediate = 'Experienced'
+    Professional = 'Seasoned'
+    Veteran = 'Veteran'
+
 qbStatsDict = {
                 'passAtt': 0, 
                 'passComp': 0, 
@@ -82,6 +88,7 @@ class Player:
         self.seasonPerformanceRating = 0
         self.playerRating = 0
         self.freeAgentYears = 0
+        self.serviceTime = PlayerServiceTime.Rookie
 
         self.gameStatsDict = None
         self.seasonStatsDict = None
@@ -100,8 +107,6 @@ class Player:
                 self.attributes.attitude += randint (-2,1)
                 self.attributes.confidence += randint(-10,5)/1000
                 self.attributes.determination += randint(-5,10)/1000
-        else:
-            print('In postgameChanges, player team is {}'.format(self.team))
         
         self.updateRating()
 
@@ -120,41 +125,7 @@ class Player:
         self.updateInGameRating()
 
     def offseasonTraining(self):
-        self.attributes.armStrength += randint(-5, 5)
-        if self.attributes.armStrength > 100:
-            self.attributes.armStrength = 100
-        elif self.attributes.armStrength < 70:
-            self.attributes.armStrength = 70
-        self.attributes.accuracy += randint(-5, 5)
-        if self.attributes.accuracy > 100:
-            self.attributes.accuracy = 100
-        elif self.attributes.accuracy < 70:
-            self.attributes.accuracy = 70
-        self.attributes.agility += randint(-5, 5)
-        if self.attributes.agility > 100:
-            self.attributes.agility = 100
-        elif self.attributes.agility < 70:
-            self.attributes.agility = 70
-        self.attributes.speed += randint(-5, 5)
-        if self.attributes.speed > 100:
-            self.attributes.speed = 100
-        elif self.attributes.speed < 70:
-            self.attributes.speed = 70
-        self.attributes.power += randint(-5, 5)
-        if self.attributes.power > 100:
-            self.attributes.power = 100
-        elif self.attributes.power < 70:
-            self.attributes.power = 70
-        self.attributes.hands += randint(-5, 5)
-        if self.attributes.hands > 100:
-            self.attributes.hands = 100
-        elif self.attributes.hands < 70:
-            self.attributes.hands = 70
-        self.attributes.legStrength += randint(-5, 5)
-        if self.attributes.legStrength > 100:
-            self.attributes.legStrength = 100
-        elif self.attributes.legStrength < 70:
-            self.attributes.legStrength = 70
+        pass
 
 
 
@@ -169,6 +140,15 @@ class PlayerAttributes:
         self.accuracy = 0
         self.legStrength = 0
         self.skillRating = 0
+
+        self.potentialSpeed = 0
+        self.potentialHands = 0
+        self.potentialAgility = 0
+        self.potentialPower = 0
+        self.potentialArmStrength = 0
+        self.potentialAccuracy = 0
+        self.potentialLegStrength = 0
+        self.potentialSkillRating = 0
         
         #intangibles
         self.confidence = 1
@@ -177,6 +157,7 @@ class PlayerAttributes:
         self.focus = 0
         self.instinct = 0
         self.creativity = 0
+        self.longevity = randint(3,8)
         self.luck = FloosMethods.getStat(1,100,1)
         self.attitude = 0
         self.playMakingAbility = 0
@@ -203,37 +184,37 @@ class PlayerAttributes:
                 if y <= 10:
                     skillValList.append(randint(90, 100))
                 else:
-                    skillValList.append(randint(80, 89))
+                    skillValList.append(randint(85, 89))
         elif x >= 85 and x < 95:
             # Elite array
            for y in range(12):
                 if y <= 8:
                     skillValList.append(randint(90, 100))
                 else:
-                    skillValList.append(randint(80, 89))
+                    skillValList.append(randint(85, 89))
         elif x >= 50 and x < 85:
             # AboveAverage array
            for y in range(12):
                 if y <= 4:
                     skillValList.append(randint(90, 100))
                 elif y > 4 and y < 9:
-                    skillValList.append(randint(80, 89))
+                    skillValList.append(randint(85, 89))
                 else:
-                    skillValList.append(randint(70, 79))
+                    skillValList.append(randint(75, 79))
         elif x >= 10 and x < 50:
             # Average array
            for y in range(12):
                 if y < 6:
                     skillValList.append(randint(80, 89))
                 else:
-                    skillValList.append(randint(70, 79))
+                    skillValList.append(randint(60, 79))
         else:
             # BelowAverage array
            for y in range(12):
                 if y < 4:
                     skillValList.append(randint(80, 89))
                 else:
-                    skillValList.append(randint(70, 79))
+                    skillValList.append(randint(60, 79))
         
         self.speed = skillValList.pop(randint(0, len(skillValList)) - 1)
         self.hands = skillValList.pop(randint(0, len(skillValList)) - 1)
@@ -267,6 +248,18 @@ class PlayerQB(Player):
         self.seasonStatsDict = qbStatsDict.copy()
         self.careerStatsDict = qbStatsDict.copy()
 
+        self.attributes.potentialArmStrength = self.attributes.armStrength + randint(0,30)
+        self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        if self.attributes.potentialArmStrength > 100:
+            self.attributes.potentialArmStrength = 100
+        if self.attributes.potentialAccuracy > 100:
+            self.attributes.potentialAccuracy = 100
+        if self.attributes.potentialAgility > 100:
+            self.attributes.potentialAgility = 100
+        self.attributes.potentialSkillRating = round(((self.attributes.potentialArmStrength*1.2) + (self.attributes.potentialAccuracy*1.3) + (self.attributes.potentialAgility*.5))/3)
+        
+
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.skillRating = round(((self.gameAttributes.armStrength*1.2) + (self.gameAttributes.accuracy*1.3) + (self.gameAttributes.agility*.5))/3)
@@ -289,89 +282,152 @@ class PlayerQB(Player):
         self.attributes.discipline += randint(-5,5)
         self.attributes.calculateIntangibles()
 
-        if self.attributes.xFactor > 90:
-            if self.attributes.armStrength >= 95:
-                self.attributes.armStrength += randint(-3,0)
-            elif self.attributes.armStrength <= 75:
-                self.attributes.armStrength += randint(0,10)
-            else:
-                self.attributes.armStrength += randint(0,5)
-            if self.attributes.armStrength > 100:
-                self.attributes.armStrength = 100
+        if self.seasonsPlayed > self.attributes.longevity:
+            if self.attributes.xFactor > 90:
+                if self.attributes.armStrength >= 95:
+                    self.attributes.armStrength += randint(0,2)
+                elif self.attributes.armStrength <= 70:
+                    self.attributes.armStrength += randint(0,10)
+                else:
+                    self.attributes.armStrength += randint(0,5)
+                
 
-            if self.attributes.accuracy >= 95:
-                self.attributes.accuracy += randint(-3,0)
-            elif self.attributes.accuracy <= 75:
-                self.attributes.accuracy += randint(0,10)
-            else:
-                self.attributes.accuracy += randint(0,5)
-            if self.attributes.accuracy > 100:
-                self.attributes.accuracy = 100  
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(0,3)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(0,10)
+                else:
+                    self.attributes.accuracy += randint(0,5)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-3,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,10)
-            else:
-                self.attributes.agility += randint(0,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(0,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,10)
+                else:
+                    self.attributes.agility += randint(0,5)
 
-        elif self.attributes.xFactor > 75:
-            if self.attributes.armStrength >= 95:
-                self.attributes.armStrength += randint(-5,0)
-            elif self.attributes.armStrength <= 75:
-                self.attributes.armStrength += randint(0,7)
-            else:
-                self.attributes.armStrength += randint(-3,3)
-            if self.attributes.armStrength > 100:
-                self.attributes.armStrength = 100
+            elif self.attributes.xFactor > 75:
+                if self.attributes.armStrength >= 95:
+                    self.attributes.armStrength += randint(-1,2)
+                elif self.attributes.armStrength <= 70:
+                    self.attributes.armStrength += randint(0,7)
+                else:
+                    self.attributes.armStrength += randint(-2,3)
 
-            if self.attributes.accuracy >= 95:
-                self.attributes.accuracy += randint(-5,0)
-            elif self.attributes.accuracy <= 75:
-                self.attributes.accuracy += randint(0,7)
-            else:
-                self.attributes.accuracy += randint(-3,3)
-            if self.attributes.accuracy > 100:
-                self.attributes.accuracy = 100  
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-1,2)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(0,7)
+                else:
+                    self.attributes.accuracy += randint(-2,3)
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-5,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,7)
-            else:
-                self.attributes.agility += randint(-3,3)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-1,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,7)
+                else:
+                    self.attributes.agility += randint(-2,3)
 
+            else:
+                if self.attributes.armStrength >= 95:
+                    self.attributes.armStrength += randint(-5,1)
+                elif self.attributes.armStrength <= 70:
+                    self.attributes.armStrength += randint(0,5)
+                else:
+                    self.attributes.armStrength += randint(-5,5)
+
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-5,1)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(0,5)
+                else:
+                    self.attributes.accuracy += randint(-5,5)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,1)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,5)
+                else:
+                    self.attributes.agility += randint(-5,5)
         else:
-            if self.attributes.armStrength >= 95:
-                self.attributes.armStrength += randint(-10,0)
-            elif self.attributes.armStrength <= 75:
-                self.attributes.armStrength += randint(0,5)
-            else:
-                self.attributes.armStrength += randint(-5,5)
-            if self.attributes.armStrength > 100:
-                self.attributes.armStrength = 100
+            if self.attributes.xFactor > 90:
+                if self.attributes.armStrength >= 95:
+                    self.attributes.armStrength += randint(-3,0)
+                elif self.attributes.armStrength <= 70:
+                    self.attributes.armStrength += randint(-1,5)
+                else:
+                    self.attributes.armStrength += randint(-3,3)
 
-            if self.attributes.accuracy >= 95:
-                self.attributes.accuracy += randint(-10,0)
-            elif self.attributes.accuracy <= 75:
-                self.attributes.accuracy += randint(0,5)
-            else:
-                self.attributes.accuracy += randint(-5,5)
-            if self.attributes.accuracy > 100:
-                self.attributes.accuracy = 100  
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-3,0)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(-1,5)
+                else:
+                    self.attributes.accuracy += randint(-3,3)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-10,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,5)
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-3,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-1,5)
+                else:
+                    self.attributes.agility += randint(-3,3)
+
+            elif self.attributes.xFactor > 75:
+                if self.attributes.armStrength >= 95:
+                    self.attributes.armStrength += randint(-5,0)
+                elif self.attributes.armStrength <= 70:
+                    self.attributes.armStrength += randint(-3,3)
+                else:
+                    self.attributes.armStrength += randint(-5,2)
+
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-5,0)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(-3,3)
+                else:
+                    self.attributes.accuracy += randint(-5,2)
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-3,3)
+                else:
+                    self.attributes.agility += randint(-5,2)
+
             else:
-                self.attributes.agility += randint(-5,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.armStrength >= 95:
+                    self.attributes.armStrength += randint(-10,0)
+                elif self.attributes.armStrength <= 70:
+                    self.attributes.armStrength += randint(-5,2)
+                else:
+                    self.attributes.armStrength += randint(-7,1)
+
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-10,0)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(-5,2)
+                else:
+                    self.attributes.accuracy += randint(-7,1)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-10,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-5,2)
+                else:
+                    self.attributes.agility += randint(-7,1)
+
+        if self.attributes.armStrength > self.attributes.potentialArmStrength:
+            self.attributes.armStrength = self.attributes.potentialArmStrength
+        if self.attributes.armStrength < 60:
+            self.attributes.armStrength = 60
+        if self.attributes.accuracy > self.attributes.potentialAccuracy:
+            self.attributes.accuracy = self.attributes.potentialAccuracy
+        if self.attributes.accuracy < 60:
+            self.attributes.accuracy = 60
+        if self.attributes.agility > self.attributes.potentialAgility:
+            self.attributes.agility = self.attributes.potentialAgility 
+        if self.attributes.agility < 60:
+            self.attributes.agility = 60
 
         self.updateRating()
 
@@ -385,6 +441,17 @@ class PlayerRB(Player):
         self.gameStatsDict = rbStatsDict.copy()
         self.seasonStatsDict = rbStatsDict.copy()
         self.careerStatsDict = rbStatsDict.copy()
+
+        self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
+        self.attributes.potentialPower = self.attributes.power + randint(0,30)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        if self.attributes.potentialSpeed > 100:
+            self.attributes.potentialSpeed = 100
+        if self.attributes.potentialPower > 100:
+            self.attributes.potentialPower = 100
+        if self.attributes.potentialAgility > 100:
+            self.attributes.potentialAgility = 100
+        self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*1.2) + (self.attributes.potentialSpeed*1.3) + (self.attributes.potentialAgility*.5))/3)
 
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
@@ -408,89 +475,151 @@ class PlayerRB(Player):
         self.attributes.discipline += randint(-5,5)
         self.attributes.calculateIntangibles()
 
-        if self.attributes.xFactor > 90:
-            if self.attributes.speed >= 95:
-                self.attributes.speed += randint(-3,0)
-            elif self.attributes.speed <= 75:
-                self.attributes.speed += randint(0,10)
-            else:
-                self.attributes.speed += randint(0,5)
-            if self.attributes.speed > 100:
-                self.attributes.speed = 100
+        if self.seasonsPlayed > self.attributes.longevity:
+            if self.attributes.xFactor > 90:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(0,2)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(0,10)
+                else:
+                    self.attributes.power += randint(0,5)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-3,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,10)
-            else:
-                self.attributes.hands += randint(0,5)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(0,3)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(0,10)
+                else:
+                    self.attributes.speed += randint(0,5)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-3,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,10)
-            else:
-                self.attributes.agility += randint(0,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(0,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,10)
+                else:
+                    self.attributes.agility += randint(0,5)
 
-        elif self.attributes.xFactor > 75:
-            if self.attributes.speed >= 95:
-                self.attributes.speed += randint(-5,0)
-            elif self.attributes.speed <= 75:
-                self.attributes.speed += randint(0,7)
-            else:
-                self.attributes.speed += randint(-3,3)
-            if self.attributes.speed > 100:
-                self.attributes.speed = 100
+            elif self.attributes.xFactor > 75:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-1,2)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(0,7)
+                else:
+                    self.attributes.power += randint(-2,3)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-5,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,7)
-            else:
-                self.attributes.hands += randint(-3,3)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-1,2)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(0,7)
+                else:
+                    self.attributes.speed += randint(-2,3)
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-5,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,7)
-            else:
-                self.attributes.agility += randint(-3,3)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-1,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,7)
+                else:
+                    self.attributes.agility += randint(-2,3)
 
+            else:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-5,1)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(0,5)
+                else:
+                    self.attributes.power += randint(-5,5)
+
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-5,1)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(0,5)
+                else:
+                    self.attributes.speed += randint(-5,5)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,1)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,5)
+                else:
+                    self.attributes.agility += randint(-5,5)
         else:
-            if self.attributes.speed >= 95:
-                self.attributes.speed += randint(-10,0)
-            elif self.attributes.speed <= 75:
-                self.attributes.speed += randint(0,5)
-            else:
-                self.attributes.speed += randint(-5,5)
-            if self.attributes.speed > 100:
-                self.attributes.speed = 100
+            if self.attributes.xFactor > 90:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-3,0)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(-1,5)
+                else:
+                    self.attributes.power += randint(-3,3)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-10,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,5)
-            else:
-                self.attributes.hands += randint(-5,5)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-3,0)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(-1,5)
+                else:
+                    self.attributes.speed += randint(-3,3)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-10,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,5)
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-3,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-1,5)
+                else:
+                    self.attributes.agility += randint(-3,3)
+
+            elif self.attributes.xFactor > 75:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-5,0)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(-3,3)
+                else:
+                    self.attributes.power += randint(-5,2)
+
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-5,0)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(-3,3)
+                else:
+                    self.attributes.speed += randint(-5,2)
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-3,3)
+                else:
+                    self.attributes.agility += randint(-5,2)
+
             else:
-                self.attributes.agility += randint(-5,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-10,0)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(-5,2)
+                else:
+                    self.attributes.power += randint(-7,1)
+
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-10,0)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(-5,2)
+                else:
+                    self.attributes.speed += randint(-7,1)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-10,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-5,2)
+                else:
+                    self.attributes.agility += randint(-7,1)
+
+        if self.attributes.power > self.attributes.potentialPower:
+            self.attributes.power = self.attributes.potentialPower
+        if self.attributes.power < 60:
+            self.attributes.power = 60
+        if self.attributes.speed > self.attributes.potentialSpeed:
+            self.attributes.speed = self.attributes.potentialSpeed
+        if self.attributes.speed < 60:
+            self.attributes.speed = 60
+        if self.attributes.agility > self.attributes.potentialAgility:
+            self.attributes.agility = self.attributes.potentialAgility 
+        if self.attributes.agility < 60:
+            self.attributes.agility = 60
 
         self.updateRating()
         
@@ -504,6 +633,17 @@ class PlayerWR(Player):
         self.gameStatsDict = wrStatsDict.copy()
         self.seasonStatsDict = wrStatsDict.copy()
         self.careerStatsDict = wrStatsDict.copy()
+
+        self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
+        self.attributes.potentialHands = self.attributes.hands + randint(0,30)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        if self.attributes.potentialSpeed > 100:
+            self.attributes.potentialSpeed = 100
+        if self.attributes.potentialHands > 100:
+            self.attributes.potentialHands = 100
+        if self.attributes.potentialAgility > 100:
+            self.attributes.potentialAgility = 100
+        self.attributes.potentialSkillRating = round(((self.attributes.potentialHands*1.2) + (self.attributes.potentialSpeed*1.3) + (self.attributes.potentialAgility*.5))/3)
 
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
@@ -527,89 +667,164 @@ class PlayerWR(Player):
         self.attributes.discipline += randint(-5,5)
         self.attributes.calculateIntangibles()
 
-        if self.attributes.xFactor > 90:
-            if self.attributes.speed >= 95:
-                self.attributes.speed += randint(-3,0)
-            elif self.attributes.speed <= 75:
-                self.attributes.speed += randint(0,10)
-            else:
-                self.attributes.speed += randint(0,5)
-            if self.attributes.speed > 100:
-                self.attributes.speed = 100
+        if self.seasonsPlayed > self.attributes.longevity:
+            if self.attributes.xFactor > 90:
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(0,2)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(0,10)
+                else:
+                    self.attributes.hands += randint(0,5)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-3,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,10)
-            else:
-                self.attributes.hands += randint(0,5)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(0,3)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(0,10)
+                else:
+                    self.attributes.speed += randint(0,5)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-3,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,10)
-            else:
-                self.attributes.agility += randint(0,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(0,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,10)
+                else:
+                    self.attributes.agility += randint(0,5)
 
-        elif self.attributes.xFactor > 75:
-            if self.attributes.speed >= 95:
-                self.attributes.speed += randint(-5,0)
-            elif self.attributes.speed <= 75:
-                self.attributes.speed += randint(0,7)
-            else:
-                self.attributes.speed += randint(-3,3)
-            if self.attributes.speed > 100:
-                self.attributes.speed = 100
+            elif self.attributes.xFactor > 75:
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-1,2)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(0,7)
+                else:
+                    self.attributes.hands += randint(-2,3)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-5,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,7)
-            else:
-                self.attributes.hands += randint(-3,3)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-1,2)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(0,7)
+                else:
+                    self.attributes.speed += randint(-2,3)
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-5,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,7)
-            else:
-                self.attributes.agility += randint(-3,3)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-1,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,7)
+                else:
+                    self.attributes.agility += randint(-2,3)
 
+            else:
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-5,1)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(0,5)
+                else:
+                    self.attributes.hands += randint(-5,5)
+
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-5,1)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(0,5)
+                else:
+                    self.attributes.speed += randint(-5,5)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,1)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,5)
+                else:
+                    self.attributes.agility += randint(-5,5)
         else:
-            if self.attributes.speed >= 95:
-                self.attributes.speed += randint(-10,0)
-            elif self.attributes.speed <= 75:
-                self.attributes.speed += randint(0,5)
-            else:
-                self.attributes.speed += randint(-5,5)
-            if self.attributes.speed > 100:
-                self.attributes.speed = 100
+            if self.attributes.xFactor > 90:
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-3,0)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(-1,5)
+                else:
+                    self.attributes.hands += randint(-3,3)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-10,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,5)
-            else:
-                self.attributes.hands += randint(-5,5)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-3,0)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(-1,5)
+                else:
+                    self.attributes.speed += randint(-3,3)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-10,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,5)
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-3,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-1,5)
+                else:
+                    self.attributes.agility += randint(-3,3)
+
+            elif self.attributes.xFactor > 75:
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-5,0)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(-3,3)
+                else:
+                    self.attributes.hands += randint(-5,2)
+
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-5,0)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(-3,3)
+                else:
+                    self.attributes.speed += randint(-5,2)
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-3,3)
+                else:
+                    self.attributes.agility += randint(-5,2)
+
             else:
-                self.attributes.agility += randint(-5,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-10,0)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(-5,2)
+                else:
+                    self.attributes.hands += randint(-7,1)
+
+                if self.attributes.speed >= 95:
+                    self.attributes.speed += randint(-10,0)
+                elif self.attributes.speed <= 70:
+                    self.attributes.speed += randint(-5,2)
+                else:
+                    self.attributes.speed += randint(-7,1)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-10,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-5,2)
+                else:
+                    self.attributes.agility += randint(-7,1)
+
+        if self.attributes.hands > self.attributes.potentialHands:
+            self.attributes.hands = self.attributes.potentialHands
+        if self.attributes.hands < 60:
+            self.attributes.hands = 60
+        if self.attributes.speed > self.attributes.potentialSpeed:
+            self.attributes.speed = self.attributes.potentialSpeed
+        if self.attributes.speed < 60:
+            self.attributes.speed = 60
+        if self.attributes.agility > self.attributes.potentialAgility:
+            self.attributes.agility = self.attributes.potentialAgility 
+        if self.attributes.agility < 60:
+            self.attributes.agility = 60
+
+        if self.attributes.hands > self.attributes.potentialHands:
+            self.attributes.hands = self.attributes.potentialHands
+        if self.attributes.hands < 60:
+            self.attributes.hands = 60
+        if self.attributes.speed > self.attributes.potentialSpeed:
+            self.attributes.speed = self.attributes.potentialSpeed
+        if self.attributes.speed < 60:
+            self.attributes.speed = 60
+        if self.attributes.agility > self.attributes.potentialAgility:
+            self.attributes.agility = self.attributes.potentialAgility 
+        if self.attributes.agility < 60:
+            self.attributes.agility = 60
 
         self.updateRating()
 
@@ -623,6 +838,17 @@ class PlayerTE(Player):
         self.gameStatsDict = wrStatsDict.copy()
         self.seasonStatsDict = wrStatsDict.copy()
         self.careerStatsDict = wrStatsDict.copy()
+
+        self.attributes.potentialHands = self.attributes.hands + randint(0,30)
+        self.attributes.potentialPower = self.attributes.power + randint(0,30)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        if self.attributes.potentialHands > 100:
+            self.attributes.potentialHands = 100
+        if self.attributes.potentialPower > 100:
+            self.attributes.potentialPower = 100
+        if self.attributes.potentialAgility > 100:
+            self.attributes.potentialAgility = 100
+        self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*1.2) + (self.attributes.potentialHands*1.3) + (self.attributes.potentialAgility*.5))/3)
     
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
@@ -646,89 +872,151 @@ class PlayerTE(Player):
         self.attributes.discipline += randint(-5,5)
         self.attributes.calculateIntangibles()
 
-        if self.attributes.xFactor > 90:
-            if self.attributes.power >= 95:
-                self.attributes.power += randint(-3,0)
-            elif self.attributes.power <= 75:
-                self.attributes.power += randint(0,10)
-            else:
-                self.attributes.power += randint(0,5)
-            if self.attributes.power > 100:
-                self.attributes.power = 100
+        if self.seasonsPlayed > self.attributes.longevity:
+            if self.attributes.xFactor > 90:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(0,2)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(0,10)
+                else:
+                    self.attributes.power += randint(0,5)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-3,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,10)
-            else:
-                self.attributes.hands += randint(0,5)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(0,3)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(0,10)
+                else:
+                    self.attributes.hands += randint(0,5)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-3,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,10)
-            else:
-                self.attributes.agility += randint(0,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(0,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,10)
+                else:
+                    self.attributes.agility += randint(0,5)
 
-        elif self.attributes.xFactor > 75:
-            if self.attributes.power >= 95:
-                self.attributes.power += randint(-5,0)
-            elif self.attributes.power <= 75:
-                self.attributes.power += randint(0,7)
-            else:
-                self.attributes.power += randint(-3,3)
-            if self.attributes.power > 100:
-                self.attributes.power = 100
+            elif self.attributes.xFactor > 75:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-1,2)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(0,7)
+                else:
+                    self.attributes.power += randint(-2,3)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-5,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,7)
-            else:
-                self.attributes.hands += randint(-3,3)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-1,2)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(0,7)
+                else:
+                    self.attributes.hands += randint(-2,3)
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-5,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,7)
-            else:
-                self.attributes.agility += randint(-3,3)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-1,2)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,7)
+                else:
+                    self.attributes.agility += randint(-2,3)
 
+            else:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-5,1)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(0,5)
+                else:
+                    self.attributes.power += randint(-5,5)
+
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-5,1)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(0,5)
+                else:
+                    self.attributes.hands += randint(-5,5)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,1)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(0,5)
+                else:
+                    self.attributes.agility += randint(-5,5)
         else:
-            if self.attributes.power >= 95:
-                self.attributes.power += randint(-10,0)
-            elif self.attributes.power <= 75:
-                self.attributes.power += randint(0,5)
-            else:
-                self.attributes.power += randint(-5,5)
-            if self.attributes.power > 100:
-                self.attributes.power = 100
+            if self.attributes.xFactor > 90:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-3,0)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(-1,5)
+                else:
+                    self.attributes.power += randint(-3,3)
 
-            if self.attributes.hands >= 95:
-                self.attributes.hands += randint(-10,0)
-            elif self.attributes.hands <= 75:
-                self.attributes.hands += randint(0,5)
-            else:
-                self.attributes.hands += randint(-5,5)
-            if self.attributes.hands > 100:
-                self.attributes.hands = 100  
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-3,0)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(-1,5)
+                else:
+                    self.attributes.hands += randint(-3,3)  
 
-            if self.attributes.agility >= 95:
-                self.attributes.agility += randint(-10,0)
-            elif self.attributes.agility <= 75:
-                self.attributes.agility += randint(0,5)
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-3,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-1,5)
+                else:
+                    self.attributes.agility += randint(-3,3)
+
+            elif self.attributes.xFactor > 75:
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-5,0)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(-3,3)
+                else:
+                    self.attributes.power += randint(-5,2)
+
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-5,0)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(-3,3)
+                else:
+                    self.attributes.hands += randint(-5,2)
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-5,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-3,3)
+                else:
+                    self.attributes.agility += randint(-5,2)
+
             else:
-                self.attributes.agility += randint(-5,5)
-            if self.attributes.agility > 100:
-                self.attributes.agility = 100 
+                if self.attributes.power >= 95:
+                    self.attributes.power += randint(-10,0)
+                elif self.attributes.power <= 70:
+                    self.attributes.power += randint(-5,2)
+                else:
+                    self.attributes.power += randint(-7,1)
+
+                if self.attributes.hands >= 95:
+                    self.attributes.hands += randint(-10,0)
+                elif self.attributes.hands <= 70:
+                    self.attributes.hands += randint(-5,2)
+                else:
+                    self.attributes.hands += randint(-7,1)  
+
+                if self.attributes.agility >= 95:
+                    self.attributes.agility += randint(-10,0)
+                elif self.attributes.agility <= 70:
+                    self.attributes.agility += randint(-5,2)
+                else:
+                    self.attributes.agility += randint(-7,1)
+
+        if self.attributes.power > self.attributes.potentialPower:
+            self.attributes.power = self.attributes.potentialPower
+        if self.attributes.power < 60:
+            self.attributes.power = 60
+        if self.attributes.hands > self.attributes.potentialHands:
+            self.attributes.hands = self.attributes.potentialHands
+        if self.attributes.hands < 60:
+            self.attributes.hands = 60
+        if self.attributes.agility > self.attributes.potentialAgility:
+            self.attributes.agility = self.attributes.potentialAgility 
+        if self.attributes.agility < 60:
+            self.attributes.agility = 60
 
         self.updateRating()
 
@@ -741,6 +1029,14 @@ class PlayerK(Player):
         self.gameStatsDict = kStatsDict.copy()
         self.seasonStatsDict = kStatsDict.copy()
         self.careerStatsDict = kStatsDict.copy()
+
+        self.attributes.potentialLegStrength = self.attributes.legStrength + randint(0,30)
+        self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
+        if self.attributes.potentialLegStrength > 100:
+            self.attributes.potentialLegStrength = 100
+        if self.attributes.potentialAccuracy > 100:
+            self.attributes.potentialAccuracy = 100
+        self.attributes.potentialSkillRating = round((self.attributes.potentialLegStrength + self.attributes.potentialAccuracy)/2)
     
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
@@ -759,78 +1055,111 @@ class PlayerK(Player):
             self.playerRating = self.attributes.overallRating
 
     def offseasonTraining(self):
-        self.attributes.accuracy += randint(-5, 5)
-        if self.attributes.accuracy > 100:
-            self.attributes.accuracy = 100
-        elif self.attributes.accuracy < 70:
-            self.attributes.accuracy = 70
-        self.attributes.legStrength += randint(-5, 5)
-        if self.attributes.legStrength > 100:
-            self.attributes.legStrength = 100
-        elif self.attributes.legStrength < 70:
-            self.attributes.legStrength = 70
-
         self.attributes.attitude += randint(-5,5)
         self.attributes.luck += randint(-5,5)
         self.attributes.discipline += randint(-5,5)
         self.attributes.calculateIntangibles()
 
-        if self.attributes.xFactor > 90:
-            if self.attributes.legStrength >= 95:
-                self.attributes.legStrength += randint(-3,0)
-            elif self.attributes.legStrength <= 75:
-                self.attributes.legStrength += randint(0,10)
-            else:
-                self.attributes.legStrength += randint(0,5)
-            if self.attributes.legStrength > 100:
-                self.attributes.legStrength = 100
+        if self.seasonsPlayed < self.attributes.longevity:
+            if self.attributes.xFactor > 90:
+                if self.attributes.legStrength >= 95:
+                    self.attributes.legStrength += randint(0,2)
+                elif self.attributes.legStrength <= 70:
+                    self.attributes.legStrength += randint(0,10)
+                else:
+                    self.attributes.legStrength += randint(0,5)
+                
 
-            if self.attributes.accuracy >= 95:
-                self.attributes.accuracy += randint(-3,0)
-            elif self.attributes.accuracy <= 75:
-                self.attributes.accuracy += randint(0,10)
-            else:
-                self.attributes.accuracy += randint(0,5)
-            if self.attributes.accuracy > 100:
-                self.attributes.accuracy = 100   
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(0,3)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(0,10)
+                else:
+                    self.attributes.accuracy += randint(0,5)  
 
-        elif self.attributes.xFactor > 75:
-            if self.attributes.legStrength >= 95:
-                self.attributes.legStrength += randint(-5,0)
-            elif self.attributes.legStrength <= 75:
-                self.attributes.legStrength += randint(0,7)
-            else:
-                self.attributes.legStrength += randint(-3,3)
-            if self.attributes.legStrength > 100:
-                self.attributes.legStrength = 100
+            elif self.attributes.xFactor > 75:
+                if self.attributes.legStrength >= 95:
+                    self.attributes.legStrength += randint(-1,2)
+                elif self.attributes.legStrength <= 70:
+                    self.attributes.legStrength += randint(0,7)
+                else:
+                    self.attributes.legStrength += randint(-2,3)
 
-            if self.attributes.accuracy >= 95:
-                self.attributes.accuracy += randint(-5,0)
-            elif self.attributes.accuracy <= 75:
-                self.attributes.accuracy += randint(0,7)
-            else:
-                self.attributes.accuracy += randint(-3,3)
-            if self.attributes.accuracy > 100:
-                self.attributes.accuracy = 100  
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-1,2)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(0,7)
+                else:
+                    self.attributes.accuracy += randint(-2,3)
 
+            else:
+                if self.attributes.legStrength >= 95:
+                    self.attributes.legStrength += randint(-5,1)
+                elif self.attributes.legStrength <= 70:
+                    self.attributes.legStrength += randint(0,5)
+                else:
+                    self.attributes.legStrength += randint(-5,5)
+
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-5,1)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(0,5)
+                else:
+                    self.attributes.accuracy += randint(-5,5)  
         else:
-            if self.attributes.legStrength >= 95:
-                self.attributes.legStrength += randint(-10,0)
-            elif self.attributes.legStrength <= 75:
-                self.attributes.legStrength += randint(0,5)
-            else:
-                self.attributes.legStrength += randint(-5,5)
-            if self.attributes.legStrength > 100:
-                self.attributes.legStrength = 100
+            if self.attributes.xFactor > 90:
+                if self.attributes.legStrength >= 95:
+                    self.attributes.legStrength += randint(-3,0)
+                elif self.attributes.legStrength <= 70:
+                    self.attributes.legStrength += randint(-1,5)
+                else:
+                    self.attributes.legStrength += randint(-3,3)
 
-            if self.attributes.accuracy >= 95:
-                self.attributes.accuracy += randint(-10,0)
-            elif self.attributes.accuracy <= 75:
-                self.attributes.accuracy += randint(0,5)
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-3,0)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(-1,5)
+                else:
+                    self.attributes.accuracy += randint(-3,3)  
+
+            elif self.attributes.xFactor > 75:
+                if self.attributes.legStrength >= 95:
+                    self.attributes.legStrength += randint(-5,0)
+                elif self.attributes.legStrength <= 70:
+                    self.attributes.legStrength += randint(-3,3)
+                else:
+                    self.attributes.legStrength += randint(-5,2)
+
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-5,0)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(-3,3)
+                else:
+                    self.attributes.accuracy += randint(-5,2)
+
             else:
-                self.attributes.accuracy += randint(-5,5)
-            if self.attributes.accuracy > 100:
-                self.attributes.accuracy = 100  
+                if self.attributes.legStrength >= 95:
+                    self.attributes.legStrength += randint(-10,0)
+                elif self.attributes.legStrength <= 70:
+                    self.attributes.legStrength += randint(-5,2)
+                else:
+                    self.attributes.legStrength += randint(-7,1)
+
+                if self.attributes.accuracy >= 95:
+                    self.attributes.accuracy += randint(-10,0)
+                elif self.attributes.accuracy <= 70:
+                    self.attributes.accuracy += randint(-5,2)
+                else:
+                    self.attributes.accuracy += randint(-7,1) 
+
+        if self.attributes.legStrength > self.attributes.potentialLegStrength:
+            self.attributes.legStrength = self.attributes.potentialLegStrength
+        if self.attributes.legStrength < 60:
+            self.attributes.legStrength = 60
+        if self.attributes.accuracy > self.attributes.potentialAccuracy:
+            self.attributes.accuracy = self.attributes.potentialAccuracy
+        if self.attributes.accuracy < 60:
+            self.attributes.accuracy = 60
 
         self.updateRating()
 
