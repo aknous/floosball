@@ -169,8 +169,8 @@ class Season:
             for player in team.reserveRosterDict.values():
                 playerDict = {}
                 player: FloosPlayer.Player
+                player.seasonsPlayed += 1
                 if player is not None and player.gamesPlayed > 0:
-                    player.seasonsPlayed += 1
                     if 'passComp' in player.seasonStatsDict and player.seasonStatsDict['passYards'] > 0:
                         player.careerStatsDict['passAtt'] += player.seasonStatsDict['passAtt']
                         player.careerStatsDict['passComp'] += player.seasonStatsDict['passComp']
@@ -520,6 +520,7 @@ class Season:
 
         return champ
 
+
 def getPlayerTerm(tier: FloosPlayer.PlayerTier):
         if tier is FloosPlayer.PlayerTier.SuperStar or tier is FloosPlayer.PlayerTier.Elite:
             return randint(3,5)
@@ -717,9 +718,6 @@ def getPlayers(_config):
                 elif player['position'] == 'K':
                     newPlayer = FloosPlayer.PlayerK()
                     activeKList.append(newPlayer)
-                    newPlayer.attributes.skillRating = player['attributes']['skillRating']
-                    newPlayer.attributes.legStrength = player['attributes']['legStrength']
-                    newPlayer.attributes.accuracy = player['attributes']['accuracy']
 
                 newPlayer.name = player['name']
                 newPlayer.id = player['id']
@@ -736,6 +734,15 @@ def getPlayers(_config):
                 newPlayer.attributes.accuracy = player['attributes']['accuracy']
                 newPlayer.attributes.legStrength = player['attributes']['legStrength']
 
+                newPlayer.attributes.potentialSkillRating = player['attributes']['potentialSkillRating']
+                newPlayer.attributes.potentialSpeed = player['attributes']['potentialSpeed']
+                newPlayer.attributes.potentialHands = player['attributes']['potentialHands']
+                newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
+                newPlayer.attributes.potentialPower = player['attributes']['potentialPower']
+                newPlayer.attributes.potentialArmStrength = player['attributes']['potentialArmStrength']
+                newPlayer.attributes.potentialAccuracy = player['attributes']['potentialAccuracy']
+                newPlayer.attributes.potentialLegStrength = player['attributes']['potentialLegStrength']
+
                 newPlayer.attributes.confidence = player['attributes']['confidence']
                 newPlayer.attributes.determination = player['attributes']['determination']
                 newPlayer.attributes.discipline = player['attributes']['discipline']
@@ -745,6 +752,7 @@ def getPlayers(_config):
                 newPlayer.attributes.luck = player['attributes']['luck']
                 newPlayer.attributes.attitude = player['attributes']['attitude']
                 newPlayer.attributes.playMakingAbility = player['attributes']['playMakingAbility']
+                newPlayer.attributes.xFactor = player['attributes']['xFactor']
 
                 newPlayer.careerStatsDict = player['careerStats']
 
@@ -754,7 +762,7 @@ def getPlayers(_config):
         jsonFile.close()
 
     else:
-        numOfPlayers = 114
+        numOfPlayers = 150
         id = 1
         for x in _config['players']:
             unusedNamesList.append(x)
@@ -1040,6 +1048,13 @@ def offseason():
         for k,v in team.rosterDict.items():
             v: FloosPlayer.Player
             v.seasonPerformanceRating = 0
+            if v.seasonsPlayed >= 1 and v.seasonsPlayed < 4:
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Intermediate
+            elif v.seasonsPlayed >= 4 and v.seasonsPlayed < 7:
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Professional
+            else:
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran
+
             v.term -= 1
             if v.term == 0:
                 retirePlayerBool = None
@@ -1093,7 +1108,7 @@ def offseason():
                 else:
                     x = randint(1,100)
                     if v.playerTier is FloosPlayer.PlayerTier.SuperStar:
-                        if x > 90:
+                        if x > 80:
                             team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False, 'method': 'Free Agency'})
                             v.previousTeam = team.name
                             v.team = 'Free Agent'
@@ -1102,7 +1117,7 @@ def offseason():
                         else:
                             v.term = getPlayerTerm(v.playerTier)
                     elif v.playerTier is FloosPlayer.PlayerTier.Elite:
-                        if x > 75:
+                        if x > 65:
                             team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False, 'method': 'Free Agency'})
                             v.previousTeam = team.name
                             v.team = 'Free Agent'
@@ -1111,7 +1126,7 @@ def offseason():
                         else:
                             v.term = getPlayerTerm(v.playerTier)
                     elif v.playerTier is FloosPlayer.PlayerTier.AboveAverage:
-                        if x > 50:
+                        if x > 40:
                             team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False, 'method': 'Free Agency'})
                             v.previousTeam = team.name
                             v.team = 'Free Agent'
@@ -1120,7 +1135,7 @@ def offseason():
                         else:
                             v.term = getPlayerTerm(v.playerTier)
                     elif v.playerTier is FloosPlayer.PlayerTier.Average:
-                        if x > 25:
+                        if x > 20:
                             team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False, 'method': 'Free Agency'})
                             v.previousTeam = team.name
                             v.team = 'Free Agent'
@@ -1129,7 +1144,7 @@ def offseason():
                         else:
                             v.term = getPlayerTerm(v.playerTier)
                     elif v.playerTier is FloosPlayer.PlayerTier.BelowAverage:
-                        if x > 10:
+                        if x > 5:
                             team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False, 'method': 'Free Agency'})
                             v.previousTeam = team.name
                             v.team = 'Free Agent'
@@ -1142,6 +1157,13 @@ def offseason():
             if v is not None:
                 v: FloosPlayer.Player
                 v.seasonPerformanceRating = 0
+                if v.seasonsPlayed >= 1 and v.seasonsPlayed < 4:
+                    v.serviceTime = FloosPlayer.PlayerServiceTime.Intermediate
+                elif v.seasonsPlayed >= 4 and v.seasonsPlayed < 7:
+                    v.serviceTime = FloosPlayer.PlayerServiceTime.Professional
+                else:
+                    v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran
+
                 v.term -= 1
                 if v.term == 0:
                     retirePlayerBool = None
