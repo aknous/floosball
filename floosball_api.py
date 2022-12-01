@@ -54,11 +54,11 @@ async def returnTeams(id = None):
                 teamDict['id'] = team.id
                 teamDict['championships'] = team.leagueChampionships
                 teamDict['eliminated'] = team.eliminated
-                teamDict['ratingStars'] = round((((team.overallRating - 70)/30)*4)+1)
-                teamDict['offenseRatingStars'] = round((((team.offenseRating - 70)/30)*4)+1)
+                teamDict['ratingStars'] = round((((team.overallRating - 60)/40)*4)+1)
+                teamDict['offenseRatingStars'] = round((((team.offenseRating - 60)/40)*4)+1)
                 teamDict['defenseRatingStars'] = team.defenseTier
-                teamDict['runDefenseRating'] = round((((team.runDefenseRating - 70)/30)*4)+1)
-                teamDict['passDefenseRating'] = round((((team.passDefenseRating - 70)/30)*4)+1)
+                teamDict['runDefenseRating'] = round((((team.runDefenseRating - 60)/40)*4)+1)
+                teamDict['passDefenseRating'] = round((((team.passDefenseRating - 60)/40)*4)+1)
                 teamDict['wins'] = team.seasonTeamStats['wins']
                 teamDict['losses'] = team.seasonTeamStats['losses']
                 if (team.seasonTeamStats['wins']+team.seasonTeamStats['losses']) > 0:
@@ -95,11 +95,11 @@ async def returnTeams(id = None):
                 teamDict['id'] = team.id
                 teamDict['eliminated'] = team.eliminated
                 teamDict['championships'] = team.leagueChampionships
-                teamDict['ratingStars'] = round((((team.overallRating - 70)/30)*4)+1)
-                teamDict['offenseRatingStars'] = round((((team.offenseRating - 70)/30)*4)+1)
+                teamDict['ratingStars'] = round((((team.overallRating - 60)/60)*4)+1)
+                teamDict['offenseRatingStars'] = round((((team.offenseRating - 60)/40)*4)+1)
                 teamDict['defenseRatingStars'] = team.defenseTier
-                teamDict['runDefenseRating'] = round((((team.runDefenseRating - 70)/30)*4)+1)
-                teamDict['passDefenseRating'] = round((((team.passDefenseRating - 70)/30)*4)+1)
+                teamDict['runDefenseRating'] = round((((team.runDefenseRating - 60)/40)*4)+1)
+                teamDict['passDefenseRating'] = round((((team.passDefenseRating - 60)/60)*4)+1)
                 teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
                 teamDict['wins'] = team.seasonTeamStats['wins']
                 teamDict['losses'] = team.seasonTeamStats['losses']
@@ -508,33 +508,34 @@ async def returnPlays(id = None):
                 game: FloosGame.Game = weekGameList[x]
                 if id == game.id:
                     for play in game.playsList:
+                        play: FloosGame.Play
                         playDict = {}
-                        playDict['playText'] = play['playText']
-                        playDict['team'] = play['offense'].name
+                        playDict['playText'] = play.playText
+                        playDict['team'] = play.offense.name
                         playDict['homeAbbr'] = game.homeTeam.abbr
                         playDict['awayAbbr'] = game.awayTeam.abbr
-                        playDict['yardLine'] = play['yardLine']
-                        if play['down'] == 1:
+                        playDict['yardLine'] = play.yardLine
+                        if play.down == 1:
                             down = '1st'
-                        elif play['down'] == 2:
+                        elif play.down == 2:
                             down = '2nd'
-                        elif play['down'] == 3:
+                        elif play.down == 3:
                             down = '3rd'
-                        elif play['down'] == 4:
+                        elif play.down == 4:
                             down = '4th'
                         else:
                             down = '1st'
-                        playDict['down'] = '{} & {}'.format(down, play['yardsTo1st'])
-                        playDict['result'] = play['result']
-                        playDict['homeScore'] = play['homeTeamScore']
-                        playDict['awayScore'] = play['awayTeamScore']
-                        playDict['color'] = play['offense'].color
-                        playDict['quarter'] = play['quarter']
-                        playDict['playsLeft'] = play['playsLeft']
-                        playDict['scoreChange'] = play['scoreChange']
-                        playDict['isTd'] = play['isTd']
-                        playDict['isFg'] = play['isFg']
-                        playDict['isSafety'] = play['isSafety']
+                        playDict['down'] = '{} & {}'.format(down, play.yardsTo1st)
+                        playDict['result'] = play.playResult.value
+                        playDict['homeScore'] = play.homeTeamScore
+                        playDict['awayScore'] = play.awayTeamScore
+                        playDict['color'] = play.offense.color
+                        playDict['quarter'] = play.quarter
+                        playDict['playsLeft'] = play.playsLeft
+                        playDict['scoreChange'] = play.scoreChange
+                        playDict['isTd'] = play.isTd
+                        playDict['isFg'] = play.isFgGood
+                        playDict['isSafety'] = play.isSafety
                         playList.append(playDict)
                     return(playList)
         else:
@@ -552,34 +553,35 @@ async def returnScoringPlays(id = None):
                 game: FloosGame.Game = weekGameList[x]
                 if id == game.id:
                     for play in game.scoringPlaysList:
+                        play: FloosGame.Play
                         playDict = {}
-                        playDict['playText'] = play['playText']
-                        playDict['team'] = play['offense'].name
+                        playDict['playText'] = play.playText
+                        playDict['team'] = play.offense.name
                         playDict['homeAbbr'] = game.homeTeam.abbr
                         playDict['awayAbbr'] = game.awayTeam.abbr
-                        playDict['yardLine'] = play['yardLine']
-                        if play['down'] == 1:
+                        playDict['yardLine'] = play.yardLine
+                        if play.down == 1:
                             down = '1st'
-                        elif play['down'] == 2:
+                        elif play.down == 2:
                             down = '2nd'
-                        elif play['down'] == 3:
+                        elif play.down == 3:
                             down = '3rd'
-                        elif play['down'] == 4:
+                        elif play.down == 4:
                             down = '4th'
                         else:
                             down = '1st'
-                        playDict['down'] = '{} & {}'.format(down, play['yardsTo1st'])
-                        playDict['yardage'] = play['yardage']
-                        playDict['result'] = play['result']
-                        playDict['homeScore'] = play['homeTeamScore']
-                        playDict['awayScore'] = play['awayTeamScore']
-                        playDict['color'] = play['offense'].color
-                        playDict['quarter'] = play['quarter']
-                        playDict['playsLeft'] = play['playsLeft']
-                        playDict['scoreChange'] = play['scoreChange']
-                        playDict['isTd'] = play['isTd']
-                        playDict['isFg'] = play['isFg']
-                        playDict['isSafety'] = play['isSafety']
+                        playDict['down'] = '{} & {}'.format(down, play.yardsTo1st)
+                        playDict['yardage'] = play.yardage
+                        playDict['result'] = play.playResult.value
+                        playDict['homeScore'] = play.homeTeamScore
+                        playDict['awayScore'] = play.awayTeamScore
+                        playDict['color'] = play.offense.color
+                        playDict['quarter'] = play.quarter
+                        playDict['playsLeft'] = play.playsLeft
+                        playDict['scoreChange'] = play.scoreChange
+                        playDict['isTd'] = play.isTd
+                        playDict['isFg'] = play.isFgGood
+                        playDict['isSafety'] = play.isSafety
                         playList.append(playDict)
                     return(playList)
         else:
