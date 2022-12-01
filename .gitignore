@@ -65,3 +65,5 @@ season4/games/Week 8.json
 season4/games/Week 9.json
 season4/seasonData.json
 season*
+*.pyc
+*.png
