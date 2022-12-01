@@ -98,17 +98,17 @@ class Team:
             self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
             x = randint(1, 100)
             if x >= 99:
-                self.runDefenseRating = randint(90, 100)
-                self.passDefenseRating = randint(90, 100)
+                self.runDefenseRating = randint(85, 100)
+                self.passDefenseRating = randint(85, 100)
             elif x >= 85 and x < 98:
-                self.runDefenseRating = randint(86, 95)
-                self.passDefenseRating = randint(86, 95)
+                self.runDefenseRating = randint(80, 95)
+                self.passDefenseRating = randint(80, 95)
             elif x >= 60 and x < 85:
-                self.runDefenseRating = randint(80, 89)
-                self.passDefenseRating = randint(80, 89)
+                self.runDefenseRating = randint(70, 89)
+                self.passDefenseRating = randint(70, 89)
             else:
-                self.runDefenseRating = randint(70, 95)
-                self.passDefenseRating = randint(70, 95)
+                self.runDefenseRating = randint(60, 95)
+                self.passDefenseRating = randint(60, 95)
                 
             self.defenseRating = round(((self.runDefenseRating*1.8)+(self.passDefenseRating*2.2))/4)
             self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
@@ -177,34 +177,50 @@ class Team:
             self.gameDefenseRating = 100
 
     def updateDefense(self):
-        if self.defenseDiscipline >= 95:
-            self.defenseDiscipline += randint(-15, -5)
-        elif self.defenseDiscipline <= 75:
-            self.defenseDiscipline += randint(5, 15)
+        x = randint(1,10)
+        if x < 3:
+            x = randint(1, 100)
+            if x >= 99:
+                self.runDefenseRating = randint(85, 100)
+                self.passDefenseRating = randint(85, 100)
+            elif x >= 85 and x < 98:
+                self.runDefenseRating = randint(80, 95)
+                self.passDefenseRating = randint(80, 95)
+            elif x >= 60 and x < 85:
+                self.runDefenseRating = randint(70, 89)
+                self.passDefenseRating = randint(70, 89)
+            else:
+                self.runDefenseRating = randint(60, 95)
+                self.passDefenseRating = randint(60, 95)   
         else:
-            self.defenseDiscipline += randint(-10, 10)
+            if self.defenseDiscipline >= 95:
+                self.defenseDiscipline += randint(-15, -5)
+            elif self.defenseDiscipline <= 70:
+                self.defenseDiscipline += randint(5, 15)
+            else:
+                self.defenseDiscipline += randint(-10, 10)
 
-        if self.passDefenseRating >= 95:
-            self.passDefenseRating += randint(-10, -5)
-        elif self.passDefenseRating <= 75:
-            self.passDefenseRating += randint(5, 15)
-        else:
-            self.passDefenseRating += randint(-10, 10)
-        if self.runDefenseRating >= 95:
-            self.runDefenseRating += randint(-10, -5)
-        elif self.runDefenseRating <= 75:
-            self.runDefenseRating += randint(5, 15)
-        else:
-            self.runDefenseRating += randint(-10, 10)
-        
-        if self.passDefenseRating > 100:
-            self.passDefenseRating = 100
-        elif self.passDefenseRating < 70:
-            self.passDefenseRating = 70
-        if self.runDefenseRating > 100:
-            self.runDefenseRating = 100
-        elif self.runDefenseRating < 70:
-            self.runDefenseRating = 70
+            if self.passDefenseRating >= 95:
+                self.passDefenseRating += randint(-10, -5)
+            elif self.passDefenseRating <= 70:
+                self.passDefenseRating += randint(5, 15)
+            else:
+                self.passDefenseRating += randint(-10, 10)
+            if self.runDefenseRating >= 95:
+                self.runDefenseRating += randint(-10, -5)
+            elif self.runDefenseRating <= 70:
+                self.runDefenseRating += randint(5, 15)
+            else:
+                self.runDefenseRating += randint(-10, 10)
+
+            if self.passDefenseRating > 100:
+                self.passDefenseRating = 100
+            elif self.passDefenseRating < 60:
+                self.passDefenseRating = 60
+            if self.runDefenseRating > 100:
+                self.runDefenseRating = 100
+            elif self.runDefenseRating < 60:
+                self.runDefenseRating = 60
 
         self.updateRating()
 
