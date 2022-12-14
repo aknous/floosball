@@ -10,6 +10,7 @@ import asyncio
 import os
 import json
 import uvicorn
+from operator import itemgetter
 from floosball_player import Player, Position
 
 from floosball_team import Team
@@ -154,6 +155,7 @@ async def returnTeams(id = None):
                     playerDict['pos'] = player.position.name
                     playerDict['id'] = player.id
                     playerDict['rating'] = player.attributes.overallRating
+                    playerDict['rank'] = player.serviceTime
                     playerDict['ratingStars'] = player.playerTier.value
                     playerDict['term'] = player.term
                     playerDict['gamesPlayed'] = player.gamesPlayed
@@ -169,6 +171,7 @@ async def returnTeams(id = None):
                         playerDict['id'] = player.id
                         playerDict['pos'] = player.position.name
                         playerDict['rating'] = player.attributes.overallRating
+                        playerDict['rank'] = player.serviceTime
                         playerDict['ratingStars'] = player.playerTier.value
                         playerDict['term'] = player.term
                         playerDict['gamesPlayed'] = player.gamesPlayed
@@ -185,6 +188,7 @@ async def returnPlayers(id = None):
         for player in floosball.activePlayerList:
             playerDict = {}
             playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
             playerDict['id'] = player.id
             playerDict['position'] = player.position.name
             playerDict['ratingStars'] = player.playerTier.value
@@ -204,6 +208,7 @@ async def returnPlayers(id = None):
             dict = {}
             if player.id == id:
                 dict['name'] = player.name
+                dict['rank'] = player.serviceTime
                 if isinstance(player.team, str):
                     dict['team'] = player.team
                 elif player.team is None:
@@ -501,89 +506,137 @@ async def returnPlays(id = None):
     if id is None:
         return 'No ID specified'
     else:
-        playList = []
+        eventList = []
         for y in range(len(floosball.scheduleList)):
             weekGameList = floosball.scheduleList[y]
             for x in range(0,len(weekGameList)):
                 game: FloosGame.Game = weekGameList[x]
                 if id == game.id:
-                    for play in game.playsList:
-                        play: FloosGame.Play
-                        playDict = {}
-                        playDict['playText'] = play.playText
-                        playDict['team'] = play.offense.name
-                        playDict['homeAbbr'] = game.homeTeam.abbr
-                        playDict['awayAbbr'] = game.awayTeam.abbr
-                        playDict['yardLine'] = play.yardLine
-                        if play.down == 1:
-                            down = '1st'
-                        elif play.down == 2:
-                            down = '2nd'
-                        elif play.down == 3:
-                            down = '3rd'
-                        elif play.down == 4:
-                            down = '4th'
-                        else:
-                            down = '1st'
-                        playDict['down'] = '{} & {}'.format(down, play.yardsTo1st)
-                        playDict['result'] = play.playResult.value
-                        playDict['homeScore'] = play.homeTeamScore
-                        playDict['awayScore'] = play.awayTeamScore
-                        playDict['color'] = play.offense.color
-                        playDict['quarter'] = play.quarter
-                        playDict['playsLeft'] = play.playsLeft
-                        playDict['scoreChange'] = play.scoreChange
-                        playDict['isTd'] = play.isTd
-                        playDict['isFg'] = play.isFgGood
-                        playDict['isSafety'] = play.isSafety
-                        playList.append(playDict)
-                    return(playList)
+                    for entry in game.gameFeed:
+                        entry: dict
+                        for k,v in entry.items():
+                            if k == 'event':
+                                v['type'] = 'event'
+                                eventList.append(v)
+                            elif k == 'play':
+                                play: FloosGame.Play = v
+                                playDict = {}
+                                playDict['type'] = 'play'
+                                playDict['playText'] = play.playText
+                                playDict['team'] = play.offense.name
+                                playDict['homeAbbr'] = game.homeTeam.abbr
+                                playDict['awayAbbr'] = game.awayTeam.abbr
+                                playDict['yardLine'] = play.yardLine
+                                if play.down == 1:
+                                    down = '1st'
+                                elif play.down == 2:
+                                    down = '2nd'
+                                elif play.down == 3:
+                                    down = '3rd'
+                                elif play.down == 4:
+                                    down = '4th'
+                                else:
+                                    down = '1st'
+                                playDict['down'] = '{} & {}'.format(down, play.yardsTo1st)
+                                playDict['yardage'] = play.yardage
+                                playDict['result'] = play.playResult.value
+                                playDict['homeScore'] = play.homeTeamScore
+                                playDict['awayScore'] = play.awayTeamScore
+                                playDict['color'] = play.offense.color
+                                playDict['quarter'] = play.quarter
+                                playDict['playsLeft'] = play.playsLeft
+                                playDict['scoreChange'] = play.scoreChange
+                                playDict['isTd'] = play.isTd
+                                playDict['isFg'] = play.isFgGood
+                                playDict['isSafety'] = play.isSafety
+                                eventList.append(playDict)
+                    return(eventList)
         else:
             return 'Game Not Found'
 
-@app.get('/scoringPlays')
-async def returnScoringPlays(id = None):
+@app.get('/highlights')
+async def returnHighlights(id = None):
     if id is None:
-        return 'No ID specified'
+        eventList = []
+        highlights = []
+        for x in range(len(floosball.activeSeason.leagueHighlights)):
+            if x < 10:
+                highlights.append(floosball.activeSeason.leagueHighlights[x])
+            else:
+                break
+
+        for entry in highlights:
+            entry: dict
+            for k,v in entry.items():
+                if k == 'event':
+                    v['type'] = 'event'
+                    eventList.append(v)
+                elif k == 'play':
+                    play: FloosGame.Play = v
+                    playDict = {}
+                    playDict['type'] = 'play'
+                    playDict['playText'] = play.playText
+                    playDict['team'] = play.offense.name
+                    playDict['homeAbbr'] = play.homeAbbr
+                    playDict['awayAbbr'] = play.awayAbbr
+                    playDict['yardage'] = play.yardage
+                    playDict['result'] = play.playResult.value
+                    playDict['homeScore'] = play.homeTeamScore
+                    playDict['awayScore'] = play.awayTeamScore
+                    playDict['color'] = play.offense.color
+                    playDict['scoreChange'] = play.scoreChange
+                    playDict['isTd'] = play.isTd
+                    playDict['isFg'] = play.isFgGood
+                    playDict['isSafety'] = play.isSafety
+                    eventList.append(playDict)
+        return(eventList)
+
     else:
-        playList = []
+        eventList = []
         for y in range(len(floosball.scheduleList)):
             weekGameList = floosball.scheduleList[y]
             for x in range(0,len(weekGameList)):
                 game: FloosGame.Game = weekGameList[x]
                 if id == game.id:
-                    for play in game.scoringPlaysList:
-                        play: FloosGame.Play
-                        playDict = {}
-                        playDict['playText'] = play.playText
-                        playDict['team'] = play.offense.name
-                        playDict['homeAbbr'] = game.homeTeam.abbr
-                        playDict['awayAbbr'] = game.awayTeam.abbr
-                        playDict['yardLine'] = play.yardLine
-                        if play.down == 1:
-                            down = '1st'
-                        elif play.down == 2:
-                            down = '2nd'
-                        elif play.down == 3:
-                            down = '3rd'
-                        elif play.down == 4:
-                            down = '4th'
-                        else:
-                            down = '1st'
-                        playDict['down'] = '{} & {}'.format(down, play.yardsTo1st)
-                        playDict['yardage'] = play.yardage
-                        playDict['result'] = play.playResult.value
-                        playDict['homeScore'] = play.homeTeamScore
-                        playDict['awayScore'] = play.awayTeamScore
-                        playDict['color'] = play.offense.color
-                        playDict['quarter'] = play.quarter
-                        playDict['playsLeft'] = play.playsLeft
-                        playDict['scoreChange'] = play.scoreChange
-                        playDict['isTd'] = play.isTd
-                        playDict['isFg'] = play.isFgGood
-                        playDict['isSafety'] = play.isSafety
-                        playList.append(playDict)
-                    return(playList)
+                    for entry in game.highlights:
+                        entry: dict
+                        for k,v in entry.items():
+                            if k == 'event':
+                                v['type'] = 'event'
+                                eventList.append(v)
+                            elif k == 'play':
+                                play: FloosGame.Play = v
+                                playDict = {}
+                                playDict['type'] = 'play'
+                                playDict['playText'] = play.playText
+                                playDict['team'] = play.offense.name
+                                playDict['homeAbbr'] = game.homeTeam.abbr
+                                playDict['awayAbbr'] = game.awayTeam.abbr
+                                playDict['yardLine'] = play.yardLine
+                                if play.down == 1:
+                                    down = '1st'
+                                elif play.down == 2:
+                                    down = '2nd'
+                                elif play.down == 3:
+                                    down = '3rd'
+                                elif play.down == 4:
+                                    down = '4th'
+                                else:
+                                    down = '1st'
+                                playDict['down'] = '{} & {}'.format(down, play.yardsTo1st)
+                                playDict['yardage'] = play.yardage
+                                playDict['result'] = play.playResult.value
+                                playDict['homeScore'] = play.homeTeamScore
+                                playDict['awayScore'] = play.awayTeamScore
+                                playDict['color'] = play.offense.color
+                                playDict['quarter'] = play.quarter
+                                playDict['playsLeft'] = play.playsLeft
+                                playDict['scoreChange'] = play.scoreChange
+                                playDict['isTd'] = play.isTd
+                                playDict['isFg'] = play.isFgGood
+                                playDict['isSafety'] = play.isSafety
+                                eventList.append(playDict)
+                    return(eventList)
         else:
             return 'Game Not Found'
 
@@ -629,40 +682,230 @@ async def returnPlayerStats(pos = None):
             teamDict = {}
             team: Team
             teamDict['name'] = team.name
+            teamDict['city'] = team.city
             teamDict['ratingStars'] = team.defenseTier
-            teamDict['seasonStats'] = team.seasonTeamStats['Defense']
+            teamDict['stat1'] = team.seasonTeamStats['Defense']['sacks']
+            teamDict['stat2'] = team.seasonTeamStats['Defense']['ints']
+            teamDict['stat3'] = team.seasonTeamStats['Defense']['fumRec']
+            teamDict['stat4'] = team.seasonTeamStats['Defense']['passYardsAlwd']
+            teamDict['stat5'] = team.seasonTeamStats['Defense']['runYardsAlwd']
+            teamDict['stat6'] = team.seasonTeamStats['Defense']['totalYardsAlwd']
+            teamDict['stat7'] = team.seasonTeamStats['Defense']['avgYardsAlwd']
+            teamDict['stat8'] = team.seasonTeamStats['Defense']['runTdsAlwd']
+            teamDict['stat9'] = team.seasonTeamStats['Defense']['passTdsAlwd']
+            teamDict['stat10'] = team.seasonTeamStats['Defense']['tdsAlwd']
+            teamDict['stat11'] = team.seasonTeamStats['Defense']['avgTdsAlwd']
+            teamDict['stat12'] = team.seasonTeamStats['Defense']['ptsAlwd']
+            teamDict['stat13'] = team.seasonTeamStats['Defense']['avgPtsAlwd']
             statList.append(teamDict)
     elif pos == 'O':
         for team in floosball.teamList:
             teamDict = {}
             team: Team
             teamDict['name'] = team.name
+            teamDict['city'] = team.city
             teamDict['ratingStars'] = team.defenseTier
             teamDict['seasonStats'] = team.seasonTeamStats['Offense']
             statList.append(teamDict)
     else:
-        if pos == 'QB':
+        if pos == 'Passing':
             playerList = floosball.activeQbList
-        elif pos == 'RB':
+        elif pos == 'Rushing':
             playerList = floosball.activeRbList
-        elif pos == 'WR':
-            playerList = floosball.activeWrList
-        elif pos == 'TE':
-            playerList = floosball.activeTeList
-        elif pos == 'K':
-            playerList = floosball.activeKList
+        elif pos == 'Receiving':
+            playerList.extend(floosball.activeWrList)
+            playerList.extend(floosball.activeTeList)
+            playerList.extend(floosball.activeRbList)
+        elif pos == 'Kicking':
+            playerList.extend(floosball.activeKList)
 
         for player in playerList:
             player: Player
             playerDict = {}
             if isinstance(player.team, Team):
                 playerDict['name'] = player.name
-                playerDict['team'] = player.team.name
+                playerDict['pos'] = player.position.name
+                playerDict['abbr'] = player.team.abbr
+                playerDict['rank'] = player.serviceTime
                 playerDict['ratingStars'] = player.playerTier.value
-                playerDict['seasonStats'] = player.seasonStatsDict
+                if pos == 'Passing':
+                    playerDict['stat1'] = player.seasonStatsDict['passing']['att']
+                    playerDict['stat2'] = player.seasonStatsDict['passing']['comp']
+                    playerDict['stat3'] = player.seasonStatsDict['passing']['compPerc']
+                    playerDict['stat4'] = player.seasonStatsDict['passing']['yards']
+                    playerDict['stat5'] = player.seasonStatsDict['passing']['ypc']
+                    playerDict['stat6'] = player.seasonStatsDict['passing']['tds']
+                    playerDict['stat7'] = player.seasonStatsDict['passing']['ints']
+                elif pos == 'Rushing':
+                    playerDict['stat1'] = player.seasonStatsDict['rushing']['carries']
+                    playerDict['stat2'] = player.seasonStatsDict['rushing']['yards']
+                    playerDict['stat3'] = player.seasonStatsDict['rushing']['ypc']
+                    playerDict['stat4'] = player.seasonStatsDict['rushing']['tds']
+                    playerDict['stat5'] = player.seasonStatsDict['rushing']['fumblesLost']
+                elif pos == 'Receiving':
+                    playerDict['stat1'] = player.seasonStatsDict['receiving']['receptions']
+                    playerDict['stat2'] = player.seasonStatsDict['receiving']['targets']
+                    playerDict['stat3'] = player.seasonStatsDict['receiving']['rcvPerc']
+                    playerDict['stat4'] = player.seasonStatsDict['receiving']['yards']
+                    playerDict['stat5'] = player.seasonStatsDict['receiving']['ypr']
+                    playerDict['stat6'] = player.seasonStatsDict['receiving']['tds']
+                elif pos == 'Kicking':
+                    playerDict['stat1'] = player.seasonStatsDict['kicking']['fgs']
+                    playerDict['stat2'] = player.seasonStatsDict['kicking']['fgAtt']
+                    playerDict['stat3'] = player.seasonStatsDict['kicking']['fgPerc']
                 statList.append(playerDict)
+
+    list.sort(statList, key=itemgetter('ratingStars'), reverse=True)
     return statList
 
+@app.get('/topPlayers')
+async def returnTopPlayers(pos = None):
+    playerList = []
+    if pos == 'QB':
+        qbList = floosball.activeQbList.copy()
+        topQbList = []
+
+        if floosball.activeSeason.currentWeek == 1:
+            list.sort(qbList, key=lambda player: player.attributes.overallRating, reverse=True)
+        else:
+            list.sort(qbList, key=lambda player: player.seasonPerformanceRating, reverse=True)
+
+        for player in qbList:
+            player: Player
+            if isinstance(player.team, Team):
+                topQbList.append(player)
+            if len(topQbList) == 3:
+                break
+            
+        for player in topQbList:
+            player: Player
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['team'] = player.team.name
+            playerDict['abbr'] = player.team.abbr
+            playerDict['city'] = player.team.city
+            playerDict['color'] = player.team.color
+            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['yards'] = player.seasonStatsDict['passing']['yards']
+            playerDict['tds'] = player.seasonStatsDict['passing']['tds']
+            playerList.append(playerDict)
+    elif pos == 'RB':
+        rbList = floosball.activeRbList.copy()
+        topRbList = []
+
+        if floosball.activeSeason.currentWeek == 1:
+            list.sort(rbList, key=lambda player: player.attributes.overallRating, reverse=True)
+        else:
+            list.sort(rbList, key=lambda player: player.seasonPerformanceRating, reverse=True)
+
+        for player in rbList:
+            player: Player
+            if isinstance(player.team, Team):
+                topRbList.append(player)
+            if len(topRbList) == 3:
+                break
+            
+        for player in topRbList:
+            player: Player
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['team'] = player.team.name
+            playerDict['abbr'] = player.team.abbr
+            playerDict['city'] = player.team.city
+            playerDict['color'] = player.team.color
+            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['yards'] = player.seasonStatsDict['rushing']['yards']
+            playerDict['tds'] = player.seasonStatsDict['rushing']['tds']
+            playerList.append(playerDict)
+    elif pos == 'WR':
+        wrList = floosball.activeWrList.copy()
+        topWrList = []
+
+        if floosball.activeSeason.currentWeek == 1:
+            list.sort(wrList, key=lambda player: player.attributes.overallRating, reverse=True)
+        else:
+            list.sort(wrList, key=lambda player: player.seasonPerformanceRating, reverse=True)
+
+        for player in wrList:
+            player: Player
+            if isinstance(player.team, Team):
+                topWrList.append(player)
+            if len(topWrList) == 3:
+                break
+            
+        for player in topWrList:
+            player: Player
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['team'] = player.team.name
+            playerDict['abbr'] = player.team.abbr
+            playerDict['city'] = player.team.city
+            playerDict['color'] = player.team.color
+            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['yards'] = player.seasonStatsDict['receiving']['yards']
+            playerDict['tds'] = player.seasonStatsDict['receiving']['tds']
+            playerList.append(playerDict)
+    elif pos == 'TE':
+        teList = floosball.activeTeList.copy()
+        topTeList = []
+
+        if floosball.activeSeason.currentWeek == 1:
+            list.sort(teList, key=lambda player: player.attributes.overallRating, reverse=True)
+        else:
+            list.sort(teList, key=lambda player: player.seasonPerformanceRating, reverse=True)
+
+        for player in teList:
+            player: Player
+            if isinstance(player.team, Team):
+                topTeList.append(player)
+            if len(topTeList) == 3:
+                break
+            
+        for player in topTeList:
+            player: Player
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['team'] = player.team.name
+            playerDict['abbr'] = player.team.abbr
+            playerDict['city'] = player.team.city
+            playerDict['color'] = player.team.color
+            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['yards'] = player.seasonStatsDict['receiving']['yards']
+            playerDict['tds'] = player.seasonStatsDict['receiving']['tds']
+            playerList.append(playerDict)
+    elif pos == 'K':
+        kList = floosball.activeKList.copy()
+        topKList = []
+
+        if floosball.activeSeason.currentWeek == 1:
+            list.sort(kList, key=lambda player: player.attributes.overallRating, reverse=True)
+        else:
+            list.sort(kList, key=lambda player: player.seasonPerformanceRating, reverse=True)
+
+        for player in kList:
+            player: Player
+            if isinstance(player.team, Team):
+                topKList.append(player)
+            if len(topKList) == 3:
+                break
+            
+        for player in topKList:
+            player: Player
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['team'] = player.team.name
+            playerDict['abbr'] = player.team.abbr
+            playerDict['city'] = player.team.city
+            playerDict['color'] = player.team.color
+            playerDict['ratingStars'] = player.playerTier.value
+            playerList.append(playerDict)
+
+    return playerList
 
 @app.get('/seasonInfo')
 async def returnSeasonInfo():

@@ -20,7 +20,7 @@
         },
         {
             "city": "Chicago",
-            "name": "Beans",
+            "name": "Casseroles",
             "abbr": "CHI",
             "color": "#06b6d4"
         },
@@ -37,9 +37,9 @@
             "color": "#ef4444"
         },
         {
-            "city": "Baltimore",
-            "name": "Oldbays",
-            "abbr": "BAL",
+            "city": "Atlanta",
+            "name": "Pacifics",
+            "abbr": "ATL",
             "color": "#0ea5e9"
         },
         {
@@ -50,8 +50,8 @@
         },
         {
             "city": "Denver",
-            "name": "Northern Lights",
-            "abbr": "DNL",
+            "name": "Blueberries",
+            "abbr": "DEN",
             "color": "#a855f7"
         },
         {
@@ -64,12 +64,12 @@
             "city": "Cleveland",
             "name": "Rocks",
             "abbr": "CLE",
-            "color": "#f43f5e"
+            "color": "#64748b"
         },
         {
-            "city": "Washington",
-            "name": "Companions",
-            "abbr": "WSH",
+            "city": "San Francisco",
+            "name": "Phones",
+            "abbr": "SFP",
             "color": "#84cc16"
         },
         {
@@ -85,10 +85,10 @@
             "color": "#3b82f6"
         },
         {
-            "city": "Toronto",
-            "name": "Imaginaries",
-            "abbr": "TOR",
-            "color": "#ec4899"
+            "city": "Minnesota",
+            "name": "Fuzz",
+            "abbr": "MIN",
+            "color": "#d946ef"
         },
         {
             "city": "San Diego",
@@ -749,6 +749,7 @@
         "Didcot Babson",
         "Master Murder",
         "Derrick The Enemy",
-        "Jerry"
+        "Jerry",
+        "Calgary Bueno"
     ]
 }
