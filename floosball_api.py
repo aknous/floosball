@@ -1,7 +1,7 @@
 import math
 from random import randint
 from re import T
-from turtle import home
+#from turtle import home
 import floosball
 import floosball_game as FloosGame
 from fastapi import FastAPI
