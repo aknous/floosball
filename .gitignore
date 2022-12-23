@@ -67,3 +67,4 @@ season4/seasonData.json
 season*
 *.pyc
 *.png
+data/unusedNames.json

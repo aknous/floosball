@@ -104,6 +104,7 @@ async def returnTeams(id = None):
                 teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
                 teamDict['wins'] = team.seasonTeamStats['wins']
                 teamDict['losses'] = team.seasonTeamStats['losses']
+                teamDict['history'] = team.statArchive
 
                 pointDiff = team.seasonTeamStats['Offense']['pts'] - team.seasonTeamStats['Defense']['ptsAlwd']
                 if pointDiff >= 0:
@@ -150,18 +151,19 @@ async def returnTeams(id = None):
                 teamDict['schedule'] = scheduleList
                 rosterDict = {}
                 for pos, player in team.rosterDict.items():
-                    playerDict = {}
-                    playerDict['name'] = player.name
-                    playerDict['pos'] = player.position.name
-                    playerDict['id'] = player.id
-                    playerDict['rating'] = player.attributes.overallRating
-                    playerDict['rank'] = player.serviceTime
-                    playerDict['ratingStars'] = player.playerTier.value
-                    playerDict['term'] = player.term
-                    playerDict['gamesPlayed'] = player.gamesPlayed
-                    playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
-                    playerDict['seasonStats'] = player.seasonStatsDict
-                    rosterDict[pos] = playerDict
+                    if isinstance(player, Player):
+                        playerDict = {}
+                        playerDict['name'] = player.name
+                        playerDict['pos'] = player.position.name
+                        playerDict['id'] = player.id
+                        playerDict['rating'] = player.attributes.overallRating
+                        playerDict['rank'] = player.serviceTime
+                        playerDict['ratingStars'] = player.playerTier.value
+                        playerDict['term'] = player.term
+                        playerDict['gamesPlayed'] = player.gamesPlayed
+                        playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
+                        playerDict['seasonStats'] = player.seasonStatsDict
+                        rosterDict[pos] = playerDict
                 teamDict['roster'] = rosterDict
                 reserveList = []
                 for pos, player in team.reserveRosterDict.items():
@@ -211,40 +213,62 @@ async def returnPlayers(id = None):
                 dict['rank'] = player.serviceTime
                 if isinstance(player.team, str):
                     dict['team'] = player.team
+                    dict['city'] = ''
+                    dict['color'] = '#94a3b8'
                 elif player.team is None:
                     dict['team'] = 'Free Agent'
+                    dict['city'] = ''
+                    dict['color'] = '#94a3b8'
                 else:
                     dict['team'] = player.team.name
+                    dict['city'] = player.team.city
+                    dict['color'] = player.team.color
                 dict['position'] = player.position.name
                 dict['ratingStars'] = player.playerTier.value
-                dict['rating'] = player.attributes.overallRating
                 dict['term'] = player.term
                 attDict = {}
                 if player.position is Position.QB:
-                    attDict['armStrength'] = player.attributes.armStrength
-                    attDict['accuracy'] = player.attributes.accuracy
-                    attDict['agility'] = player.attributes.agility
+                    attDict['att1Name'] = 'Arm Strength'
+                    attDict['att2Name'] = 'Accuracy'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.armStrength - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
                 elif player.position is Position.RB:
-                    attDict['speed'] = player.attributes.speed
-                    attDict['power'] = player.attributes.power
-                    attDict['agility'] = player.attributes.agility
+                    attDict['att1Name'] = 'Speed'
+                    attDict['att2Name'] = 'Power'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
                 elif player.position is Position.WR:
-                    attDict['speed'] = player.attributes.speed
-                    attDict['hands'] = player.attributes.hands
-                    attDict['agility'] = player.attributes.agility
+                    attDict['att1Name'] = 'Speed'
+                    attDict['att2Name'] = 'Hands'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.hands - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
                 elif player.position is Position.TE:
-                    attDict['speed'] = player.attributes.hands
-                    attDict['power'] = player.attributes.power
-                    attDict['agility'] = player.attributes.agility
+                    attDict['att1Name'] = 'Hands'
+                    attDict['att2Name'] = 'Power'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.hands - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
                 elif player.position is Position.K:
-                    attDict['legStrength'] = player.attributes.legStrength
-                    attDict['accuracy'] = player.attributes.accuracy
+                    attDict['att1Name'] = 'Leg Strength'
+                    attDict['att2Name'] = 'Accuracy'
+                    attDict['att3Name'] = ''
+                    attDict['att1'] = round((((player.attributes.legStrength - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
+                    attDict['att3'] = 0
+                attDict['playmaking'] = round((((player.attributes.playMakingAbility - 60)/40)*4)+1)
+                attDict['xFactor'] = round((((player.attributes.xFactor - 60)/40)*4)+1)
                 dict['attributes'] = attDict
                 if player.seasonPerformanceRating > 0:
                     dict['seasonPerformanceRating'] = player.seasonPerformanceRating
-                dict['seasonStats'] = player.seasonStatsDict
-                dict['careerStats'] = player.careerStatsDict
-        return dict
+                dict['stats'] = player.seasonStatsArchive
+                return dict
 
 @app.get('/standings')
 async def returnStandings():
@@ -423,38 +447,28 @@ async def returnCurrentGames():
     return gameList
 
 @app.get('/results')
-async def returnResults(week = None, season = None):
-    dict = {}
-    weekDict = {}
-    if week is None:
-        strWeek = 'Week {}'.format(floosball.activeSeason.currentWeek)
-        activeGameList = floosball.activeSeason.activeGames
-        for x in range(0,len(activeGameList)):
-            game = activeGameList[x]
-            if game.status is FloosGame.GameStatus.Final:
-                resultsDict = {}
-                resultsDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
-                if game.homeTeam.name == game.winningTeam.name:
-                    resultsDict['score'] = '{0}-{1}'.format(game.homeScore, game.awayScore)
-                elif game.awayTeam.name == game.winningTeam.name:
-                    resultsDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                weekDict[game.id] = resultsDict
-        dict[strWeek] = weekDict
-    else:
-        strWeek = 'Week {}'.format(week)
-        weekGameList = floosball.scheduleList[int(week)-1]
-        for x in range(0,len(weekGameList)):
-            game = weekGameList[x]
-            if game.status is FloosGame.GameStatus.Final:
-                resultsDict = {}
-                resultsDict['teams'] = '{0} def. {1}'.format(game.winningTeam.name, game.losingTeam.name)
-                if game.homeTeam.name == game.winningTeam.name:
-                    resultsDict['score'] = '{0}-{1}'.format(game.homeScore, game.awayScore)
-                elif game.awayTeam.name == game.winningTeam.name:
-                    resultsDict['score'] = '{0}-{1}'.format(game.awayScore, game.homeScore)
-                weekDict[game.id] = resultsDict
-        dict[strWeek] = weekDict
-    return dict
+async def returnResults(week = None):
+    gameList = []
+    weekGameList = floosball.scheduleList[int(week)-1]
+    for x in range(0,len(weekGameList)):
+        game: FloosGame.Game = weekGameList[x]
+        gameDict = {}
+        gameDict['id'] = game.id
+        gameDict['status'] = game.status.name
+        gameDict['isHalftime'] = game.isHalftime
+        gameDict['isOvertime'] = game.isOvertime
+        gameDict['homeCity'] = game.homeTeam.city
+        gameDict['homeTeam'] = game.homeTeam.name
+        gameDict['homeTeamColor'] = game.homeTeam.color
+        gameDict['homeTeamRecord'] = '{0}-{1}'.format(game.homeTeam.seasonTeamStats['wins'], game.homeTeam.seasonTeamStats['losses'])
+        gameDict['awayCity'] = game.awayTeam.city
+        gameDict['awayTeam'] = game.awayTeam.name
+        gameDict['awayTeamColor'] = game.awayTeam.color
+        gameDict['awayTeamRecord'] = '{0}-{1}'.format(game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'])
+        gameDict['homeScore'] = game.homeScore
+        gameDict['awayScore'] = game.awayScore
+        gameList.append(gameDict)
+    return gameList
 
 @app.get('/lastPlay')
 async def returnLastPlay(id = None):
@@ -682,7 +696,8 @@ async def returnPlayerStats(pos = None):
             teamDict = {}
             team: Team
             teamDict['name'] = team.name
-            teamDict['city'] = team.city
+            teamDict['city'] = team.id
+            teamDict['id'] = team.city
             teamDict['ratingStars'] = team.defenseTier
             teamDict['stat1'] = team.seasonTeamStats['Defense']['sacks']
             teamDict['stat2'] = team.seasonTeamStats['Defense']['ints']
@@ -724,6 +739,7 @@ async def returnPlayerStats(pos = None):
             playerDict = {}
             if isinstance(player.team, Team):
                 playerDict['name'] = player.name
+                playerDict['id'] = player.id
                 playerDict['pos'] = player.position.name
                 playerDict['abbr'] = player.team.abbr
                 playerDict['rank'] = player.serviceTime
@@ -753,6 +769,7 @@ async def returnPlayerStats(pos = None):
                     playerDict['stat1'] = player.seasonStatsDict['kicking']['fgs']
                     playerDict['stat2'] = player.seasonStatsDict['kicking']['fgAtt']
                     playerDict['stat3'] = player.seasonStatsDict['kicking']['fgPerc']
+                    playerDict['stat4'] = player.seasonStatsDict['kicking']['fgAvg']
                 statList.append(playerDict)
 
     list.sort(statList, key=itemgetter('ratingStars'), reverse=True)
@@ -781,6 +798,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             playerDict = {}
             playerDict['name'] = player.name
+            playerDict['id'] = player.id
             playerDict['rank'] = player.serviceTime
             playerDict['team'] = player.team.name
             playerDict['abbr'] = player.team.abbr
@@ -810,6 +828,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             playerDict = {}
             playerDict['name'] = player.name
+            playerDict['id'] = player.id
             playerDict['rank'] = player.serviceTime
             playerDict['team'] = player.team.name
             playerDict['abbr'] = player.team.abbr
@@ -839,6 +858,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             playerDict = {}
             playerDict['name'] = player.name
+            playerDict['id'] = player.id
             playerDict['rank'] = player.serviceTime
             playerDict['team'] = player.team.name
             playerDict['abbr'] = player.team.abbr
@@ -868,6 +888,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             playerDict = {}
             playerDict['name'] = player.name
+            playerDict['id'] = player.id
             playerDict['rank'] = player.serviceTime
             playerDict['team'] = player.team.name
             playerDict['abbr'] = player.team.abbr
@@ -897,6 +918,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             playerDict = {}
             playerDict['name'] = player.name
+            playerDict['id'] = player.id
             playerDict['rank'] = player.serviceTime
             playerDict['team'] = player.team.name
             playerDict['abbr'] = player.team.abbr
@@ -909,7 +931,7 @@ async def returnTopPlayers(pos = None):
 
 @app.get('/seasonInfo')
 async def returnSeasonInfo():
-    return {'season': floosball.activeSeason.currentSeason, 'currentWeek': floosball.activeSeason.currentWeek}
+    return {'season': floosball.activeSeason.currentSeason, 'currentWeek': floosball.activeSeason.currentWeek, 'currentWeekText': floosball.activeSeason.currentWeekText, 'totalWeeks': len(floosball.scheduleList)}
             
 
 @app.get('/info')

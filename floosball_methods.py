@@ -157,7 +157,7 @@ def getStat(min, max, weight):
         elif x < 75 and x >= 25:
             return randint(75, 84)
         else:
-            return randint(65, 74)
+            return randint(60, 74)
     else:
         return x
 

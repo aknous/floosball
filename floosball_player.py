@@ -24,6 +24,7 @@ class PlayerServiceTime(enum.Enum):
     Intermediate = 'Experienced'
     Professional = 'Seasoned'
     Veteran = 'Veteran'
+    Retired = 'Retired'
 
 playerStatsDict =   {   
                         'team': None,
@@ -324,8 +325,14 @@ class PlayerQB(Player):
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
+        if self.attributes.attitude > 100:
+            self.attributes.attitude = 100
         self.attributes.luck += randint(-5,5)
+        if self.attributes.luck > 100:
+            self.attributes.luck = 100
         self.attributes.discipline += randint(-5,5)
+        if self.attributes.discipline > 100:
+            self.attributes.discipline = 100
         self.attributes.calculateIntangibles()
 
         if self.seasonsPlayed > self.attributes.longevity:
@@ -513,8 +520,14 @@ class PlayerRB(Player):
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
+        if self.attributes.attitude > 100:
+            self.attributes.attitude = 100
         self.attributes.luck += randint(-5,5)
+        if self.attributes.luck > 100:
+            self.attributes.luck = 100
         self.attributes.discipline += randint(-5,5)
+        if self.attributes.discipline > 100:
+            self.attributes.discipline = 100
         self.attributes.calculateIntangibles()
 
         if self.seasonsPlayed > self.attributes.longevity:
@@ -701,8 +714,14 @@ class PlayerWR(Player):
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
+        if self.attributes.attitude > 100:
+            self.attributes.attitude = 100
         self.attributes.luck += randint(-5,5)
+        if self.attributes.luck > 100:
+            self.attributes.luck = 100
         self.attributes.discipline += randint(-5,5)
+        if self.attributes.discipline > 100:
+            self.attributes.discipline = 100
         self.attributes.calculateIntangibles()
 
         if self.seasonsPlayed > self.attributes.longevity:
@@ -902,8 +921,14 @@ class PlayerTE(Player):
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
+        if self.attributes.attitude > 100:
+            self.attributes.attitude = 100
         self.attributes.luck += randint(-5,5)
+        if self.attributes.luck > 100:
+            self.attributes.luck = 100
         self.attributes.discipline += randint(-5,5)
+        if self.attributes.discipline > 100:
+            self.attributes.discipline = 100
         self.attributes.calculateIntangibles()
 
         if self.seasonsPlayed > self.attributes.longevity:
@@ -1086,8 +1111,14 @@ class PlayerK(Player):
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
+        if self.attributes.attitude > 100:
+            self.attributes.attitude = 100
         self.attributes.luck += randint(-5,5)
+        if self.attributes.luck > 100:
+            self.attributes.luck = 100
         self.attributes.discipline += randint(-5,5)
+        if self.attributes.discipline > 100:
+            self.attributes.discipline = 100
         self.attributes.calculateIntangibles()
 
         if self.seasonsPlayed < self.attributes.longevity:

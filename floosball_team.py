@@ -8,6 +8,10 @@ import floosball_player as FloosPlayer
 
 
 teamStatsDict = {   
+                    'season': 0,
+                    'madePlayoffs': False,
+                    'divPLace': 0,
+                    'leagueChamp': False,
                     'wins': 0, 
                     'losses': 0, 
                     'winPerc': 0, 
@@ -82,10 +86,11 @@ class Team:
         self.defenseSeasonPerformanceRating = 0
         self.gmScore = randint(0,20)
         self.eliminated = False
+        self.faComplete = False
         self.schedule = []
-        self.draftHistory = []
         self.freeAgentHistory = []
         self.rosterHistory = []
+        self.statArchive = []
 
         self.gameDefenseStats = copy.deepcopy(teamStatsDict['Defense'])
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
@@ -318,22 +323,22 @@ class Team:
 
     def inGamePush(self):
         for player in self.rosterDict.values():
-            player.updateInGameDetermination(.02)
-        self.updateGameDetermination(.02)
+            player.updateInGameDetermination(.01)
+        self.updateGameDetermination(.01)
 
     def teamUnderPerform(self):
         for player in self.rosterDict.values():
-            player.updateInGameDetermination(-.02)
-            player.updateInGameConfidence(-.02)
-        self.updateGameDetermination(-.02)
-        self.updateGameConfidence(-.02)
+            player.updateInGameDetermination(-.01)
+            player.updateInGameConfidence(-.01)
+        self.updateGameDetermination(-.01)
+        self.updateGameConfidence(-.01)
 
     def teamOverPerform(self):
         for player in self.rosterDict.values():
-            player.updateInGameDetermination(.02)
-            player.updateInGameConfidence(.02)
-        self.updateGameDetermination(.02)
-        self.updateGameConfidence(.02)
+            player.updateInGameDetermination(.01)
+            player.updateInGameConfidence(.01)
+        self.updateGameDetermination(.01)
+        self.updateGameConfidence(.01)
 
     def resetConfidence(self):
         for player in self.rosterDict.values():
