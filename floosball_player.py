@@ -137,6 +137,8 @@ class Player:
         self.playerRating = 0
         self.freeAgentYears = 0
         self.serviceTime = PlayerServiceTime.Rookie
+        self.overPerforming = False
+        self.underPerforming = False
 
         self.gameStatsDict = copy.deepcopy(playerStatsDict)
         self.seasonStatsDict = copy.deepcopy(playerStatsDict)
@@ -319,9 +321,39 @@ class PlayerQB(Player):
         self.attributes.skillRating = round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
         if self.seasonPerformanceRating > 0:
-            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+
+            self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
+
+        if self.playerTier is PlayerTier.TierS:
+            if self.seasonPerformanceRating < 90:
+                self.underPerforming = True
+        elif self.playerTier is PlayerTier.TierA:
+            if self.seasonPerformanceRating < 75:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 85:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierB:
+            if self.seasonPerformanceRating < 35:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 50:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierC:
+            if self.seasonPerformanceRating < 5:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 30:
+                self.underPerforming = False
+                self.overPerforming = True
+        else:
+            if self.seasonPerformanceRating > 20:
+                self.underPerforming = False
+                self.overPerforming = True
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
@@ -514,7 +546,7 @@ class PlayerRB(Player):
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.power*1.3) + (self.attributes.agility*1))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
         if self.seasonPerformanceRating > 0:
-            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+            self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
 
@@ -708,7 +740,7 @@ class PlayerWR(Player):
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.hands*1.5) + (self.attributes.agility*.8))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
         if self.seasonPerformanceRating > 0:
-            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+            self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
 
@@ -915,7 +947,7 @@ class PlayerTE(Player):
         self.attributes.skillRating = round(((self.attributes.power*1.3) + (self.attributes.hands*1) + (self.attributes.agility*.7))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
         if self.seasonPerformanceRating > 0:
-            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+            self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
 
@@ -1105,7 +1137,7 @@ class PlayerK(Player):
         self.attributes.skillRating = round((self.attributes.legStrength + self.attributes.accuracy)/2)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
         if self.seasonPerformanceRating > 0:
-            self.playerRating = round(((self.attributes.overallRating*1.3) + (self.seasonPerformanceRating*.7))/2)
+            self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
 

@@ -547,10 +547,10 @@ class Season:
         return champ
 
 
-def getPlayerTerm(rating):
-        if rating > 90:
+def getPlayerTerm(tier: FloosPlayer.PlayerTier):
+        if tier is FloosPlayer.PlayerTier.TierS:
             return randint(3,5)
-        elif rating < 75:
+        elif tier is FloosPlayer.PlayerTier.TierD:
             return 1
         else:
             return randint(1,3)
@@ -681,7 +681,7 @@ def playerDraft():
                     playerDraftList.remove(selectedPlayer)
 
             selectedPlayer.team = team
-            selectedPlayer.term = getPlayerTerm(selectedPlayer.playerRating)
+            selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
             selectedPlayer.seasonStatsDict['team'] = selectedPlayer.team.name
             team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True})
                 
@@ -1206,7 +1206,7 @@ async def offseason():
                             team.rosterDict[k] = None
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
                         else:
-                            v.term = getPlayerTerm(v.playerRating)
+                            v.term = getPlayerTerm(v.playerTier)
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                     elif v.playerTier is FloosPlayer.PlayerTier.TierA:
                         if x > 40:
@@ -1217,7 +1217,7 @@ async def offseason():
                             team.rosterDict[k] = None
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
                         else:
-                            v.term = getPlayerTerm(v.playerRating)
+                            v.term = getPlayerTerm(v.playerTier)
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                     elif v.playerTier is FloosPlayer.PlayerTier.TierB:
                         if x > 20:
@@ -1228,7 +1228,7 @@ async def offseason():
                             team.rosterDict[k] = None
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
                         else:
-                            v.term = getPlayerTerm(v.playerRating)
+                            v.term = getPlayerTerm(v.playerTier)
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                     elif v.playerTier is FloosPlayer.PlayerTier.TierC:
                         if x > 10:
@@ -1239,7 +1239,7 @@ async def offseason():
                             team.rosterDict[k] = None
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
                         else:
-                            v.term = getPlayerTerm(v.playerRating)
+                            v.term = getPlayerTerm(v.playerTier)
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                     elif v.playerTier is FloosPlayer.PlayerTier.TierD:
                         if x > 5:
@@ -1250,7 +1250,7 @@ async def offseason():
                             team.rosterDict[k] = None
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
                         else:
-                            v.term = getPlayerTerm(v.playerRating)
+                            v.term = getPlayerTerm(v.playerTier)
                             activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
 
         for k,v in team.reserveRosterDict.items():
@@ -1327,7 +1327,7 @@ async def offseason():
                                 team.reserveRosterDict[k] = None
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(player.name)}})
                             else:
-                                v.term = getPlayerTerm(v.playerRating)
+                                v.term = getPlayerTerm(v.playerTier)
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                         elif v.playerTier is FloosPlayer.PlayerTier.TierA:
                             if x > 40:
@@ -1338,7 +1338,7 @@ async def offseason():
                                 team.reserveRosterDict[k] = None
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(player.name)}})
                             else:
-                                v.term = getPlayerTerm(v.playerRating)
+                                v.term = getPlayerTerm(v.playerTier)
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                         elif v.playerTier is FloosPlayer.PlayerTier.TierB:
                             if x > 20:
@@ -1349,7 +1349,7 @@ async def offseason():
                                 team.reserveRosterDict[k] = None
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(player.name)}})
                             else:
-                                v.term = getPlayerTerm(v.playerRating)
+                                v.term = getPlayerTerm(v.playerTier)
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                         elif v.playerTier is FloosPlayer.PlayerTier.TierC:
                             if x > 10:
@@ -1360,7 +1360,7 @@ async def offseason():
                                 team.reserveRosterDict[k] = None
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(player.name)}})
                             else:
-                                v.term = getPlayerTerm(v.playerRating)
+                                v.term = getPlayerTerm(v.playerTier)
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                         elif v.playerTier is FloosPlayer.PlayerTier.TierD:
                             if x > 5:
@@ -1371,7 +1371,7 @@ async def offseason():
                                 team.reserveRosterDict[k] = None
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(player.name)}})
                             else:
-                                v.term = getPlayerTerm(v.playerRating)
+                                v.term = getPlayerTerm(v.playerTier)
                                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, v.name, v.position.name, v.term)}})
                     
     for player in activePlayerList:
@@ -1494,7 +1494,7 @@ async def offseason():
                 freeAgentList.remove(selectedPlayer)
                 selectedPlayer.team = team
                 team.rosterDict[pos] = selectedPlayer
-                selectedPlayer.term = getPlayerTerm(selectedPlayer.playerRating)
+                selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, selectedPlayer.name, selectedPlayer.position.name, selectedPlayer.term)}})
                 team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True})
                 freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.skillRating, 'tier': selectedPlayer.playerTier.value, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "Starting"}
@@ -1554,7 +1554,7 @@ async def offseason():
                     freeAgentList.remove(selectedPlayer)
                     selectedPlayer.team = team
                     team.reserveRosterDict[pos] = selectedPlayer
-                    selectedPlayer.term = getPlayerTerm(selectedPlayer.playerRating)
+                    selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
                     activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, selectedPlayer.name, selectedPlayer.position.name, selectedPlayer.term)}})
                     team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True})
                     freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.skillRating, 'tier': selectedPlayer.playerTier.value, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "Reserve"}
