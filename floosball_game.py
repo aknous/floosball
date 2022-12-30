@@ -1076,9 +1076,9 @@ class Game:
         if self.play.playType is PlayType.Run:
             if self.play.isFumble:
                 if self.play.isFumbleLost:
-                    text = '{} runs for {} yds and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.name)
+                    text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.name)
                 else:
-                    text = '{} runs for {} yds and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.offense.name)
+                    text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.offense.name)
             else:
                 if self.play.yardage <= 0:
                     text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
@@ -1203,6 +1203,7 @@ class Game:
                 if self.isRegularSeasonGame:
                     player.seasonStatsDict['receiving']['targets'] += player.gameStatsDict['receiving']['targets']
                     player.seasonStatsDict['receiving']['receptions'] += player.gameStatsDict['receiving']['receptions']
+                    player.seasonStatsDict['receiving']['yac'] += player.gameStatsDict['receiving']['yac']
                     player.seasonStatsDict['receiving']['yards'] += player.gameStatsDict['receiving']['yards']
                     player.seasonStatsDict['receiving']['tds'] += player.gameStatsDict['receiving']['tds']
                     player.seasonStatsDict['receiving']['20+'] += player.gameStatsDict['receiving']['20+']
@@ -1285,6 +1286,7 @@ class Game:
                 if self.isRegularSeasonGame:
                     player.seasonStatsDict['receiving']['targets'] += player.gameStatsDict['receiving']['targets']
                     player.seasonStatsDict['receiving']['receptions'] += player.gameStatsDict['receiving']['receptions']
+                    player.seasonStatsDict['receiving']['yac'] += player.gameStatsDict['receiving']['yac']
                     player.seasonStatsDict['receiving']['yards'] += player.gameStatsDict['receiving']['yards']
                     player.seasonStatsDict['receiving']['tds'] += player.gameStatsDict['receiving']['tds']
                     player.seasonStatsDict['receiving']['20+'] += player.gameStatsDict['receiving']['20+']
@@ -1539,7 +1541,7 @@ class Game:
 
                 self.play = Play(self)
                 
-                await asyncio.sleep(randint(5,20))
+                await asyncio.sleep(randint(10,30))
 
                 self.playCaller()
                 self.totalPlays += 1
@@ -2042,6 +2044,16 @@ class Play():
         x = randint(1,100)
         fumbleRoll = randint(1,100)
         fumbleResist = round(((self.runner.gameAttributes.power*.8) + (self.runner.gameAttributes.luck*1) + (self.runner.gameAttributes.discipline*1.2))/3)
+        fumbleResistModifyer = 0
+        if fumbleResist >= 92:
+            fumbleResistModifyer = -2
+        elif fumbleResist >= 84 and fumbleResist <= 91:
+            fumbleResistModifyer = -1
+        elif fumbleResist >= 68 and fumbleResist <= 75:
+            fumbleResistModifyer = 1
+        elif fumbleResist >= 60 and fumbleResist <= 67:
+            fumbleResistModifyer = 2
+
         playStrength = ((self.runner.gameAttributes.overallRating*1.2) + (blocker.gameAttributes.power*.8))/2
         if (self.defense.runDefenseRating + randint(-5,5)) >= (playStrength + randint(-5,5)):
             if x < 20:
@@ -2057,7 +2069,7 @@ class Play():
                 else:
                     self.yardage = randint(7, self.yardsToEndzone)
                 self.runner.updateInGameConfidence(.01)
-            if (fumbleRoll/fumbleResist) > 1.17:
+            if (fumbleRoll+fumbleResistModifyer) > 95:
                 #fumble
                 self.isFumble = True
                 if (self.defense.defenseRating + randint(-5,5)) >= (self.runner.gameAttributes.overallRating + randint(-5,5)):
@@ -2084,7 +2096,7 @@ class Play():
                 else:
                     self.yardage = randint(20, self.yardsToEndzone)
                 self.runner.updateInGameConfidence(.01)
-            if (fumbleRoll/fumbleResist) > 1.17:
+            if (fumbleRoll+fumbleResistModifyer) > 97:
                 #fumble
                 self.isFumble = True
                 if (self.defense.runDefenseRating + randint(-5,5)) >= (self.runner.gameAttributes.overallRating + randint(-5,5)):
@@ -2124,7 +2136,16 @@ class Play():
             self.isSack = True
             fumbleRoll = randint(1,100)
             fumbleResist = round(((self.passer.gameAttributes.power*.7) + (self.passer.gameAttributes.luck*.1) + (self.passer.gameAttributes.discipline*1.3))/3)
-            if (fumbleRoll/fumbleResist) > 1.15:
+            fumbleResistModifyer = 0
+            if fumbleResist >= 92:
+                fumbleResistModifyer = -2
+            elif fumbleResist >= 84 and fumbleResist <= 91:
+                fumbleResistModifyer = -1
+            elif fumbleResist >= 68 and fumbleResist <= 75:
+                fumbleResistModifyer = 1
+            elif fumbleResist >= 60 and fumbleResist <= 67:
+                fumbleResistModifyer = 2
+            if (fumbleRoll+fumbleResistModifyer) > 96:
                 #fumble
                 self.isFumble = True
                 if (self.defense.defenseRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
@@ -2185,6 +2206,7 @@ class Play():
                         self.receiver.gameStatsDict['receiving']['targets'] += 1
                         self.receiver.gameStatsDict['receiving']['receptions'] += 1
                         self.receiver.gameStatsDict['receiving']['yards'] += self.yardage
+                        self.receiver.gameStatsDict['receiving']['yac'] += yac
                         self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
                         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
                         self.passer.updateInGameConfidence(0.005)
@@ -2260,6 +2282,7 @@ class Play():
                         self.passer.gameStatsDict['passing']['comp'] += 1
                         self.receiver.gameStatsDict['receiving']['targets'] += 1
                         self.receiver.gameStatsDict['receiving']['receptions'] += 1
+                        self.receiver.gameStatsDict['receiving']['yac'] += yac
                         self.receiver.gameStatsDict['receiving']['yards'] += self.yardage
                         self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
                         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
@@ -2332,6 +2355,7 @@ class Play():
                         self.passer.gameStatsDict['passing']['comp'] += 1
                         self.receiver.gameStatsDict['receiving']['targets'] += 1
                         self.receiver.gameStatsDict['receiving']['receptions'] += 1
+                        self.receiver.gameStatsDict['receiving']['yac'] += yac
                         self.receiver.gameStatsDict['receiving']['yards'] += self.yardage
                         self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
                         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage

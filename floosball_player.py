@@ -54,10 +54,10 @@ playerStatsDict =   {
                             'receptions': 0, 
                             'targets': 0, 
                             'rcvPerc': 0, 
-                            'yards': 0, 
-                            'ypr': 0, 
-                            'tds': 0, 
                             'yards': 0,
+                            'yac': 0, 
+                            'ypr': 0, 
+                            'tds': 0,
                             '20+': 0,
                             'longest': 0
                         },

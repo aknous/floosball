@@ -105,6 +105,7 @@ async def returnTeams(id = None):
                 teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
                 teamDict['wins'] = team.seasonTeamStats['wins']
                 teamDict['losses'] = team.seasonTeamStats['losses']
+                teamDict['allTimeStats'] = team.allTimeTeamStats
                 teamDict['history'] = team.statArchive
 
                 pointDiff = team.seasonTeamStats['Offense']['pts'] - team.seasonTeamStats['Defense']['ptsAlwd']
@@ -159,7 +160,7 @@ async def returnTeams(id = None):
                         playerDict['id'] = player.id
                         playerDict['rating'] = player.attributes.overallRating
                         playerDict['rank'] = player.serviceTime
-                        playerDict['ratingStars'] = player.playerTier.value
+                        playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
                         playerDict['term'] = player.term
                         playerDict['gamesPlayed'] = player.gamesPlayed
                         playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
@@ -175,7 +176,7 @@ async def returnTeams(id = None):
                         playerDict['pos'] = player.position.name
                         playerDict['rating'] = player.attributes.overallRating
                         playerDict['rank'] = player.serviceTime
-                        playerDict['ratingStars'] = player.playerTier.value
+                        playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
                         playerDict['term'] = player.term
                         playerDict['gamesPlayed'] = player.gamesPlayed
                         playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
@@ -194,7 +195,7 @@ async def returnPlayers(id = None):
             playerDict['rank'] = player.serviceTime
             playerDict['id'] = player.id
             playerDict['position'] = player.position.name
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
             playerDict['seasons'] = player.seasonsPlayed
             if isinstance(player.team, str):
                 playerDict['team'] = player.team
@@ -225,7 +226,7 @@ async def returnPlayers(id = None):
                     dict['city'] = player.team.city
                     dict['color'] = player.team.color
                 dict['position'] = player.position.name
-                dict['ratingStars'] = player.playerTier.value
+                dict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
                 dict['term'] = player.term
                 attDict = {}
                 if player.position is Position.QB:
@@ -269,6 +270,7 @@ async def returnPlayers(id = None):
                 if player.seasonPerformanceRating > 0:
                     dict['seasonPerformanceRating'] = player.seasonPerformanceRating
                 dict['stats'] = player.seasonStatsArchive
+                dict['allTimeStats'] = player.careerStatsDict
                 return dict
 
 @app.get('/standings')
@@ -697,8 +699,8 @@ async def returnPlayerStats(pos = None):
             teamDict = {}
             team: Team
             teamDict['name'] = team.name
-            teamDict['city'] = team.id
-            teamDict['id'] = team.city
+            teamDict['city'] = team.city
+            teamDict['id'] = team.id
             teamDict['ratingStars'] = team.defenseTier
             teamDict['stat1'] = team.seasonTeamStats['Defense']['sacks']
             teamDict['stat2'] = team.seasonTeamStats['Defense']['ints']
@@ -744,7 +746,7 @@ async def returnPlayerStats(pos = None):
                 playerDict['pos'] = player.position.name
                 playerDict['abbr'] = player.team.abbr
                 playerDict['rank'] = player.serviceTime
-                playerDict['ratingStars'] = player.playerTier.value
+                playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
                 if pos == 'Passing':
                     playerDict['stat1'] = player.seasonStatsDict['passing']['att']
                     playerDict['stat2'] = player.seasonStatsDict['passing']['comp']
@@ -765,7 +767,8 @@ async def returnPlayerStats(pos = None):
                     playerDict['stat3'] = player.seasonStatsDict['receiving']['rcvPerc']
                     playerDict['stat4'] = player.seasonStatsDict['receiving']['yards']
                     playerDict['stat5'] = player.seasonStatsDict['receiving']['ypr']
-                    playerDict['stat6'] = player.seasonStatsDict['receiving']['tds']
+                    playerDict['stat6'] = player.seasonStatsDict['receiving']['yac']
+                    playerDict['stat7'] = player.seasonStatsDict['receiving']['tds']
                 elif pos == 'Kicking':
                     playerDict['stat1'] = player.seasonStatsDict['kicking']['fgs']
                     playerDict['stat2'] = player.seasonStatsDict['kicking']['fgAtt']
@@ -805,7 +808,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
             playerDict['yards'] = player.seasonStatsDict['passing']['yards']
             playerDict['tds'] = player.seasonStatsDict['passing']['tds']
             playerList.append(playerDict)
@@ -835,7 +838,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
             playerDict['yards'] = player.seasonStatsDict['rushing']['yards']
             playerDict['tds'] = player.seasonStatsDict['rushing']['tds']
             playerList.append(playerDict)
@@ -865,7 +868,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
             playerDict['yards'] = player.seasonStatsDict['receiving']['yards']
             playerDict['tds'] = player.seasonStatsDict['receiving']['tds']
             playerList.append(playerDict)
@@ -895,7 +898,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
             playerDict['yards'] = player.seasonStatsDict['receiving']['yards']
             playerDict['tds'] = player.seasonStatsDict['receiving']['tds']
             playerList.append(playerDict)
@@ -925,7 +928,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.overallRating - 60)/40)*4)+1)
             playerList.append(playerDict)
 
     return playerList
