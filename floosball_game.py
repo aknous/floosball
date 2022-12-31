@@ -1868,7 +1868,7 @@ class Game:
                             self.play.scoreChange = True
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
-                            self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
+                            self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                             break
 
                     elif self.play.yardage < self.yardsToFirstDown:
@@ -2069,7 +2069,7 @@ class Play():
                 else:
                     self.yardage = randint(7, self.yardsToEndzone)
                 self.runner.updateInGameConfidence(.01)
-            if (fumbleRoll+fumbleResistModifyer) > 95:
+            if (fumbleRoll+fumbleResistModifyer) > 97:
                 #fumble
                 self.isFumble = True
                 if (self.defense.defenseRating + randint(-5,5)) >= (self.runner.gameAttributes.overallRating + randint(-5,5)):

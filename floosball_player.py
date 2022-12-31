@@ -550,6 +550,35 @@ class PlayerRB(Player):
         else:
             self.playerRating = self.attributes.overallRating
 
+        if self.playerTier is PlayerTier.TierS:
+            if self.seasonPerformanceRating < 90:
+                self.underPerforming = True
+        elif self.playerTier is PlayerTier.TierA:
+            if self.seasonPerformanceRating < 75:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 85:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierB:
+            if self.seasonPerformanceRating < 35:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 50:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierC:
+            if self.seasonPerformanceRating < 5:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 30:
+                self.underPerforming = False
+                self.overPerforming = True
+        else:
+            if self.seasonPerformanceRating > 20:
+                self.underPerforming = False
+                self.overPerforming = True
+
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
@@ -743,6 +772,35 @@ class PlayerWR(Player):
             self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
+
+        if self.playerTier is PlayerTier.TierS:
+            if self.seasonPerformanceRating < 90:
+                self.underPerforming = True
+        elif self.playerTier is PlayerTier.TierA:
+            if self.seasonPerformanceRating < 75:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 85:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierB:
+            if self.seasonPerformanceRating < 35:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 50:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierC:
+            if self.seasonPerformanceRating < 5:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 30:
+                self.underPerforming = False
+                self.overPerforming = True
+        else:
+            if self.seasonPerformanceRating > 20:
+                self.underPerforming = False
+                self.overPerforming = True
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
@@ -951,6 +1009,35 @@ class PlayerTE(Player):
         else:
             self.playerRating = self.attributes.overallRating
 
+        if self.playerTier is PlayerTier.TierS:
+            if self.seasonPerformanceRating < 90:
+                self.underPerforming = True
+        elif self.playerTier is PlayerTier.TierA:
+            if self.seasonPerformanceRating < 75:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 85:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierB:
+            if self.seasonPerformanceRating < 35:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 50:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierC:
+            if self.seasonPerformanceRating < 5:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 30:
+                self.underPerforming = False
+                self.overPerforming = True
+        else:
+            if self.seasonPerformanceRating > 20:
+                self.underPerforming = False
+                self.overPerforming = True
+
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
@@ -1140,6 +1227,35 @@ class PlayerK(Player):
             self.playerRating = round(((self.attributes.overallRating*1.8) + (self.seasonPerformanceRating*.2))/2)
         else:
             self.playerRating = self.attributes.overallRating
+
+        if self.playerTier is PlayerTier.TierS:
+            if self.seasonPerformanceRating < 90:
+                self.underPerforming = True
+        elif self.playerTier is PlayerTier.TierA:
+            if self.seasonPerformanceRating < 75:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 85:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierB:
+            if self.seasonPerformanceRating < 35:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 50:
+                self.underPerforming = False
+                self.overPerforming = True
+        elif self.playerTier is PlayerTier.TierC:
+            if self.seasonPerformanceRating < 5:
+                self.overPerforming = False
+                self.underPerforming = True
+            elif self.seasonPerformanceRating > 30:
+                self.underPerforming = False
+                self.overPerforming = True
+        else:
+            if self.seasonPerformanceRating > 20:
+                self.underPerforming = False
+                self.overPerforming = True
 
     def offseasonTraining(self):
         self.attributes.attitude += randint(-5,5)

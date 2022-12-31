@@ -485,6 +485,12 @@ async def returnResults(week = None):
         gameDict['awayTeamRecord'] = '{0}-{1}'.format(game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'])
         gameDict['homeScore'] = game.homeScore
         gameDict['awayScore'] = game.awayScore
+        if game.homeScore > game.awayScore:
+            gameDict['homeWinner'] = True
+            gameDict['awayWinner'] = False
+        else:
+            gameDict['awayWinner'] = True
+            gameDict['homeWinner'] = False
         gameList.append(gameDict)
     return gameList
 
