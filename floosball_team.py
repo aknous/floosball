@@ -72,11 +72,11 @@ class Team:
         self.gameRunDefenseRating = 0
         self.gamePassDefenseRating = 0
         self.gameDefenseRating = 0
-        self._gameDefenseConfidence = 1
-        self._gameDefenseDetermination = 1
-        self.defenseLuck = FloosMethods.getStat(1,100,1)
-        self.defenseDiscipline = FloosMethods.getStat(1,100,1)
-        self._gameDefenseEnergy = 100
+        # self._gameDefenseConfidence = 1
+        # self._gameDefenseDetermination = 1
+        # self.defenseLuck = FloosMethods.getStat(1,100,1)
+        # self.defenseDiscipline = FloosMethods.getStat(1,100,1)
+        # self._gameDefenseEnergy = 100
         self.defenseRating = 0
         self.defenseOverallRating = 0
         self.defenseTier = 0
@@ -95,26 +95,15 @@ class Team:
         self.gameDefenseStats = copy.deepcopy(teamStatsDict['Defense'])
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
         self.allTimeTeamStats = copy.deepcopy(teamStatsDict)
-        self.rosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None}
-        self.reserveRosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None}
+        self.rosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None, 'db1': None, 'db2': None, 'lb': None, 'de': None, 'dl': None}
+        self.reserveRosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None, 'db1': None, 'db2': None, 'lb': None, 'de': None, 'dl': None}
 
     def setupTeam(self):
         if self.overallRating == 0:
             self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
-            x = randint(1, 100)
-            if x >= 99:
-                self.runDefenseRating = randint(85, 100)
-                self.passDefenseRating = randint(85, 100)
-            elif x >= 85 and x < 98:
-                self.runDefenseRating = randint(80, 95)
-                self.passDefenseRating = randint(80, 95)
-            elif x >= 60 and x < 85:
-                self.runDefenseRating = randint(70, 89)
-                self.passDefenseRating = randint(70, 89)
-            else:
-                self.runDefenseRating = randint(60, 95)
-                self.passDefenseRating = randint(60, 95)
-                
+            self.passDefenseRating = round(((self.rosterDict['db1'].attributes.overallRating*1.2)+(self.rosterDict['db2'].attributes.overallRating*1.2)+(self.rosterDict['lb'].attributes.overallRating*.8)+(self.rosterDict['dl'].attributes.overallRating*.8)+(self.rosterDict['de'].attributes.overallRating*1))/5)
+            self.runDefenseRating = round(((self.rosterDict['db1'].attributes.overallRating*.5)+(self.rosterDict['db2'].attributes.overallRating*.5)+(self.rosterDict['lb'].attributes.overallRating*1.3)+(self.rosterDict['dl'].attributes.overallRating*1.5)+(self.rosterDict['de'].attributes.overallRating*1.2))/5)
+                   
             self.defenseRating = round(((self.runDefenseRating*1.8)+(self.passDefenseRating*2.2))/4)
             self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
             if self.defenseSeasonPerformanceRating > 0:
@@ -161,71 +150,50 @@ class Team:
                 replacedPlayer = self.rosterDict['k']
                 self.rosterDict['k'] = self.reserveRosterDict['k']
                 self.reserveRosterDict['k'] = replacedPlayer
+        if self.reserveRosterDict['db1'] is not None:
+            if self.reserveRosterDict['db1'].playerRating > self.rosterDict['db1'].playerRating:
+                replacedPlayer = self.rosterDict['db1']
+                self.rosterDict['db1'] = self.reserveRosterDict['db1']
+                self.reserveRosterDict['db1'] = replacedPlayer
+        if self.reserveRosterDict['db2'] is not None:
+            if self.reserveRosterDict['db2'].playerRating > self.rosterDict['db2'].playerRating:
+                replacedPlayer = self.rosterDict['db2']
+                self.rosterDict['db2'] = self.reserveRosterDict['db2']
+                self.reserveRosterDict['db2'] = replacedPlayer
+        if self.reserveRosterDict['lb'] is not None:
+            if self.reserveRosterDict['lb'].playerRating > self.rosterDict['lb'].playerRating:
+                replacedPlayer = self.rosterDict['lb']
+                self.rosterDict['lb'] = self.reserveRosterDict['lb']
+                self.reserveRosterDict['lb'] = replacedPlayer
+        if self.reserveRosterDict['dl'] is not None:
+            if self.reserveRosterDict['dl'].playerRating > self.rosterDict['dl'].playerRating:
+                replacedPlayer = self.rosterDict['dl']
+                self.rosterDict['dl'] = self.reserveRosterDict['dl']
+                self.reserveRosterDict['dl'] = replacedPlayer
+        if self.reserveRosterDict['de'] is not None:
+            if self.reserveRosterDict['de'].playerRating > self.rosterDict['de'].playerRating:
+                replacedPlayer = self.rosterDict['de']
+                self.rosterDict['de'] = self.reserveRosterDict['de']
+                self.reserveRosterDict['de'] = replacedPlayer
 
         self.updateRating()
 
 
     def updateRating(self):
+        self.passDefenseRating = round(((self.rosterDict['db1'].attributes.overallRating*1.2)+(self.rosterDict['db2'].attributes.overallRating*1.2)+(self.rosterDict['lb'].attributes.overallRating*.8)+(self.rosterDict['dl'].attributes.overallRating*.8)+(self.rosterDict['de'].attributes.overallRating*1))/5)
+        self.runDefenseRating = round(((self.rosterDict['db1'].attributes.overallRating*.5)+(self.rosterDict['db2'].attributes.overallRating*.5)+(self.rosterDict['lb'].attributes.overallRating*1.3)+(self.rosterDict['dl'].attributes.overallRating*1.5)+(self.rosterDict['de'].attributes.overallRating*1.2))/5)
         self.defenseRating = round(((self.runDefenseRating*1.8)+(self.passDefenseRating*2.2))/4)
         self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
         self.overallRating = round(statistics.mean([self.offenseRating, self.runDefenseRating, self.passDefenseRating]))
-        self.gameDefenseRating = round(((self.gameRunDefenseRating*1.5)+(self.gamePassDefenseRating*1.7)+(self.defenseDiscipline*1)+(self.defenseLuck*.8))/5)
+        self.gamePassDefenseRating = round(((self.rosterDict['db1'].attributes.overallRating*1.2)+(self.rosterDict['db2'].attributes.overallRating*1.2)+(self.rosterDict['lb'].attributes.overallRating*.8)+(self.rosterDict['dl'].attributes.overallRating*.8)+(self.rosterDict['de'].attributes.overallRating*1))/5)
+        self.gameRunDefenseRating = round(((self.rosterDict['db1'].attributes.overallRating*.5)+(self.rosterDict['db2'].attributes.overallRating*.5)+(self.rosterDict['lb'].attributes.overallRating*1.3)+(self.rosterDict['dl'].attributes.overallRating*1.5)+(self.rosterDict['de'].attributes.overallRating*1.2))/5)
+        self.gameDefenseRating = round(((self.gameRunDefenseRating*1.5)+(self.gamePassDefenseRating*1.7))/3)
         if self.defenseSeasonPerformanceRating > 0:
             self.defenseOverallRating = round(((self.defenseRating*.8)+(self.defenseSeasonPerformanceRating*1.2))/2)
         else:
             self.defenseOverallRating = self.defenseRating
 
-    def updateInGameDefenseRating(self):
-        rating = round(((self.gameRunDefenseRating*1.5)+(self.gamePassDefenseRating*1.7)+(self.defenseDiscipline*1)+(self.defenseLuck*.8))/5)
-        self.gameDefenseRating = round(((((rating - 60) * self._gameDefenseEnergy)/100)+60)*((self._gameDefenseConfidence+self._gameDefenseDetermination)/2))
-        if self.gameDefenseRating > 100:
-            self.gameDefenseRating = 100
-
     def updateDefense(self):
-        x = randint(1,10)
-        if x < 3:
-            x = randint(1, 100)
-            if x >= 99:
-                self.runDefenseRating = randint(85, 100)
-                self.passDefenseRating = randint(85, 100)
-            elif x >= 85 and x < 98:
-                self.runDefenseRating = randint(80, 95)
-                self.passDefenseRating = randint(80, 95)
-            elif x >= 60 and x < 85:
-                self.runDefenseRating = randint(70, 89)
-                self.passDefenseRating = randint(70, 89)
-            else:
-                self.runDefenseRating = randint(60, 95)
-                self.passDefenseRating = randint(60, 95)   
-        else:
-            if self.defenseDiscipline >= 95:
-                self.defenseDiscipline += randint(-15, -5)
-            elif self.defenseDiscipline <= 70:
-                self.defenseDiscipline += randint(5, 15)
-            else:
-                self.defenseDiscipline += randint(-10, 10)
-
-            if self.passDefenseRating >= 95:
-                self.passDefenseRating += randint(-10, -5)
-            elif self.passDefenseRating <= 70:
-                self.passDefenseRating += randint(5, 15)
-            else:
-                self.passDefenseRating += randint(-10, 10)
-            if self.runDefenseRating >= 95:
-                self.runDefenseRating += randint(-10, -5)
-            elif self.runDefenseRating <= 70:
-                self.runDefenseRating += randint(5, 15)
-            else:
-                self.runDefenseRating += randint(-10, 10)
-
-            if self.passDefenseRating > 100:
-                self.passDefenseRating = 100
-            elif self.passDefenseRating < 60:
-                self.passDefenseRating = 60
-            if self.runDefenseRating > 100:
-                self.runDefenseRating = 100
-            elif self.runDefenseRating < 60:
-                self.runDefenseRating = 60
 
         self.updateRating()
 
@@ -309,17 +277,9 @@ class Team:
 
     def updateGameConfidence(self, value):
         self._gameDefenseConfidence = round(self._gameDefenseConfidence + value, 2)
-        self.updateInGameDefenseRating()
 
     def updateGameDetermination(self, value):
         self._gameDefenseDetermination = round(self._gameDefenseDetermination + value, 2)
-        self.updateInGameDefenseRating()
-
-    def updateGameEnergy(self, value):
-        self._gameDefenseEnergy = round(self._gameDefenseEnergy + value, 2)
-        if self._gameDefenseEnergy > 100:
-            self._gameDefenseEnergy = 100
-        self.updateInGameDefenseRating()
 
     def inGamePush(self):
         for player in self.rosterDict.values():
@@ -344,14 +304,15 @@ class Team:
         for player in self.rosterDict.values():
             player.gameAttributes.confidence = 1
             player.updateInGameRating
-        self._gameDefenseConfidence = 1
+        #self._gameDefenseConfidence = 1
 
     def resetDetermination(self):
         for player in self.rosterDict.values():
             player.gameAttributes.determination = 1
             player.updateInGameRating
-        self._gameDefenseDetermination = 1
+        #self._gameDefenseDetermination = 1
 
     def resetGameEnergy(self):
-        self._gameDefenseEnergy = 100
-        self.updateInGameDefenseRating()
+        for player in self.rosterDict.values():
+            player: FloosPlayer.Player
+            player.energy = 100

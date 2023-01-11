@@ -1,5 +1,6 @@
 {
     "leagueConfig": {
+        "cap": 30,
         "totalSeasons": 10,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
@@ -773,6 +774,13 @@
         "Droop Sixcrabs",
         "Jamie Bassclef",
         "Flakey Bugle",
-        "Chazmereld Feldsbar"
+        "Chazmereld Feldsbar",
+        "Hambo Pitviper",
+        "Teodor McVideo",
+        "Bonkie Spunch",
+        "Scarlet Bitcrush",
+        "Charlie Dayman",
+        "Sandra 5",
+        "Matilda Tigerseye"
     ]
 }

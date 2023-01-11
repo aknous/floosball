@@ -11,7 +11,7 @@ import os
 import json
 import uvicorn
 from operator import itemgetter
-from floosball_player import Player, Position
+from floosball_player import Player, Position, PlayerDefBasic
 
 from floosball_team import Team
 
@@ -249,14 +249,14 @@ async def returnPlayers(id = None):
                     attDict['att1'] = round((((player.attributes.armStrength - 60)/40)*4)+1)
                     attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
                     attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
-                elif player.position is Position.RB:
+                elif player.position is Position.RB or isinstance(player, PlayerDefBasic):
                     attDict['att1Name'] = 'Speed'
                     attDict['att2Name'] = 'Power'
                     attDict['att3Name'] = 'Agility'
                     attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
                     attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
                     attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
-                elif player.position is Position.WR:
+                elif player.position is Position.WR or player.position is Position.DB:
                     attDict['att1Name'] = 'Speed'
                     attDict['att2Name'] = 'Hands'
                     attDict['att3Name'] = 'Agility'
