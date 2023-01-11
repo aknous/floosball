@@ -169,22 +169,6 @@ async def returnTeams(id = None):
                         playerDict['seasonStats'] = player.seasonStatsDict
                         rosterDict[pos] = playerDict
                 teamDict['roster'] = rosterDict
-                reserveList = []
-                for pos, player in team.reserveRosterDict.items():
-                    if isinstance(player, Player):
-                        playerDict = {}
-                        playerDict['name'] = player.name
-                        playerDict['id'] = player.id
-                        playerDict['pos'] = player.position.name
-                        playerDict['rating'] = player.attributes.overallRating
-                        playerDict['rank'] = player.serviceTime
-                        playerDict['ratingStars'] = player.playerTier.value
-                        playerDict['term'] = player.term
-                        playerDict['gamesPlayed'] = player.gamesPlayed
-                        playerDict['seasonPerformanceRating'] = round(((player.seasonPerformanceRating * 4)/100)+1)
-                        playerDict['seasonStats'] = player.seasonStatsDict
-                        reserveList.append(playerDict)
-                teamDict['reserves'] = reserveList
                 return teamDict
 
 @app.get('/players')

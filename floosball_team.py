@@ -84,6 +84,7 @@ class Team:
         self.leagueChampionships = []
         self.playoffAppearances = 0
         self.defenseSeasonPerformanceRating = 0
+        self.playerCap = 0
         self.gmScore = randint(0,10)
         self.eliminated = False
         self.faComplete = False
@@ -96,7 +97,6 @@ class Team:
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
         self.allTimeTeamStats = copy.deepcopy(teamStatsDict)
         self.rosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None, 'db1': None, 'db2': None, 'lb': None, 'de': None, 'dl': None}
-        self.reserveRosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None, 'db1': None, 'db2': None, 'lb': None, 'de': None, 'dl': None}
 
     def setupTeam(self):
         if self.overallRating == 0:
@@ -110,73 +110,6 @@ class Team:
                 self.defenseOverallRating = round(((self.defenseRating*1.2)+(self.defenseSeasonPerformanceRating*.8))/2)
             else:
                 self.defenseOverallRating = self.defenseRating
-
-    def setRoster(self):
-        if self.reserveRosterDict['qb'] is not None:
-            if self.reserveRosterDict['qb'].playerRating> self.rosterDict['qb'].playerRating:
-                replacedPlayer = self.rosterDict['qb']
-                self.rosterDict['qb'] = self.reserveRosterDict['qb']
-                self.reserveRosterDict['qb'] = replacedPlayer
-        if self.reserveRosterDict['rb'] is not None:
-            if self.reserveRosterDict['rb'].playerRating > self.rosterDict['rb'].playerRating:
-                replacedPlayer = self.rosterDict['rb']
-                self.rosterDict['rb'] = self.reserveRosterDict['rb']
-                self.reserveRosterDict['rb'] = replacedPlayer
-        if self.reserveRosterDict['wr1'] is not None:
-            if self.reserveRosterDict['wr1'].playerRating > self.rosterDict['wr1'].playerRating:
-                replacedPlayer = self.rosterDict['wr1']
-                self.rosterDict['wr1'] = self.reserveRosterDict['wr1']
-                self.reserveRosterDict['wr1'] = replacedPlayer
-            elif self.reserveRosterDict['wr1'].playerRating > self.rosterDict['wr2'].playerRating:
-                replacedPlayer = self.rosterDict['wr2']
-                self.rosterDict['wr2'] = self.reserveRosterDict['wr1']
-                self.reserveRosterDict['wr1'] = replacedPlayer
-        if self.reserveRosterDict['wr2'] is not None:
-            if self.reserveRosterDict['wr2'].playerRating > self.rosterDict['wr2'].playerRating:
-                replacedPlayer = self.rosterDict['wr2']
-                self.rosterDict['wr2'] = self.reserveRosterDict['wr2']
-                self.reserveRosterDict['wr2'] = replacedPlayer
-            elif self.reserveRosterDict['wr2'].playerRating > self.rosterDict['wr1'].playerRating:
-                replacedPlayer = self.rosterDict['wr1']
-                self.rosterDict['wr1'] = self.reserveRosterDict['wr2']
-                self.reserveRosterDict['wr2'] = replacedPlayer
-        if self.reserveRosterDict['te'] is not None:
-            if self.reserveRosterDict['te'].playerRating > self.rosterDict['te'].playerRating:
-                replacedPlayer = self.rosterDict['te']
-                self.rosterDict['te'] = self.reserveRosterDict['te']
-                self.reserveRosterDict['te'] = replacedPlayer
-        if self.reserveRosterDict['k'] is not None:
-            if self.reserveRosterDict['k'].playerRating > self.rosterDict['k'].playerRating:
-                replacedPlayer = self.rosterDict['k']
-                self.rosterDict['k'] = self.reserveRosterDict['k']
-                self.reserveRosterDict['k'] = replacedPlayer
-        if self.reserveRosterDict['db1'] is not None:
-            if self.reserveRosterDict['db1'].playerRating > self.rosterDict['db1'].playerRating:
-                replacedPlayer = self.rosterDict['db1']
-                self.rosterDict['db1'] = self.reserveRosterDict['db1']
-                self.reserveRosterDict['db1'] = replacedPlayer
-        if self.reserveRosterDict['db2'] is not None:
-            if self.reserveRosterDict['db2'].playerRating > self.rosterDict['db2'].playerRating:
-                replacedPlayer = self.rosterDict['db2']
-                self.rosterDict['db2'] = self.reserveRosterDict['db2']
-                self.reserveRosterDict['db2'] = replacedPlayer
-        if self.reserveRosterDict['lb'] is not None:
-            if self.reserveRosterDict['lb'].playerRating > self.rosterDict['lb'].playerRating:
-                replacedPlayer = self.rosterDict['lb']
-                self.rosterDict['lb'] = self.reserveRosterDict['lb']
-                self.reserveRosterDict['lb'] = replacedPlayer
-        if self.reserveRosterDict['dl'] is not None:
-            if self.reserveRosterDict['dl'].playerRating > self.rosterDict['dl'].playerRating:
-                replacedPlayer = self.rosterDict['dl']
-                self.rosterDict['dl'] = self.reserveRosterDict['dl']
-                self.reserveRosterDict['dl'] = replacedPlayer
-        if self.reserveRosterDict['de'] is not None:
-            if self.reserveRosterDict['de'].playerRating > self.rosterDict['de'].playerRating:
-                replacedPlayer = self.rosterDict['de']
-                self.rosterDict['de'] = self.reserveRosterDict['de']
-                self.reserveRosterDict['de'] = replacedPlayer
-
-        self.updateRating()
 
 
     def updateRating(self):

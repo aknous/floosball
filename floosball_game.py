@@ -1384,8 +1384,6 @@ class Game:
         coinFlipLoser = None
         otContinue = False
 
-        self.homeTeam.setRoster()
-        self.awayTeam.setRoster()
         self.homeTeam.gameDefenseRating = self.homeTeam.defenseRating
         self.homeTeam.gameRunDefenseRating = self.homeTeam.runDefenseRating
         self.homeTeam.gamePassDefenseRating = self.homeTeam.passDefenseRating
