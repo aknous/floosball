@@ -130,7 +130,7 @@ class Season:
                 gameList.append(newGame)
             scheduleList.append(gameList)
 
-    def getSeasonStats(self):
+    def saveSeasonStats(self):
         dict = {}
         jsonFile = open("data/teamData.json", "w+")
         for team in teamList:
@@ -147,8 +147,11 @@ class Season:
                     player.careerStatsDict['passing']['tds'] += player.seasonStatsDict['passing']['tds']
                     player.careerStatsDict['passing']['ints'] += player.seasonStatsDict['passing']['ints']
                     player.careerStatsDict['passing']['yards'] += player.seasonStatsDict['passing']['yards']
+                    player.careerStatsDict['passing']['20+'] += player.seasonStatsDict['passing']['20+']
                     player.careerStatsDict['passing']['ypc'] = round(player.careerStatsDict['passing']['yards']/player.careerStatsDict['passing']['comp'])
                     player.careerStatsDict['passing']['compPerc'] = round((player.careerStatsDict['passing']['comp']/player.careerStatsDict['passing']['att'])*100)
+                    if player.seasonStatsDict['passing']['longest'] > player.careerStatsDict['passing']['longest']:
+                        player.careerStatsDict['passing']['longest'] = player.seasonStatsDict['passing']['longest']
                     team.seasonTeamStats['Offense']['passYards'] += player.seasonStatsDict['passing']['yards']
                 if player.seasonStatsDict['receiving']['yards'] > 0:
                     player.careerStatsDict['receiving']['receptions'] += player.seasonStatsDict['receiving']['receptions']
@@ -156,6 +159,9 @@ class Season:
                     player.careerStatsDict['receiving']['yac'] += player.seasonStatsDict['receiving']['yac']
                     player.careerStatsDict['receiving']['yards'] += player.seasonStatsDict['receiving']['yards']
                     player.careerStatsDict['receiving']['tds'] += player.seasonStatsDict['receiving']['tds']
+                    player.careerStatsDict['receiving']['20+'] += player.seasonStatsDict['receiving']['20+']
+                    if player.seasonStatsDict['receiving']['longest'] > player.careerStatsDict['receiving']['longest']:
+                        player.careerStatsDict['receiving']['longest'] = player.seasonStatsDict['receiving']['longest']
                     if player.careerStatsDict['receiving']['receptions'] > 0:
                         player.careerStatsDict['receiving']['ypr'] = round(player.careerStatsDict['receiving']['yards']/player.careerStatsDict['receiving']['receptions'])
                         player.careerStatsDict['receiving']['rcvPerc'] = round((player.careerStatsDict['receiving']['receptions']/player.careerStatsDict['receiving']['targets'])*100)
@@ -164,7 +170,10 @@ class Season:
                     player.careerStatsDict['rushing']['yards'] += player.seasonStatsDict['rushing']['yards']
                     player.careerStatsDict['rushing']['tds'] += player.seasonStatsDict['rushing']['tds']
                     player.careerStatsDict['rushing']['fumblesLost'] += player.seasonStatsDict['rushing']['fumblesLost']
+                    player.careerStatsDict['rushing']['20+'] += player.seasonStatsDict['rushing']['20+']
                     player.careerStatsDict['rushing']['ypc'] = round(player.careerStatsDict['rushing']['yards']/player.careerStatsDict['rushing']['carries'])
+                    if player.seasonStatsDict['rushing']['longest'] > player.careerStatsDict['rushing']['longest']:
+                        player.careerStatsDict['rushing']['longest'] = player.seasonStatsDict['rushing']['longest']
                     team.seasonTeamStats['Offense']['runYards'] += player.seasonStatsDict['rushing']['yards']
                 if player.seasonStatsDict['kicking']['fgAtt'] > 0:
                     if player.seasonStatsDict['kicking']['fgs'] > 0:
@@ -174,6 +183,9 @@ class Season:
 
                     player.careerStatsDict['kicking']['fgAtt'] += player.seasonStatsDict['kicking']['fgAtt']
                     player.careerStatsDict['kicking']['fgs'] += player.seasonStatsDict['kicking']['fgs']
+                    player.careerStatsDict['kicking']['fg45+'] += player.seasonStatsDict['kicking']['fg45+']
+                    if player.seasonStatsDict['kicking']['longest'] > player.careerStatsDict['kicking']['longest']:
+                        player.careerStatsDict['kicking']['longest'] = player.seasonStatsDict['kicking']['longest']
                     if player.careerStatsDict['kicking']['fgs'] > 0:
                         player.careerStatsDict['kicking']['fgPerc'] = round((player.careerStatsDict['kicking']['fgs']/player.careerStatsDict['kicking']['fgAtt'])*100)
                     else:
@@ -181,12 +193,12 @@ class Season:
                     team.seasonTeamStats['Offense']['tds'] += (player.seasonStatsDict['passing']['tds'] + player.seasonStatsDict['rushing']['tds'] + player.seasonStatsDict['receiving']['tds'])
 
                 if isinstance(player, FloosPlayer.PlayerDB) or isinstance(player, FloosPlayer.PlayerDefBasic):
-                    player.careerStatsDict['defense']['tackles'] += player.seasonStatsDict['kicking']['tackles']
-                    player.careerStatsDict['defense']['sacks'] += player.seasonStatsDict['kicking']['sacks']
-                    player.careerStatsDict['defense']['fumRec'] += player.seasonStatsDict['kicking']['fumRec']
-                    player.careerStatsDict['defense']['ints'] += player.seasonStatsDict['kicking']['ints']
-                    player.careerStatsDict['defense']['passTargets'] += player.seasonStatsDict['kicking']['passTargets']
-                    player.careerStatsDict['defense']['passDisruptions'] += player.seasonStatsDict['kicking']['passDisruptions']
+                    player.careerStatsDict['defense']['tackles'] += player.seasonStatsDict['defense']['tackles']
+                    player.careerStatsDict['defense']['sacks'] += player.seasonStatsDict['defense']['sacks']
+                    player.careerStatsDict['defense']['fumRec'] += player.seasonStatsDict['defense']['fumRec']
+                    player.careerStatsDict['defense']['ints'] += player.seasonStatsDict['defense']['ints']
+                    player.careerStatsDict['defense']['passTargets'] += player.seasonStatsDict['defense']['passTargets']
+                    player.careerStatsDict['defense']['passDisruptions'] += player.seasonStatsDict['defense']['passDisruptions']
                     if player.careerStatsDict['defense']['passTargets'] > 0:
                         player.careerStatsDict['defense']['passDisPerc'] = round((player.careerStatsDict['defense']['passDisruptions']/player.careerStatsDict['defense']['passTargets'])*100)
 
@@ -197,6 +209,8 @@ class Season:
                 playerDict['seasonsPlayed'] = player.seasonsPlayed
                 playerDict['gamesPlayed'] = player.gamesPlayed
                 playerDict['term'] = player.term
+                playerDict['termRemaining'] = player.termRemaining
+                playerDict['capHit'] = player.capHit
                 playerDict['seasonStats'] = player.seasonStatsDict
                 rosterDict[pos] = playerDict
 
@@ -206,6 +220,7 @@ class Season:
             team.allTimeTeamStats['wins'] += team.seasonTeamStats['wins']
             team.allTimeTeamStats['losses'] += team.seasonTeamStats['losses']
             team.allTimeTeamStats['Offense']['tds'] += team.seasonTeamStats['Offense']['tds']
+            team.allTimeTeamStats['Offense']['fgs'] += team.seasonTeamStats['Offense']['fgs']
             team.allTimeTeamStats['Offense']['passYards'] += team.seasonTeamStats['Offense']['passYards']
             team.allTimeTeamStats['Offense']['runYards'] += team.seasonTeamStats['Offense']['runYards']
             team.allTimeTeamStats['Offense']['totalYards'] += team.seasonTeamStats['Offense']['totalYards']
@@ -329,12 +344,12 @@ class Season:
             sortPlayers()
             sortDefenses()
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
-            #await asyncio.sleep(30)
+            await asyncio.sleep(30)
 
         #seasonDict['games'] = weekDict
         leagueChampion = await self.playPlayoffs()
 
-        self.getSeasonStats()
+        self.saveSeasonStats()
 
         standingsDict = {}
         divStandingsTempDict = {}
@@ -380,6 +395,7 @@ class Season:
             dict['leagueChampionships'] = team.leagueChampionships
             dict['playoffAppearances'] = team.playoffAppearances
             dict['seasonTeamStats'] = team.seasonTeamStats
+            dict['playerCap'] = team.playerCap
             rosterDict = {}
             for pos, player in team.rosterDict.items():
                 player: FloosPlayer.Player
@@ -390,6 +406,7 @@ class Season:
                 playerDict['overallRating'] = player.attributes.overallRating
                 playerDict['seasonsPlayed'] = player.seasonsPlayed
                 playerDict['term'] = player.term
+                playerDict['termRemaining'] = player.termRemaining
                 playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
                 playerDict['seasonStatsDict'] = player.seasonStatsDict
                 rosterDict[pos] = playerDict
@@ -500,7 +517,7 @@ class Season:
             if x < numOfRounds - 1:
                 sortPlayers()
                 sortDefenses()
-                #await asyncio.sleep(30)
+                await asyncio.sleep(30)
 
         return champ
 
@@ -718,9 +735,12 @@ def playerDraft():
 
             selectedPlayer.team = team
             selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
+            selectedPlayer.termRemaining = selectedPlayer.term
             selectedPlayer.seasonStatsDict['team'] = selectedPlayer.team.name
             team.playerCap += selectedPlayer.capHit
-            team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True})
+            team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True, 'term': selectedPlayer.term})
+
+        draftOrderList.reverse()
                 
     for player in draftQbList:
         player.team = 'Free Agent'
@@ -764,6 +784,7 @@ def savePlayerData():
         newDict['position'] = activePlayerList[x].position
         newDict['seasonsPlayed'] = activePlayerList[x].seasonsPlayed
         newDict['term'] = activePlayerList[x].term
+        newDict['termRemaining'] = activePlayerList[x].termRemaining
         newDict['capHit'] = activePlayerList[x].capHit
         newDict['seasonPerformanceRating'] = activePlayerList[x].seasonPerformanceRating
         newDict['playerRating'] = activePlayerList[x].playerRating
@@ -837,6 +858,7 @@ def getPlayers(_config):
                 newPlayer.id = player['id']
                 newPlayer.team = player['team']
                 newPlayer.term = player['term']
+                newPlayer.termRemaining = player['termRemaining']
                 newPlayer.capHit = player['capHit']
                 newPlayer.seasonsPlayed = player['seasonsPlayed']
                 newPlayer.playerRating = player['playerRating']
@@ -974,8 +996,8 @@ def getTeams(_config):
                 newTeam.allTimeTeamStats = team['allTimeTeamStats']
                 newTeam.leagueChampionships = team['leagueChampionships']
                 newTeam.playoffAppearances = team['playoffAppearances']
-                newTeam.rosterHistory = team['rosterHistory']
-
+                if 'rosterHistory' in team:
+                    newTeam.rosterHistory = team['rosterHistory']
 
                 teamRoster = team['roster']
                 for pos, player in teamRoster.items():
@@ -983,8 +1005,8 @@ def getTeams(_config):
                         z:FloosPlayer.Player
                         if z.name == player['name']:
                             newTeam.rosterDict[pos] = z
+                            newTeam.playerCap += z.capHit
                             break
-
 
                 teamList.append(newTeam)
 
@@ -1058,8 +1080,11 @@ def initTeams():
             playerDict['tier'] = player.playerTier.name
             playerDict['overallRating'] = player.attributes.overallRating
             playerDict['term'] = player.term
+            playerDict['termRemaining'] = player.termRemaining
             playerDict['seasonsPlayed'] = player.seasonsPlayed
             playerDict['careerStatsDict'] = player.careerStatsDict
+            if player.team is not team:
+                player.team = team
             rosterDict[pos] = playerDict
 
         teamDict['roster'] = rosterDict
@@ -1097,8 +1122,8 @@ def sortPlayers():
             else:
                 player.playerTier = FloosPlayer.PlayerTier.TierD
 
-        if player.team is None or player.team == 'Free Agent':
-            player.capHit = player.playerTier.value
+            if player.team is None or player.team == 'Free Agent':
+                player.capHit = player.playerTier.value
 
 
 def sortDefenses():
@@ -1213,8 +1238,8 @@ async def offseason():
             else:
                 v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran
 
-            v.term -= 1
-            if v.term == 0:
+            v.termRemaining -= 1
+            if v.termRemaining == 0:
                 retirePlayerBool = None
                 if v.seasonsPlayed > 15:
                     x = randint(1,10)
@@ -1277,7 +1302,7 @@ async def offseason():
                         name += ' Jr.'
                     unusedNamesList.append(name)
                 else:
-                    team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': round((((v.attributes.overallRating - 60)/40)*4)+1), 'isAddition': False})
+                    team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': round((((v.attributes.overallRating - 60)/40)*4)+1), 'isAddition': False, 'term': v.term})
                     v.previousTeam = team.name
                     team.playerCap -= v.capHit
                     v.team = 'Free Agent'
@@ -1384,7 +1409,7 @@ async def offseason():
                 teamsComplete += 1
                 continue
                 
-            #await asyncio.sleep(2)
+            await asyncio.sleep(2)
 
             for k,v in team.rosterDict.items():
                 if v is None:
@@ -1460,10 +1485,12 @@ async def offseason():
 
                 freeAgentList.remove(selectedPlayer)
                 selectedPlayer.team = team
+                team.playerCap += selectedPlayer.capHit
                 team.rosterDict[pos] = selectedPlayer
                 selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
+                selectedPlayer.termRemaining = selectedPlayer.term
                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, selectedPlayer.name, selectedPlayer.position.name, selectedPlayer.term)}})
-                team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True})
+                team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True, 'term': selectedPlayer.term})
                 freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.skillRating, 'tier': selectedPlayer.playerTier.value, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "Starting"}
                 continue
             else:
@@ -1738,8 +1765,8 @@ async def startLeague():
     print('Floosball v{}'.format(__version__))
     #print('Reading config...')
     config = FloosMethods.getConfig()
-    cap = leagueConfig['cap']
     leagueConfig = config['leagueConfig']
+    cap = leagueConfig['cap']
     totalSeasons = leagueConfig['totalSeasons']
     deleteDataOnStart = leagueConfig['deleteDataOnRestart']
     saveSeasonProgress = leagueConfig['saveSeasonProgress']
@@ -1797,6 +1824,6 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        #await asyncio.sleep(60)
+        await asyncio.sleep(60)
         activeSeason.clearSeasonStats()
         await offseason()

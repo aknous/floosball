@@ -85,7 +85,7 @@ class Team:
         self.playoffAppearances = 0
         self.defenseSeasonPerformanceRating = 0
         self.playerCap = 0
-        self.gmScore = randint(0,10)
+        self.gmScore = 0
         self.eliminated = False
         self.faComplete = False
         self.schedule = []

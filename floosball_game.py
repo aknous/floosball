@@ -1094,7 +1094,7 @@ class Game:
         if self.play.playType is PlayType.Run:
             if self.play.isFumble:
                 if self.play.isFumbleLost:
-                    text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defender.name)
+                    text = '{} runs for {} yards and fumbles, {} recovers'.format(self.play.runner.name, self.play.yardage, self.play.defender.name)
                 else:
                     text = '{} runs for {} yards and fumbles, {} recovers'.format(self.play.runner.name, self.play.yardage, self.play.runner.name)
             else:
@@ -1141,9 +1141,13 @@ class Game:
     def postgame(self): 
         if self.isRegularSeasonGame:   
             self.homeTeam.seasonTeamStats['Offense']['pts'] += self.homeScore
+            self.homeTeam.seasonTeamStats['Offense']['tds'] += (self.homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + self.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
+            self.homeTeam.seasonTeamStats['Offense']['fgs'] += self.homeTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
             homeScoreDiff = self.homeScore - self.homeTeam.gameDefenseStats['ptsAlwd']
             self.homeTeam.seasonTeamStats['scoreDiff'] += homeScoreDiff
             self.awayTeam.seasonTeamStats['Offense']['pts'] += self.awayScore
+            self.awayTeam.seasonTeamStats['Offense']['tds'] += (self.awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + self.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
+            self.awayTeam.seasonTeamStats['Offense']['fgs'] += self.awayTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
             awayScoreDiff = self.awayScore - self.awayTeam.gameDefenseStats['ptsAlwd']
             self.awayTeam.seasonTeamStats['scoreDiff'] += awayScoreDiff
 
@@ -1272,12 +1276,12 @@ class Game:
                         player.seasonStatsDict['kicking']['fgPerc'] = 0
 
             if isinstance(player, FloosPlayer.PlayerDB) or isinstance(player, FloosPlayer.PlayerDefBasic):
-                player.seasonStatsDict['defense']['tackles'] += player.gameStatsDict['kicking']['tackles']
-                player.seasonStatsDict['defense']['sacks'] += player.gameStatsDict['kicking']['sacks']
-                player.seasonStatsDict['defense']['fumRec'] += player.gameStatsDict['kicking']['fumRec']
-                player.seasonStatsDict['defense']['ints'] += player.gameStatsDict['kicking']['ints']
-                player.seasonStatsDict['defense']['passTargets'] += player.gameStatsDict['kicking']['passTargets']
-                player.seasonStatsDict['defense']['passDisruptions'] += player.gameStatsDict['kicking']['passDisruptions']
+                player.seasonStatsDict['defense']['tackles'] += player.gameStatsDict['defense']['tackles']
+                player.seasonStatsDict['defense']['sacks'] += player.gameStatsDict['defense']['sacks']
+                player.seasonStatsDict['defense']['fumRec'] += player.gameStatsDict['defense']['fumRec']
+                player.seasonStatsDict['defense']['ints'] += player.gameStatsDict['defense']['ints']
+                player.seasonStatsDict['defense']['passTargets'] += player.gameStatsDict['defense']['passTargets']
+                player.seasonStatsDict['defense']['passDisruptions'] += player.gameStatsDict['defense']['passDisruptions']
                 if player.seasonStatsDict['defense']['passTargets'] > 0:
                     player.seasonStatsDict['defense']['passDisPerc'] = round((player.seasonStatsDict['defense']['passDisruptions']/player.seasonStatsDict['defense']['passTargets'])*100)
 
@@ -1365,12 +1369,12 @@ class Game:
                         player.seasonStatsDict['kicking']['fgPerc'] = 0
                         
             if isinstance(player, FloosPlayer.PlayerDB) or isinstance(player, FloosPlayer.PlayerDefBasic):
-                player.seasonStatsDict['defense']['tackles'] += player.gameStatsDict['kicking']['tackles']
-                player.seasonStatsDict['defense']['sacks'] += player.gameStatsDict['kicking']['sacks']
-                player.seasonStatsDict['defense']['fumRec'] += player.gameStatsDict['kicking']['fumRec']
-                player.seasonStatsDict['defense']['ints'] += player.gameStatsDict['kicking']['ints']
-                player.seasonStatsDict['defense']['passTargets'] += player.gameStatsDict['kicking']['passTargets']
-                player.seasonStatsDict['defense']['passDisruptions'] += player.gameStatsDict['kicking']['passDisruptions']
+                player.seasonStatsDict['defense']['tackles'] += player.gameStatsDict['defense']['tackles']
+                player.seasonStatsDict['defense']['sacks'] += player.gameStatsDict['defense']['sacks']
+                player.seasonStatsDict['defense']['fumRec'] += player.gameStatsDict['defense']['fumRec']
+                player.seasonStatsDict['defense']['ints'] += player.gameStatsDict['defense']['ints']
+                player.seasonStatsDict['defense']['passTargets'] += player.gameStatsDict['defense']['passTargets']
+                player.seasonStatsDict['defense']['passDisruptions'] += player.gameStatsDict['defense']['passDisruptions']
                 if player.seasonStatsDict['defense']['passTargets'] > 0:
                     player.seasonStatsDict['defense']['passDisPerc'] = round((player.seasonStatsDict['defense']['passDisruptions']/player.seasonStatsDict['defense']['passTargets'])*100)
             
@@ -1400,7 +1404,7 @@ class Game:
             player.gameAttributes = copy.deepcopy(player.attributes)
             player.gameStatsDict = copy.deepcopy(FloosPlayer.playerStatsDict)
 
-        #await asyncio.sleep(15)
+        await asyncio.sleep(15)
         x = randint(0,1)
         if x == 0:
             self.offensiveTeam = self.homeTeam
@@ -1484,7 +1488,7 @@ class Game:
                                                 'playsRemaining': 132 - self.totalPlays
                                             }
                                         })
-                        #await asyncio.sleep(60)
+                        await asyncio.sleep(60)
                         self.isHalftime = False
                     if self.currentQuarter != 3:
                         self.currentQuarter = 3
@@ -1570,7 +1574,7 @@ class Game:
 
                 self.play = Play(self)
                 
-                #await asyncio.sleep(randint(10,30))
+                await asyncio.sleep(randint(10,30))
 
                 self.playCaller()
                 self.totalPlays += 1
@@ -2176,9 +2180,10 @@ class Play():
 
         if passType.value == 1:
             if sackRoll < round(30 * (sackModifyer)):
+                self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
                 self.defense.gameDefenseStats['sacks'] += 1
-                dl.gameStatsDict['defense']['sacks'] += 1
+                self.defender.gameStatsDict['defense']['sacks'] += 1
                 self.isSack = True
                 fumbleRoll = randint(1,100)
                 fumbleResist = round(((self.passer.gameAttributes.power*.7) + (self.passer.gameAttributes.luck*.1) + (self.passer.gameAttributes.discipline*1.3))/3)
@@ -2194,7 +2199,7 @@ class Play():
                 if (fumbleRoll+fumbleResistModifyer) > 96:
                     #fumble
                     self.isFumble = True
-                    if (dl.gameAttributes.overallRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
+                    if (self.defender.gameAttributes.overallRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
                         self.passer.updateInGameConfidence(-.02)
                         dl.updateInGameConfidence(.02)
                         self.defense.gameDefenseStats['fumRec'] += 1
@@ -2325,9 +2330,10 @@ class Play():
                         self.passer.updateInGameConfidence(-.005)
         elif passType.value == 2:
             if sackRoll < round(50 * (sackModifyer)):
+                self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
                 self.defense.gameDefenseStats['sacks'] += 1
-                dl.gameStatsDict['defense']['sacks'] += 1
+                self.defender.gameStatsDict['defense']['sacks'] += 1
                 self.isSack = True
                 fumbleRoll = randint(1,100)
                 fumbleResist = round(((self.passer.gameAttributes.power*.7) + (self.passer.gameAttributes.luck*.1) + (self.passer.gameAttributes.discipline*1.3))/3)
@@ -2343,7 +2349,7 @@ class Play():
                 if (fumbleRoll+fumbleResistModifyer) > 96:
                     #fumble
                     self.isFumble = True
-                    if (dl.gameAttributes.overallRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
+                    if (self.defender.gameAttributes.overallRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
                         self.passer.updateInGameConfidence(-.02)
                         dl.updateInGameConfidence(.02)
                         self.defense.gameDefenseStats['fumRec'] += 1
@@ -2473,9 +2479,10 @@ class Play():
                         self.passer.updateInGameConfidence(-.005)
         elif passType.value == 3:
             if sackRoll < round(80 * (sackModifyer)):
+                self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
                 self.defense.gameDefenseStats['sacks'] += 1
-                dl.gameStatsDict['defense']['sacks'] += 1
+                self.defender.gameStatsDict['defense']['sacks'] += 1
                 self.isSack = True
                 fumbleRoll = randint(1,100)
                 fumbleResist = round(((self.passer.gameAttributes.power*.7) + (self.passer.gameAttributes.luck*.1) + (self.passer.gameAttributes.discipline*1.3))/3)
@@ -2491,7 +2498,7 @@ class Play():
                 if (fumbleRoll+fumbleResistModifyer) > 96:
                     #fumble
                     self.isFumble = True
-                    if (dl.gameAttributes.overallRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
+                    if (self.defender.gameAttributes.overallRating + randint(-5,5)) >= ((((self.passer.gameAttributes.power*1.3)+(self.passer.gameAttributes.luck*.7))/2) + randint(-5,5)):
                         self.passer.updateInGameConfidence(-.02)
                         dl.updateInGameConfidence(.02)
                         self.defense.gameDefenseStats['fumRec'] += 1

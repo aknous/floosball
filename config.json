@@ -2,9 +2,8 @@
     "leagueConfig": {
         "cap": 30,
         "totalSeasons": 10,
-        "deleteDataOnRestart": true,
-        "saveSeasonProgress": false,
-        "lastSeason": 0
+        "deleteDataOnRestart": false,
+        "saveSeasonProgress": true,
     },
     "divisions": [
         "Starfish",
@@ -781,6 +780,8 @@
         "Scarlet Bitcrush",
         "Charlie Dayman",
         "Sandra 5",
-        "Matilda Tigerseye"
+        "Matilda Tigerseye",
+        "Reverend Memes",
+        "Socks McElroy"
     ]
 }
