@@ -2087,8 +2087,8 @@ class Play():
         elif fumbleResist >= 60 and fumbleResist <= 67:
             fumbleResistModifyer = 2
 
-        playStrength = (((self.runner.gameAttributes.overallRating*1.2) + (blocker.gameAttributes.power*.8))/2) + randint(-5,5)
-        defenseStrength = self.defense.gameRunDefenseRating + randint(-5,5)
+        playStrength = (((self.runner.gameAttributes.overallRating*1.2) + (blocker.gameAttributes.power*.8))/2) + randint(-10,10)
+        defenseStrength = self.defense.gameRunDefenseRating + randint(-10,10)
 
         if defenseStrength >= playStrength:
             if x < 20:
@@ -2208,36 +2208,40 @@ class Play():
                         self.playResult = PlayResult.Fumble
             else:
                 self.passer.gameStatsDict['passing']['att'] += 1
-                if (((wr1.gameAttributes.agility+wr1.gameAttributes.speed+wr1.gameAttributes.xFactor)/3) + randint(-5,5)) > (((db1.gameAttributes.agility+db1.gameAttributes.speed+db1.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((wr1.gameAttributes.agility+wr1.gameAttributes.speed+wr1.gameAttributes.xFactor)/3) + randint(-10,10)) > (((db1.gameAttributes.agility+db1.gameAttributes.speed+db1.gameAttributes.xFactor)/3) + randint(-10,10)):
                     wr1.isOpen = True
-                if (((wr2.gameAttributes.agility+wr2.gameAttributes.speed+wr2.gameAttributes.xFactor)/3) + randint(-5,5)) > (((db2.gameAttributes.agility+db2.gameAttributes.speed+db2.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((wr2.gameAttributes.agility+wr2.gameAttributes.speed+wr2.gameAttributes.xFactor)/3) + randint(-10,10)) > (((db2.gameAttributes.agility+db2.gameAttributes.speed+db2.gameAttributes.xFactor)/3) + randint(-10,10)):
                     wr2.isOpen = True
-                if (((te.gameAttributes.agility+te.gameAttributes.speed+te.gameAttributes.xFactor)/3) + randint(-5,5)) > (((lb.gameAttributes.agility+lb.gameAttributes.speed+lb.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((te.gameAttributes.agility+te.gameAttributes.speed+te.gameAttributes.xFactor)/3) + randint(-10,10)) > (((lb.gameAttributes.agility+lb.gameAttributes.speed+lb.gameAttributes.xFactor)/3) + randint(-10,10)):
                     te.isOpen = True
-                if (((rb.gameAttributes.agility+rb.gameAttributes.speed+rb.gameAttributes.xFactor)/3) + randint(-5,5)) > (((de.gameAttributes.agility+de.gameAttributes.speed+de.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((rb.gameAttributes.agility+rb.gameAttributes.speed+rb.gameAttributes.xFactor)/3) + randint(-10,10)) > (((de.gameAttributes.agility+de.gameAttributes.speed+de.gameAttributes.xFactor)/3) + randint(-10,10)):
                     rb.isOpen = True
 
-                if wr1.isOpen and wr2.isOpen:
-                    x = randint(0,1)
-                    if x:
-                        self.receiver = wr1
-                        self.defender = db1
-                    else:
-                        self.receiver = wr2
-                        self.defender = db2
-                elif wr1.isOpen:
-                    self.receiver = wr1
-                    self.defender = db1
-                elif wr2.isOpen:
-                    self.receiver = wr2
-                    self.defender = db2
-                elif te.isOpen:
-                    self.receiver = te
-                    self.defender = lb
-                elif rb.isOpen:
-                    self.receiver = rb
-                    self.defender = de
-                else:
+                targetList = [(wr1,db1),(wr2,db2),(te,lb),(rb,de)]
+
+                while len(targetList) > 0:
+                    target = choice(targetList)
+
+                    if target[0].isOpen:
+                        self.receiver = target[0]
+                        self.defender = target[1]
+                        break
+                    elif self.passer.attributes.xFactor < 85:
+                        x = randint(1,100)
+                        if x > 70:
+                            self.receiver = target[0]
+                            self.defender = target[1]
+                            break
+                    elif self.passer.attributes.playMakingAbility > 90:
+                        x = randint(1,100)
+                        if x > 80:
+                            self.receiver = target[0]
+                            self.defender = target[1]
+                            break
+
+                    targetList.remove(target)
+
+                if self.receiver is None:
                     passTarget = randint(1,10)
                     if passTarget < 4:
                         self.receiver = rb 
@@ -2253,6 +2257,8 @@ class Play():
                         else:
                             self.receiver = wr2
                             self.defender = db2
+
+
                 accRoll = randint(1,100)
                 receiverYACRating = (self.receiver.gameAttributes.agility+self.receiver.gameAttributes.speed+self.receiver.gameAttributes.playMakingAbility)/3
                 if accRoll < (self.passer.gameAttributes.overallRating - (self.defender.gameAttributes.overallRating/12)):
@@ -2261,7 +2267,7 @@ class Play():
                         passYards = randint(0,5)
                         yac = 0
                         x = randint(1,10)
-                        if (receiverYACRating + randint(-5,5)) > (self.defender.gameAttributes.overallRating + randint(-5,5)):
+                        if (receiverYACRating + randint(-10,10)) > (self.defender.gameAttributes.overallRating + randint(-10,10)):
                             if x < 2:
                                 yac = 0
                             elif x >= 2 and x < 5:
@@ -2358,36 +2364,40 @@ class Play():
                         self.playResult = PlayResult.Fumble
             else:
                 self.passer.gameStatsDict['passing']['att'] += 1
-                if (((wr1.gameAttributes.agility+wr1.gameAttributes.speed+wr1.gameAttributes.xFactor)/3) + randint(-5,5)) > (((db1.gameAttributes.agility+db1.gameAttributes.speed+db1.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((wr1.gameAttributes.agility+wr1.gameAttributes.speed+wr1.gameAttributes.xFactor)/3) + randint(-7,7)) > (((db1.gameAttributes.agility+db1.gameAttributes.speed+db1.gameAttributes.xFactor)/3) + randint(-7,7)):
                     wr1.isOpen = True
-                if (((wr2.gameAttributes.agility+wr2.gameAttributes.speed+wr2.gameAttributes.xFactor)/3) + randint(-5,5)) > (((db2.gameAttributes.agility+db2.gameAttributes.speed+db2.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((wr2.gameAttributes.agility+wr2.gameAttributes.speed+wr2.gameAttributes.xFactor)/3) + randint(-7,7)) > (((db2.gameAttributes.agility+db2.gameAttributes.speed+db2.gameAttributes.xFactor)/3) + randint(-7,7)):
                     wr2.isOpen = True
-                if (((te.gameAttributes.agility+te.gameAttributes.speed+te.gameAttributes.xFactor)/3) + randint(-5,5)) > (((lb.gameAttributes.agility+lb.gameAttributes.speed+lb.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((te.gameAttributes.agility+te.gameAttributes.speed+te.gameAttributes.xFactor)/3) + randint(-7,7)) > (((lb.gameAttributes.agility+lb.gameAttributes.speed+lb.gameAttributes.xFactor)/3) + randint(-7,7)):
                     te.isOpen = True
-                if (((rb.gameAttributes.agility+rb.gameAttributes.speed+rb.gameAttributes.xFactor)/3) + randint(-5,5)) > (((de.gameAttributes.agility+de.gameAttributes.speed+de.gameAttributes.xFactor)/3) + randint(-5,5)):
+                if (((rb.gameAttributes.agility+rb.gameAttributes.speed+rb.gameAttributes.xFactor)/3) + randint(-7,7)) > (((de.gameAttributes.agility+de.gameAttributes.speed+de.gameAttributes.xFactor)/3) + randint(-7,7)):
                     rb.isOpen = True
 
-                if wr1.isOpen and wr2.isOpen:
-                    x = randint(0,1)
-                    if x:
-                        self.receiver = wr1
-                        self.defender = db1
-                    else:
-                        self.receiver = wr2
-                        self.defender = db2
-                elif wr1.isOpen:
-                    self.receiver = wr1
-                    self.defender = db1
-                elif wr2.isOpen:
-                    self.receiver = wr2
-                    self.defender = db2
-                elif te.isOpen:
-                    self.receiver = te
-                    self.defender = lb
-                elif rb.isOpen:
-                    self.receiver = rb
-                    self.defender = de
-                else:
+                targetList = [(wr1,db1),(wr2,db2),(te,lb),(rb,de)]
+
+                while len(targetList) > 0:
+                    target = choice(targetList)
+
+                    if target[0].isOpen:
+                        self.receiver = target[0]
+                        self.defender = target[1]
+                        break
+                    elif self.passer.attributes.xFactor < 85:
+                        x = randint(1,100)
+                        if x > 70:
+                            self.receiver = target[0]
+                            self.defender = target[1]
+                            break
+                    elif self.passer.attributes.playMakingAbility > 90:
+                        x = randint(1,100)
+                        if x > 80:
+                            self.receiver = target[0]
+                            self.defender = target[1]
+                            break
+
+                    targetList.remove(target)
+
+                if self.receiver is None:
                     passTarget = randint(1,10)
                     if passTarget < 2:
                         self.receiver = rb   
@@ -2403,6 +2413,7 @@ class Play():
                         else:
                             self.receiver = wr2
                             self.defender = db2
+
                 accRoll = randint(1,100)
                 receiverYACRating = (self.receiver.gameAttributes.agility+self.receiver.gameAttributes.speed+self.receiver.gameAttributes.playMakingAbility)/3
                 if accRoll < (self.passer.gameAttributes.overallRating - (self.defender.gameAttributes.overallRating/8)):
@@ -2411,7 +2422,7 @@ class Play():
                         passYards = randint(5,10)
                         yac = 0
                         x = randint(1,10)
-                        if (receiverYACRating + randint(-5,5)) > (self.defender.gameAttributes.overallRating + randint(-5,5)):
+                        if (receiverYACRating + randint(-10,10)) > (self.defender.gameAttributes.overallRating + randint(-10,10)):
                             if x < 2:
                                 yac = 0
                             elif x >= 2 and x < 5:
@@ -2514,36 +2525,38 @@ class Play():
                 if (((te.gameAttributes.agility+te.gameAttributes.speed+te.gameAttributes.xFactor)/3) + randint(-5,5)) > (((lb.gameAttributes.agility+lb.gameAttributes.speed+lb.gameAttributes.xFactor)/3) + randint(-5,5)):
                     te.isOpen = True
 
-                if wr1.isOpen and wr2.isOpen:
-                    x = randint(0,1)
-                    if x:
+                targetList = [(wr1,db1),(wr2,db2),(te,lb)]
+
+                while len(targetList) > 0:
+                    target = choice(targetList)
+
+                    if target[0].isOpen:
+                        self.receiver = target[0]
+                        self.defender = target[1]
+                        break
+                    elif self.passer.attributes.xFactor < 85:
+                        x = randint(1,100)
+                        if x > 70:
+                            self.receiver = target[0]
+                            self.defender = target[1]
+                            break
+                    elif self.passer.attributes.playMakingAbility > 90:
+                        x = randint(1,100)
+                        if x > 80:
+                            self.receiver = target[0]
+                            self.defender = target[1]
+                            break
+
+                    targetList.remove(target)
+
+                if self.receiver is None:
+                    x = randint(1,2)
+                    if x == 1:
                         self.receiver = wr1
                         self.defender = db1
                     else:
                         self.receiver = wr2
                         self.defender = db2
-                elif wr1.isOpen:
-                    self.receiver = wr1
-                    self.defender = db1
-                elif wr2.isOpen:
-                    self.receiver = wr2
-                    self.defender = db2
-                elif te.isOpen:
-                    self.receiver = te
-                    self.defender = lb
-                else:
-                    passTarget = randint(1,10)
-                    if passTarget < 2:
-                        self.receiver = te   
-                        self.defender = lb   
-                    else:
-                        x = randint(1,2)
-                        if x == 1:
-                            self.receiver = wr1
-                            self.defender = db1
-                        else:
-                            self.receiver = wr2
-                            self.defender = db2
                 accRoll = randint(1,100)
                 receiverYACRating = (self.receiver.gameAttributes.agility+self.receiver.gameAttributes.speed+self.receiver.gameAttributes.playMakingAbility)/3
                 if accRoll < (self.passer.gameAttributes.overallRating - (self.defender.gameAttributes.overallRating/5)):
@@ -2552,7 +2565,7 @@ class Play():
                         passYards = randint(11,20)
                         yac = 0
                         x = randint(1,10)
-                        if (receiverYACRating + randint(-5,5)) > (self.defender.gameAttributes.overallRating + randint(-5,5)):
+                        if (receiverYACRating + randint(-10,10)) > (self.defender.gameAttributes.overallRating + randint(-10,10)):
                             if x < 2:
                                 yac = 0
                             elif x >= 2 and x < 5:

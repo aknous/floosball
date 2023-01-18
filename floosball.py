@@ -1316,7 +1316,7 @@ async def offseason():
             pass
         player.offseasonTraining()
 
-    for x in range(len(teamList)):
+    for x in range(8):
         player = None
         seed = randint(15,100)
         y = randint(0,8)
