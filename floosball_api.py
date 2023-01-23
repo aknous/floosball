@@ -196,6 +196,19 @@ async def returnPlayers(id = None):
             playerDict['name'] = player.name
             playerDict['rank'] = player.serviceTime
             playerDict['id'] = player.id
+            playerDict['team'] = 'Retired'
+            playerDict['position'] = player.position.name
+            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['seasons'] = player.seasonsPlayed
+            playerList.append(playerDict)
+        return playerList
+    elif id == 'HoF':
+        for player in floosball.hallOfFame:
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['id'] = player.id
+            playerDict['team'] = 'Retired'
             playerDict['position'] = player.position.name
             playerDict['ratingStars'] = player.playerTier.value
             playerDict['seasons'] = player.seasonsPlayed
@@ -225,6 +238,127 @@ async def returnPlayers(id = None):
                 dict['ratingStars'] = player.playerTier.value
                 dict['term'] = player.term
                 dict['termRemaining'] = player.termRemaining
+                dict['championships'] = player.leagueChampionships
+                attDict = {}
+                if player.position is Position.QB:
+                    attDict['att1Name'] = 'Arm Strength'
+                    attDict['att2Name'] = 'Accuracy'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.armStrength - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.RB or isinstance(player, PlayerDefBasic):
+                    attDict['att1Name'] = 'Speed'
+                    attDict['att2Name'] = 'Power'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.WR or player.position is Position.DB:
+                    attDict['att1Name'] = 'Speed'
+                    attDict['att2Name'] = 'Hands'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.hands - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.TE:
+                    attDict['att1Name'] = 'Hands'
+                    attDict['att2Name'] = 'Power'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.hands - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.K:
+                    attDict['att1Name'] = 'Leg Strength'
+                    attDict['att2Name'] = 'Accuracy'
+                    attDict['att3Name'] = ''
+                    attDict['att1'] = round((((player.attributes.legStrength - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
+                    attDict['att3'] = 0
+                attDict['playmaking'] = round((((player.attributes.playMakingAbility - 60)/40)*4)+1)
+                attDict['xFactor'] = round((((player.attributes.xFactor - 60)/40)*4)+1)
+                dict['attributes'] = attDict
+                if player.seasonPerformanceRating > 0:
+                    dict['seasonPerformanceRating'] = round(((player.seasonPerformanceRating * 4)/100)+1)
+                else:
+                    dict['seasonPerformanceRating'] = 0
+                dict['stats'] = player.seasonStatsArchive
+                dict['allTimeStats'] = player.careerStatsDict
+                return dict
+        for player in floosball.retiredPlayersList:
+            player: Player
+            dict = {}
+            if player.id == id:
+                dict['name'] = player.name
+                dict['rank'] = player.serviceTime
+                dict['team'] = 'Retired'
+                dict['city'] = ''
+                dict['color'] = '#94a3b8'
+                dict['position'] = player.position.name
+                dict['ratingStars'] = player.playerTier.value
+                dict['term'] = player.term
+                dict['termRemaining'] = player.termRemaining
+                dict['championships'] = player.leagueChampionships
+                attDict = {}
+                if player.position is Position.QB:
+                    attDict['att1Name'] = 'Arm Strength'
+                    attDict['att2Name'] = 'Accuracy'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.armStrength - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.RB or isinstance(player, PlayerDefBasic):
+                    attDict['att1Name'] = 'Speed'
+                    attDict['att2Name'] = 'Power'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.WR or player.position is Position.DB:
+                    attDict['att1Name'] = 'Speed'
+                    attDict['att2Name'] = 'Hands'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.speed - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.hands - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.TE:
+                    attDict['att1Name'] = 'Hands'
+                    attDict['att2Name'] = 'Power'
+                    attDict['att3Name'] = 'Agility'
+                    attDict['att1'] = round((((player.attributes.hands - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.power - 60)/40)*4)+1)
+                    attDict['att3'] = round((((player.attributes.agility - 60)/40)*4)+1)
+                elif player.position is Position.K:
+                    attDict['att1Name'] = 'Leg Strength'
+                    attDict['att2Name'] = 'Accuracy'
+                    attDict['att3Name'] = ''
+                    attDict['att1'] = round((((player.attributes.legStrength - 60)/40)*4)+1)
+                    attDict['att2'] = round((((player.attributes.accuracy - 60)/40)*4)+1)
+                    attDict['att3'] = 0
+                attDict['playmaking'] = round((((player.attributes.playMakingAbility - 60)/40)*4)+1)
+                attDict['xFactor'] = round((((player.attributes.xFactor - 60)/40)*4)+1)
+                dict['attributes'] = attDict
+                if player.seasonPerformanceRating > 0:
+                    dict['seasonPerformanceRating'] = round(((player.seasonPerformanceRating * 4)/100)+1)
+                else:
+                    dict['seasonPerformanceRating'] = 0
+                dict['stats'] = player.seasonStatsArchive
+                dict['allTimeStats'] = player.careerStatsDict
+                return dict
+        for player in floosball.hallOfFame:
+            player: Player
+            dict = {}
+            if player.id == id:
+                dict['name'] = player.name
+                dict['rank'] = player.serviceTime
+                dict['team'] = 'Retired'
+                dict['city'] = ''
+                dict['color'] = '#94a3b8'
+                dict['position'] = player.position.name
+                dict['ratingStars'] = player.playerTier.value
+                dict['term'] = player.term
+                dict['termRemaining'] = player.termRemaining
+                dict['championships'] = player.leagueChampionships
                 attDict = {}
                 if player.position is Position.QB:
                     attDict['att1Name'] = 'Arm Strength'
@@ -582,7 +716,7 @@ async def returnHighlights(id = None):
         eventList = []
         highlights = []
         for x in range(len(floosball.activeSeason.leagueHighlights)):
-            if x < 10:
+            if x < 30:
                 highlights.append(floosball.activeSeason.leagueHighlights[x])
             else:
                 break
@@ -800,7 +934,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             if isinstance(player.team, Team):
                 topQbList.append(player)
-            if len(topQbList) == 3:
+            if len(topQbList) == 5:
                 break
             
         for player in topQbList:
@@ -830,7 +964,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             if isinstance(player.team, Team):
                 topRbList.append(player)
-            if len(topRbList) == 3:
+            if len(topRbList) == 5:
                 break
             
         for player in topRbList:
@@ -860,7 +994,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             if isinstance(player.team, Team):
                 topWrList.append(player)
-            if len(topWrList) == 3:
+            if len(topWrList) == 5:
                 break
             
         for player in topWrList:
@@ -890,7 +1024,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             if isinstance(player.team, Team):
                 topTeList.append(player)
-            if len(topTeList) == 3:
+            if len(topTeList) == 5:
                 break
             
         for player in topTeList:
@@ -920,7 +1054,7 @@ async def returnTopPlayers(pos = None):
             player: Player
             if isinstance(player.team, Team):
                 topKList.append(player)
-            if len(topKList) == 3:
+            if len(topKList) == 5:
                 break
             
         for player in topKList:

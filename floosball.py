@@ -14,7 +14,7 @@ import floosball_player as FloosPlayer
 import floosball_methods as FloosMethods
  
 
-__version__ = '0.6.0_alpha'
+__version__ = '0.6.5_alpha'
 
 config = None
 totalSeasons = 0
@@ -25,6 +25,8 @@ unusedNamesList = []
 freeAgentList = []
 rookieDraftList = []
 retiredPlayersList = []
+newlyRetiredPlayersList = []
+hallOfFame = []
 
 activeQbList = []
 activeRbList = []
@@ -502,6 +504,9 @@ class Season:
                     playoffDict['Floos Bowl'] = gameResults
                     freeAgencyOrder.append(game.losingTeam)
                     freeAgencyOrder.append(champ)
+                    for player in champ.rosterDict.values():
+                        player:FloosPlayer.Player
+                        player.leagueChampionships.append({'Season': seasonsPlayed+1, 'team': player.team.abbr, 'teamColor': player.team.color})
                 else:
                     playoffDict[game.id] = gameResults
                     for team in playoffTeamsList:
@@ -524,7 +529,9 @@ class Season:
 
 def getPlayerTerm(tier: FloosPlayer.PlayerTier):
         if tier is FloosPlayer.PlayerTier.TierS:
-            return randint(3,5)
+            return randint(4,6)
+        if tier is FloosPlayer.PlayerTier.TierA:
+            return randint(3,4)
         elif tier is FloosPlayer.PlayerTier.TierD:
             return 1
         else:
@@ -845,12 +852,12 @@ def getPlayers(_config):
 
                 if player['serviceTime'] == 'Rookie':
                     newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
-                elif player['serviceTime'] == 'Intermediate':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Intermediate
-                elif player['serviceTime'] == 'Professional':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Professional
-                elif player['serviceTime'] == 'Veteran':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran
+                elif player['serviceTime'] == 'Veteran1':
+                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
+                elif player['serviceTime'] == 'Veteran2':
+                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran2
+                elif player['serviceTime'] == 'Veteran3':
+                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran3
                 elif player['serviceTime'] == 'Retired':
                     newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Retired
 
@@ -1177,13 +1184,13 @@ async def offseason():
     for player in freeAgentList:
         player: FloosPlayer.Player
         player.freeAgentYears += 1
-        player.seasonPerformanceRating = 0
 
-        if player.freeAgentYears > 5:
+        if player.freeAgentYears > 8:
             x = randint(1,10)
             if x > 6:
                 player.team = 'Retired'
                 retiredPlayersList.append(player)
+                newlyRetiredPlayersList.append(player)
                 freeAgentList.remove(player)
                 activePlayerList.remove(player)
                 if player.position is FloosPlayer.Position.QB:
@@ -1227,31 +1234,31 @@ async def offseason():
 
 
     for team in teamList:
+        team.cutsAvailable = 1
 
         for k,v in team.rosterDict.items():
             v: FloosPlayer.Player
-            v.seasonPerformanceRating = 0
             if v.seasonsPlayed >= 1 and v.seasonsPlayed < 4:
-                v.serviceTime = FloosPlayer.PlayerServiceTime.Intermediate
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
             elif v.seasonsPlayed >= 4 and v.seasonsPlayed < 7:
-                v.serviceTime = FloosPlayer.PlayerServiceTime.Professional
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran2
             else:
-                v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran3
 
             v.termRemaining -= 1
             if v.termRemaining == 0:
                 retirePlayerBool = None
                 if v.seasonsPlayed > 15:
-                    x = randint(1,10)
-                    if x > 4:
+                    x = randint(1,100)
+                    if x > 30:
                         retirePlayerBool = True
                 elif v.seasonsPlayed > 10:
-                    x = randint(1,10)
-                    if x > 6:
+                    x = randint(1,100)
+                    if x > 80:
                         retirePlayerBool = True
                 elif v.seasonsPlayed >= 7:
-                    x = randint(1,10)
-                    if x > 8:
+                    x = randint(1,100)
+                    if x > 95:
                         retirePlayerBool = True
                 else:
                     retirePlayerBool = False
@@ -1259,9 +1266,11 @@ async def offseason():
                 if retirePlayerBool:
                     team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False})
                     v.previousTeam = team.name
+                    v.seasonPerformanceRating = 0
                     team.playerCap -= v.capHit
                     v.team = 'Retired'
                     retiredPlayersList.append(v)
+                    newlyRetiredPlayersList.append(v)
                     activePlayerList.remove(v)
                     if v.position is FloosPlayer.Position.QB:
                         activeQbList.remove(v)
@@ -1315,36 +1324,37 @@ async def offseason():
         if player.team is None:
             pass
         player.offseasonTraining()
+        player.seasonPerformanceRating = 0
 
-    for x in range(8):
+    for x in range(16):
         player = None
-        seed = randint(15,100)
-        y = randint(0,8)
+        seed = randint(30,100)
+        y = randint(0,10)
         if y == 0:
             player = FloosPlayer.PlayerQB(seed)
             activeQbList.append(player)
         elif y == 1:
             player = FloosPlayer.PlayerRB(seed)
             activeRbList.append(player)
-        elif y == 2:
+        elif y == 2 or y == 3:
             player = FloosPlayer.PlayerWR(seed)
             activeWrList.append(player)
-        elif y == 3:
+        elif y == 4:
             player = FloosPlayer.PlayerTE(seed)
             activeTeList.append(player)
-        elif y == 4:
+        elif y == 5:
             player = FloosPlayer.PlayerK(seed)
             activeKList.append(player)
-        elif y == 5:
+        elif y == 6 or y == 7:
             player = FloosPlayer.PlayerDB(seed)
             activeDbList.append(player)
-        elif y == 6:
+        elif y == 8:
             player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.LB, seed)
             activeLbList.append(player)
-        elif y == 7:
+        elif y == 9:
             player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DL, seed)
             activeDlList.append(player)
-        elif y == 8:
+        elif y == 10:
             player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DE, seed)
             activeDeList.append(player)
 
@@ -1410,6 +1420,151 @@ async def offseason():
                 continue
                 
             await asyncio.sleep(2)
+
+            if team.cutsAvailable > 0:
+                cutPlayer:FloosPlayer.Player = None
+                newPlayer:FloosPlayer.Player = None
+                eligiblePlayersToCutList = []
+                for k,v in team.rosterDict.items():
+                    v:FloosPlayer.Player
+                    if v is not None and v.termRemaining == 1 and v.playerTier.value < 3:
+                        eligiblePlayersToCutList.append(k)
+                while len(eligiblePlayersToCutList) > 0: 
+                    pos = choice(eligiblePlayersToCutList)
+                    currentPlayer:FloosPlayer.Player = team.rosterDict[pos]
+                    compPlayer:FloosPlayer.Player = None
+
+                    if pos == 'qb':
+                        if team.gmScore >= len(freeAgentQbList):
+                            i = len(freeAgentQbList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentQbList[randint(0,i)]
+                    elif pos == 'rb':
+                        if team.gmScore >= len(freeAgentRbList):
+                            i = len(freeAgentRbList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentRbList[randint(0,i)]
+                    elif pos == 'wr1' or pos == 'wr2':
+                        if team.gmScore >= len(freeAgentWrList):
+                            i = len(freeAgentWrList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentWrList[randint(0,i)]
+                    elif pos == 'te':
+                        if team.gmScore >= len(freeAgentTeList):
+                            i = len(freeAgentTeList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentTeList[randint(0,i)]
+                    elif pos == 'k':
+                        if team.gmScore >= len(freeAgentKList):
+                            i = len(freeAgentKList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentKList[randint(0,i)]
+                    elif pos == 'db1' or pos == 'db2':
+                        if team.gmScore >= len(freeAgentDbList):
+                            i = len(freeAgentDbList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentDbList[randint(0,i)]
+                    elif pos == 'lb':
+                        if team.gmScore >= len(freeAgentLbList):
+                            i = len(freeAgentLbList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentLbList[randint(0,i)]
+                    elif pos == 'de':
+                        if team.gmScore >= len(freeAgentDeList):
+                            i = len(freeAgentDeList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentDeList[randint(0,i)]
+                    elif pos == 'dl':
+                        if team.gmScore >= len(freeAgentDlList):
+                            i = len(freeAgentDlList) - 1
+                        else:
+                            i = team.gmScore    
+                        compPlayer = freeAgentDlList[randint(0,i)]
+
+                    if (compPlayer.playerTier.value - 2) > currentPlayer.playerTier.value:
+                        cutPlayer = currentPlayer
+                        newPlayer = compPlayer
+
+                        team.rosterDict[pos] = newPlayer
+                        newPlayer.term = getPlayerTerm(newPlayer.playerTier)
+                        newPlayer.termRemaining = newPlayer.term
+                        newPlayer.team = team
+                        cutPlayer.termRemaining = 0
+                        cutPlayer.team = 'Free Agent'
+                        cutPlayer.previousTeam = team.name
+                        team.playerCap -= cutPlayer.capHit
+                        team.playerCap += newPlayer.capHit
+                        freeAgentList.append(cutPlayer)
+                        freeAgentList.remove(newPlayer)
+                        team.rosterHistory.append({'season': seasonsPlayed+1, 'name': cutPlayer.name, 'pos': cutPlayer.position.name, 'tier': round((((cutPlayer.attributes.overallRating - 60)/40)*4)+1), 'isAddition': False, 'term': cutPlayer.term})
+                        team.rosterHistory.append({'season': seasonsPlayed+1, 'name': newPlayer.name, 'pos': newPlayer.position.name, 'tier': newPlayer.playerTier.value, 'isAddition': True, 'term': newPlayer.term})
+                        activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has cut {}'.format(team.name, cutPlayer.name)}})
+                        activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, newPlayer.name, newPlayer.position.name, newPlayer.term)}})
+                        
+                        if newPlayer.position is FloosPlayer.Position.QB:
+                            freeAgentQbList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.RB:
+                            freeAgentRbList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.WR:
+                            freeAgentWrList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.TE:
+                            freeAgentTeList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.K:
+                            freeAgentKList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.DB:
+                            freeAgentDbList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.LB:
+                            freeAgentLbList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.DE:
+                            freeAgentDeList.remove(newPlayer)
+                        elif newPlayer.position is FloosPlayer.Position.DL:
+                            freeAgentDlList.remove(newPlayer)
+
+                        if cutPlayer.position is FloosPlayer.Position.QB:
+                            freeAgentQbList.append(cutPlayer)
+                            list.sort(freeAgentQbList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.RB:
+                            freeAgentRbList.append(cutPlayer)
+                            list.sort(freeAgentRbList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.WR:
+                            freeAgentWrList.append(cutPlayer)
+                            list.sort(freeAgentWrList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.TE:
+                            freeAgentTeList.append(cutPlayer)
+                            list.sort(freeAgentTeList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.K:
+                            freeAgentKList.append(cutPlayer)
+                            list.sort(freeAgentKList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.DB:
+                            freeAgentDbList.append(cutPlayer)
+                            list.sort(freeAgentDbList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.LB:
+                            freeAgentLbList.append(cutPlayer)
+                            list.sort(freeAgentLbList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.DE:
+                            freeAgentDeList.append(cutPlayer)
+                            list.sort(freeAgentDeList, key=lambda player: player.attributes.skillRating, reverse=True)
+                        elif cutPlayer.position is FloosPlayer.Position.DL:
+                            freeAgentDlList.append(cutPlayer)
+                            list.sort(freeAgentDlList, key=lambda player: player.attributes.skillRating, reverse=True)
+
+                        break
+
+                    else:
+                        eligiblePlayersToCutList.remove(pos)
+
+                team.cutsAvailable -= 1
+                if cutPlayer is not None:
+                    continue
+
 
             for k,v in team.rosterDict.items():
                 if v is None:
@@ -1506,6 +1661,7 @@ async def offseason():
         team.faComplete = False
         team.updateDefense()
     sortDefenses()
+    inductHallOfFame()
     
 def getPerformanceRating():
     qbStatsPassCompList = []
@@ -1572,7 +1728,7 @@ def getPerformanceRating():
             rcvYardsRating = stats.percentileofscore(wrStatsRcvYardsList, wr.seasonStatsDict['receiving']['yards'], 'rank')
             yacRating = stats.percentileofscore(wrStatsYACList, wr.seasonStatsDict['receiving']['yac'], 'rank')
             tdsRating = stats.percentileofscore(wrStatsTdsList, wr.seasonStatsDict['receiving']['tds'], 'rank')
-            wr.seasonPerformanceRating = round(((rcvPercRating*1)+(rcvYardsRating*.8)+(tdsRating*1)+(yacRating*1.2)+(receptionsRating*1))/5)
+            wr.seasonPerformanceRating = round(((rcvPercRating*1)+(rcvYardsRating*1.2)+(tdsRating*1)+(yacRating*1)+(receptionsRating*.8))/5)
 
     teStatsReceptionsList = []
     teStatsRcvPercList = []
@@ -1752,7 +1908,17 @@ def getUnusedNames():
                 unusedNamesList.append(name)
     jsonFile.close()
 
-
+def inductHallOfFame():
+    if len(newlyRetiredPlayersList) > 0:
+        for player in newlyRetiredPlayersList:
+            player:FloosPlayer.Player
+            if player.playerTier.value == 5:
+                hallOfFame.append(player)
+                activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has been inducted into the Floosball Hall of Fame'.format(player.name)}})
+            elif player.playerTier.value == 4 and len(player.leagueChampionships):
+                hallOfFame.append(player)
+                activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has been inducted into the Floosball Hall of Fame'.format(player.name)}})
+        newlyRetiredPlayersList.clear()
 
 async def startLeague():
     global cap
@@ -1824,6 +1990,6 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        await asyncio.sleep(60)
+        await asyncio.sleep(120)
         activeSeason.clearSeasonStats()
         await offseason()

@@ -25,9 +25,9 @@ class PlayerTier(enum.Enum):
 
 class PlayerServiceTime(enum.Enum):
     Rookie = 'Rookie'
-    Intermediate = 'Experienced'
-    Professional = 'Seasoned'
-    Veteran = 'Veteran'
+    Veteran1 = 'Established'
+    Veteran2 = 'Veteran'
+    Veteran3 = 'Grizzled Veteran'
     Retired = 'Retired'
 
 playerStatsDict =   {   
@@ -152,6 +152,7 @@ class Player:
         self.playerRating = 0
         self.freeAgentYears = 0
         self.serviceTime = PlayerServiceTime.Rookie
+        self.leagueChampionships = []
 
         self.gameStatsDict = copy.deepcopy(playerStatsDict)
         self.seasonStatsDict = copy.deepcopy(playerStatsDict)
