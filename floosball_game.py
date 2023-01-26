@@ -1150,7 +1150,7 @@ class Game:
         elif self.play.playType == PlayType.FieldGoal:
             text = '{}yd Field Goal attempt by {}'.format(self.play.fgDistance, self.play.kicker.name)
         elif self.play.playType is PlayType.Punt:
-            text = '{} punts'.format(self.play.offense.name, self.play.playResult.value)
+            text = '{} punts'.format(self.play.offense.rosterDict['k'].name, self.play.playResult.value)
         
         self.play.playText = text
 

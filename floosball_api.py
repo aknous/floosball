@@ -190,6 +190,18 @@ async def returnPlayers(id = None):
                 playerDict['team'] = player.team.name
             playerList.append(playerDict)
         return playerList
+    elif id == 'FA':
+        for player in floosball.freeAgentList:
+            playerDict = {}
+            playerDict['name'] = player.name
+            playerDict['rank'] = player.serviceTime
+            playerDict['id'] = player.id
+            playerDict['team'] = 'Free Agent'
+            playerDict['position'] = player.position.name
+            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['seasons'] = player.seasonsPlayed
+            playerList.append(playerDict)
+        return playerList
     elif id == 'Retired':
         for player in floosball.retiredPlayersList:
             playerDict = {}
