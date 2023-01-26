@@ -1115,8 +1115,8 @@ def getTeams(_config):
             team = FloosTeam.Team(x['name'])
             team.city = x['city']
             team.abbr = x['abbr']
-            #team.color = x['color']
-            team.color = colorList.pop(randint(0,len(colorList)-1))
+            team.color = x['color']
+            #team.color = colorList.pop(randint(0,len(colorList)-1))
             team.id = id
             teamList.append(team)
             id += 1

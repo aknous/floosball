@@ -17,37 +17,43 @@
             "city": "New York",
             "name": "Strangers",
             "abbr": "NYS",
-            "color": "#c0392b"
+            "color": "#EA2027",
+            "dontChangeColor": true
         },
         {
             "city": "Chicago",
             "name": "Casseroles",
             "abbr": "CHI",
-            "color": "#651FFF"
+            "color": "#651FFF",
+            "dontChangeColor": true
         },
         {
             "city": "Boston",
             "name": "Normies",
             "abbr": "BOS",
-            "color": "#16a085"
+            "color": "#16a085",
+            "dontChangeColor": true
         },
         {
             "city": "Philadelphia",
             "name": "Broads",
             "abbr": "PHI",
-            "color": "#8e44ad"
+            "color": "#26A69A",
+            "dontChangeColor": true
         },
         {
             "city": "Atlanta",
             "name": "Pacifics",
             "abbr": "ATL",
-            "color": "#3498db"
+            "color": "#3498db",
+            "dontChangeColor": true
         },
         {
             "city": "Pittsburgh",
             "name": "Melons",
             "abbr": "PIT",
-            "color": "#27ae60"
+            "color": "#27ae60",
+            "dontChangeColor": true
         },
         {
             "city": "Denver",
@@ -59,37 +65,43 @@
             "city": "Seattle",
             "name": "Cranes",
             "abbr": "SEA",
-            "color": "#60a3bc"
+            "color": "#60a3bc",
+            "dontChangeColor": true
         },
         {
             "city": "Cleveland",
             "name": "Rocks",
             "abbr": "CLE",
-            "color": "#EA2027"
+            "color": "#EA2027",
+            "dontChangeColor": true
         },
         {
             "city": "San Francisco",
             "name": "Phones",
             "abbr": "SFP",
-            "color": "#0fbcf9"
+            "color": "#0fbcf9",
+            "dontChangeColor": true
         },
         {
             "city": "Tampa Bay",
             "name": "Bees",
             "abbr": "TBB",
-            "color": "#FFC400"
+            "color": "#FFC400",
+            "dontChangeColor": true
         },
         {
             "city": "Miami",
             "name": "Jetskis",
             "abbr": "MIA",
-            "color": "#26C6DA"
+            "color": "#ff00a0",
+            "dontChangeColor": true
         },
         {
             "city": "Minnesota",
             "name": "Fuzz",
             "abbr": "MIN",
-            "color": "#ef5777"
+            "color": "#D500F9",
+            "dontChangeColor": true
         },
         {
             "city": "San Diego",
@@ -101,25 +113,28 @@
             "city": "Phoenix",
             "name": "Dry Heat",
             "abbr": "PHX",
-            "color": "#009432"
+            "color": "#8e44ad",
+            "dontChangeColor": true
         },
         {
             "city": "Las Vegas",
             "name": "Residents",
             "abbr": "LVR",
-            "color": "#6F1E51"
+            "color": "#9C27B0",
+            "dontChangeColor": true
         },
         {
             "city": "Anaheim",
             "name": "Rhyme",
             "abbr": "ANA",
-            "color": "#D980FA"
+            "color": "#58D68D"
         },
         {
             "city": "Carolina",
             "name": "Boil",
             "abbr": "CAR",
-            "color": "#B53471"
+            "color": "#ff4757",
+            "dontChangeColor": true
         },
         {
             "city": "Portland",
@@ -131,25 +146,27 @@
             "city": "Nashville",
             "name": "Fingers",
             "abbr": "NSH",
-            "color": "#9C27B0"
+            "color": "#ff6348"
         },
         {
             "city": "Washington",
             "name": "Mimosas",
             "abbr": "WAS",
-            "color": "#F79F1F"
+            "color": "#ffa801",
+            "dontChangeColor": true
         },
         {
             "city": "Austin",
             "name": "Jam Band",
             "abbr": "AUS",
-            "color": "#2d98da"
+            "color": "#FF6D00",
+            "dontChangeColor": true
         },
         {
             "city": "St. Louis",
             "name": "Shave",
             "abbr": "STL",
-            "color": "#4b6584"
+            "color": "#26C6DA"
         },
         {
             "city": "Detroit",
