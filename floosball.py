@@ -39,7 +39,6 @@ activeDeList = []
 activeDlList = []
 playerLists = [activeQbList, activeRbList, activeWrList, activeTeList, activeKList, activeDbList, activeLbList, activeDeList, activeDlList]
 
-rookieDraftHistoryDict = {}
 freeAgencyOrder = []
 freeAgencyHistoryDict = {}
 teamList = []
@@ -47,29 +46,41 @@ divisionList = []
 scheduleList = []
 seasonList = []
 activeSeason = None
+leagueChampion: FloosTeam.Team = None
+championshipHistory = []
 scheduleScheme = [
-    ('1112','1314','2122','2324','3132','3334','4142','4344'),
-    ('1311','1412','2321','2422','3331','3432','4341','4442'),
-    ('1114','1213','2124','2223','3134','3233','4144','4243'),
+    ('1112','1314','1516','2122','2324','2526','3132','3334','3536','4142','4344','4546'),
+    ('1311','1215','1614','2321','2225','2624','3331','3235','3634','4341','4245','4644'),
+    ('1116','1213','1415','2126','2223','2425','3136','3233','3435','4146','4243','4445'),
+    ('1114','1612','1513','2124','2622','2523','3134','3632','3533','4144','4642','4543'),
+    ('1511','1412','1316','2521','2422','2326','3531','3432','3336','4541','4442','4346'),
 
-    ('1121','1222','1323','1424','3141','3242','3343','3444'),
-    ('2112','2211','2314','2413','4132','4231','4334','4433'),
-    ('1123','1224','1321','1422','3143','3244','3341','3442'),
-    ('2114','2213','2312','2411','4134','4233','4332','4431'),
+    ('1121','1222','1323','1424','1525','1626','3141','3242','3343','3444','3545','3646'),
+    ('2112','2213','2314','2415','2516','2611','4132','4233','4334','4435','4536','4631'),
+    ('1123','1224','1325','1426','1521','1622','3143','3244','3345','3446','3541','3642'),
+    ('2114','2215','2316','2411','2512','2613','4134','4235','4336','4431','4532','4633'),
+    ('1125','1226','1321','1422','1523','1624','3145','3246','3341','3442','3543','3644'),
+    ('2116','2211','2312','2413','2514','2615','4136','4231','4332','4433','4534','4635'),
 
-    ('1131','1232','1333','1434','2141','2242','2343','2444'),
-    ('3112','3211','3314','3413','4122','4221','4324','4423'),
-    ('1133','1234','1331','1432','2143','2244','2341','2442'),
-    ('3114','3213','3312','3411','4124','4223','4322','4421'),
+    ('1131','1232','1333','1434','1535','1636','2141','2242','2343','2444','2545','2646'),
+    ('3112','3213','3314','3415','3516','3611','4122','4223','4324','4425','4526','4621'),
+    ('1133','1234','1335','1436','1531','1632','2143','2244','2345','2446','2541','2642'),
+    ('3114','3215','3316','3411','3512','3613','4124','4225','4326','4421','4522','4623'),
+    ('1135','1236','1331','1432','1533','1634','2145','2246','2341','2442','2543','2644'),
+    ('3116','3211','3312','3413','3514','3615','4126','4221','4322','4423','4524','4625'),
 
-    ('1141','1242','1343','1444','2131','2232','2333','2434'),
-    ('4112','4211','4314','4413','3122','3221','3324','3423'),
-    ('1143','1244','1341','1442','2133','2234','2331','2432'),
-    ('4114','4213','4312','4411','3124','3223','3322','3421'),
+    ('1141','1242','1343','1444','1545','1646','2131','2232','2333','2434','2535','2636'),
+    ('4112','4213','4314','4415','4516','4611','3122','3223','3324','3425','3526','3621'),
+    ('1143','1244','1345','1446','1541','1642','2133','2234','2335','2436','2531','2632'),
+    ('4114','4215','4316','4411','4512','4613','3124','3225','3326','3421','3522','3623'),
+    ('1145','1246','1341','1442','1543','1644','2135','2236','2331','2432','2533','2634'),
+    ('4116','4211','4312','4413','4514','4615','3126','3221','3322','3423','3524','3625'),
 
-    ('1211','1413','2221','2423','3231','3433','4241','4443'),
-    ('1113','1214','2123','2224','3133','3234','4143','4244'),
-    ('1411','1312','2421','2322','3431','3332','4441','4342')]
+    ('1211','1413','1615','2122','2423','2625','3231','3433','3635','4241','4443','4645'),
+    ('1113','1512','1416','2123','2522','2426','3133','3532','3436','4143','4542','4446'),
+    ('1611','1312','1514','2621','2322','2524','3631','3332','3534','4641','4342','4544'),
+    ('1411','1216','1315','2421','2226','2325','3431','3236','3335','4441','4246','4345'),
+    ('1115','1214','1613','2125','2224','2623','3135','3234','3633','4145','4244','4643')]
 
 
 colorList = [   
@@ -317,6 +328,10 @@ class Season:
 
         for team in teamList:
             team: FloosTeam.Team
+            roster = []
+            for player in team.rosterDict.values():
+                player: FloosPlayer.Player
+                roster.append({'name': player.name, 'pos': player.position.name, 'rating': player.playerTier.value, 'termRemaining': player.termRemaining, 'id': player.id})
             team.statArchive.insert(0,team.seasonTeamStats)
             team.seasonTeamStats = copy.deepcopy(FloosTeam.teamStatsDict)
             team.schedule = []
@@ -324,6 +339,7 @@ class Season:
 
     async def startSeason(self):
         global freeAgencyOrder
+        global leagueChampion
         weekDict = {}
         seasonDict = {}
         gameDictTemp = {}
@@ -394,6 +410,9 @@ class Season:
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
             await asyncio.sleep(30)
 
+        list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+        bestTeam:FloosTeam.Team = teamList[0]
+        bestTeam.regularSeasonChampions.append('Season {}'.format(seasonsPlayed+1))
         #seasonDict['games'] = weekDict
         leagueChampion = await self.playPlayoffs()
 
@@ -470,24 +489,33 @@ class Season:
         playoffDict = {}
         playoffTeamsList = []
         nonDivWinnersList = []
+        byeTeamList = []
         strCurrentSeason = 'season{}'.format(self.currentSeason)
         x = 0
         for division in divisionList:
             list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            division.teamList[0].divisionChampionships.append({'season': 'Season {}'.format(seasonsPlayed+1), 'division': division.name})
             division.teamList[0].seasonTeamStats['divPLace'] = '1st'
             division.teamList[1].seasonTeamStats['divPLace'] = '2nd'
             division.teamList[2].seasonTeamStats['divPLace'] = '3rd'
             division.teamList[3].seasonTeamStats['divPLace'] = '4th'
+            if len(division.teamList) == 6:
+                division.teamList[4].seasonTeamStats['divPLace'] = '5th'
+                division.teamList[5].seasonTeamStats['divPLace'] = '6th'
+
             playoffTeamsList.append(division.teamList[0])
             nonDivWinnersList.append(division.teamList[1])
             nonDivWinnersList.append(division.teamList[2])
             nonDivWinnersList.append(division.teamList[3])
+            nonDivWinnersList.append(division.teamList[4])
+            nonDivWinnersList.append(division.teamList[5])
 
         list.sort(nonDivWinnersList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-        playoffTeamsList.append(nonDivWinnersList.pop(0))
-        playoffTeamsList.append(nonDivWinnersList.pop(0))
-        playoffTeamsList.append(nonDivWinnersList.pop(0))
-        playoffTeamsList.append(nonDivWinnersList.pop(0))
+        for x in range(len(nonDivWinnersList)):
+            playoffTeamsList.append(nonDivWinnersList.pop(0))
+            if x == 7:
+                break
+        
         freeAgencyOrder.extend(nonDivWinnersList)
         list.sort(freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
 
@@ -508,11 +536,22 @@ class Season:
             playoffGamesTaskList = []
             self.leagueHighlights = []
             currentRound = x + 1
-            hiSeed = 0
-            lowSeed = len(playoffTeamsList) - 1
             gameNumber = 1
 
             list.sort(playoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+            if len(playoffTeamsList) == 12:
+                for y in range(4):
+                    byeTeamList.append(playoffTeamsList.pop(0))
+
+            if len(playoffTeamsList) == 4 and len(byeTeamList) == 4:
+                playoffTeamsList.extend(byeTeamList)
+                byeTeamList.clear()
+                list.sort(playoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+            hiSeed = 0
+            lowSeed = len(playoffTeamsList) - 1
+
             while lowSeed > hiSeed:
                 newGame = FloosGame.Game(playoffTeamsList[hiSeed], playoffTeamsList[lowSeed])
                 newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
@@ -545,14 +584,22 @@ class Season:
                 if len(playoffGamesList) == 1:
                     playoffTeamsList.clear()
                     game.winningTeam.leagueChampionships.append('Season {}'.format(seasonsPlayed+1))
-                    champ = game.winningTeam
-                    game.losingTeam.eliminated = True
+                    champ: FloosTeam.Team = game.winningTeam
+                    runnerUp: FloosTeam.Team = game.losingTeam
+                    runnerUp.eliminated = True
                     playoffDict['Floos Bowl'] = gameResults
-                    freeAgencyOrder.append(game.losingTeam)
+                    freeAgencyOrder.append(runnerUp)
                     freeAgencyOrder.append(champ)
                     for player in champ.rosterDict.values():
                         player:FloosPlayer.Player
                         player.leagueChampionships.append({'Season': seasonsPlayed+1, 'team': player.team.abbr, 'teamColor': player.team.color})
+                    
+                    championshipHistory.append({'champ': '{} {}'.format(champ.city, champ.name), 
+                                                'champColor': champ.color, 
+                                                'champId': champ.id, 
+                                                'runnerUp': '{} {}'.format(runnerUp.city, runnerUp.name),
+                                                'runnerUpColor': runnerUp.color,
+                                                'runnerUpId': runnerUp.id})
                 else:
                     playoffDict[game.id] = gameResults
                     for team in playoffTeamsList:
@@ -791,7 +838,6 @@ def playerDraft():
             selectedPlayer.termRemaining = selectedPlayer.term
             selectedPlayer.seasonStatsDict['team'] = selectedPlayer.team.name
             team.playerCap += selectedPlayer.capHit
-            team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True, 'term': selectedPlayer.term})
 
         draftOrderList.reverse()
                 
@@ -975,7 +1021,7 @@ def getPlayers(_config):
         getUnusedNames()
 
     else:
-        numOfPlayers = 200
+        numOfPlayers = 300
         id = 1
         for x in _config['players']:
             unusedNamesList.append(x)
@@ -1069,6 +1115,7 @@ def getTeams(_config):
             team = FloosTeam.Team(x['name'])
             team.city = x['city']
             team.abbr = x['abbr']
+            #team.color = x['color']
             team.color = colorList.pop(randint(0,len(colorList)-1))
             team.id = id
             teamList.append(team)
@@ -1310,7 +1357,6 @@ async def offseason():
                     retirePlayerBool = False
 
                 if retirePlayerBool:
-                    team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': v.playerTier.value, 'isAddition': False})
                     v.previousTeam = team.name
                     v.seasonPerformanceRating = 0
                     team.playerCap -= v.capHit
@@ -1357,7 +1403,6 @@ async def offseason():
                         name += ' Jr.'
                     unusedNamesList.append(name)
                 else:
-                    team.rosterHistory.append({'season': seasonsPlayed+1, 'name': v.name, 'pos': v.position.name, 'tier': round((((v.attributes.overallRating - 60)/40)*4)+1), 'isAddition': False, 'term': v.term})
                     v.previousTeam = team.name
                     team.playerCap -= v.capHit
                     v.team = 'Free Agent'
@@ -1372,9 +1417,9 @@ async def offseason():
         player.offseasonTraining()
         player.seasonPerformanceRating = 0
 
-    for x in range(16):
+    for x in range(30):
         player = None
-        seed = randint(30,100)
+        seed = randint(1,100)
         y = randint(0,10)
         if y == 0:
             player = FloosPlayer.PlayerQB(seed)
@@ -1480,6 +1525,41 @@ async def offseason():
                     currentPlayer:FloosPlayer.Player = team.rosterDict[pos]
                     compPlayer:FloosPlayer.Player = None
 
+                    if pos == 'qb' and len(freeAgentQbList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'rb' and len(freeAgentRbList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'wr1' and len(freeAgentWrList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'wr2' and len(freeAgentWrList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'te' and len(freeAgentTeList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'k' and len(freeAgentKList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'db1' and len(freeAgentDbList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'db2' and len(freeAgentDbList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'lb' and len(freeAgentLbList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'de' and len(freeAgentDeList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+                    if pos == 'dl' and len(freeAgentDlList) == 0:
+                        eligiblePlayersToCutList.remove(pos)
+                        pos = choice(eligiblePlayersToCutList)
+
+
                     if pos == 'qb':
                         if team.gmScore >= len(freeAgentQbList):
                             i = len(freeAgentQbList) - 1
@@ -1550,8 +1630,6 @@ async def offseason():
                         team.playerCap += newPlayer.capHit
                         freeAgentList.append(cutPlayer)
                         freeAgentList.remove(newPlayer)
-                        team.rosterHistory.append({'season': seasonsPlayed+1, 'name': cutPlayer.name, 'pos': cutPlayer.position.name, 'tier': round((((cutPlayer.attributes.overallRating - 60)/40)*4)+1), 'isAddition': False, 'term': cutPlayer.term})
-                        team.rosterHistory.append({'season': seasonsPlayed+1, 'name': newPlayer.name, 'pos': newPlayer.position.name, 'tier': newPlayer.playerTier.value, 'isAddition': True, 'term': newPlayer.term})
                         activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has cut {}'.format(team.name, cutPlayer.name)}})
                         activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, newPlayer.name, newPlayer.position.name, newPlayer.term)}})
                         
@@ -1691,7 +1769,6 @@ async def offseason():
                 selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
                 selectedPlayer.termRemaining = selectedPlayer.term
                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, selectedPlayer.name, selectedPlayer.position.name, selectedPlayer.term)}})
-                team.rosterHistory.append({'season': seasonsPlayed+1, 'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'tier': selectedPlayer.playerTier.value, 'isAddition': True, 'term': selectedPlayer.term})
                 freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.skillRating, 'tier': selectedPlayer.playerTier.value, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "Starting"}
                 continue
             else:
@@ -1774,7 +1851,7 @@ def getPerformanceRating():
             rcvYardsRating = stats.percentileofscore(wrStatsRcvYardsList, wr.seasonStatsDict['receiving']['yards'], 'rank')
             yacRating = stats.percentileofscore(wrStatsYACList, wr.seasonStatsDict['receiving']['yac'], 'rank')
             tdsRating = stats.percentileofscore(wrStatsTdsList, wr.seasonStatsDict['receiving']['tds'], 'rank')
-            wr.seasonPerformanceRating = round(((rcvPercRating*1)+(rcvYardsRating*1.2)+(tdsRating*1)+(yacRating*1)+(receptionsRating*.8))/5)
+            wr.seasonPerformanceRating = round(((rcvPercRating*.4)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(yacRating*1.2)+(receptionsRating*1))/5)
 
     teStatsReceptionsList = []
     teStatsRcvPercList = []
@@ -1795,7 +1872,7 @@ def getPerformanceRating():
             rcvPercRating = stats.percentileofscore(teStatsRcvPercList, te.seasonStatsDict['receiving']['rcvPerc'], 'rank')
             rcvYardsRating = stats.percentileofscore(teStatsRcvYardsList, te.seasonStatsDict['receiving']['yards'], 'rank')
             tdsRating = stats.percentileofscore(teStatsTdsList, te.seasonStatsDict['receiving']['tds'], 'rank')
-            te.seasonPerformanceRating = round(((rcvPercRating*1)+(rcvYardsRating*.8)+(tdsRating*1.2)+(receptionsRating*1))/4)
+            te.seasonPerformanceRating = round(((rcvPercRating*.6)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(receptionsRating*1))/4)
 
     kStatsFgPercList = []
     kStatsFgsList = []

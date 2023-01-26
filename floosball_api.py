@@ -796,32 +796,6 @@ async def returnHighlights(id = None):
         else:
             return 'Game Not Found'
 
-@app.get('/draftResults')
-async def returnDraftResults(season = None, id = None):
-    if id is None:
-        if season is None:
-            return floosball.rookieDraftHistoryDict
-        else:
-            return floosball.rookieDraftHistoryDict['offseason {}'.format(season)]
-    else:
-        for team in floosball.teamList:
-            team: Team
-            if team.id == int(id):
-                return team.draftHistory
-
-@app.get('/freeAgency')
-async def returnDraftResults(season = None, id = None):
-    if id is None:
-        if season is None:
-            return floosball.freeAgencyHistoryDict
-        else:
-            return floosball.freeAgencyHistoryDict['offseason {}'.format(season)]
-    else:
-        for team in floosball.teamList:
-            team: Team
-            if team.id == int(id):
-                return team.freeAgentHistory
-
 @app.get('/rosterHistory')
 async def returnTeamRosters(id = None):
     team: Team
@@ -1075,6 +1049,12 @@ async def returnTopPlayers(pos = None):
 @app.get('/seasonInfo')
 async def returnSeasonInfo():
     return {'season': floosball.activeSeason.currentSeason, 'currentWeek': floosball.activeSeason.currentWeek, 'currentWeekText': floosball.activeSeason.currentWeekText, 'totalWeeks': len(floosball.scheduleList)}
+
+@app.get('/champion')
+async def returnChampion():
+    if isinstance(floosball.leagueChampion, Team):
+        return {'team': '{} {}'.format(floosball.leagueChampion.city, floosball.leagueChampion.name), 'color': floosball.leagueChampion.color, 'id': floosball.leagueChampion.id}
+    else: return {}
             
 
 @app.get('/info')

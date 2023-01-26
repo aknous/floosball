@@ -81,7 +81,9 @@ class Team:
         self.defenseOverallRating = 0
         self.defenseTier = 0
         self.overallRating = 0
+        self.divisionChampionships = []
         self.leagueChampionships = []
+        self.regularSeasonChampions = []
         self.playoffAppearances = 0
         self.defenseSeasonPerformanceRating = 0
         self.playerCap = 0
@@ -90,7 +92,6 @@ class Team:
         self.eliminated = False
         self.faComplete = False
         self.schedule = []
-        self.freeAgentHistory = []
         self.rosterHistory = []
         self.statArchive = []
 

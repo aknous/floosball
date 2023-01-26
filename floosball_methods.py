@@ -167,7 +167,7 @@ def getStat(min, max, weight):
 def getPower(x, y):
     z = 1
     while z < y:
-        if (x**z) == y:
+        if (x**z) >= y:
             return z
         else:
             z += 1

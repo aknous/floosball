@@ -1,7 +1,7 @@
 {
     "leagueConfig": {
         "cap": 30,
-        "totalSeasons": 20,
+        "totalSeasons": 10,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
         "lastSeason": 0
@@ -17,97 +17,145 @@
             "city": "New York",
             "name": "Strangers",
             "abbr": "NYS",
-            "color": "#f97316"
+            "color": "#c0392b"
         },
         {
             "city": "Chicago",
             "name": "Casseroles",
             "abbr": "CHI",
-            "color": "#06b6d4"
+            "color": "#651FFF"
         },
         {
             "city": "Boston",
             "name": "Normies",
             "abbr": "BOS",
-            "color": "#22c55e"
+            "color": "#16a085"
         },
         {
             "city": "Philadelphia",
             "name": "Broads",
             "abbr": "PHI",
-            "color": "#ef4444"
+            "color": "#8e44ad"
         },
         {
             "city": "Atlanta",
             "name": "Pacifics",
             "abbr": "ATL",
-            "color": "#0ea5e9"
+            "color": "#3498db"
         },
         {
             "city": "Pittsburgh",
             "name": "Melons",
             "abbr": "PIT",
-            "color": "#14b8a6"
+            "color": "#27ae60"
         },
         {
             "city": "Denver",
             "name": "Blueberries",
             "abbr": "DEN",
-            "color": "#a855f7"
+            "color": "#1e3799"
         },
         {
             "city": "Seattle",
             "name": "Cranes",
             "abbr": "SEA",
-            "color": "#8b5cf6"
+            "color": "#60a3bc"
         },
         {
             "city": "Cleveland",
             "name": "Rocks",
             "abbr": "CLE",
-            "color": "#64748b"
+            "color": "#EA2027"
         },
         {
             "city": "San Francisco",
             "name": "Phones",
             "abbr": "SFP",
-            "color": "#84cc16"
+            "color": "#0fbcf9"
         },
         {
             "city": "Tampa Bay",
             "name": "Bees",
             "abbr": "TBB",
-            "color": "#eab308"
+            "color": "#FFC400"
         },
         {
             "city": "Miami",
             "name": "Jetskis",
             "abbr": "MIA",
-            "color": "#3b82f6"
+            "color": "#26C6DA"
         },
         {
             "city": "Minnesota",
             "name": "Fuzz",
             "abbr": "MIN",
-            "color": "#d946ef"
+            "color": "#ef5777"
         },
         {
             "city": "San Diego",
             "name": "Sand Dollars",
             "abbr": "SND",
-            "color": "#f59e0b"
+            "color": "#487eb0"
         },
         {
             "city": "Phoenix",
             "name": "Dry Heat",
             "abbr": "PHX",
-            "color": "#10b981"
+            "color": "#009432"
         },
         {
             "city": "Las Vegas",
             "name": "Residents",
             "abbr": "LVR",
-            "color": "#6366f1"
+            "color": "#6F1E51"
+        },
+        {
+            "city": "Anaheim",
+            "name": "Rhyme",
+            "abbr": "ANA",
+            "color": "#D980FA"
+        },
+        {
+            "city": "Carolina",
+            "name": "Boil",
+            "abbr": "CAR",
+            "color": "#B53471"
+        },
+        {
+            "city": "Portland",
+            "name": "Lattes",
+            "abbr": "POR",
+            "color": "#B53471"
+        },
+        {
+            "city": "Nashville",
+            "name": "Fingers",
+            "abbr": "NSH",
+            "color": "#9C27B0"
+        },
+        {
+            "city": "Washington",
+            "name": "Mimosas",
+            "abbr": "WAS",
+            "color": "#F79F1F"
+        },
+        {
+            "city": "Austin",
+            "name": "Jam Band",
+            "abbr": "AUS",
+            "color": "#2d98da"
+        },
+        {
+            "city": "St. Louis",
+            "name": "Shave",
+            "abbr": "STL",
+            "color": "#4b6584"
+        },
+        {
+            "city": "Detroit",
+            "name": "Beam",
+            "abbr": "DET",
+            "color": "#1B9CFC"
         }
     ],
     "players": [
@@ -783,6 +831,36 @@
         "Sandra 5",
         "Matilda Tigerseye",
         "Reverend Memes",
-        "Socks McElroy"
+        "Socks McElroy",
+        "Fozzie Montgomery",
+        "Spit Odilon",
+        "Wispy July",
+        "Tomato Kablooey",
+        "Rosa Phonetag",
+        "Antimony Robinson",
+        "Lohnny Roosevelt",
+        "Cottan Jean",
+        "Gordon Frogwild",
+        "Updog Gillette",
+        "Ollie Olly",
+        "Trolley Sanchez",
+        "Ordinary Cornetto",
+        "Spurlock Mornfrey",
+        "Rusty Apology",
+        "Vesper Tamualsson",
+        "Hawk Vasser",
+        "Warrick Sharpie",
+        "Harlan Paulsen",
+        "Minigun Belmonte",
+        "Cookie Contessa",
+        "Julius Freeware",
+        "Brerb Wheeler",
+        "Jonboy Montanya",
+        "Xandra McHorse",
+        "Cube Kettle",
+        "Dinosaur Pastel",
+        "Anubis Gemerald",
+        "Ducks Fitzgerald",
+        "Thrush Goodwin"
     ]
 }
