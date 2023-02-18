@@ -1067,7 +1067,7 @@ def getPlayers(_config):
             player.id = id
             activePlayerList.append(player)
             id += 1
-        saveUnusedNames()
+        #saveUnusedNames()
 
     sortPlayers()
 

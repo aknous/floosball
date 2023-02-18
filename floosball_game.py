@@ -1462,6 +1462,8 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+                    self.play.gradePlay()
+                    
 
                 if self.totalPlays == 132 and self.homeScore != self.awayScore:
                     break
@@ -2007,6 +2009,12 @@ class Play():
         self.defense = game.defensiveTeam
         self.homeTeamScore = game.homeScore
         self.awayTeamScore = game.awayScore
+        if game.offensiveTeam is game.homeTeam:
+            self.offenseScore = game.homeScore
+            self.defenseScore = game.awayScore
+        else:
+            self.offenseScore = game.awayScore
+            self.defenseScore = game.homeScore
         self.homeAbbr = game.homeTeam.abbr
         self.awayAbbr = game.awayTeam.abbr
         self.quarter = game.currentQuarter
@@ -2042,6 +2050,7 @@ class Play():
         self.isSafety = False
         self.scoreChange = False
         self.playText = ''
+        self.grade = 0
 
     def fieldGoalTry(self):
         self.kicker = self.offense.rosterDict['k']
@@ -2849,3 +2858,19 @@ class Play():
                         self.defender.gameStatsDict['defense']['passDisruptions'] += 1
                         self.defender.updateInGameConfidence(.005)
                         self.passer.updateInGameConfidence(-.005)
+
+
+    def gradePlay(self):
+        if self.isTd:
+            self.score += 6
+            self.score += self.yardage/10
+        elif self.isFgGood:
+            self.score += 3
+            self.score += self.fgDistance/20
+        elif self.isSafety:
+            self.score += -2
+            self.score += self.yardage/10
+        elif self.isFumbleLost or self.isInterception:
+            self.score += -2
+        else:
+            self.score += self.yardage/10
