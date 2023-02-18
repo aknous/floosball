@@ -328,10 +328,6 @@ class Season:
 
         for team in teamList:
             team: FloosTeam.Team
-            roster = []
-            for player in team.rosterDict.values():
-                player: FloosPlayer.Player
-                roster.append({'name': player.name, 'pos': player.position.name, 'rating': player.playerTier.value, 'termRemaining': player.termRemaining, 'id': player.id})
             team.statArchive.insert(0,team.seasonTeamStats)
             team.seasonTeamStats = copy.deepcopy(FloosTeam.teamStatsDict)
             team.schedule = []
@@ -350,6 +346,12 @@ class Season:
             team: FloosTeam.Team
             team.eliminated = False
             team.seasonTeamStats['season'] = self.currentSeason
+            rosterDict = {}
+            for pos, player in team.rosterDict.items():
+                player: FloosPlayer.Player
+                rosterDict[pos] = {'name': player.name, 'pos': player.position.name, 'rating': player.playerTier.value, 'termRemaining': player.termRemaining, 'id': player.id}
+            team.rosterHistory.append({'season': self.currentSeason, 'roster': rosterDict})
+
 
         weekFilePath = '{}/games'.format(strCurrentSeason)
         if os.path.isdir(weekFilePath):
@@ -408,7 +410,7 @@ class Season:
             sortPlayers()
             sortDefenses()
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
-            await asyncio.sleep(30)
+            #await asyncio.sleep(30)
 
         list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
         bestTeam:FloosTeam.Team = teamList[0]
@@ -494,7 +496,7 @@ class Season:
         x = 0
         for division in divisionList:
             list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-            division.teamList[0].divisionChampionships.append({'season': 'Season {}'.format(seasonsPlayed+1), 'division': division.name})
+            division.teamList[0].divisionChampionships.append('Season {}'.format(seasonsPlayed+1))
             division.teamList[0].seasonTeamStats['divPLace'] = '1st'
             division.teamList[1].seasonTeamStats['divPLace'] = '2nd'
             division.teamList[2].seasonTeamStats['divPLace'] = '3rd'
@@ -615,7 +617,7 @@ class Season:
             if x < numOfRounds - 1:
                 sortPlayers()
                 sortDefenses()
-                await asyncio.sleep(30)
+                #await asyncio.sleep(30)
 
         return champ
 
@@ -1021,7 +1023,7 @@ def getPlayers(_config):
         getUnusedNames()
 
     else:
-        numOfPlayers = 300
+        numOfPlayers = 264
         id = 1
         for x in _config['players']:
             unusedNamesList.append(x)
@@ -1094,6 +1096,8 @@ def getTeams(_config):
                 newTeam.overallRating = team['overallRating']
                 newTeam.allTimeTeamStats = team['allTimeTeamStats']
                 newTeam.leagueChampionships = team['leagueChampionships']
+                newTeam.divisionChampionships = team['divisionChampionships']
+                newTeam.regularSeasonChampions = team['regularSeasonChampions']
                 newTeam.playoffAppearances = team['playoffAppearances']
                 if 'rosterHistory' in team:
                     newTeam.rosterHistory = team['rosterHistory']
@@ -1163,10 +1167,11 @@ def initTeams():
         teamDict['overallRating'] = team.overallRating
         teamDict['allTimeTeamStats'] = team.allTimeTeamStats
         teamDict['leagueChampionships'] = team.leagueChampionships
+        teamDict['regularSeasonChampions'] = team.regularSeasonChampions
+        teamDict['divisionChampionships'] = team.divisionChampionships
         teamDict['playoffAppearances'] = team.playoffAppearances
         teamDict['gmScore'] = team.gmScore
         teamDict['defenseTier'] = team.defenseTier
-        teamDict['leagueChampionships'] = team.leagueChampionships
         teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
 
 
@@ -1273,6 +1278,7 @@ def initDivisions():
 
 async def offseason():
     activeSeason.currentWeek = 'Offseason'
+    activeSeason.currentWeekText = 'Offseason'
     freeAgencyDict = {}
     for player in freeAgentList:
         player: FloosPlayer.Player
@@ -1282,6 +1288,7 @@ async def offseason():
             x = randint(1,10)
             if x > 6:
                 player.team = 'Retired'
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
                 retiredPlayersList.append(player)
                 newlyRetiredPlayersList.append(player)
                 freeAgentList.remove(player)
@@ -1361,6 +1368,7 @@ async def offseason():
                     v.seasonPerformanceRating = 0
                     team.playerCap -= v.capHit
                     v.team = 'Retired'
+                    v.serviceTime = FloosPlayer.PlayerServiceTime.Retired
                     retiredPlayersList.append(v)
                     newlyRetiredPlayersList.append(v)
                     activePlayerList.remove(v)
@@ -1417,10 +1425,10 @@ async def offseason():
         player.offseasonTraining()
         player.seasonPerformanceRating = 0
 
-    for x in range(30):
+    for x in range(22):
         player = None
         seed = randint(1,100)
-        y = randint(0,10)
+        y = x%11
         if y == 0:
             player = FloosPlayer.PlayerQB(seed)
             activeQbList.append(player)
@@ -1510,7 +1518,7 @@ async def offseason():
                 teamsComplete += 1
                 continue
                 
-            await asyncio.sleep(2)
+            #await asyncio.sleep(2)
 
             if team.cutsAvailable > 0:
                 cutPlayer:FloosPlayer.Player = None
@@ -1519,7 +1527,24 @@ async def offseason():
                 for k,v in team.rosterDict.items():
                     v:FloosPlayer.Player
                     if v is not None and v.termRemaining == 1 and v.playerTier.value < 3:
-                        eligiblePlayersToCutList.append(k)
+                        if v.position is FloosPlayer.Position.QB and len(freeAgentQbList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.RB and len(freeAgentRbList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.WR and len(freeAgentWrList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.TE and len(freeAgentTeList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.K and len(freeAgentKList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.DB and len(freeAgentDbList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.LB and len(freeAgentLbList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.DE and len(freeAgentDeList) == 0:
+                            eligiblePlayersToCutList.append(k)
+                        elif v.position is FloosPlayer.Position.DL and len(freeAgentDlList) == 0:
+                            eligiblePlayersToCutList.append(k)
                 while len(eligiblePlayersToCutList) > 0: 
                     pos = choice(eligiblePlayersToCutList)
                     currentPlayer:FloosPlayer.Player = team.rosterDict[pos]
@@ -2113,6 +2138,6 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        await asyncio.sleep(120)
+        #await asyncio.sleep(120)
         activeSeason.clearSeasonStats()
         await offseason()

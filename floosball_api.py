@@ -95,8 +95,11 @@ async def returnTeams(id = None):
                 teamDict['city'] = team.city
                 teamDict['color'] = team.color
                 teamDict['id'] = team.id
+                teamDict['division'] = team.division
                 teamDict['eliminated'] = team.eliminated
                 teamDict['championships'] = team.leagueChampionships
+                teamDict['regularSeasonChampions'] = team.regularSeasonChampions
+                teamDict['divisionChampionships'] = team.divisionChampionships
                 teamDict['ratingStars'] = round((((team.overallRating - 60)/60)*4)+1)
                 teamDict['offenseRatingStars'] = round((((team.offenseRating - 60)/40)*4)+1)
                 teamDict['defenseRatingStars'] = team.defenseTier
@@ -151,23 +154,6 @@ async def returnTeams(id = None):
                     scheduleList.append(gameDict)
                     x += 1
                 teamDict['schedule'] = scheduleList
-                rosterDict = {}
-                for pos, player in team.rosterDict.items():
-                    if isinstance(player, Player):
-                        playerDict = {}
-                        playerDict['name'] = player.name
-                        playerDict['pos'] = player.position.name
-                        playerDict['id'] = player.id
-                        playerDict['rating'] = player.attributes.overallRating
-                        playerDict['rank'] = player.serviceTime
-                        playerDict['ratingStars'] = player.playerTier.value
-                        playerDict['term'] = player.term
-                        playerDict['termRemaining'] = player.termRemaining
-                        playerDict['gamesPlayed'] = player.gamesPlayed
-                        playerDict['seasonPerformanceRating'] = round(((player.seasonPerformanceRating * 4)/100)+1)
-                        playerDict['seasonStats'] = player.seasonStatsDict
-                        rosterDict[pos] = playerDict
-                teamDict['roster'] = rosterDict
                 return teamDict
 
 @app.get('/players')
@@ -244,6 +230,7 @@ async def returnPlayers(id = None):
                     dict['color'] = '#94a3b8'
                 else:
                     dict['team'] = player.team.name
+                    dict['teamId'] = player.team.id
                     dict['city'] = player.team.city
                     dict['color'] = player.team.color
                 dict['position'] = player.position.name
