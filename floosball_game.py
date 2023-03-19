@@ -11,7 +11,12 @@ import floosball_team as FloosTeam
 class PlayType(enum.Enum):
     Run = 'Run'
     Pass = 'Pass'
+    Pass1 = 'Pass1'
+    Pass2 = 'Pass2'
+    Pass3 = 'Pass3'
+    Pass4 = 'Pass4'
     FieldGoal = 'Field Goal Try'
+    FG = 'FG'
     Punt = 'Punt'
     ExtraPoint = 'Extra Point'
     
@@ -885,6 +890,7 @@ class Game:
                         x = randint(1,10)
                         if x > 8:
                             self.play.playType = PlayType.Punt
+                            self.play.playTypeAdv = PlayType.Punt
                             return
                         else:
                             x = randint(1,3)
@@ -947,6 +953,7 @@ class Game:
                         x = randint(1,10)
                         if x > 8:
                             self.play.playType = PlayType.Punt
+                            self.play.playTypeAdv = PlayType.Punt
                             return
                         else:
                             x = randint(1,3)
@@ -977,6 +984,7 @@ class Game:
                     return
                 else:
                     self.play.playType = PlayType.Punt
+                    self.play.playTypeAdv = PlayType.Punt
                     return
             elif self.currentQuarter == 4 and self.awayTeam == self.play.offense and self.awayScore > self.homeScore:
                 if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
@@ -984,6 +992,7 @@ class Game:
                     return
                 else:
                     self.play.playType = PlayType.Punt
+                    self.play.playTypeAdv = PlayType.Punt
                     return
             elif self.yardsToEndzone <= 5:
                     x = randint(1,10)
@@ -1059,15 +1068,18 @@ class Game:
                         return
                     else:
                         self.play.playType = PlayType.Punt
+                        self.play.playTypeAdv = PlayType.Punt
                         return
             elif self.yardsToSafety <= 40:
                 self.play.playType = PlayType.Punt
+                self.play.playTypeAdv = PlayType.Punt
                 return
             else:
                 if self.yardsToFirstDown <= 2:
                     x = randint(1,10)
                     if x < 8:
                         self.play.playType = PlayType.Punt
+                        self.play.playTypeAdv = PlayType.Punt
                         return
                     elif x >= 7 and x < 9:
                         self.play.passPlay(PassType.short)
@@ -1079,6 +1091,7 @@ class Game:
                     x = randint(1,100)
                     if x < 95:
                         self.play.playType = PlayType.Punt
+                        self.play.playTypeAdv = PlayType.Punt
                         return
                     else:
                         y = randint(0,1)
@@ -1397,7 +1410,7 @@ class Game:
             self.winningTeam.resetConfidence()
             self.losingTeam.resetDetermination()
 
-    async def playGame(self):
+    def playGame(self):
         self.totalPlays = 0
         possReset = 80
         coinFlipWinner = None
@@ -1994,9 +2007,9 @@ class Game:
         self.status = GameStatus.Final
         self.gameDict['winningTeam'] = self.winningTeam.name
         self.gameDict['losingTeam'] = self.losingTeam.name
-        self.saveGameData()
-        self.homeTeam.getAverages()
-        self.awayTeam.getAverages()
+        #self.saveGameData()
+        #self.homeTeam.getAverages()
+        #self.awayTeam.getAverages()
         self.winningTeam.updateRating()
         self.losingTeam.updateRating()
 
@@ -2025,11 +2038,14 @@ class Play():
         self.yardsToSafety = game.yardsToSafety
         if self.yardsToEndzone <= 10:
             self.yardsTo1st = 'Goal'
+            self.yardsTo1stInt = game.yardsToEndzone
         else:
             self.yardsTo1st = game.yardsToFirstDown
+            self.yardsTo1stInt = game.yardsToFirstDown
         self.yardage = 0
         self.fgDistance = 0
         self.playType: PlayType = None
+        self.playTypeAdv: PlayType = None
         self.passType: PassType = None
         self.playResult: PlayResult = None
         self.runner: FloosPlayer.PlayerRB = None
@@ -2053,6 +2069,7 @@ class Play():
         self.grade = 0
 
     def fieldGoalTry(self):
+        self.playTypeAdv = PlayType.FG
         self.kicker = self.offense.rosterDict['k']
         self.kicker.gameStatsDict['kicking']['fgAtt'] += 1
         yardsToFG = self.yardsToEndzone + 17
@@ -2134,6 +2151,7 @@ class Play():
     
     def runPlay(self):
         self.playType = PlayType.Run
+        self.playTypeAdv = PlayType.Run
         self.runner = self.offense.rosterDict['rb']
         blocker: FloosPlayer.PlayerTE = self.offense.rosterDict['te']
         x = randint(1,100)
@@ -2249,6 +2267,7 @@ class Play():
         sackModifyer = round((dl.gameAttributes.overallRating + randint(-5,5))/(self.passer.gameAttributes.agility + randint(-5,5)))
 
         if passType.value == 1:
+            self.playTypeAdv = PlayType.Pass1
             if sackRoll < round(30 * (sackModifyer)):
                 self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
@@ -2417,6 +2436,7 @@ class Play():
                         self.defender.updateInGameConfidence(.005)
                         self.passer.updateInGameConfidence(-.005)
         elif passType.value == 2:
+            self.playTypeAdv = PlayType.Pass2
             if sackRoll < round(50 * (sackModifyer)):
                 self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
@@ -2571,6 +2591,7 @@ class Play():
                         self.defender.updateInGameConfidence(.005)
                         self.passer.updateInGameConfidence(-.005)
         elif passType.value == 3:
+            self.playTypeAdv = PlayType.Pass3
             if sackRoll < round(80 * (sackModifyer)):
                 self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
@@ -2714,6 +2735,7 @@ class Play():
                         self.defender.updateInGameConfidence(.005)
                         self.passer.updateInGameConfidence(-.005)
         elif passType.value == 4:
+            self.playTypeAdv = PlayType.Pass4
             if sackRoll < round(100 * (sackModifyer)):
                 self.defender = dl
                 self.yardage = round(-(randint(0,5) * sackModifyer))
@@ -2862,15 +2884,41 @@ class Play():
 
     def gradePlay(self):
         if self.isTd:
-            self.score += 6
-            self.score += self.yardage/10
+            self.grade = 5
         elif self.isFgGood:
-            self.score += 3
-            self.score += self.fgDistance/20
+            self.grade = 4
         elif self.isSafety:
-            self.score += -2
-            self.score += self.yardage/10
+            self.grade = 0
         elif self.isFumbleLost or self.isInterception:
-            self.score += -2
+            self.grade += 0
+        elif self.playTypeAdv is PlayType.Punt:
+            self.grade = 3
         else:
-            self.score += self.yardage/10
+            if self.down == 1:
+                if self.yardage >= self.yardsTo1stInt/3:
+                    self.grade = 3
+                elif self.yardage <= 0:
+                    self.grade = 1
+                else:
+                    self.grade = 2
+            if self.down == 2:
+                if self.yardage >= self.yardsTo1stInt/2:
+                    self.grade = 3
+                elif self.yardage <= 0:
+                    self.grade = 1
+                else:
+                    self.grade = 2
+            elif self.down == 3:
+                if self.yardage >= self.yardsTo1stInt:
+                    self.grade = 3
+                elif self.yardage <= 0:
+                    self.grade = 1
+                else:
+                    self.grade = 2
+            elif self.down == 4:
+                if self.yardage >= self.yardsTo1stInt:
+                    self.grade = 3
+                else:
+                    self.grade = 1
+
+

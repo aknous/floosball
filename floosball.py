@@ -8,6 +8,7 @@ from unicodedata import name
 import numpy as np
 from scipy import stats
 import statistics
+import csv
 import floosball_game as FloosGame
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
@@ -2068,7 +2069,7 @@ def inductHallOfFame():
                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has been inducted into the Floosball Hall of Fame'.format(player.name)}})
         newlyRetiredPlayersList.clear()
 
-async def startLeague():
+def startLeague():
     global cap
     global seasonsPlayed
     global totalSeasons
@@ -2127,7 +2128,22 @@ async def startLeague():
         initDivisions()
 
     print('Initialization complete!')
-    while seasonsPlayed < totalSeasons:
+
+    game = FloosGame.Game(teamList[0], teamList[1])
+    game.playGame()
+
+    features = ['Down', 'YardsTo1', 'YardsToEz', 'PlaysLeft', 'ScoreDiff', 'Play', 'Grade']
+
+    with open('data.csv', mode='w') as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=features)
+        writer.writeheader()
+        for item in game.gameFeed:
+            for type, event in item.items():
+                if type == 'play':
+                    event: FloosGame.Play
+                    writer.writerow({'Down': event.down, 'YardsTo1': event.yardsTo1stInt, 'YardsToEz': event.yardsToEndzone, 'PlaysLeft': event.playsLeft, 'ScoreDiff': event.offenseScore - event.defenseScore, 'Play': event.playTypeAdv.value, 'Grade': event.grade})
+
+"""     while seasonsPlayed < totalSeasons:
         print('Season {} start'.format(seasonsPlayed+1))
         activeSeason = Season()
         seasonList.append(activeSeason)
@@ -2140,4 +2156,6 @@ async def startLeague():
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
         #await asyncio.sleep(120)
         activeSeason.clearSeasonStats()
-        await offseason()
+        await offseason() """
+
+startLeague()
