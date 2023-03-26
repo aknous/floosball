@@ -570,15 +570,17 @@ async def returnCurrentGames():
             down = '4th'
         else:
             down = '1st'
-        gameDict['downText'] = '{0} & {1}'.format(down, game.yardsToFirstDown)
         gameDict['playsLeft'] = 132 - game.totalPlays
         if game.yardsToEndzone < 10:
             gameDict['yardsTo1stDwn'] = game.yardsToEndzone
+            gameDict['downText'] = '{0} & Goal'.format(down)
         else:
             gameDict['yardsTo1stDwn'] = game.yardsToFirstDown
+            gameDict['downText'] = '{0} & {1}'.format(down, game.yardsToFirstDown)
         gameDict['yardsToEZ'] = game.yardsToEndzone
         gameDict['yardLine'] = game.yardLine
         gameList.append(gameDict)
+    list.sort(gameList, key=itemgetter('status'), reverse=False)
     return gameList
 
 @app.get('/results')

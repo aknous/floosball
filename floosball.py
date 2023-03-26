@@ -410,7 +410,7 @@ class Season:
             sortPlayers()
             sortDefenses()
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
-            #await asyncio.sleep(30)
+            await asyncio.sleep(30)
 
         list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
         bestTeam:FloosTeam.Team = teamList[0]
@@ -617,7 +617,7 @@ class Season:
             if x < numOfRounds - 1:
                 sortPlayers()
                 sortDefenses()
-                #await asyncio.sleep(30)
+                await asyncio.sleep(30)
 
         return champ
 
@@ -1279,6 +1279,7 @@ def initDivisions():
 async def offseason():
     activeSeason.currentWeek = 'Offseason'
     activeSeason.currentWeekText = 'Offseason'
+    newPlayerCount = 8
     freeAgencyDict = {}
     for player in freeAgentList:
         player: FloosPlayer.Player
@@ -1425,43 +1426,75 @@ async def offseason():
         player.offseasonTraining()
         player.seasonPerformanceRating = 0
 
-    for x in range(22):
-        player = None
-        seed = randint(1,100)
-        y = x%11
-        if y == 0:
-            player = FloosPlayer.PlayerQB(seed)
-            activeQbList.append(player)
-        elif y == 1:
-            player = FloosPlayer.PlayerRB(seed)
-            activeRbList.append(player)
-        elif y == 2 or y == 3:
-            player = FloosPlayer.PlayerWR(seed)
-            activeWrList.append(player)
-        elif y == 4:
-            player = FloosPlayer.PlayerTE(seed)
-            activeTeList.append(player)
-        elif y == 5:
-            player = FloosPlayer.PlayerK(seed)
-            activeKList.append(player)
-        elif y == 6 or y == 7:
-            player = FloosPlayer.PlayerDB(seed)
-            activeDbList.append(player)
-        elif y == 8:
-            player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.LB, seed)
-            activeLbList.append(player)
-        elif y == 9:
-            player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DL, seed)
-            activeDlList.append(player)
-        elif y == 10:
-            player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DE, seed)
-            activeDeList.append(player)
 
-        player.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
-        player.team = 'Free Agent'
-        player.id = (len(activePlayerList) + len(retiredPlayersList) + 1)
-        activePlayerList.append(player)
-        freeAgentList.append(player)
+    for player in newlyRetiredPlayersList:
+        player: FloosPlayer.Player
+        newPlayer: FloosPlayer.Player = None
+        if player.position is FloosPlayer.Position.QB:
+            newPlayer = FloosPlayer.PlayerQB(seed)
+            activeQbList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.RB:
+            newPlayer = FloosPlayer.PlayerRB(seed)
+            activeRbList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.WR:
+            newPlayer = FloosPlayer.PlayerWR(seed)
+            activeWrList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.TE:
+            newPlayer = FloosPlayer.PlayerTE(seed)
+            activeTeList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.K:
+            newPlayer = FloosPlayer.PlayerK(seed)
+            activeKList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.DB:
+            newPlayer = FloosPlayer.PlayerDB(seed)
+            activeDbList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.LB:
+            newPlayer = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.LB)
+            activeLbList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.DE:
+            newPlayer = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DE)
+            activeDeList.append(newPlayer)
+        elif player.position is FloosPlayer.Position.DL:
+            newPlayer = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DL)
+            activeDlList.append(newPlayer)
+
+    if newPlayerCount > len(newlyRetiredPlayersList):
+        for x in range(newPlayerCount - len(newlyRetiredPlayersList)):
+            player = None
+            y = randint(0,10)
+            if y == 0:
+                player = FloosPlayer.PlayerQB()
+                activeQbList.append(player)
+            elif y == 1:
+                player = FloosPlayer.PlayerRB()
+                activeRbList.append(player)
+            elif y == 2 or y == 3:
+                player = FloosPlayer.PlayerWR()
+                activeWrList.append(player)
+            elif y == 4:
+                player = FloosPlayer.PlayerTE()
+                activeTeList.append(player)
+            elif y == 5:
+                player = FloosPlayer.PlayerK()
+                activeKList.append(player)
+            elif y == 6 or y == 7:
+                player = FloosPlayer.PlayerDB()
+                activeDbList.append(player)
+            elif y == 8:
+                player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.LB)
+                activeLbList.append(player)
+            elif y == 9:
+                player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DL)
+                activeDlList.append(player)
+            elif y == 10:
+                player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DE)
+                activeDeList.append(player)
+
+            player.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
+            player.team = 'Free Agent'
+            player.id = (len(activePlayerList) + len(retiredPlayersList) + 1)
+            activePlayerList.append(player)
+            freeAgentList.append(player)
 
     saveUnusedNames()
     sortPlayers()
@@ -1518,7 +1551,7 @@ async def offseason():
                 teamsComplete += 1
                 continue
                 
-            #await asyncio.sleep(2)
+            await asyncio.sleep(2)
 
             if team.cutsAvailable > 0:
                 cutPlayer:FloosPlayer.Player = None
@@ -2138,6 +2171,6 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        #await asyncio.sleep(120)
+        await asyncio.sleep(120)
         activeSeason.clearSeasonStats()
         await offseason()

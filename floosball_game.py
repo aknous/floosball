@@ -1487,7 +1487,7 @@ class Game:
                         #     self.awayTeam.teamUnderPerform()
                 elif self.totalPlays >= 33 and self.totalPlays < 66:
                     if self.currentQuarter != 2:
-                        #await asyncio.sleep(15)
+                        await asyncio.sleep(15)
                         self.currentQuarter = 2
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 2nd Quarter',
@@ -1504,7 +1504,7 @@ class Game:
                                                 'playsRemaining': 132 - self.totalPlays
                                             }
                                         })
-                        #await asyncio.sleep(60)
+                        await asyncio.sleep(60)
                         self.isHalftime = False
                     if self.currentQuarter != 3:
                         self.currentQuarter = 3
@@ -1532,7 +1532,7 @@ class Game:
                         #     self.awayTeam.resetDetermination()
                 elif self.totalPlays >= 100 and self.totalPlays < 132:
                     if self.currentQuarter != 4:
-                        #await asyncio.sleep(15)
+                        await asyncio.sleep(15)
                         self.currentQuarter = 4
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 4th Quarter',
@@ -1556,7 +1556,7 @@ class Game:
                             otContinue = False
                             break
                     if self.currentQuarter != 5:
-                        #await asyncio.sleep(15)
+                        await asyncio.sleep(15)
                         self.currentQuarter = 5
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start Overtime',
@@ -1592,7 +1592,7 @@ class Game:
 
                 self.play = Play(self)
                 
-                #await asyncio.sleep(randint(8,15))
+                await asyncio.sleep(randint(8,15))
 
                 self.playCaller()
                 self.totalPlays += 1
