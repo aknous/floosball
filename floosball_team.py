@@ -9,9 +9,13 @@ import floosball_player as FloosPlayer
 
 teamStatsDict = {   
                     'season': 0,
+                    'elo': 0,
+                    'overallRating': 0,
                     'madePlayoffs': False,
-                    'divPLace': 0,
+                    'divPlace': 0,
+                    'divisionChamp': False,
                     'leagueChamp': False,
+                    'topSeed': False,
                     'wins': 0, 
                     'losses': 0, 
                     'winPerc': 0, 
@@ -21,6 +25,8 @@ teamStatsDict = {
                     'divWinPerc': 0, 
                     'scoreDiff': 0,
                     'Offense': {
+                        'runTds': 0,
+                        'passTds': 0,
                         'tds': 0, 
                         'fgs': 0,
                         'pts': 0,
@@ -55,7 +61,8 @@ teamStatsDict = {
                         'avgPassTdsAlwd': 0,
                         'avgRunTdsAlwd': 0,
                         'avgTdsAlwd': 0,
-                        'avgPtsAlwd': 0
+                        'avgPtsAlwd': 0,
+                        'fantasyPoints': 0
                     }
                 }
 class Team:
@@ -72,6 +79,7 @@ class Team:
         self.gameRunDefenseRating = 0
         self.gamePassDefenseRating = 0
         self.gameDefenseRating = 0
+        self.elo = 1500
         # self._gameDefenseConfidence = 1
         # self._gameDefenseDetermination = 1
         # self.defenseLuck = FloosMethods.getStat(1,100,1)
@@ -94,6 +102,11 @@ class Team:
         self.schedule = []
         self.rosterHistory = []
         self.statArchive = []
+        self.clinchedPlayoffs = False
+        self.clinchedDivision = False
+        self.clinchedTopSeed = False
+        self.leagueChampion = False
+        self.winningStreak = False
 
         self.gameDefenseStats = copy.deepcopy(teamStatsDict['Defense'])
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
@@ -187,6 +200,9 @@ class Team:
         self.seasonTeamStats['Offense']['avgRunYards'] = round(statistics.mean(offenseRunYardsList),2)
         self.seasonTeamStats['Offense']['avgPassYards'] = round(statistics.mean(offensePassYardsList),2)
         self.seasonTeamStats['Offense']['avgYards'] = round(statistics.mean(offenseTotalYardsList),2)
+        self.seasonTeamStats['Offense']['avgRunTds'] = round(statistics.mean(offenseRunTdsList),2)
+        self.seasonTeamStats['Offense']['avgPassTds'] = round(statistics.mean(offensePassTdsList),2)
+        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2)
         self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2)
         self.seasonTeamStats['Offense']['avgFgs'] = round(statistics.mean(offenseFgsList),2)
         self.seasonTeamStats['Offense']['avgPts'] = round(statistics.mean(offensePtsList),2)

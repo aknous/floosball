@@ -1,5 +1,6 @@
 import enum
 from os import stat
+import math
 from random import randint
 import copy
 import floosball_methods as FloosMethods
@@ -28,16 +29,19 @@ class PlayerServiceTime(enum.Enum):
     Veteran1 = 'Established'
     Veteran2 = 'Veteran'
     Veteran3 = 'Grizzled Veteran'
+    Veteran4 = 'Ancient Veteran'
     Retired = 'Retired'
 
 playerStatsDict =   {   
                         'team': None,
                         'season': 0,
                         'gp': 0,
+                        'fantasyPoints': 0,
                         'passing': {
                             'att': 0, 
                             'comp': 0, 
                             'compPerc': 0, 
+                            'missedPass': 0,
                             'tds': 0, 
                             'ints': 0, 
                             'yards': 0, 
@@ -58,6 +62,7 @@ playerStatsDict =   {
                             'receptions': 0, 
                             'targets': 0, 
                             'rcvPerc': 0, 
+                            'drops': 0,
                             'yards': 0,
                             'yac': 0, 
                             'ypr': 0, 
@@ -89,6 +94,7 @@ qbStatsDict = {
                 'passAtt': 0, 
                 'passComp': 0, 
                 'passCompPerc': 0, 
+                'passMiss': 0,
                 'tds': 0, 
                 'ints': 0, 
                 'passYards': 0, 
@@ -117,6 +123,7 @@ rbStatsDict = {
 wrStatsDict = {
                 'receptions': 0, 
                 'passTargets': 0, 
+                'drops': 0,
                 'rcvPerc': 0, 
                 'rcvYards': 0, 
                 'ypr': 0, 
@@ -174,6 +181,8 @@ class Player:
                 self.attributes.attitude += randint (-2,1)
                 self.attributes.confidence += randint(-10,5)/1000
                 self.attributes.determination += randint(-5,10)/1000
+            if self.attributes.attitude < 0:
+                self.attributes.attitude = 0
         
         self.updateRating()
 
@@ -193,6 +202,221 @@ class Player:
 
     def offseasonTraining(self):
         pass
+
+
+    def addPassTd(self, yards, isRegularSeason):
+        self.gameStatsDict['passing']['tds'] += 1
+        self.gameStatsDict['fantasyPoints'] += 4
+        if yards >= 40:
+            self.gameStatsDict['fantasyPoints'] += 2
+
+        if isRegularSeason:
+            self.seasonStatsDict['passing']['tds'] += 1
+            self.careerStatsDict['passing']['tds'] += 1
+
+    def addCompletion(self, isRegularSeason):
+        self.gameStatsDict['passing']['comp'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['passing']['comp'] += 1
+            self.careerStatsDict['passing']['comp'] += 1
+
+    def addInterception(self, isRegularSeason):
+        self.gameStatsDict['passing']['ints'] += 1
+        self.gameStatsDict['fantasyPoints'] += -2
+
+        if isRegularSeason:
+            self.seasonStatsDict['passing']['ints'] += 1
+            self.careerStatsDict['passing']['ints'] += 1
+
+    def addPassAttempt(self, isRegularSeason):
+        self.gameStatsDict['passing']['att'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['passing']['att'] += 1
+            self.careerStatsDict['passing']['att'] += 1
+
+    def addPassYards(self, yards, isRegularSeason):
+        if (math.floor((self.gameStatsDict['passing']['yards'] + yards) / 25)) > (math.floor(self.gameStatsDict['passing']['yards'] / 25)):
+            self.gameStatsDict['fantasyPoints'] += (math.floor((self.gameStatsDict['passing']['yards'] + yards) / 25) - math.floor(self.gameStatsDict['passing']['yards'] / 25))
+
+        self.gameStatsDict['passing']['yards'] += yards
+
+        if isRegularSeason:
+            self.seasonStatsDict['passing']['yards'] += yards
+            self.careerStatsDict['passing']['yards'] += yards
+
+    def addMissedPass(self, isRegularSeason):
+        self.gameStatsDict['passing']['missedPass'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['passing']['missedPass'] += 1
+            self.careerStatsDict['passing']['missedPass'] += 1
+
+    def addRcvPassTarget(self, isRegularSeason):
+        self.gameStatsDict['receiving']['targets'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['receiving']['targets'] += 1
+            self.careerStatsDict['receiving']['targets'] += 1
+
+    def addReception(self, isRegularSeason):
+        self.gameStatsDict['receiving']['receptions'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['receiving']['receptions'] += 1
+            self.careerStatsDict['receiving']['receptions'] += 1
+
+    def addPassDrop(self, isRegularSeason):
+        self.gameStatsDict['receiving']['drops'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['receiving']['drops'] += 1
+            self.careerStatsDict['receiving']['drops'] += 1
+
+    def addReceiveYards(self, yards, isRegularSeason):
+        if (math.floor((self.gameStatsDict['receiving']['yards'] + yards) / 10)) > (math.floor(self.gameStatsDict['receiving']['yards'] / 10)):
+            self.gameStatsDict['fantasyPoints'] += (math.floor((self.gameStatsDict['receiving']['yards'] + yards) / 10) - math.floor(self.gameStatsDict['receiving']['yards'] / 10))
+
+        self.gameStatsDict['receiving']['yards'] += yards
+
+        if isRegularSeason:
+            self.seasonStatsDict['receiving']['yards'] += yards
+            self.careerStatsDict['receiving']['yards'] += yards
+
+    def addYAC(self, yac, isRegularSeason):
+        self.gameStatsDict['receiving']['yac'] += yac
+
+        if isRegularSeason:
+            self.seasonStatsDict['receiving']['yac'] += yac
+            self.careerStatsDict['receiving']['yac'] += yac
+
+    def addReceiveTd(self, yards, isRegularSeason):
+        self.gameStatsDict['receiving']['tds'] += 1
+        self.gameStatsDict['fantasyPoints'] += 6
+        if yards >= 40:
+            self.gameStatsDict['fantasyPoints'] += 2
+
+        if isRegularSeason:
+            self.seasonStatsDict['receiving']['tds'] += 1
+            self.careerStatsDict['receiving']['tds'] += 1
+
+    def addDefPassTarget(self, isRegularSeason):
+        self.gameStatsDict['defense']['passTargets'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['defense']['passTargets'] += 1
+            self.careerStatsDict['defense']['passTargets'] += 1
+
+    def addPassDisruption(self, isRegularSeason):
+        self.gameStatsDict['defense']['passDisruptions'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['defense']['passDisruptions'] += 1
+            self.careerStatsDict['defense']['passDisruptions'] += 1
+
+    def addDefInterception(self, isRegularSeason):
+        self.gameStatsDict['defense']['ints'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['defense']['ints'] += 1
+            self.careerStatsDict['defense']['ints'] += 1
+
+    def addFumbleRecovery(self, isRegularSeason):
+        self.gameStatsDict['defense']['fumRec'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['defense']['fumRec'] += 1
+            self.careerStatsDict['defense']['fumRec'] += 1
+
+    def addTackle(self, isRegularSeason):
+        self.gameStatsDict['defense']['tackles'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['defense']['tackles'] += 1
+            self.careerStatsDict['defense']['tackles'] += 1
+
+    def addSack(self, isRegularSeason):
+        self.gameStatsDict['defense']['sacks'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['defense']['sacks'] += 1
+            self.careerStatsDict['defense']['sacks'] += 1
+
+    def addCarry(self, isRegularSeason):
+        self.gameStatsDict['rushing']['carries'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['rushing']['carries'] += 1
+            self.careerStatsDict['rushing']['carries'] += 1
+
+    def addRushTd(self, yards, isRegularSeason):
+        self.gameStatsDict['rushing']['tds'] += 1
+        self.gameStatsDict['fantasyPoints'] += 6
+        if yards >= 40:
+            self.gameStatsDict['fantasyPoints'] += 2
+
+        if isRegularSeason:
+            self.seasonStatsDict['rushing']['tds'] += 1
+            self.careerStatsDict['rushing']['tds'] += 1
+
+    def addRushYards(self, yards, isRegularSeason):
+        if (math.floor((self.gameStatsDict['rushing']['yards'] + yards) / 10)) > (math.floor(self.gameStatsDict['rushing']['yards'] / 10)):
+            self.gameStatsDict['fantasyPoints'] += (math.floor((self.gameStatsDict['rushing']['yards'] + yards) / 10) - math.floor(self.gameStatsDict['rushing']['yards'] / 10))
+
+        self.gameStatsDict['rushing']['yards'] += yards
+
+        if isRegularSeason:
+            self.seasonStatsDict['rushing']['yards'] += yards
+            self.careerStatsDict['rushing']['yards'] += yards
+
+    def addFumble(self, isRegularSeason):
+        self.gameStatsDict['rushing']['fumblesLost'] += 1
+        self.gameStatsDict['fantasyPoints'] += -2
+
+        if isRegularSeason:
+            self.seasonStatsDict['rushing']['fumblesLost'] += 1
+            self.careerStatsDict['rushing']['fumblesLost'] += 1
+
+    def addFgAttempt(self, isRegularSeason):
+        self.gameStatsDict['kicking']['fgAtt'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['kicking']['fgAtt'] += 1
+            self.careerStatsDict['kicking']['fgAtt'] += 1
+
+    def addFg(self, yards, isRegularSeason):
+        self.gameStatsDict['kicking']['fgs'] += 1
+        self.gameStatsDict['kicking']['fgYards'] += yards
+
+        if yards >= 50:
+            self.gameStatsDict['fantasyPoints'] += 5
+        elif yards >= 40:
+            self.gameStatsDict['fantasyPoints'] += 4
+        else:
+            self.gameStatsDict['fantasyPoints'] += 3
+
+        if yards >= 45:
+            self.gameStatsDict['kicking']['fg45+'] += 1
+
+        if isRegularSeason:
+            self.seasonStatsDict['kicking']['fgs'] += 1
+            self.careerStatsDict['kicking']['fgYards'] += yards
+            if yards >= 45:
+                self.seasonStatsDict['kicking']['fg45+'] += 1
+                self.careerStatsDict['kicking']['fg45+'] += 1
+
+    def addMissedFg(self, yards):
+        if yards >= 40 and yards < 50:
+            self.gameStatsDict['fantasyPoints'] += -1
+        elif yards < 40:
+            self.gameStatsDict['fantasyPoints'] += -2
+
+    def addExtraPoint(self):
+        self.gameStatsDict['fantasyPoints'] += 1
+
+    def addMissedExtraPoint(self):
+        self.gameStatsDict['fantasyPoints'] += -3
 
 
 class PlayerAttributes:
@@ -223,7 +447,7 @@ class PlayerAttributes:
         self.focus = 0
         self.instinct = 0
         self.creativity = 0
-        self.longevity = randint(3,8)
+        self.longevity = randint(4,10)
         self.luck = FloosMethods.getStat(1,100,1)
         self.attitude = 0
         self.playMakingAbility = 0
@@ -320,6 +544,10 @@ class PlayerQB(Player):
         if self.attributes.potentialAgility > 100:
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialArmStrength*1.2) + (self.attributes.potentialAccuracy*1.3) + (self.attributes.potentialAgility*.5))/3)
+
+        #Position Specific Attributes
+
+        self.vision = ((self.attributes.discipline + self.attributes.instinct + self.attributes.focus) / 3)
         
 
     def updateInGameRating(self):
@@ -340,6 +568,8 @@ class PlayerQB(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100
@@ -516,6 +746,12 @@ class PlayerRB(Player):
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*1.2) + (self.attributes.potentialSpeed*1.3) + (self.attributes.potentialAgility*.5))/3)
 
+        #Position Specific Attributes
+
+        self.routeRunning = (((self.attributes.discipline*1.5) + (self.attributes.speed*.5) + (self.attributes.agility*1.5) + (self.attributes.xFactor*.5)) / 4)
+
+    
+
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.skillRating = round(((self.gameAttributes.speed*.7) + (self.gameAttributes.power*1.3) + (self.gameAttributes.agility*1))/3)
@@ -534,6 +770,8 @@ class PlayerRB(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100
@@ -709,6 +947,10 @@ class PlayerWR(Player):
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialHands*1.2) + (self.attributes.potentialSpeed*1.3) + (self.attributes.potentialAgility*.5))/3)
 
+        #Position Specific Attributes
+
+        self.routeRunning = (((self.attributes.discipline*1.5) + (self.attributes.speed*.5) + (self.attributes.agility*1.5) + (self.attributes.xFactor*.5)) / 4)
+
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.skillRating = round(((self.gameAttributes.speed*.7) + (self.gameAttributes.hands*1.5) + (self.gameAttributes.agility*.8))/3)
@@ -727,6 +969,8 @@ class PlayerWR(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100
@@ -914,6 +1158,10 @@ class PlayerTE(Player):
         if self.attributes.potentialAgility > 100:
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*1.2) + (self.attributes.potentialHands*1.3) + (self.attributes.potentialAgility*.5))/3)
+
+        #Position Specific Attributes
+
+        self.routeRunning = (((self.attributes.discipline*1.5) + (self.attributes.speed*.5) + (self.attributes.agility*1.5) + (self.attributes.xFactor*.5)) / 4)
     
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
@@ -933,6 +1181,8 @@ class PlayerTE(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100
@@ -1104,6 +1354,8 @@ class PlayerK(Player):
             self.attributes.potentialAccuracy = 100
         self.attributes.potentialSkillRating = round((self.attributes.potentialLegStrength + self.attributes.potentialAccuracy)/2)
     
+
+
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.skillRating = round((self.gameAttributes.legStrength + self.gameAttributes.accuracy)/2)
@@ -1123,6 +1375,8 @@ class PlayerK(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100
@@ -1252,6 +1506,10 @@ class PlayerDB(Player):
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialHands*.7) + (self.attributes.potentialSpeed*1) + (self.attributes.potentialAgility*1.3))/3)
 
+        #Position Specific Attributes
+
+        self.passCoverage = (((self.attributes.discipline*1.5) + (self.attributes.speed*.5) + (self.attributes.agility*1.5) + (self.attributes.xFactor*.5)) / 4)
+
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.skillRating = round(((self.gameAttributes.speed*1) + (self.gameAttributes.hands*.7) + (self.gameAttributes.agility*1.3))/3)
@@ -1270,6 +1528,8 @@ class PlayerDB(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100
@@ -1446,6 +1706,10 @@ class PlayerDefBasic(Player):
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*.7) + (self.attributes.potentialSpeed*1) + (self.attributes.potentialAgility*1.3))/3)
 
+        #Position Specific Attributes
+
+        self.passCoverage = (((self.attributes.discipline*1.5) + (self.attributes.speed*.5) + (self.attributes.agility*1.5) + (self.attributes.xFactor*.5)) / 4)
+
     def updateInGameRating(self):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.skillRating = round(((self.gameAttributes.speed*.5) + (self.gameAttributes.power*1.2) + (self.gameAttributes.agility*1.3))/3)
@@ -1463,6 +1727,8 @@ class PlayerDefBasic(Player):
         self.attributes.attitude += randint(-5,5)
         if self.attributes.attitude > 100:
             self.attributes.attitude = 100
+        if self.attributes.attitude < 0:
+            self.attributes.attitude = 0
         self.attributes.luck += randint(-5,5)
         if self.attributes.luck > 100:
             self.attributes.luck = 100

@@ -12,9 +12,11 @@ import floosball_game as FloosGame
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
 import floosball_methods as FloosMethods
+import datetime
+import math
  
 
-__version__ = '0.6.5_alpha'
+__version__ = '0.9.0_alpha'
 
 config = None
 totalSeasons = 0
@@ -37,7 +39,6 @@ activeDbList = []
 activeLbList = []
 activeDeList = []
 activeDlList = []
-playerLists = [activeQbList, activeRbList, activeWrList, activeTeList, activeKList, activeDbList, activeLbList, activeDeList, activeDlList]
 
 freeAgencyOrder = []
 freeAgencyHistoryDict = {}
@@ -81,6 +82,457 @@ scheduleScheme = [
     ('1611','1312','1514','2621','2322','2524','3631','3332','3534','4641','4342','4544'),
     ('1411','1216','1315','2421','2226','2325','3431','3236','3335','4441','4246','4345'),
     ('1115','1214','1613','2125','2224','2623','3135','3234','3633','4145','4244','4643')]
+
+
+allTimeRecordsDict = {
+    'players': {
+        'passing': {
+            'game': {
+                'yards': {
+                    'record': 'Pass Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tds': {
+                    'record': 'Pass TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'comps': {
+                    'record': 'Completions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'ints': {
+                    'record': 'Most Interceptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'career': {
+                'yards': {
+                    'record': 'Pass Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tds': {
+                    'record': 'Pass TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'comps': {
+                    'record': 'Completions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'ints': {
+                    'record': 'Most Interceptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'season': {
+                'yards': {
+                    'record': 'Pass Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'tds': {
+                    'record': 'Pass TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'comps': {
+                    'record': 'Completions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'ints': {
+                    'record': 'Most Interceptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                }
+            }
+        },
+        'rushing': {
+            'game': {
+                'yards': {
+                    'record': 'Rush Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tds': {
+                    'record': 'Rush TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'fumbles': {
+                    'record': 'Most Fumbles',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'career': {
+                'yards': {
+                    'record': 'Rush Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tds': {
+                    'record': 'Rush TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'fumbles': {
+                    'record': 'Most Fumbles',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'season': {
+                'yards': {
+                    'record': 'Rush Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'tds': {
+                    'record': 'Rush TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'fumbles': {
+                    'record': 'Most Fumbles',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                }
+            }
+        },
+        'receiving': {
+            'game': {
+                'yards': {
+                    'record': 'Receiving Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tds': {
+                    'record': 'Receiving TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'receptions': {
+                    'record': 'Receptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'career': {
+                'yards': {
+                    'record': 'Receiving Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tds': {
+                    'record': 'Receiving TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'receptions': {
+                    'record': 'Receptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'season': {
+                'yards': {
+                    'record': 'Receiving Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'tds': {
+                    'record': 'Receiving TDs',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'receptions': {
+                    'record': 'Receptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                }
+            }
+        },
+        'kicking': {
+            'game': {
+                'fgs': {
+                    'record': 'Field Goals',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'fgYards': {
+                    'record': 'Total FG Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'career': {
+                'fgs': {
+                    'record': 'Field Goals',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'fgYards': {
+                    'record': 'Total FG Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'season': {
+                'fgs': {
+                    'record': 'Field Goals',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'fgYards': {
+                    'record': 'Total FG Yards',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                }
+            }
+        },
+        'defense': {
+            'game': {
+                'ints': {
+                    'record': 'Interceptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'sacks': {
+                    'record': 'Sacks',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tackles': {
+                    'record': 'Tackles',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'fumRec': {
+                    'record': 'Fumble Recoveries',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'career': {
+                'ints': {
+                    'record': 'Interceptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'sacks': {
+                    'record': 'Sacks',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'tackles': {
+                    'record': 'Tackles',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                },
+                'fumRec': {
+                    'record': 'Fumble Recoveries',
+                    'name': None,
+                    'id': 0,
+                    'value': 0
+                }
+            },
+            'season': {
+                'ints': {
+                    'record': 'Interceptions',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'sacks': {
+                    'record': 'Sacks',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'tackles': {
+                    'record': 'Tackles',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                },
+                'fumRec': {
+                    'record': 'Fumble Recoveries',
+                    'name': None,
+                    'id': 0,
+                    'value': 0,
+                    'season': 0
+                }
+            }
+        }
+    },
+    'team': {
+        'game': {
+            'yards': {
+                'record': 'Yards',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'tds': {
+                'record': 'TDs',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'pts': {
+                'record': 'Total Points',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            }
+        },
+        'allTime': {
+            'wins': {
+                'record': 'Most Wins',
+                'name': None,
+                'id': 0,
+                'value': 0,
+            },
+            'losses': {
+                'record': 'Most Losses',
+                'name': None,
+                'id': 0,
+                'value': 0,
+            },
+            'titles': {
+                'record': 'FloosBowl Titles',
+                'name': None,
+                'id': 0,
+                'value': 0,
+            },
+            'divTitles': {
+                'record': 'Division Titles',
+                'name': None,
+                'id': 0,
+                'value': 0,
+            },
+            'regSeasonTitles': {
+                'record': 'Regular Season Titles',
+                'name': None,
+                'id': 0,
+                'value': 0,
+            }
+        },
+        'season': {
+            'yards': {
+                'record': 'Yards',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'tds': {
+                'record': 'TDs',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'pts': {
+                'record': 'Total Points',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'ints': {
+                'record': 'Most Interceptions',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'fumRec': {
+                'record': 'Most Fumble Recoveries',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            },
+            'elo': {
+                'record': 'Highest Rating',
+                'name': None,
+                'id': 0,
+                'value': 0,
+                'season': 0
+            }
+        }
+    }
+}
 
 
 colorList = [   
@@ -155,8 +607,386 @@ colorList = [
                 '#0fbcf9',
                 '#f53b57'
             ]
-    
 
+dateNow = datetime.datetime.now()
+dateNowUtc = datetime.datetime.utcnow()
+if dateNow.day == dateNowUtc.day:
+    utcOffset = dateNowUtc.hour - dateNow.hour
+elif dateNowUtc.day > dateNow.day:
+    utcOffset = (dateNowUtc.hour + 24) - dateNow.hour
+elif dateNow.day > dateNowUtc.day:
+    utcOffset = dateNowUtc.hour - (dateNow.hour + 24)
+
+
+def checkPlayerGameRecords():
+    for player in activePlayerList:
+        player: FloosPlayer.Player
+        if player.gameStatsDict['passing']['att'] > 0:
+            if player.gameStatsDict['passing']['comp'] > allTimeRecordsDict['players']['passing']['game']['comps']['value']:
+                allTimeRecordsDict['players']['passing']['game']['comps']['value'] = player.gameStatsDict['passing']['comp']
+                allTimeRecordsDict['players']['passing']['game']['comps']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['game']['comps']['id'] = player.id
+            if player.gameStatsDict['passing']['yards'] > allTimeRecordsDict['players']['passing']['game']['yards']['value']:
+                allTimeRecordsDict['players']['passing']['game']['yards']['value'] = player.gameStatsDict['passing']['yards']
+                allTimeRecordsDict['players']['passing']['game']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['game']['yards']['id'] = player.id
+            if player.gameStatsDict['passing']['tds'] > allTimeRecordsDict['players']['passing']['game']['tds']['value']:
+                allTimeRecordsDict['players']['passing']['game']['tds']['value'] = player.gameStatsDict['passing']['tds']
+                allTimeRecordsDict['players']['passing']['game']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['game']['tds']['id'] = player.id
+            if player.gameStatsDict['passing']['ints'] > allTimeRecordsDict['players']['passing']['game']['ints']['value']:
+                allTimeRecordsDict['players']['passing']['game']['ints']['value'] = player.gameStatsDict['passing']['ints']
+                allTimeRecordsDict['players']['passing']['game']['ints']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['game']['ints']['id'] = player.id
+
+        if player.gameStatsDict['rushing']['carries'] > 0:
+            if player.gameStatsDict['rushing']['yards'] > allTimeRecordsDict['players']['rushing']['game']['yards']['value']:
+                allTimeRecordsDict['players']['rushing']['game']['yards']['value'] = player.gameStatsDict['rushing']['yards']
+                allTimeRecordsDict['players']['rushing']['game']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['game']['yards']['id'] = player.id
+            if player.gameStatsDict['rushing']['tds'] > allTimeRecordsDict['players']['rushing']['game']['tds']['value']:
+                allTimeRecordsDict['players']['rushing']['game']['tds']['value'] = player.gameStatsDict['rushing']['tds']
+                allTimeRecordsDict['players']['rushing']['game']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['game']['tds']['id'] = player.id
+            if player.gameStatsDict['rushing']['fumblesLost'] > allTimeRecordsDict['players']['rushing']['game']['fumbles']['value']:
+                allTimeRecordsDict['players']['rushing']['game']['fumbles']['value'] = player.gameStatsDict['rushing']['fumblesLost']
+                allTimeRecordsDict['players']['rushing']['game']['fumbles']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['game']['fumbles']['id'] = player.id
+        
+        if player.gameStatsDict['receiving']['receptions'] > 0:
+            if player.gameStatsDict['receiving']['yards'] > allTimeRecordsDict['players']['receiving']['game']['yards']['value']:
+                allTimeRecordsDict['players']['receiving']['game']['yards']['value'] = player.gameStatsDict['receiving']['yards']
+                allTimeRecordsDict['players']['receiving']['game']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['game']['yards']['id'] = player.id
+            if player.gameStatsDict['receiving']['tds'] > allTimeRecordsDict['players']['receiving']['game']['tds']['value']:
+                allTimeRecordsDict['players']['receiving']['game']['tds']['value'] = player.gameStatsDict['receiving']['tds']
+                allTimeRecordsDict['players']['receiving']['game']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['game']['tds']['id'] = player.id
+            if player.gameStatsDict['receiving']['receptions'] > allTimeRecordsDict['players']['receiving']['game']['receptions']['value']:
+                allTimeRecordsDict['players']['receiving']['game']['receptions']['value'] = player.gameStatsDict['receiving']['receptions']
+                allTimeRecordsDict['players']['receiving']['game']['receptions']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['game']['receptions']['id'] = player.id
+        
+        if player.gameStatsDict['kicking']['fgs'] > 0:
+            if player.gameStatsDict['kicking']['fgs'] > allTimeRecordsDict['players']['kicking']['game']['fgs']['value']:
+                allTimeRecordsDict['players']['kicking']['game']['fgs']['value'] = player.gameStatsDict['kicking']['fgs']
+                allTimeRecordsDict['players']['kicking']['game']['fgs']['name'] = player.name
+                allTimeRecordsDict['players']['kicking']['game']['fgs']['id'] = player.id
+        
+        if player.gameStatsDict['kicking']['fgYards'] > 0:
+            if player.gameStatsDict['kicking']['fgYards'] > allTimeRecordsDict['players']['kicking']['game']['fgYards']['value']:
+                allTimeRecordsDict['players']['kicking']['game']['fgYards']['value'] = player.gameStatsDict['kicking']['fgYards']
+                allTimeRecordsDict['players']['kicking']['game']['fgYards']['name'] = player.name
+                allTimeRecordsDict['players']['kicking']['game']['fgYards']['id'] = player.id
+        
+        if player.gameStatsDict['defense']['ints'] > 0:
+            if player.gameStatsDict['defense']['ints'] > allTimeRecordsDict['players']['defense']['game']['ints']['value']:
+                allTimeRecordsDict['players']['defense']['game']['ints']['value'] = player.gameStatsDict['defense']['ints']
+                allTimeRecordsDict['players']['defense']['game']['ints']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['game']['ints']['id'] = player.id
+        
+        if player.gameStatsDict['defense']['sacks'] > 0:
+            if player.gameStatsDict['defense']['sacks'] > allTimeRecordsDict['players']['defense']['game']['sacks']['value']:
+                allTimeRecordsDict['players']['defense']['game']['sacks']['value'] = player.gameStatsDict['defense']['sacks']
+                allTimeRecordsDict['players']['defense']['game']['sacks']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['game']['sacks']['id'] = player.id
+        
+        if player.gameStatsDict['defense']['tackles'] > 0:
+            if player.gameStatsDict['defense']['tackles'] > allTimeRecordsDict['players']['defense']['game']['tackles']['value']:
+                allTimeRecordsDict['players']['defense']['game']['tackles']['value'] = player.gameStatsDict['defense']['tackles']
+                allTimeRecordsDict['players']['defense']['game']['tackles']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['game']['tackles']['id'] = player.id
+        
+        if player.gameStatsDict['defense']['fumRec'] > 0:
+            if player.gameStatsDict['defense']['fumRec'] > allTimeRecordsDict['players']['defense']['game']['fumRec']['value']:
+                allTimeRecordsDict['players']['defense']['game']['fumRec']['value'] = player.gameStatsDict['defense']['fumRec']
+                allTimeRecordsDict['players']['defense']['game']['fumRec']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['game']['fumRec']['id'] = player.id
+
+def checkTeamGameRecords(game:FloosGame.Game):
+    if game.homeScore > allTimeRecordsDict['team']['game']['pts']['value']:
+        allTimeRecordsDict['team']['game']['pts']['value'] = game.homeScore
+        allTimeRecordsDict['team']['game']['pts']['name'] = '{} {}'.format(game.homeTeam.city, game.homeTeam.name)
+        allTimeRecordsDict['team']['game']['pts']['id'] = game.homeTeam.id
+    if (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']) > allTimeRecordsDict['team']['game']['tds']['value']:
+        allTimeRecordsDict['team']['game']['tds']['value'] = (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
+        allTimeRecordsDict['team']['game']['tds']['name'] = '{} {}'.format(game.homeTeam.city, game.homeTeam.name)
+        allTimeRecordsDict['team']['game']['tds']['id'] = game.homeTeam.id
+    if (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']) > allTimeRecordsDict['team']['game']['yards']['value']:
+        allTimeRecordsDict['team']['game']['yards']['value'] = (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
+        allTimeRecordsDict['team']['game']['yards']['name'] = '{} {}'.format(game.homeTeam.city, game.homeTeam.name)
+        allTimeRecordsDict['team']['game']['yards']['id'] = game.homeTeam.id
+        
+    if game.awayScore > allTimeRecordsDict['team']['game']['pts']['value']:
+        allTimeRecordsDict['team']['game']['pts']['value'] = game.awayScore
+        allTimeRecordsDict['team']['game']['pts']['name'] = '{} {}'.format(game.awayTeam.city, game.awayTeam.name)
+        allTimeRecordsDict['team']['game']['pts']['id'] = game.awayTeam.id
+    if (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']) > allTimeRecordsDict['team']['game']['tds']['value']:
+        allTimeRecordsDict['team']['game']['tds']['value'] = (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
+        allTimeRecordsDict['team']['game']['tds']['name'] = '{} {}'.format(game.awayTeam.city, game.awayTeam.name)
+        allTimeRecordsDict['team']['game']['tds']['id'] = game.awayTeam.id
+    if (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']) > allTimeRecordsDict['team']['game']['yards']['value']:
+        allTimeRecordsDict['team']['game']['yards']['value'] = (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
+        allTimeRecordsDict['team']['game']['yards']['name'] = '{} {}'.format(game.awayTeam.city, game.awayTeam.name)
+        allTimeRecordsDict['team']['game']['yards']['id'] = game.awayTeam.id
+
+
+
+def checkCareerRecords():
+    for player in activePlayerList:
+        player: FloosPlayer.Player
+        if player.careerStatsDict['passing']['att'] > 0:
+            if player.careerStatsDict['passing']['comp'] > allTimeRecordsDict['players']['passing']['career']['comps']['value']:
+                allTimeRecordsDict['players']['passing']['career']['comps']['value'] = player.careerStatsDict['passing']['comp']
+                allTimeRecordsDict['players']['passing']['career']['comps']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['career']['comps']['id'] = player.id
+            if player.careerStatsDict['passing']['yards'] > allTimeRecordsDict['players']['passing']['career']['yards']['value']:
+                allTimeRecordsDict['players']['passing']['career']['yards']['value'] = player.careerStatsDict['passing']['yards']
+                allTimeRecordsDict['players']['passing']['career']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['career']['yards']['id'] = player.id
+            if player.careerStatsDict['passing']['tds'] > allTimeRecordsDict['players']['passing']['career']['tds']['value']:
+                allTimeRecordsDict['players']['passing']['career']['tds']['value'] = player.careerStatsDict['passing']['tds']
+                allTimeRecordsDict['players']['passing']['career']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['career']['tds']['id'] = player.id
+            if player.careerStatsDict['passing']['ints'] > allTimeRecordsDict['players']['passing']['career']['ints']['value']:
+                allTimeRecordsDict['players']['passing']['career']['ints']['value'] = player.careerStatsDict['passing']['ints']
+                allTimeRecordsDict['players']['passing']['career']['ints']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['career']['ints']['id'] = player.id
+
+        if player.careerStatsDict['rushing']['carries'] > 0:
+            if player.careerStatsDict['rushing']['yards'] > allTimeRecordsDict['players']['rushing']['career']['yards']['value']:
+                allTimeRecordsDict['players']['rushing']['career']['yards']['value'] = player.careerStatsDict['rushing']['yards']
+                allTimeRecordsDict['players']['rushing']['career']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['career']['yards']['id'] = player.id
+            if player.careerStatsDict['rushing']['tds'] > allTimeRecordsDict['players']['rushing']['career']['tds']['value']:
+                allTimeRecordsDict['players']['rushing']['career']['tds']['value'] = player.careerStatsDict['rushing']['tds']
+                allTimeRecordsDict['players']['rushing']['career']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['career']['tds']['id'] = player.id
+            if player.careerStatsDict['rushing']['fumblesLost'] > allTimeRecordsDict['players']['rushing']['career']['fumbles']['value']:
+                allTimeRecordsDict['players']['rushing']['career']['fumbles']['value'] = player.careerStatsDict['rushing']['fumblesLost']
+                allTimeRecordsDict['players']['rushing']['career']['fumbles']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['career']['fumbles']['id'] = player.id
+        
+        if player.careerStatsDict['receiving']['receptions'] > 0:
+            if player.careerStatsDict['receiving']['yards'] > allTimeRecordsDict['players']['receiving']['career']['yards']['value']:
+                allTimeRecordsDict['players']['receiving']['career']['yards']['value'] = player.careerStatsDict['receiving']['yards']
+                allTimeRecordsDict['players']['receiving']['career']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['career']['yards']['id'] = player.id
+            if player.careerStatsDict['receiving']['tds'] > allTimeRecordsDict['players']['receiving']['career']['tds']['value']:
+                allTimeRecordsDict['players']['receiving']['career']['tds']['value'] = player.careerStatsDict['receiving']['tds']
+                allTimeRecordsDict['players']['receiving']['career']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['career']['tds']['id'] = player.id
+            if player.careerStatsDict['receiving']['receptions'] > allTimeRecordsDict['players']['receiving']['career']['receptions']['value']:
+                allTimeRecordsDict['players']['receiving']['career']['receptions']['value'] = player.careerStatsDict['receiving']['receptions']
+                allTimeRecordsDict['players']['receiving']['career']['receptions']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['career']['receptions']['id'] = player.id
+        
+        if player.careerStatsDict['kicking']['fgs'] > 0:
+            if player.careerStatsDict['kicking']['fgs'] > allTimeRecordsDict['players']['kicking']['career']['fgs']['value']:
+                allTimeRecordsDict['players']['kicking']['career']['fgs']['value'] = player.careerStatsDict['kicking']['fgs']
+                allTimeRecordsDict['players']['kicking']['career']['fgs']['name'] = player.name
+                allTimeRecordsDict['players']['kicking']['career']['fgs']['id'] = player.id
+        
+        if player.careerStatsDict['kicking']['fgYards'] > 0:
+            if player.careerStatsDict['kicking']['fgYards'] > allTimeRecordsDict['players']['kicking']['career']['fgYards']['value']:
+                allTimeRecordsDict['players']['kicking']['career']['fgYards']['value'] = player.careerStatsDict['kicking']['fgYards']
+                allTimeRecordsDict['players']['kicking']['career']['fgYards']['name'] = player.name
+                allTimeRecordsDict['players']['kicking']['career']['fgYards']['id'] = player.id
+        
+        if player.careerStatsDict['defense']['ints'] > 0:
+            if player.careerStatsDict['defense']['ints'] > allTimeRecordsDict['players']['defense']['career']['ints']['value']:
+                allTimeRecordsDict['players']['defense']['career']['ints']['value'] = player.careerStatsDict['defense']['ints']
+                allTimeRecordsDict['players']['defense']['career']['ints']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['career']['ints']['id'] = player.id
+        
+        if player.careerStatsDict['defense']['sacks'] > 0:
+            if player.careerStatsDict['defense']['sacks'] > allTimeRecordsDict['players']['defense']['career']['sacks']['value']:
+                allTimeRecordsDict['players']['defense']['career']['sacks']['value'] = player.careerStatsDict['defense']['sacks']
+                allTimeRecordsDict['players']['defense']['career']['sacks']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['career']['sacks']['id'] = player.id
+        
+        if player.careerStatsDict['defense']['tackles'] > 0:
+            if player.careerStatsDict['defense']['tackles'] > allTimeRecordsDict['players']['defense']['career']['tackles']['value']:
+                allTimeRecordsDict['players']['defense']['career']['tackles']['value'] = player.careerStatsDict['defense']['tackles']
+                allTimeRecordsDict['players']['defense']['career']['tackles']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['career']['tackles']['id'] = player.id
+        
+        if player.careerStatsDict['defense']['fumRec'] > 0:
+            if player.careerStatsDict['defense']['fumRec'] > allTimeRecordsDict['players']['defense']['career']['fumRec']['value']:
+                allTimeRecordsDict['players']['defense']['career']['fumRec']['value'] = player.careerStatsDict['defense']['fumRec']
+                allTimeRecordsDict['players']['defense']['career']['fumRec']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['career']['fumRec']['id'] = player.id
+
+    for team in teamList:
+            team: FloosTeam.Team
+            if team.allTimeTeamStats['wins'] > allTimeRecordsDict['team']['allTime']['wins']['value']:
+                allTimeRecordsDict['team']['allTime']['wins']['value'] = team.allTimeTeamStats['wins']
+                allTimeRecordsDict['team']['allTime']['wins']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['allTime']['wins']['id'] = team.id
+
+            if team.allTimeTeamStats['losses'] > allTimeRecordsDict['team']['allTime']['losses']['value']:
+                allTimeRecordsDict['team']['allTime']['losses']['value'] = team.allTimeTeamStats['losses']
+                allTimeRecordsDict['team']['allTime']['losses']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['allTime']['losses']['id'] = team.id
+
+            if len(team.leagueChampionships) > allTimeRecordsDict['team']['allTime']['titles']['value']:
+                allTimeRecordsDict['team']['allTime']['titles']['value'] = len(team.leagueChampionships)
+                allTimeRecordsDict['team']['allTime']['titles']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['allTime']['titles']['id'] = team.id
+
+            if len(team.divisionChampionships) > allTimeRecordsDict['team']['allTime']['divTitles']['value']:
+                allTimeRecordsDict['team']['allTime']['divTitles']['value'] = len(team.divisionChampionships)
+                allTimeRecordsDict['team']['allTime']['divTitles']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['allTime']['divTitles']['id'] = team.id
+
+            if len(team.regularSeasonChampions) > allTimeRecordsDict['team']['allTime']['regSeasonTitles']['value']:
+                allTimeRecordsDict['team']['allTime']['regSeasonTitles']['value'] = len(team.regularSeasonChampions)
+                allTimeRecordsDict['team']['allTime']['regSeasonTitles']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['allTime']['regSeasonTitles']['id'] = team.id
+
+
+def checkSeasonRecords(season):
+    for player in activePlayerList:
+        player: FloosPlayer.Player
+        if player.seasonStatsDict['passing']['att'] > 0:
+            if player.seasonStatsDict['passing']['comp'] > allTimeRecordsDict['players']['passing']['season']['comps']['value']:
+                allTimeRecordsDict['players']['passing']['season']['comps']['value'] = player.seasonStatsDict['passing']['comp']
+                allTimeRecordsDict['players']['passing']['season']['comps']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['season']['comps']['id'] = player.id
+                allTimeRecordsDict['players']['passing']['season']['comps']['season'] = season
+            if player.seasonStatsDict['passing']['yards'] > allTimeRecordsDict['players']['passing']['season']['yards']['value']:
+                allTimeRecordsDict['players']['passing']['season']['yards']['value'] = player.seasonStatsDict['passing']['yards']
+                allTimeRecordsDict['players']['passing']['season']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['season']['yards']['id'] = player.id
+                allTimeRecordsDict['players']['passing']['season']['yards']['season'] = season
+            if player.seasonStatsDict['passing']['tds'] > allTimeRecordsDict['players']['passing']['season']['tds']['value']:
+                allTimeRecordsDict['players']['passing']['season']['tds']['value'] = player.seasonStatsDict['passing']['tds']
+                allTimeRecordsDict['players']['passing']['season']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['season']['tds']['id'] = player.id
+                allTimeRecordsDict['players']['passing']['season']['tds']['season'] = season
+            if player.seasonStatsDict['passing']['ints'] > allTimeRecordsDict['players']['passing']['season']['ints']['value']:
+                allTimeRecordsDict['players']['passing']['season']['ints']['value'] = player.seasonStatsDict['passing']['ints']
+                allTimeRecordsDict['players']['passing']['season']['ints']['name'] = player.name
+                allTimeRecordsDict['players']['passing']['season']['ints']['id'] = player.id
+                allTimeRecordsDict['players']['passing']['season']['ints']['season'] = season
+
+        if player.seasonStatsDict['rushing']['carries'] > 0:
+            if player.seasonStatsDict['rushing']['yards'] > allTimeRecordsDict['players']['rushing']['season']['yards']['value']:
+                allTimeRecordsDict['players']['rushing']['season']['yards']['value'] = player.seasonStatsDict['rushing']['yards']
+                allTimeRecordsDict['players']['rushing']['season']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['season']['yards']['id'] = player.id
+                allTimeRecordsDict['players']['rushing']['season']['yards']['season'] = season
+            if player.seasonStatsDict['rushing']['tds'] > allTimeRecordsDict['players']['rushing']['season']['tds']['value']:
+                allTimeRecordsDict['players']['rushing']['season']['tds']['value'] = player.seasonStatsDict['rushing']['tds']
+                allTimeRecordsDict['players']['rushing']['season']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['season']['tds']['id'] = player.id
+                allTimeRecordsDict['players']['rushing']['season']['tds']['season'] = season
+            if player.seasonStatsDict['rushing']['fumblesLost'] > allTimeRecordsDict['players']['rushing']['season']['fumbles']['value']:
+                allTimeRecordsDict['players']['rushing']['season']['fumbles']['value'] = player.seasonStatsDict['rushing']['fumblesLost']
+                allTimeRecordsDict['players']['rushing']['season']['fumbles']['name'] = player.name
+                allTimeRecordsDict['players']['rushing']['season']['fumbles']['id'] = player.id
+                allTimeRecordsDict['players']['rushing']['season']['fumbles']['season'] = season
+        
+        if player.seasonStatsDict['receiving']['receptions'] > 0:
+            if player.seasonStatsDict['receiving']['yards'] > allTimeRecordsDict['players']['receiving']['season']['yards']['value']:
+                allTimeRecordsDict['players']['receiving']['season']['yards']['value'] = player.seasonStatsDict['receiving']['yards']
+                allTimeRecordsDict['players']['receiving']['season']['yards']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['season']['yards']['id'] = player.id
+                allTimeRecordsDict['players']['receiving']['season']['yards']['season'] = season
+            if player.seasonStatsDict['receiving']['tds'] > allTimeRecordsDict['players']['receiving']['season']['tds']['value']:
+                allTimeRecordsDict['players']['receiving']['season']['tds']['value'] = player.seasonStatsDict['receiving']['tds']
+                allTimeRecordsDict['players']['receiving']['season']['tds']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['season']['tds']['id'] = player.id
+                allTimeRecordsDict['players']['receiving']['season']['tds']['season'] = season
+            if player.seasonStatsDict['receiving']['receptions'] > allTimeRecordsDict['players']['receiving']['season']['receptions']['value']:
+                allTimeRecordsDict['players']['receiving']['season']['receptions']['value'] = player.seasonStatsDict['receiving']['receptions']
+                allTimeRecordsDict['players']['receiving']['season']['receptions']['name'] = player.name
+                allTimeRecordsDict['players']['receiving']['season']['receptions']['id'] = player.id
+                allTimeRecordsDict['players']['receiving']['season']['receptions']['season'] = season
+        
+        if player.seasonStatsDict['kicking']['fgs'] > 0:
+            if player.seasonStatsDict['kicking']['fgs'] > allTimeRecordsDict['players']['kicking']['season']['fgs']['value']:
+                allTimeRecordsDict['players']['kicking']['season']['fgs']['value'] = player.seasonStatsDict['kicking']['fgs']
+                allTimeRecordsDict['players']['kicking']['season']['fgs']['name'] = player.name
+                allTimeRecordsDict['players']['kicking']['season']['fgs']['id'] = player.id
+                allTimeRecordsDict['players']['kicking']['season']['fgs']['season'] = season
+            if player.seasonStatsDict['kicking']['fgYards'] > allTimeRecordsDict['players']['kicking']['season']['fgYards']['value']:
+                allTimeRecordsDict['players']['kicking']['season']['fgYards']['value'] = player.seasonStatsDict['kicking']['fgYards']
+                allTimeRecordsDict['players']['kicking']['season']['fgYards']['name'] = player.name
+                allTimeRecordsDict['players']['kicking']['season']['fgYards']['id'] = player.id
+                allTimeRecordsDict['players']['kicking']['season']['fgYards']['season'] = season
+        
+        if player.seasonStatsDict['defense']['ints'] > 0:
+            if player.seasonStatsDict['defense']['ints'] > allTimeRecordsDict['players']['defense']['season']['ints']['value']:
+                allTimeRecordsDict['players']['defense']['season']['ints']['value'] = player.seasonStatsDict['defense']['ints']
+                allTimeRecordsDict['players']['defense']['season']['ints']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['season']['ints']['id'] = player.id
+                allTimeRecordsDict['players']['defense']['season']['ints']['season'] = season
+        
+        if player.seasonStatsDict['defense']['sacks'] > 0:
+            if player.seasonStatsDict['defense']['sacks'] > allTimeRecordsDict['players']['defense']['season']['sacks']['value']:
+                allTimeRecordsDict['players']['defense']['season']['sacks']['value'] = player.seasonStatsDict['defense']['sacks']
+                allTimeRecordsDict['players']['defense']['season']['sacks']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['season']['sacks']['id'] = player.id
+                allTimeRecordsDict['players']['defense']['season']['sacks']['season'] = season
+        
+        if player.seasonStatsDict['defense']['tackles'] > 0:
+            if player.seasonStatsDict['defense']['tackles'] > allTimeRecordsDict['players']['defense']['season']['tackles']['value']:
+                allTimeRecordsDict['players']['defense']['season']['tackles']['value'] = player.seasonStatsDict['defense']['tackles']
+                allTimeRecordsDict['players']['defense']['season']['tackles']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['season']['tackles']['id'] = player.id
+                allTimeRecordsDict['players']['defense']['season']['tackles']['season'] = season
+        
+        if player.seasonStatsDict['defense']['fumRec'] > 0:
+            if player.seasonStatsDict['defense']['fumRec'] > allTimeRecordsDict['players']['defense']['season']['fumRec']['value']:
+                allTimeRecordsDict['players']['defense']['season']['fumRec']['value'] = player.seasonStatsDict['defense']['fumRec']
+                allTimeRecordsDict['players']['defense']['season']['fumRec']['name'] = player.name
+                allTimeRecordsDict['players']['defense']['season']['fumRec']['id'] = player.id
+                allTimeRecordsDict['players']['defense']['season']['fumRec']['season'] = season
+
+        for team in teamList:
+            team: FloosTeam.Team
+            if team.seasonTeamStats['Offense']['totalYards'] > allTimeRecordsDict['team']['season']['yards']['value']:
+                allTimeRecordsDict['team']['season']['yards']['value'] = team.seasonTeamStats['Offense']['totalYards']
+                allTimeRecordsDict['team']['season']['yards']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['season']['yards']['id'] = team.id
+                allTimeRecordsDict['team']['season']['yards']['season'] = season
+    
+            if team.seasonTeamStats['Offense']['tds'] > allTimeRecordsDict['team']['season']['tds']['value']:
+                allTimeRecordsDict['team']['season']['tds']['value'] = team.seasonTeamStats['Offense']['tds']
+                allTimeRecordsDict['team']['season']['tds']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['season']['tds']['id'] = team.id
+                allTimeRecordsDict['team']['season']['tds']['season'] = season
+    
+            if team.seasonTeamStats['Offense']['pts'] > allTimeRecordsDict['team']['season']['pts']['value']:
+                allTimeRecordsDict['team']['season']['pts']['value'] = team.seasonTeamStats['Offense']['pts']
+                allTimeRecordsDict['team']['season']['pts']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['season']['pts']['id'] = team.id
+                allTimeRecordsDict['team']['season']['pts']['season'] = season
+    
+            if team.seasonTeamStats['Defense']['ints'] > allTimeRecordsDict['team']['season']['ints']['value']:
+                allTimeRecordsDict['team']['season']['ints']['value'] = team.seasonTeamStats['Defense']['ints']
+                allTimeRecordsDict['team']['season']['ints']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['season']['ints']['id'] = team.id
+                allTimeRecordsDict['team']['season']['ints']['season'] = season
+    
+            if team.seasonTeamStats['Defense']['fumRec'] > allTimeRecordsDict['team']['season']['fumRec']['value']:
+                allTimeRecordsDict['team']['season']['fumRec']['value'] = team.seasonTeamStats['Defense']['fumRec']
+                allTimeRecordsDict['team']['season']['fumRec']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['season']['fumRec']['id'] = team.id
+                allTimeRecordsDict['team']['season']['fumRec']['season'] = season
+    
+            if team.elo > allTimeRecordsDict['team']['season']['elo']['value']:
+                allTimeRecordsDict['team']['season']['elo']['value'] = team.elo
+                allTimeRecordsDict['team']['season']['elo']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['season']['elo']['id'] = team.id
+                allTimeRecordsDict['team']['season']['elo']['season'] = season
+
+
+
+
+
+    
 class Division:
     def __init__(self, name):
         self.name = name
@@ -169,13 +999,113 @@ class Season:
         self.currentWeek = None
         self.currentWeekText = None
         self.leagueHighlights = []
+        self.divisionLeadersList = []
+        self.nonDivisionLeaderPlayoffTeamsList = []
+        self.nonPlayoffTeamsList = []
+
+    def updatePlayoffPicture(self):
+        nonDivisionLeaderTeamList = []
+        self.divisionLeadersList.clear()
+        self.nonDivisionLeaderPlayoffTeamsList.clear()
+        self.nonPlayoffTeamsList.clear()
+
+        for division in divisionList:
+                division: Division
+                for t in range(len(division.teamList)):
+                    if t == 0:
+                        self.divisionLeadersList.append(division.teamList[t])
+                    else:
+                        nonDivisionLeaderTeamList.append(division.teamList[t])
+
+        list.sort(self.divisionLeadersList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+        list.sort(nonDivisionLeaderTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+        for t in range(len(nonDivisionLeaderTeamList)):
+            if t < 8:
+                self.nonDivisionLeaderPlayoffTeamsList.append(nonDivisionLeaderTeamList[t])
+            else:
+                self.nonPlayoffTeamsList.append(nonDivisionLeaderTeamList[t])
+
+        list.sort(self.nonDivisionLeaderPlayoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+        list.sort(self.nonPlayoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+
+
+    def checkForClinches(self):
+        team1: FloosTeam.Team = teamList[0]
+        team2: FloosTeam.Team = teamList[1]
+        team12: FloosTeam.Team = self.nonDivisionLeaderPlayoffTeamsList[7]
+        team13: FloosTeam.Team = self.nonPlayoffTeamsList[0]
+        for division in divisionList:
+            division: Division
+            divTeam1: FloosTeam.Team = division.teamList[0]
+            divTeam2: FloosTeam.Team = division.teamList[1] 
+
+            if not divTeam1.clinchedDivision:
+                divTeam1.clinchedDivision = FloosMethods.checkIfClinched(divTeam1.seasonTeamStats['wins'], divTeam2.seasonTeamStats['wins'], 28 - self.currentWeek)
+                if divTeam1.clinchedDivision:
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have won the {2} Division'.format(divTeam1.city, divTeam1.name, divTeam1.division)}})
+                    if not divTeam1.clinchedPlayoffs:
+                        divTeam1.clinchedPlayoffs = True
+                        self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(divTeam1.city, divTeam1.name)}})
+                elif self.currentWeek == 28:
+                    divTeam1.clinchedDivision =  True
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have won the {2} Division'.format(divTeam1.city, divTeam1.name, divTeam1.division)}})
+                    if not divTeam1.clinchedPlayoffs:
+                        divTeam1.clinchedPlayoffs = True
+                        self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(divTeam1.city, divTeam1.name)}})
+
+        for team in self.divisionLeadersList:
+            team: FloosTeam.Team
+            if not team.clinchedPlayoffs:
+                team.clinchedPlayoffs = FloosMethods.checkIfClinched(team.seasonTeamStats['wins'], team13.seasonTeamStats['wins'], 28 - self.currentWeek)
+                if team.clinchedPlayoffs:
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}}) 
+
+        if not team1.clinchedTopSeed:
+            team1.clinchedTopSeed = FloosMethods.checkIfClinched(team1.seasonTeamStats['wins'], team2.seasonTeamStats['wins'], 28 - self.currentWeek)
+            if team1.clinchedTopSeed:
+                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched the #1 seed'.format(team1.city, team1.name)}})
+            elif self.currentWeek == 28:
+                team1.clinchedTopSeed = True
+                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched the #1 seed'.format(team1.city, team1.name)}})
+
+        
+
+        if self.currentWeek == 28:
+            for team in self.nonDivisionLeaderPlayoffTeamsList:
+                team: FloosTeam.Team
+                if not team.clinchedPlayoffs:
+                    team.clinchedPlayoffs = True
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+            for team in self.nonPlayoffTeamsList:
+                team: FloosTeam.Team
+                if not team.eliminated:
+                    team.eliminated = True
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+        else:
+            for team in self.nonDivisionLeaderPlayoffTeamsList:
+                team:FloosTeam.Team
+                if not team.clinchedPlayoffs and not team.eliminated:
+                    team.clinchedPlayoffs = FloosMethods.checkIfClinched(team.seasonTeamStats['wins'], team13.seasonTeamStats['wins'], 28 - self.currentWeek)
+                    if team.clinchedPlayoffs:
+                        self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+            for team in self.nonPlayoffTeamsList:
+                team:FloosTeam.Team
+                if not team.clinchedPlayoffs and not team.eliminated:
+                    team.eliminated = FloosMethods.checkIfEliminated(team.seasonTeamStats['wins'], team12.seasonTeamStats['wins'], 28 - self.currentWeek)
+                    if team.eliminated:
+                        self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+
 
     def createSchedule(self):
         numOfWeeks = len(scheduleScheme)
         scheduleList.clear()
+        dateTimeNow = datetime.datetime.utcnow()
         for week in range(0, numOfWeeks):
             gameList = []
             numOfGames = int(len(teamList)/2)
+            weekStartTime = self.getWeekStartTime(dateTimeNow, week)
             for x in range(0, numOfGames):
                 game = scheduleScheme[week][x]
                 homeTeam:FloosTeam.Team = divisionList[int(game[0]) - 1].teamList[int(game[1]) - 1]
@@ -184,10 +1114,72 @@ class Season:
                 newGame.id = 's{0}w{1}g{2}'.format(self.currentSeason, week+1, x+1)
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.isRegularSeasonGame = True
+                newGame.startTime = weekStartTime
                 homeTeam.schedule.append(newGame)
                 awayTeam.schedule.append(newGame)
                 gameList.append(newGame)
-            scheduleList.append(gameList)
+            scheduleList.append({'startTime': weekStartTime, 'games': gameList})
+
+    def getWeekStartTime(self, now:datetime.datetime, week:int):
+        global dateNowUtc
+        global dateNow
+        global utcOffset
+
+        startDay = 4
+        monthDays = 0
+        startTimeHoursList = [11, 12, 13, 14, 15, 16, 17]
+
+        if now.month == 1 or now.month == 3 or now.month == 5 or now.month == 7 or now.month == 8 or now.month == 10 or now.month == 12:
+            monthDays = 31
+        elif now.month == 4 or now.month == 6 or now.month == 9 or now.month == 11:
+            monthDays = 30
+        elif now.month == 2:
+            if (now.year % 4) == 0:
+                monthDays = 29
+            else:
+                monthDays = 28
+
+        startTimeHour = startTimeHoursList[week%7]
+
+
+        todayWeekDay = dateNowUtc.isoweekday()
+
+        if week > 28:
+            if week == 32:
+                if todayWeekDay == startDay + 5:
+                    startDayOffset = 0
+                else:
+                    startDayOffset = (startDay + 5) - todayWeekDay
+            else:
+                if todayWeekDay == startDay + 5:
+                    startDayOffset = startDay + 4
+                elif todayWeekDay == startDay + 4:
+                    startDayOffset = 0
+                else:
+                    startDayOffset = (startDay + 4) - todayWeekDay
+            dayOffset = startDayOffset
+        else:
+            if todayWeekDay == startDay - 1:
+                startDayOffset = startDay - 1
+            elif todayWeekDay == startDay:
+                startDayOffset = 0
+            else:
+                startDayOffset = startDay + 7 - todayWeekDay
+
+            dayOffset = math.floor((week)/7) + startDayOffset
+
+
+        if (now.day + dayOffset) > monthDays:
+            if now.month + 1 > 12:
+                return datetime.datetime(now.year + 1, 1, dayOffset - (monthDays - now.day), startTimeHour)
+            else:
+                return datetime.datetime(now.year, now.month + 1, dayOffset - (monthDays - now.day), startTimeHour)
+        else:
+            if startTimeHour + utcOffset == 24:
+                return datetime.datetime(now.year, now.month, now.day + dayOffset, 0)
+            else:
+                return datetime.datetime(now.year, now.month, now.day + dayOffset, startTimeHour + utcOffset)
+            
 
     def saveSeasonStats(self):
         dict = {}
@@ -201,11 +1193,12 @@ class Season:
                 player: FloosPlayer.Player
                 player.seasonsPlayed += 1
                 if player.seasonStatsDict['passing']['yards'] > 0:
-                    player.careerStatsDict['passing']['att'] += player.seasonStatsDict['passing']['att']
-                    player.careerStatsDict['passing']['comp'] += player.seasonStatsDict['passing']['comp']
-                    player.careerStatsDict['passing']['tds'] += player.seasonStatsDict['passing']['tds']
-                    player.careerStatsDict['passing']['ints'] += player.seasonStatsDict['passing']['ints']
-                    player.careerStatsDict['passing']['yards'] += player.seasonStatsDict['passing']['yards']
+                    #player.careerStatsDict['passing']['att'] += player.seasonStatsDict['passing']['att']
+                    #player.careerStatsDict['passing']['comp'] += player.seasonStatsDict['passing']['comp']
+                    #player.careerStatsDict['passing']['tds'] += player.seasonStatsDict['passing']['tds']
+                    #player.careerStatsDict['passing']['ints'] += player.seasonStatsDict['passing']['ints']
+                    #player.careerStatsDict['passing']['yards'] += player.seasonStatsDict['passing']['yards']
+                    #player.careerStatsDict['passing']['missedPass'] += player.seasonStatsDict['passing']['missedPass']
                     player.careerStatsDict['passing']['20+'] += player.seasonStatsDict['passing']['20+']
                     player.careerStatsDict['passing']['ypc'] = round(player.careerStatsDict['passing']['yards']/player.careerStatsDict['passing']['comp'])
                     player.careerStatsDict['passing']['compPerc'] = round((player.careerStatsDict['passing']['comp']/player.careerStatsDict['passing']['att'])*100)
@@ -213,11 +1206,12 @@ class Season:
                         player.careerStatsDict['passing']['longest'] = player.seasonStatsDict['passing']['longest']
                     team.seasonTeamStats['Offense']['passYards'] += player.seasonStatsDict['passing']['yards']
                 if player.seasonStatsDict['receiving']['yards'] > 0:
-                    player.careerStatsDict['receiving']['receptions'] += player.seasonStatsDict['receiving']['receptions']
-                    player.careerStatsDict['receiving']['targets'] += player.seasonStatsDict['receiving']['targets']
-                    player.careerStatsDict['receiving']['yac'] += player.seasonStatsDict['receiving']['yac']
-                    player.careerStatsDict['receiving']['yards'] += player.seasonStatsDict['receiving']['yards']
-                    player.careerStatsDict['receiving']['tds'] += player.seasonStatsDict['receiving']['tds']
+                    #player.careerStatsDict['receiving']['receptions'] += player.seasonStatsDict['receiving']['receptions']
+                    #player.careerStatsDict['receiving']['targets'] += player.seasonStatsDict['receiving']['targets']
+                    #player.careerStatsDict['receiving']['yac'] += player.seasonStatsDict['receiving']['yac']
+                    #player.careerStatsDict['receiving']['yards'] += player.seasonStatsDict['receiving']['yards']
+                    #player.careerStatsDict['receiving']['tds'] += player.seasonStatsDict['receiving']['tds']
+                    #player.careerStatsDict['receiving']['drops'] += player.seasonStatsDict['receiving']['drops']
                     player.careerStatsDict['receiving']['20+'] += player.seasonStatsDict['receiving']['20+']
                     if player.seasonStatsDict['receiving']['longest'] > player.careerStatsDict['receiving']['longest']:
                         player.careerStatsDict['receiving']['longest'] = player.seasonStatsDict['receiving']['longest']
@@ -225,10 +1219,10 @@ class Season:
                         player.careerStatsDict['receiving']['ypr'] = round(player.careerStatsDict['receiving']['yards']/player.careerStatsDict['receiving']['receptions'])
                         player.careerStatsDict['receiving']['rcvPerc'] = round((player.careerStatsDict['receiving']['receptions']/player.careerStatsDict['receiving']['targets'])*100)
                 if player.seasonStatsDict['rushing']['carries'] > 0:
-                    player.careerStatsDict['rushing']['carries'] += player.seasonStatsDict['rushing']['carries']
-                    player.careerStatsDict['rushing']['yards'] += player.seasonStatsDict['rushing']['yards']
-                    player.careerStatsDict['rushing']['tds'] += player.seasonStatsDict['rushing']['tds']
-                    player.careerStatsDict['rushing']['fumblesLost'] += player.seasonStatsDict['rushing']['fumblesLost']
+                    #player.careerStatsDict['rushing']['carries'] += player.seasonStatsDict['rushing']['carries']
+                    #player.careerStatsDict['rushing']['yards'] += player.seasonStatsDict['rushing']['yards']
+                    #player.careerStatsDict['rushing']['tds'] += player.seasonStatsDict['rushing']['tds']
+                    #player.careerStatsDict['rushing']['fumblesLost'] += player.seasonStatsDict['rushing']['fumblesLost']
                     player.careerStatsDict['rushing']['20+'] += player.seasonStatsDict['rushing']['20+']
                     player.careerStatsDict['rushing']['ypc'] = round(player.careerStatsDict['rushing']['yards']/player.careerStatsDict['rushing']['carries'])
                     if player.seasonStatsDict['rushing']['longest'] > player.careerStatsDict['rushing']['longest']:
@@ -240,9 +1234,10 @@ class Season:
                     else:
                         player.seasonStatsDict['kicking']['fgPerc'] = 0
 
-                    player.careerStatsDict['kicking']['fgAtt'] += player.seasonStatsDict['kicking']['fgAtt']
-                    player.careerStatsDict['kicking']['fgs'] += player.seasonStatsDict['kicking']['fgs']
-                    player.careerStatsDict['kicking']['fg45+'] += player.seasonStatsDict['kicking']['fg45+']
+                    #player.careerStatsDict['kicking']['fgAtt'] += player.seasonStatsDict['kicking']['fgAtt']
+                    #player.careerStatsDict['kicking']['fgs'] += player.seasonStatsDict['kicking']['fgs']
+                    #player.careerStatsDict['kicking']['fg45+'] += player.seasonStatsDict['kicking']['fg45+']
+                    #player.careerStatsDict['kicking']['fgYards'] += player.seasonStatsDict['kicking']['fgYards']
                     if player.seasonStatsDict['kicking']['longest'] > player.careerStatsDict['kicking']['longest']:
                         player.careerStatsDict['kicking']['longest'] = player.seasonStatsDict['kicking']['longest']
                     if player.careerStatsDict['kicking']['fgs'] > 0:
@@ -252,12 +1247,12 @@ class Season:
                     team.seasonTeamStats['Offense']['tds'] += (player.seasonStatsDict['passing']['tds'] + player.seasonStatsDict['rushing']['tds'] + player.seasonStatsDict['receiving']['tds'])
 
                 if isinstance(player, FloosPlayer.PlayerDB) or isinstance(player, FloosPlayer.PlayerDefBasic):
-                    player.careerStatsDict['defense']['tackles'] += player.seasonStatsDict['defense']['tackles']
-                    player.careerStatsDict['defense']['sacks'] += player.seasonStatsDict['defense']['sacks']
-                    player.careerStatsDict['defense']['fumRec'] += player.seasonStatsDict['defense']['fumRec']
-                    player.careerStatsDict['defense']['ints'] += player.seasonStatsDict['defense']['ints']
-                    player.careerStatsDict['defense']['passTargets'] += player.seasonStatsDict['defense']['passTargets']
-                    player.careerStatsDict['defense']['passDisruptions'] += player.seasonStatsDict['defense']['passDisruptions']
+                    #player.careerStatsDict['defense']['tackles'] += player.seasonStatsDict['defense']['tackles']
+                    #player.careerStatsDict['defense']['sacks'] += player.seasonStatsDict['defense']['sacks']
+                    #player.careerStatsDict['defense']['fumRec'] += player.seasonStatsDict['defense']['fumRec']
+                    #player.careerStatsDict['defense']['ints'] += player.seasonStatsDict['defense']['ints']
+                    #player.careerStatsDict['defense']['passTargets'] += player.seasonStatsDict['defense']['passTargets']
+                    #player.careerStatsDict['defense']['passDisruptions'] += player.seasonStatsDict['defense']['passDisruptions']
                     if player.careerStatsDict['defense']['passTargets'] > 0:
                         player.careerStatsDict['defense']['passDisPerc'] = round((player.careerStatsDict['defense']['passDisruptions']/player.careerStatsDict['defense']['passTargets'])*100)
 
@@ -313,21 +1308,24 @@ class Season:
 
         jsonFile.write(json.dumps(dict, indent=4))
         jsonFile.close()
-
         savePlayerData()
 
-    def clearSeasonStats(self):
+    def clearPlayerSeasonStats(self):
         for player in activePlayerList:
             player: FloosPlayer.Player
-            player.seasonStatsDict['rating'] = player.playerTier.value
-            seasonStatsCopy = copy.deepcopy(player.seasonStatsDict)
-            player.seasonStatsArchive.pop(0)
-            player.seasonStatsArchive.insert(0, seasonStatsCopy)
-            player.seasonStatsDict = copy.deepcopy(FloosPlayer.playerStatsDict)
-            player.gamesPlayed = 0
+            if player.seasonsPlayed > 0:
+                player.seasonStatsDict['rating'] = player.playerTier.value
+                seasonStatsCopy = copy.deepcopy(player.seasonStatsDict)
+                player.seasonStatsArchive.pop(0)
+                player.seasonStatsArchive.insert(0, seasonStatsCopy)
+                player.seasonStatsDict = copy.deepcopy(FloosPlayer.playerStatsDict)
+                player.gamesPlayed = 0
 
+    def clearTeamSeasonStats(self):
         for team in teamList:
             team: FloosTeam.Team
+            team.seasonTeamStats['elo'] = team.elo
+            team.seasonTeamStats['overallRating'] = team.overallRating
             team.statArchive.insert(0,team.seasonTeamStats)
             team.seasonTeamStats = copy.deepcopy(FloosTeam.teamStatsDict)
             team.schedule = []
@@ -345,6 +1343,11 @@ class Season:
         for team in teamList:
             team: FloosTeam.Team
             team.eliminated = False
+            team.clinchedDivision = False
+            team.clinchedPlayoffs = False
+            team.clinchedTopSeed = False
+            team.leagueChampion = False
+            team.winningStreak = False
             team.seasonTeamStats['season'] = self.currentSeason
             rosterDict = {}
             for pos, player in team.rosterDict.items():
@@ -380,25 +1383,59 @@ class Season:
         self.leagueHighlights.insert(0, {'event':  {'text': 'Season {} Start'.format(self.currentSeason)}})
 
         for week in scheduleList:
-            self.currentWeek = scheduleList.index(week)+1
-            self.currentWeekText = 'Week {}'.format(self.currentWeek)
-            self.activeGames = week
-            gameDict = gameDictTemp.copy()
-            self.leagueHighlights = []
+            weekStartTime: datetime.datetime = week['startTime']
+            weekSetupTime: datetime.datetime = weekStartTime - datetime.timedelta(minutes=10)
 
-            for game in range(0,len(week)):
-                week[game].leagueHighlights = self.leagueHighlights
+            timeToWeekStart = weekStartTime - datetime.datetime.utcnow()
+            timeToWeekStartMinutes = timeToWeekStart.total_seconds()/60
+            
+            if timeToWeekStartMinutes > 60:
+                if self.currentWeek is not None:
+                    pass
+                    # while datetime.datetime.utcnow().day < weekStartTime.day:
+                    #     await asyncio.sleep(30)
+                self.currentWeek = scheduleList.index(week)+1
+                self.currentWeekText = 'Week {}'.format(self.currentWeek)
+                self.activeGames = week['games']
+                gameDict = gameDictTemp.copy()
+                self.leagueHighlights = []
+                for game in range(0,len(self.activeGames)):
+                    self.activeGames[game].leagueHighlights = self.leagueHighlights
+                    self.activeGames[game].calculateWinProbability()
+
+                #while datetime.datetime.utcnow() < weekSetupTime:
+                #   await asyncio.sleep(30)
+
+            else:
+                #while datetime.datetime.utcnow() < weekSetupTime:
+                #   await asyncio.sleep(30)
+                self.currentWeek = scheduleList.index(week)+1
+                self.currentWeekText = 'Week {}'.format(self.currentWeek)
+                self.activeGames = week['games']
+                gameDict = gameDictTemp.copy()
+                self.leagueHighlights = []
+                for game in range(0,len(self.activeGames)):
+                    self.activeGames[game].leagueHighlights = self.leagueHighlights
+                    self.activeGames[game].calculateWinProbability()
+                
+            self.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
+
+            
+
+            gamesList = [self.activeGames[game].playGame() for game in range(0,len(self.activeGames))]
+
+            await asyncio.sleep(30)
+            # while datetime.datetime.utcnow() < weekStartTime:
+            #     await asyncio.sleep(30)
 
             self.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeekText)}})
-
-            gamesList = [week[game].playGame() for game in range(0,len(week))]
             await asyncio.wait(gamesList)
 
-            for game in range(0,len(week)):
+            for game in range(0,len(self.activeGames)):
                 strGame = 'Game {}'.format(game + 1)
-                week[game].postgame()
-                gameResults = week[game].gameDict
+                gameResults = self.activeGames[game].gameDict
                 gameDict[strGame] = gameResults
+                checkTeamGameRecords(self.activeGames[game])
             weekDict = FloosMethods._prepare_for_serialization(gameDict)
             jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentWeekText)), "w+")
             jsonFile.write(json.dumps(weekDict, indent=4))
@@ -406,9 +1443,15 @@ class Season:
             
             for division in divisionList:
                 list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             getPerformanceRating()
             sortPlayers()
             sortDefenses()
+            self.updatePlayoffPicture()
+            self.checkForClinches()
+            checkPlayerGameRecords()
+            checkCareerRecords()
+            checkSeasonRecords(self.currentSeason)
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
             await asyncio.sleep(30)
 
@@ -437,6 +1480,7 @@ class Season:
         seasonDict['standings'] = standingsDict
         seasonDict['champion'] = leagueChampion.name
         leagueChampion.seasonTeamStats['leagueChamp'] = True
+        leagueChampion.leagueChampion = True
 
         _serialzedDict = FloosMethods._prepare_for_serialization(seasonDict)
 
@@ -489,48 +1533,78 @@ class Season:
     async def playPlayoffs(self):
         champ = None
         playoffDict = {}
+        nonDivisionWinnersList = []
         playoffTeamsList = []
-        nonDivWinnersList = []
-        byeTeamList = []
+        playoffsByeTeamList = []
+        playoffsNonByeTeamList = []
+        nonPlayoffTeamList = []
         strCurrentSeason = 'season{}'.format(self.currentSeason)
         x = 0
         for division in divisionList:
             list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            division.teamList[0].clinchedDivision = True
             division.teamList[0].divisionChampionships.append('Season {}'.format(seasonsPlayed+1))
-            division.teamList[0].seasonTeamStats['divPLace'] = '1st'
-            division.teamList[1].seasonTeamStats['divPLace'] = '2nd'
-            division.teamList[2].seasonTeamStats['divPLace'] = '3rd'
-            division.teamList[3].seasonTeamStats['divPLace'] = '4th'
-            if len(division.teamList) == 6:
-                division.teamList[4].seasonTeamStats['divPLace'] = '5th'
-                division.teamList[5].seasonTeamStats['divPLace'] = '6th'
+            division.teamList[0].seasonTeamStats['divPlace'] = '1st'
+            division.teamList[0].seasonTeamStats['divisionChamp'] = True
+            division.teamList[1].seasonTeamStats['divPlace'] = '2nd'
+            division.teamList[2].seasonTeamStats['divPlace'] = '3rd'
+            division.teamList[3].seasonTeamStats['divPlace'] = '4th'
+            division.teamList[4].seasonTeamStats['divPlace'] = '5th'
+            division.teamList[5].seasonTeamStats['divPlace'] = '6th'
 
-            playoffTeamsList.append(division.teamList[0])
-            nonDivWinnersList.append(division.teamList[1])
-            nonDivWinnersList.append(division.teamList[2])
-            nonDivWinnersList.append(division.teamList[3])
-            nonDivWinnersList.append(division.teamList[4])
-            nonDivWinnersList.append(division.teamList[5])
+            playoffsByeTeamList.append(division.teamList[0])
+            nonDivisionWinnersList.append(division.teamList[1])
+            nonDivisionWinnersList.append(division.teamList[2])
+            nonDivisionWinnersList.append(division.teamList[3])
+            nonDivisionWinnersList.append(division.teamList[4])
+            nonDivisionWinnersList.append(division.teamList[5])
 
-        list.sort(nonDivWinnersList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-        for x in range(len(nonDivWinnersList)):
-            playoffTeamsList.append(nonDivWinnersList.pop(0))
-            if x == 7:
-                break
+        list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+        for team in nonDivisionWinnersList:
+            team: FloosTeam.Team
+            if team.clinchedPlayoffs:
+                playoffsNonByeTeamList.append(team)
+            elif team.eliminated:
+                nonPlayoffTeamList.append(team)
+
+        list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+        playoffsByeTeamList[0].clinchedTopSeed = True
+        playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
         
-        freeAgencyOrder.extend(nonDivWinnersList)
+        freeAgencyOrder.extend(nonPlayoffTeamList)
         list.sort(freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
 
-        numOfRounds = FloosMethods.getPower(2, len(playoffTeamsList))
+        numOfRounds = FloosMethods.getPower(2, len(playoffsByeTeamList) + len(playoffsNonByeTeamList))
 
-        for team in playoffTeamsList:
+        while len(playoffsNonByeTeamList) > 8:
+            playoffsNonByeTeamList.pop()
+
+        for team in playoffsByeTeamList:
             team: FloosTeam.Team
             team.playoffAppearances += 1
             team.seasonTeamStats['madePlayoffs'] = True
-
-        for team in nonDivWinnersList:
+            team.clinchedPlayoffs = True
+            team.winningStreak = False
+        for team in playoffsNonByeTeamList:
             team: FloosTeam.Team
-            team.eliminated = True
+            team.playoffAppearances += 1
+            team.seasonTeamStats['madePlayoffs'] = True
+            team.winningStreak = False
+            if not team.clinchedPlayoffs:
+                team.clinchedPlayoffs = True
+                team.eliminated = False
+                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+
+        for team in nonPlayoffTeamList:
+            team: FloosTeam.Team
+            team.winningStreak = False
+            if not team.eliminated:
+                team.eliminated = True
+                team.clinchedPlayoffs = False
+                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+                
 
         for x in range(numOfRounds):
 
@@ -539,17 +1613,20 @@ class Season:
             self.leagueHighlights = []
             currentRound = x + 1
             gameNumber = 1
+            roundStartTime = self.getWeekStartTime(datetime.datetime.utcnow(), 28 + currentRound)
+
+            if currentRound == 1:
+                playoffTeamsList.extend(playoffsNonByeTeamList)
 
             list.sort(playoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
-            if len(playoffTeamsList) == 12:
-                for y in range(4):
-                    byeTeamList.append(playoffTeamsList.pop(0))
+            if currentRound == 2:
 
-            if len(playoffTeamsList) == 4 and len(byeTeamList) == 4:
-                playoffTeamsList.extend(byeTeamList)
-                byeTeamList.clear()
-                list.sort(playoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+                for z in range(len(playoffsByeTeamList)):
+                    playoffTeamsList.insert(0, playoffsByeTeamList.pop())
+
+                playoffsByeTeamList.clear()
+                playoffsNonByeTeamList.clear()
 
             hiSeed = 0
             lowSeed = len(playoffTeamsList) - 1
@@ -558,7 +1635,9 @@ class Season:
                 newGame = FloosGame.Game(playoffTeamsList[hiSeed], playoffTeamsList[lowSeed])
                 newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
                 newGame.status = FloosGame.GameStatus.Scheduled
+                newGame.startTime = roundStartTime
                 newGame.isRegularSeasonGame = False
+                newGame.calculateWinProbability()
                 playoffGamesList.append(newGame)
                 playoffGamesTaskList.append(newGame.playGame())
                 newGame.leagueHighlights = self.leagueHighlights
@@ -566,22 +1645,27 @@ class Season:
                 lowSeed -= 1
                 gameNumber += 1
             
-            scheduleList.append(playoffGamesList)
+            scheduleList.append({'startTime': roundStartTime, 'games': playoffGamesList})
 
             self.activeGames = playoffGamesList
             if x < numOfRounds - 1:
                 self.currentWeek = 'Playoffs Round {}'.format(x+1)
                 self.currentWeekText = 'Playoffs Round {}'.format(x+1)
-                self.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeek)}})
             else:
                 self.currentWeek = 'Floos Bowl'
                 self.currentWeekText = 'Floos Bowl'
-                self.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeek)}})
+
+            self.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
+
+            await asyncio.sleep(30)
+            # while datetime.datetime.utcnow() < roundStartTime:
+            #     await asyncio.sleep(30)
+                
+            self.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeekText)}})
             await asyncio.wait(playoffGamesTaskList)
 
             for game in playoffGamesList:
                 game: FloosGame.Game
-                game.postgame()
                 gameResults = game.gameDict
                 if len(playoffGamesList) == 1:
                     playoffTeamsList.clear()
@@ -589,6 +1673,7 @@ class Season:
                     champ: FloosTeam.Team = game.winningTeam
                     runnerUp: FloosTeam.Team = game.losingTeam
                     runnerUp.eliminated = True
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} are Floos Bowl champions!'.format(champ.city, champ.name)}})
                     playoffDict['Floos Bowl'] = gameResults
                     freeAgencyOrder.append(runnerUp)
                     freeAgencyOrder.append(champ)
@@ -596,17 +1681,24 @@ class Season:
                         player:FloosPlayer.Player
                         player.leagueChampionships.append({'Season': seasonsPlayed+1, 'team': player.team.abbr, 'teamColor': player.team.color})
                     
-                    championshipHistory.append({'champ': '{} {}'.format(champ.city, champ.name), 
-                                                'champColor': champ.color, 
-                                                'champId': champ.id, 
-                                                'runnerUp': '{} {}'.format(runnerUp.city, runnerUp.name),
-                                                'runnerUpColor': runnerUp.color,
-                                                'runnerUpId': runnerUp.id})
+                    championshipHistory.insert(0, { 'season': self.currentSeason,
+                                                    'champion': '{} {}'.format(game.winningTeam.city, game.winningTeam.name),
+                                                    'championColor': game.winningTeam.color,
+                                                    'championId': game.winningTeam.id,
+                                                    'championRecord': '{}-{}'.format(game.winningTeam.seasonTeamStats['wins'],game.winningTeam.seasonTeamStats['losses']),
+                                                    'championElo': game.winningTeam.elo,
+                                                    'runnerUp': '{} {}'.format(game.losingTeam.city, game.losingTeam.name),
+                                                    'runnerUpColor': game.losingTeam.color,
+                                                    'runnerUpId': game.losingTeam.id,
+                                                    'runnerUpRecord': '{}-{}'.format(game.losingTeam.seasonTeamStats['wins'],game.losingTeam.seasonTeamStats['losses']),
+                                                    'runnerUpElo': game.losingTeam.elo
+                                                    })
                 else:
                     playoffDict[game.id] = gameResults
                     for team in playoffTeamsList:
                         if team.name == gameResults['losingTeam']:
                             team.eliminated = True
+                            self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
                             freeAgencyOrder.append(team)
                             playoffTeamsList.remove(team)
                             break
@@ -620,6 +1712,27 @@ class Season:
                 await asyncio.sleep(30)
 
         return champ
+
+def setNewingElo():
+    ratingList = []
+    eloList = []
+    for team in teamList:
+        team: FloosTeam.Team
+        ratingList.append(team.overallRating)
+        eloList.append(team.elo)
+    
+    meanRating = round(statistics.mean(ratingList))
+
+    for team in teamList:
+        team: FloosTeam.Team
+        if len(team.statArchive):
+            lastRating = team.statArchive[0]['overallRating']
+            ratingDiff = round(team.overallRating / lastRating, 2)
+            team.elo = round(team.elo * ratingDiff)
+            
+        else:
+            teamRatingRank = round(team.overallRating / meanRating, 2)
+            team.elo = round(team.elo * teamRatingRank)
 
 
 def getPlayerTerm(tier: FloosPlayer.PlayerTier):
@@ -1204,31 +2317,27 @@ def initPlayers():
     pass
 
 def sortPlayers():
-    for playerList in playerLists:
-        ratingList = []
-        for player in playerList:
-            player: FloosPlayer.Player
-            ratingList.append(player.playerRating)
-
-        tierS = np.percentile(ratingList, 96)
-        tierA = np.percentile(ratingList, 80)
-        tierB = np.percentile(ratingList, 40)
-        tierC = np.percentile(ratingList, 10)
-
-        for player in playerList:
-            if player.playerRating >= tierS:
-                player.playerTier = FloosPlayer.PlayerTier.TierS
-            elif player.playerRating >= tierA:
-                player.playerTier = FloosPlayer.PlayerTier.TierA
-            elif player.playerRating >= tierB:
-                player.playerTier = FloosPlayer.PlayerTier.TierB
-            elif player.playerRating >= tierC:
-                player.playerTier = FloosPlayer.PlayerTier.TierC
-            else:
-                player.playerTier = FloosPlayer.PlayerTier.TierD
-
-            if player.team is None or player.team == 'Free Agent':
-                player.capHit = player.playerTier.value
+    ratingList = []
+    for player in activePlayerList:
+        player: FloosPlayer.Player
+        ratingList.append(player.playerRating)
+    tierS = np.percentile(ratingList, 96)
+    tierA = np.percentile(ratingList, 85)
+    tierB = np.percentile(ratingList, 40)
+    tierC = np.percentile(ratingList, 10)
+    for player in activePlayerList:
+        if player.playerRating >= tierS:
+            player.playerTier = FloosPlayer.PlayerTier.TierS
+        elif player.playerRating >= tierA:
+            player.playerTier = FloosPlayer.PlayerTier.TierA
+        elif player.playerRating >= tierB:
+            player.playerTier = FloosPlayer.PlayerTier.TierB
+        elif player.playerRating >= tierC:
+            player.playerTier = FloosPlayer.PlayerTier.TierC
+        else:
+            player.playerTier = FloosPlayer.PlayerTier.TierD
+        if player.team is None or player.team == 'Free Agent':
+            player.capHit = player.playerTier.value
 
 
 def sortDefenses():
@@ -1237,9 +2346,9 @@ def sortDefenses():
         team: FloosTeam.Team
         teamDefenseRatingList.append(team.defenseOverallRating)
     
-    tier5perc = np.percentile(teamDefenseRatingList, 96)
+    tier5perc = np.percentile(teamDefenseRatingList, 95)
     tier4perc = np.percentile(teamDefenseRatingList, 80)
-    tier3perc = np.percentile(teamDefenseRatingList, 40)
+    tier3perc = np.percentile(teamDefenseRatingList, 30)
     tier2perc = np.percentile(teamDefenseRatingList, 10)
 
     for team in teamList:
@@ -1279,15 +2388,23 @@ def initDivisions():
 async def offseason():
     activeSeason.currentWeek = 'Offseason'
     activeSeason.currentWeekText = 'Offseason'
-    newPlayerCount = 8
+    newPlayerCount = 6
     freeAgencyDict = {}
     for player in freeAgentList:
         player: FloosPlayer.Player
         player.freeAgentYears += 1
+        retirePlayerBool = False
 
-        if player.freeAgentYears > 8:
+        if player.freeAgentYears > 3:
             x = randint(1,10)
-            if x > 6:
+            if player.playerTier.value == 1 and x > 3:
+                retirePlayerBool = True
+            elif player.playerTier.value == 2 and x > 5:
+                retirePlayerBool = True
+            elif x > 8:
+                retirePlayerBool = True
+
+            if retirePlayerBool: 
                 player.team = 'Retired'
                 player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
                 retiredPlayersList.append(player)
@@ -1335,7 +2452,7 @@ async def offseason():
 
 
     for team in teamList:
-        team.cutsAvailable = 1
+        team.cutsAvailable = 2
 
         for k,v in team.rosterDict.items():
             v: FloosPlayer.Player
@@ -1343,81 +2460,97 @@ async def offseason():
                 v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
             elif v.seasonsPlayed >= 4 and v.seasonsPlayed < 7:
                 v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran2
-            else:
+            elif v.seasonsPlayed >= 7 and v.seasonsPlayed <= 10:
                 v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran3
+            else:
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Veteran4
 
+            retirePlayerBool = None
             v.termRemaining -= 1
-            if v.termRemaining == 0:
-                retirePlayerBool = None
-                if v.seasonsPlayed > 15:
-                    x = randint(1,100)
-                    if x > 30:
-                        retirePlayerBool = True
-                elif v.seasonsPlayed > 10:
-                    x = randint(1,100)
-                    if x > 80:
-                        retirePlayerBool = True
-                elif v.seasonsPlayed >= 7:
-                    x = randint(1,100)
-                    if x > 95:
-                        retirePlayerBool = True
-                else:
-                    retirePlayerBool = False
-
-                if retirePlayerBool:
-                    v.previousTeam = team.name
-                    v.seasonPerformanceRating = 0
-                    team.playerCap -= v.capHit
-                    v.team = 'Retired'
-                    v.serviceTime = FloosPlayer.PlayerServiceTime.Retired
-                    retiredPlayersList.append(v)
-                    newlyRetiredPlayersList.append(v)
-                    activePlayerList.remove(v)
-                    if v.position is FloosPlayer.Position.QB:
-                        activeQbList.remove(v)
-                    elif v.position is FloosPlayer.Position.RB:
-                        activeRbList.remove(v)
-                    elif v.position is FloosPlayer.Position.WR:
-                        activeWrList.remove(v)
-                    elif v.position is FloosPlayer.Position.TE:
-                        activeTeList.remove(v)
-                    elif v.position is FloosPlayer.Position.K:
-                        activeKList.remove(v)
-                    elif v.position is FloosPlayer.Position.DB:
-                        activeDbList.remove(v)
-                    elif v.position is FloosPlayer.Position.LB:
-                        activeLbList.remove(v)
-                    elif v.position is FloosPlayer.Position.DL:
-                        activeDlList.remove(v)
-                    elif v.position is FloosPlayer.Position.DE:
-                        activeDeList.remove(v)
-                    team.rosterDict[k] = None
-
-                    activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has retired after {} seasons'.format(player.name, player.seasonsPlayed)}})
-
-                    name = v.name
-                    if name.endswith('Jr.'):
-                        name = name.replace('Jr.', 'III')
-                    elif name.endswith('IV'):
-                        name = name.replace('IV', 'V')
-                    elif name.endswith('VIII'):
-                        name = name.replace('VIII', 'IX')
-                    elif name.endswith('IX'):
-                        name = name.replace('IX', 'X')
-                    elif name.endswith('III'):
-                        name = name.replace('III', 'IV')
-                    elif name.endswith('V') or name.endswith('X'):
-                        name += 'I'
+            if v.seasonsPlayed > v.attributes.longevity:
+                if v.termRemaining == 0:
+                    if v.seasonsPlayed > 15:
+                        x = randint(1,100)
+                        if x > 10:
+                            retirePlayerBool = True
+                    elif v.seasonsPlayed > 10:
+                        x = randint(1,100)
+                        if x > 35:
+                            retirePlayerBool = True
+                    elif v.seasonsPlayed >= 7:
+                        x = randint(1,100)
+                        if x > 95:
+                            retirePlayerBool = True
                     else:
-                        name += ' Jr.'
-                    unusedNamesList.append(name)
+                        retirePlayerBool = False
                 else:
-                    v.previousTeam = team.name
-                    team.playerCap -= v.capHit
-                    v.team = 'Free Agent'
-                    freeAgentList.append(v)
-                    team.rosterDict[k] = None
-                    activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
+                    if v.seasonsPlayed > 15:
+                        x = randint(1,100)
+                        if x > 30:
+                            retirePlayerBool = True
+                    elif v.seasonsPlayed > 10:
+                        x = randint(1,100)
+                        if x > 75:
+                            retirePlayerBool = True
+                    elif v.seasonsPlayed >= 7:
+                        x = randint(1,100)
+                        if x > 90:
+                            retirePlayerBool = True
+                    else:
+                        retirePlayerBool = False
+
+            if retirePlayerBool:
+                v.previousTeam = team.name
+                v.seasonPerformanceRating = 0
+                team.playerCap -= v.capHit
+                v.team = 'Retired'
+                v.serviceTime = FloosPlayer.PlayerServiceTime.Retired
+                retiredPlayersList.append(v)
+                newlyRetiredPlayersList.append(v)
+                activePlayerList.remove(v)
+                if v.position is FloosPlayer.Position.QB:
+                    activeQbList.remove(v)
+                elif v.position is FloosPlayer.Position.RB:
+                    activeRbList.remove(v)
+                elif v.position is FloosPlayer.Position.WR:
+                    activeWrList.remove(v)
+                elif v.position is FloosPlayer.Position.TE:
+                    activeTeList.remove(v)
+                elif v.position is FloosPlayer.Position.K:
+                    activeKList.remove(v)
+                elif v.position is FloosPlayer.Position.DB:
+                    activeDbList.remove(v)
+                elif v.position is FloosPlayer.Position.LB:
+                    activeLbList.remove(v)
+                elif v.position is FloosPlayer.Position.DL:
+                    activeDlList.remove(v)
+                elif v.position is FloosPlayer.Position.DE:
+                    activeDeList.remove(v)
+                team.rosterDict[k] = None
+                activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has retired after {} seasons'.format(player.name, player.seasonsPlayed)}})
+                name = v.name
+                if name.endswith('Jr.'):
+                    name = name.replace('Jr.', 'III')
+                elif name.endswith('IV'):
+                    name = name.replace('IV', 'V')
+                elif name.endswith('VIII'):
+                    name = name.replace('VIII', 'IX')
+                elif name.endswith('IX'):
+                    name = name.replace('IX', 'X')
+                elif name.endswith('III'):
+                    name = name.replace('III', 'IV')
+                elif name.endswith('V') or name.endswith('X'):
+                    name += 'I'
+                else:
+                    name += ' Jr.'
+                unusedNamesList.append(name)
+            elif v.termRemaining == 0:
+                v.previousTeam = team.name
+                team.playerCap -= v.capHit
+                v.team = 'Free Agent'
+                freeAgentList.append(v)
+                team.rosterDict[k] = None
+                activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
 
                     
     for player in activePlayerList:
@@ -1431,22 +2564,22 @@ async def offseason():
         player: FloosPlayer.Player
         newPlayer: FloosPlayer.Player = None
         if player.position is FloosPlayer.Position.QB:
-            newPlayer = FloosPlayer.PlayerQB(seed)
+            newPlayer = FloosPlayer.PlayerQB()
             activeQbList.append(newPlayer)
         elif player.position is FloosPlayer.Position.RB:
-            newPlayer = FloosPlayer.PlayerRB(seed)
+            newPlayer = FloosPlayer.PlayerRB()
             activeRbList.append(newPlayer)
         elif player.position is FloosPlayer.Position.WR:
-            newPlayer = FloosPlayer.PlayerWR(seed)
+            newPlayer = FloosPlayer.PlayerWR()
             activeWrList.append(newPlayer)
         elif player.position is FloosPlayer.Position.TE:
-            newPlayer = FloosPlayer.PlayerTE(seed)
+            newPlayer = FloosPlayer.PlayerTE()
             activeTeList.append(newPlayer)
         elif player.position is FloosPlayer.Position.K:
-            newPlayer = FloosPlayer.PlayerK(seed)
+            newPlayer = FloosPlayer.PlayerK()
             activeKList.append(newPlayer)
         elif player.position is FloosPlayer.Position.DB:
-            newPlayer = FloosPlayer.PlayerDB(seed)
+            newPlayer = FloosPlayer.PlayerDB()
             activeDbList.append(newPlayer)
         elif player.position is FloosPlayer.Position.LB:
             newPlayer = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.LB)
@@ -1457,36 +2590,44 @@ async def offseason():
         elif player.position is FloosPlayer.Position.DL:
             newPlayer = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DL)
             activeDlList.append(newPlayer)
+        
+        newPlayer.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
+        newPlayer.team = 'Free Agent'
+        newPlayer.id = (len(activePlayerList) + len(retiredPlayersList) + 1)
+        activePlayerList.append(newPlayer)
+        freeAgentList.append(newPlayer)
 
     if newPlayerCount > len(newlyRetiredPlayersList):
+        posList = [FloosPlayer.Position.QB, FloosPlayer.Position.RB, FloosPlayer.Position.WR, FloosPlayer.Position.TE, FloosPlayer.Position.K, FloosPlayer.Position.DB, FloosPlayer.Position.LB, FloosPlayer.Position.DE, FloosPlayer.Position.DL]
         for x in range(newPlayerCount - len(newlyRetiredPlayersList)):
+            r = randint(0, len(posList)-1)
+            pos = posList.pop(r)
             player = None
-            y = randint(0,10)
-            if y == 0:
+            if pos is FloosPlayer.Position.QB:
                 player = FloosPlayer.PlayerQB()
                 activeQbList.append(player)
-            elif y == 1:
+            if pos is FloosPlayer.Position.RB:
                 player = FloosPlayer.PlayerRB()
                 activeRbList.append(player)
-            elif y == 2 or y == 3:
+            if pos is FloosPlayer.Position.WR:
                 player = FloosPlayer.PlayerWR()
                 activeWrList.append(player)
-            elif y == 4:
+            if pos is FloosPlayer.Position.TE:
                 player = FloosPlayer.PlayerTE()
                 activeTeList.append(player)
-            elif y == 5:
+            if pos is FloosPlayer.Position.K:
                 player = FloosPlayer.PlayerK()
                 activeKList.append(player)
-            elif y == 6 or y == 7:
+            if pos is FloosPlayer.Position.DB:
                 player = FloosPlayer.PlayerDB()
                 activeDbList.append(player)
-            elif y == 8:
+            if pos is FloosPlayer.Position.LB:
                 player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.LB)
                 activeLbList.append(player)
-            elif y == 9:
+            if pos is FloosPlayer.Position.DL:
                 player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DL)
                 activeDlList.append(player)
-            elif y == 10:
+            if pos is FloosPlayer.Position.DE:
                 player = FloosPlayer.PlayerDefBasic(FloosPlayer.Position.DE)
                 activeDeList.append(player)
 
@@ -1559,7 +2700,7 @@ async def offseason():
                 eligiblePlayersToCutList = []
                 for k,v in team.rosterDict.items():
                     v:FloosPlayer.Player
-                    if v is not None and v.termRemaining == 1 and v.playerTier.value < 3:
+                    if v is not None and v.playerTier.value <= 3:
                         if v.position is FloosPlayer.Position.QB and len(freeAgentQbList) == 0:
                             eligiblePlayersToCutList.append(k)
                         elif v.position is FloosPlayer.Position.RB and len(freeAgentRbList) == 0:
@@ -1585,38 +2726,42 @@ async def offseason():
 
                     if pos == 'qb' and len(freeAgentQbList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'rb' and len(freeAgentRbList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'wr1' and len(freeAgentWrList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'wr2' and len(freeAgentWrList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'te' and len(freeAgentTeList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'k' and len(freeAgentKList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'db1' and len(freeAgentDbList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'db2' and len(freeAgentDbList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'lb' and len(freeAgentLbList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'de' and len(freeAgentDeList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
                     if pos == 'dl' and len(freeAgentDlList) == 0:
                         eligiblePlayersToCutList.remove(pos)
-                        pos = choice(eligiblePlayersToCutList)
+                        pos = None
 
+                    if pos is None and len(eligiblePlayersToCutList) > 0:
+                        pos = choice(eligiblePlayersToCutList)
+                    else:
+                        continue
 
                     if pos == 'qb':
                         if team.gmScore >= len(freeAgentQbList):
@@ -1673,7 +2818,7 @@ async def offseason():
                             i = team.gmScore    
                         compPlayer = freeAgentDlList[randint(0,i)]
 
-                    if (compPlayer.playerTier.value - 2) > currentPlayer.playerTier.value:
+                    if (compPlayer.playerTier.value - 1) > currentPlayer.playerTier.value:
                         cutPlayer = currentPlayer
                         newPlayer = compPlayer
 
@@ -1681,6 +2826,7 @@ async def offseason():
                         newPlayer.term = getPlayerTerm(newPlayer.playerTier)
                         newPlayer.termRemaining = newPlayer.term
                         newPlayer.team = team
+                        newPlayer.freeAgentYears = 0
                         cutPlayer.termRemaining = 0
                         cutPlayer.team = 'Free Agent'
                         cutPlayer.previousTeam = team.name
@@ -1826,6 +2972,7 @@ async def offseason():
                 team.rosterDict[pos] = selectedPlayer
                 selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
                 selectedPlayer.termRemaining = selectedPlayer.term
+                selectedPlayer.freeAgentYears = 0
                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} signed {} ({}) for {} season(s)'.format(team.name, selectedPlayer.name, selectedPlayer.position.name, selectedPlayer.term)}})
                 freeAgencyDict[team.name] = {'name': selectedPlayer.name, 'pos': selectedPlayer.position.name, 'rating': selectedPlayer.attributes.skillRating, 'tier': selectedPlayer.playerTier.value, 'term': selectedPlayer.term, 'previousTeam': selectedPlayer.previousTeam, 'roster': "Starting"}
                 continue
@@ -1842,10 +2989,12 @@ async def offseason():
         team.faComplete = False
         team.updateDefense()
     sortDefenses()
+    setNewingElo()
     inductHallOfFame()
     
 def getPerformanceRating():
     qbStatsPassCompList = []
+    qbStatsPassMissList = []
     qbStatsPassYardsList = []
     qbStatsTdsList = []
     qbStatsIntsList = []
@@ -1853,6 +3002,7 @@ def getPerformanceRating():
         qb: FloosPlayer.PlayerQB
         if qb.seasonStatsDict['passing']['yards'] > 0:
             qbStatsPassCompList.append(qb.seasonStatsDict['passing']['compPerc'])
+            qbStatsPassMissList.append(qb.seasonStatsDict['passing']['missedPass'])
             qbStatsPassYardsList.append(qb.seasonStatsDict['passing']['yards'])
             qbStatsTdsList.append(qb.seasonStatsDict['passing']['tds'])
             qbStatsIntsList.append(qb.seasonStatsDict['passing']['ints'])
@@ -1861,10 +3011,11 @@ def getPerformanceRating():
         qb: FloosPlayer.PlayerQB
         if qb.seasonStatsDict['passing']['yards'] > 0:
             passCompPercRating = stats.percentileofscore(qbStatsPassCompList, qb.seasonStatsDict['passing']['compPerc'], 'rank')
+            passMissesRating = 100 - stats.percentileofscore(qbStatsPassMissList, qb.seasonStatsDict['passing']['missedPass'], 'rank')
             passYardsRating = stats.percentileofscore(qbStatsPassYardsList, qb.seasonStatsDict['passing']['yards'], 'rank')
             tdsRating = stats.percentileofscore(qbStatsTdsList, qb.seasonStatsDict['passing']['tds'], 'rank')
             intsRating = 100 - stats.percentileofscore(qbStatsIntsList, qb.seasonStatsDict['passing']['ints'], 'rank')
-            qb.seasonPerformanceRating = round(((passCompPercRating*.6)+(passYardsRating*1.2)+(tdsRating*1.2)+(intsRating*1))/4)
+            qb.seasonPerformanceRating = round(((passCompPercRating*.8)+(passYardsRating*1.2)+(tdsRating*1.2)+(intsRating*1)+(passMissesRating*.8))/5)
 
     rbStatsYprList = []
     rbStatsRunYardsList = []
@@ -1888,6 +3039,7 @@ def getPerformanceRating():
             rb.seasonPerformanceRating = round(((yprRating*1)+(runYardsRating*1.2)+(tdsRating*1.2)+(fumblesRating*.6))/4)
 
     wrStatsReceptionsList = []
+    wrStatsDropsList = []
     wrStatsRcvPercList = []
     wrStatsRcvYardsList = []
     wrStatsYACList = []
@@ -1896,6 +3048,7 @@ def getPerformanceRating():
         wr: FloosPlayer.PlayerWR
         if wr.seasonStatsDict['receiving']['receptions'] > 0:
             wrStatsReceptionsList.append(wr.seasonStatsDict['receiving']['receptions'])
+            wrStatsDropsList.append(wr.seasonStatsDict['receiving']['drops'])
             wrStatsRcvPercList.append(wr.seasonStatsDict['receiving']['rcvPerc'])
             wrStatsRcvYardsList.append(wr.seasonStatsDict['receiving']['yards'])
             wrStatsYACList.append(wr.seasonStatsDict['receiving']['yac'])
@@ -1905,13 +3058,15 @@ def getPerformanceRating():
         wr: FloosPlayer.PlayerWR
         if wr.seasonStatsDict['receiving']['receptions'] > 0:
             receptionsRating = stats.percentileofscore(wrStatsReceptionsList, wr.seasonStatsDict['receiving']['receptions'], 'rank')
+            dropsRating = 100 - stats.percentileofscore(wrStatsDropsList, wr.seasonStatsDict['receiving']['drops'], 'rank')
             rcvPercRating = stats.percentileofscore(wrStatsRcvPercList, wr.seasonStatsDict['receiving']['rcvPerc'], 'rank')
             rcvYardsRating = stats.percentileofscore(wrStatsRcvYardsList, wr.seasonStatsDict['receiving']['yards'], 'rank')
             yacRating = stats.percentileofscore(wrStatsYACList, wr.seasonStatsDict['receiving']['yac'], 'rank')
             tdsRating = stats.percentileofscore(wrStatsTdsList, wr.seasonStatsDict['receiving']['tds'], 'rank')
-            wr.seasonPerformanceRating = round(((rcvPercRating*.4)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(yacRating*1.2)+(receptionsRating*1))/5)
+            wr.seasonPerformanceRating = round(((rcvPercRating*.4)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(yacRating*1.2)+(receptionsRating*1)+(dropsRating*1))/6)
 
     teStatsReceptionsList = []
+    teStatsDropsList = []
     teStatsRcvPercList = []
     teStatsRcvYardsList = []
     teStatsTdsList = []
@@ -1919,6 +3074,7 @@ def getPerformanceRating():
         te: FloosPlayer.PlayerTE
         if te.seasonStatsDict['receiving']['receptions'] > 0:
             teStatsReceptionsList.append(te.seasonStatsDict['receiving']['receptions'])
+            teStatsDropsList.append(te.seasonStatsDict['receiving']['drops'])
             teStatsRcvPercList.append(te.seasonStatsDict['receiving']['rcvPerc'])
             teStatsRcvYardsList.append(te.seasonStatsDict['receiving']['yards'])
             teStatsTdsList.append(te.seasonStatsDict['receiving']['tds'])
@@ -1927,10 +3083,11 @@ def getPerformanceRating():
         te: FloosPlayer.PlayerTE
         if te.seasonStatsDict['receiving']['receptions'] > 0:
             receptionsRating = stats.percentileofscore(teStatsReceptionsList, te.seasonStatsDict['receiving']['receptions'], 'rank')
+            dropsRating = 100 - stats.percentileofscore(teStatsDropsList, te.seasonStatsDict['receiving']['drops'], 'rank')
             rcvPercRating = stats.percentileofscore(teStatsRcvPercList, te.seasonStatsDict['receiving']['rcvPerc'], 'rank')
             rcvYardsRating = stats.percentileofscore(teStatsRcvYardsList, te.seasonStatsDict['receiving']['yards'], 'rank')
             tdsRating = stats.percentileofscore(teStatsTdsList, te.seasonStatsDict['receiving']['tds'], 'rank')
-            te.seasonPerformanceRating = round(((rcvPercRating*.6)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(receptionsRating*1))/4)
+            te.seasonPerformanceRating = round(((rcvPercRating*.6)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(receptionsRating*1)+(dropsRating*1))/5)
 
     kStatsFgPercList = []
     kStatsFgsList = []
@@ -2160,6 +3317,7 @@ async def startLeague():
         initDivisions()
 
     print('Initialization complete!')
+    setNewingElo()
     while seasonsPlayed < totalSeasons:
         print('Season {} start'.format(seasonsPlayed+1))
         activeSeason = Season()
@@ -2171,6 +3329,8 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        await asyncio.sleep(120)
-        activeSeason.clearSeasonStats()
+        await asyncio.sleep(30)
         await offseason()
+        await asyncio.sleep(120)
+        activeSeason.clearPlayerSeasonStats()
+        activeSeason.clearTeamSeasonStats()

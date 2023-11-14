@@ -1,63 +1,57 @@
 {
     "leagueConfig": {
         "cap": 30,
-        "totalSeasons": 10,
+        "totalSeasons": 20,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
         "lastSeason": 0
     },
     "divisions": [
-        "Starfish",
-        "Apricot",
-        "Dragon",
-        "Chestnut"
+        "Silicon",
+        "Neon",
+        "Hydrogen",
+        "Tungsten"
     ],
     "teams": [
         {
             "city": "New York",
             "name": "Strangers",
             "abbr": "NYS",
-            "color": "#E93479",
-            "dontChangeColor": true
+            "color": "#E93479"
         },
         {
             "city": "Chicago",
-            "name": "Casseroles",
+            "name": "Beans",
             "abbr": "CHI",
-            "color": "#651FFF",
-            "dontChangeColor": true
+            "color": "#651FFF"
         },
         {
             "city": "Boston",
-            "name": "Normies",
+            "name": "Normals",
             "abbr": "BOS",
-            "color": "#16a085",
-            "dontChangeColor": true
+            "color": "#16a085"
         },
         {
             "city": "Philadelphia",
             "name": "Broads",
             "abbr": "PHI",
-            "color": "#26A69A",
-            "dontChangeColor": true
+            "color": "#26A69A"
         },
         {
-            "city": "Atlanta",
-            "name": "Pacifics",
-            "abbr": "ATL",
-            "color": "#3498db",
-            "dontChangeColor": true
+            "city": "Georgia",
+            "name": "Classics",
+            "abbr": "GAC",
+            "color": "#3498db"
         },
         {
             "city": "Pittsburgh",
             "name": "Melons",
             "abbr": "PIT",
-            "color": "#27ae60",
-            "dontChangeColor": true
+            "color": "#27ae60"
         },
         {
             "city": "Denver",
-            "name": "Blueberries",
+            "name": "Leg Warmers",
             "abbr": "DEN",
             "color": "#1e3799"
         },
@@ -65,43 +59,37 @@
             "city": "Seattle",
             "name": "Cranes",
             "abbr": "SEA",
-            "color": "#60a3bc",
-            "dontChangeColor": true
+            "color": "#60a3bc"
         },
         {
             "city": "Cleveland",
             "name": "Rocks",
             "abbr": "CLE",
-            "color": "#EA2027",
-            "dontChangeColor": true
+            "color": "#26C6DA"
         },
         {
             "city": "San Francisco",
             "name": "Phones",
             "abbr": "SFP",
-            "color": "#0fbcf9",
-            "dontChangeColor": true
+            "color": "#0fbcf9"
         },
         {
-            "city": "Tampa Bay",
-            "name": "Bees",
-            "abbr": "TBB",
-            "color": "#FFC400",
-            "dontChangeColor": true
+            "city": "Tampa",
+            "name": "Babies",
+            "abbr": "TAM",
+            "color": "#FFC400"
         },
         {
             "city": "Miami",
             "name": "Jetskis",
             "abbr": "MIA",
-            "color": "#ff00a0",
-            "dontChangeColor": true
+            "color": "#ff00a0"
         },
         {
             "city": "Minnesota",
-            "name": "Fuzz",
+            "name": "Blouses",
             "abbr": "MIN",
-            "color": "#D500F9",
-            "dontChangeColor": true
+            "color": "#D500F9"
         },
         {
             "city": "San Diego",
@@ -110,18 +98,16 @@
             "color": "#487eb0"
         },
         {
-            "city": "Phoenix",
+            "city": "Arizona",
             "name": "Dry Heat",
-            "abbr": "PHX",
-            "color": "#8e44ad",
-            "dontChangeColor": true
+            "abbr": "ARI",
+            "color": "#8e44ad"
         },
         {
             "city": "Las Vegas",
             "name": "Residents",
             "abbr": "LVR",
-            "color": "#9C27B0",
-            "dontChangeColor": true
+            "color": "#9C27B0"
         },
         {
             "city": "Anaheim",
@@ -133,8 +119,7 @@
             "city": "Carolina",
             "name": "Boil",
             "abbr": "CAR",
-            "color": "#ff4757",
-            "dontChangeColor": true
+            "color": "#ff4757"
         },
         {
             "city": "Portland",
@@ -143,34 +128,32 @@
             "color": "#B53471"
         },
         {
-            "city": "Nashville",
-            "name": "Fingers",
-            "abbr": "NSH",
+            "city": "Vancouver",
+            "name": "Pinecones",
+            "abbr": "VAN",
             "color": "#ff6348"
         },
         {
-            "city": "Washington",
-            "name": "Mimosas",
-            "abbr": "WAS",
-            "color": "#ffa801",
-            "dontChangeColor": true
+            "city": "Maryland",
+            "name": "Drivers",
+            "abbr": "MDD",
+            "color": "#ffa801"
         },
         {
             "city": "Austin",
-            "name": "Jam Band",
+            "name": "Fuzz",
             "abbr": "AUS",
-            "color": "#FF6D00",
-            "dontChangeColor": true
+            "color": "#FF6D00"
         },
         {
-            "city": "St. Louis",
-            "name": "Shave",
-            "abbr": "STL",
-            "color": "#26C6DA"
+            "city": "Kansas City",
+            "name": "Slippers",
+            "abbr": "KCS",
+            "color": "#EA2027"
         },
         {
             "city": "Detroit",
-            "name": "Beam",
+            "name": "Caddies",
             "abbr": "DET",
             "color": "#1B9CFC"
         }
@@ -190,7 +173,7 @@
         "Coco Mattel",
         "Chi Chi Eichelberger",
         "Kangaroo Drive-In",
-        "Angie Brutale",
+        "Anger Brutale",
         "Rusty Mateo",
         "Pabllo St. James",
         "Worms Winterkorn",
@@ -251,7 +234,7 @@
         "Tender Jordan",
         "Johny Frankly",
         "Tomorrow McIntyre",
-        "Jurj Clemmers",
+        "Jurj Clooners",
         "Heavenly Sparrow",
         "The Duchess",
         "Lambert Puddlefoot",
@@ -878,7 +861,7 @@
         "Leon Sly",
         "Blaise Tangert",
         "Holland Hokeman",
-        "Benaiah Haskamp",
+        "Benanaiah Haskamp",
         "Antone Boyce",
         "Davion Perper",
         "Cael Lingardo",
@@ -910,6 +893,33 @@
         "Dominio Froglegs",
         "Piano Fivehead",
         "Dialup McAvoy",
-        "Reegis Toulouse"
+        "Reegis Toulouse",
+        "Gregothy Soupson",
+        "Primrose Bannister",
+        "Huberto Endzone",
+        "Venezuela Vibes",
+        "Crummy Kettlecorn",
+        "Baker Time",
+        "Nephew Langone",
+        "Sporty Daniels",
+        "Wobert Benjals",
+        "Bylan Andersons",
+        "Jabby Nichols",
+        "Fergie Dennison",
+        "Johnald Dillinger",
+        "Haircut LaRoy",
+        "Tessa Modest",
+        "Cries Cabrera",
+        "Sobbing Child",
+        "Yorky Gleason",
+        "McBain",
+        "Grunge McBlaze",
+        "Supernintendo Chalmers",
+        "Bread Poot",
+        "Mitt Dermon",
+        "Lernernerner Dicapricorn",
+        "Duffy Welsh",
+        "Ronnie Nightman",
+        "Trevor"
     ]
 }

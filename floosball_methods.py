@@ -1,9 +1,26 @@
 from random import randint
 import json
+import math
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
 import floosball_game as FloosGame
 import floosball_player as FloosPlayer
+
+def calculateProbability(rating1, rating2):
+    return round(1.0 * 1.0 / (1 + 1.0 * math.pow(10, 1.0 * (rating1 - rating2) / 400)), 2)
+
+def checkIfClinched(team1Wins, team2Wins, numOfGamesRemaining):
+    if team2Wins + numOfGamesRemaining < team1Wins:
+        return True
+    else:
+        return False
+    
+def checkIfEliminated(team1Wins, team2Wins, numOfGamesRemaining):
+    if team1Wins + numOfGamesRemaining < team2Wins:
+        return True
+    else:
+        return False
+
 
 
 def getConfig():
