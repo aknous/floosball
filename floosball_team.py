@@ -108,6 +108,8 @@ class Team:
         self.leagueChampion = False
         self.winningStreak = False
 
+        self.playerNumbersList = []
+
         self.gameDefenseStats = copy.deepcopy(teamStatsDict['Defense'])
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
         self.allTimeTeamStats = copy.deepcopy(teamStatsDict)
@@ -217,6 +219,17 @@ class Team:
         self.seasonTeamStats['Defense']['avgRunTdsAlwd'] = round(statistics.mean(defenseRunTdsAlwdList),2)
         self.seasonTeamStats['Defense']['avgTdsAlwd'] = round(statistics.mean(defenseTotalTdsAlwdList),2)
         self.seasonTeamStats['Defense']['avgPtsAlwd'] = round(statistics.mean(defensePtsAlwdList),2)
+
+    def assignPlayerNumber(self, player):
+        numberToAssign = player.preferredNumber
+        while True:
+            if numberToAssign in self.playerNumbersList:
+                numberToAssign = randint(0,99)
+                continue
+            else:
+                player.currentNumber = numberToAssign
+                self.playerNumbersList.append(player.currentNumber) 
+                break   
 
 
     def saveRoster(self):

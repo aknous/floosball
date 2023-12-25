@@ -1952,6 +1952,9 @@ def playerDraft():
             selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
             selectedPlayer.termRemaining = selectedPlayer.term
             selectedPlayer.seasonStatsDict['team'] = selectedPlayer.team.name
+
+            #assign player number
+            team.assignPlayerNumber(selectedPlayer)
             team.playerCap += selectedPlayer.capHit
 
         draftOrderList.reverse()
@@ -1984,7 +1987,6 @@ def playerDraft():
         player.team = 'Free Agent'
         freeAgentList.append(player)
 
-
 def savePlayerData():
     playerDict = {}
     tempPlayerDict = {}
@@ -1993,6 +1995,8 @@ def savePlayerData():
         newDict = tempPlayerDict.copy()
         newDict['name'] = activePlayerList[x].name
         newDict['id'] = activePlayerList[x].id
+        newDict['currentNumber'] = activePlayerList[x].currentNumber
+        newDict['preferredNumber'] = activePlayerList[x].preferredNumber
         newDict['tier'] = activePlayerList[x].playerTier.name
         newDict['team'] = activePlayerList[x].team
         newDict['position'] = activePlayerList[x].position
@@ -2072,6 +2076,8 @@ def getPlayers(_config):
                 newPlayer.id = player['id']
                 newPlayer.team = player['team']
                 newPlayer.term = player['term']
+                newPlayer.currentNumber = player['currentNumber']
+                newPlayer.preferredNumber = player['prefferedNumber']
                 newPlayer.termRemaining = player['termRemaining']
                 newPlayer.capHit = player['capHit']
                 newPlayer.seasonsPlayed = player['seasonsPlayed']
@@ -2111,13 +2117,13 @@ def getPlayers(_config):
                     newPlayer.attributes.potentialAccuracy = player['attributes']['potentialAccuracy']
 
 
-                newPlayer.attributes.confidence = player['attributes']['confidence']
-                newPlayer.attributes.determination = player['attributes']['determination']
+                newPlayer.attributes.confidenceModifier = player['attributes']['confidence']
+                newPlayer.attributes.determinationModifier = player['attributes']['determination']
                 newPlayer.attributes.discipline = player['attributes']['discipline']
                 newPlayer.attributes.focus = player['attributes']['focus']
                 newPlayer.attributes.instinct = player['attributes']['instinct']
                 newPlayer.attributes.creativity = player['attributes']['creativity']
-                newPlayer.attributes.luck = player['attributes']['luck']
+                newPlayer.attributes.luckModifier = player['attributes']['luck']
                 newPlayer.attributes.attitude = player['attributes']['attitude']
                 newPlayer.attributes.playMakingAbility = player['attributes']['playMakingAbility']
                 newPlayer.attributes.xFactor = player['attributes']['xFactor']
@@ -2201,8 +2207,6 @@ def getTeams(_config):
                 newTeam.runDefenseRating = team['runDefenseRating']
                 newTeam.passDefenseRating = team['passDefenseRating']
                 newTeam.defenseRating = team['defenseRating']
-                #newTeam.defenseLuck = team['defenseLuck']
-                #newTeam.defenseDiscipline = team['defenseDiscipline']
                 newTeam.gmScore = team['gmScore']
                 newTeam.defenseTier = team['defenseTier']
                 newTeam.defenseSeasonPerformanceRating = team['defenseSeasonPerformanceRating']
@@ -2222,6 +2226,7 @@ def getTeams(_config):
                         if z.name == player['name']:
                             newTeam.rosterDict[pos] = z
                             newTeam.playerCap += z.capHit
+                            newTeam.playerNumbersList.append(player['currentNumber'])
                             break
 
                 teamList.append(newTeam)
@@ -2503,6 +2508,7 @@ async def offseason():
                 v.previousTeam = team.name
                 v.seasonPerformanceRating = 0
                 team.playerCap -= v.capHit
+                team.playerNumbersList.remove(v.currentNumber)
                 v.team = 'Retired'
                 v.serviceTime = FloosPlayer.PlayerServiceTime.Retired
                 retiredPlayersList.append(v)
@@ -2547,9 +2553,11 @@ async def offseason():
             elif v.termRemaining == 0:
                 v.previousTeam = team.name
                 team.playerCap -= v.capHit
+                team.playerNumbersList.remove(v.currentNumber)
                 v.team = 'Free Agent'
                 freeAgentList.append(v)
                 team.rosterDict[k] = None
+
                 activeSeason.leagueHighlights.insert(0, {'event':  {'text': '{} has become a Free Agent'.format(v.name)}})
 
                     
@@ -2830,6 +2838,8 @@ async def offseason():
                         cutPlayer.termRemaining = 0
                         cutPlayer.team = 'Free Agent'
                         cutPlayer.previousTeam = team.name
+                        team.playerNumbersList.remove(cutPlayer.currentNumber)
+                        team.assignPlayerNumber(newPlayer)
                         team.playerCap -= cutPlayer.capHit
                         team.playerCap += newPlayer.capHit
                         freeAgentList.append(cutPlayer)
@@ -2970,6 +2980,7 @@ async def offseason():
                 selectedPlayer.team = team
                 team.playerCap += selectedPlayer.capHit
                 team.rosterDict[pos] = selectedPlayer
+                team.assignPlayerNumber(selectedPlayer)
                 selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
                 selectedPlayer.termRemaining = selectedPlayer.term
                 selectedPlayer.freeAgentYears = 0
