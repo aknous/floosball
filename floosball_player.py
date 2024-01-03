@@ -12,10 +12,6 @@ class Position(enum.Enum):
     WR = 3
     TE = 4
     K = 5
-    DB = 6
-    LB = 7
-    DL = 8
-    DE = 9
 
 class PlayerTier(enum.Enum):
     TierS = 5
@@ -77,16 +73,19 @@ playerStatsDict =   {
                             'fgYards': 0,
                             'fgAvg': 0,
                             'fg45+': 0,
+                            'fgUnder20att': 0,
+                            'fgUnder20': 0,
+                            'fgUnder20perc': 0,
+                            'fg20to40att': 0,
+                            'fg20to40': 0,
+                            'fg20to40perc': 0,
+                            'fg40to50att': 0,
+                            'fg40to50': 0,
+                            'fg40to50perc': 0,
+                            'fgOver50att': 0,
+                            'fgOver50': 0,
+                            'fgOver50perc': 0,
                             'longest': 0
-                        },
-                        'defense': {
-                            'tackles': 0,
-                            'sacks': 0,
-                            'fumRec': 0,
-                            'ints': 0,
-                            'passTargets': 0, 
-                            'passDisruptions': 0,
-                            'passDisPerc': 0
                         }
                     }
 
@@ -136,7 +135,18 @@ kStatsDict = {
                 'fgAtt': 0, 
                 'fgs': 0, 
                 'fgPerc': 0,
-                'fg45+': 0,
+                'fgUnder20att': 0,
+                'fgUnder20': 0,
+                'fgUnder20perc': 0,
+                'fg20to40att': 0,
+                'fg20to40': 0,
+                'fg20to40perc': 0,
+                'fg40to50att': 0,
+                'fg40to50': 0,
+                'fg40to50perc': 0,
+                'fgOver50att': 0,
+                'fgOver50': 0,
+                'fgOver50perc': 0,
                 'longest': 0
             }
 
@@ -317,48 +327,6 @@ class Player:
             self.seasonStatsDict['receiving']['tds'] += 1
             self.careerStatsDict['receiving']['tds'] += 1
 
-    def addDefPassTarget(self, isRegularSeason):
-        self.gameStatsDict['defense']['passTargets'] += 1
-
-        if isRegularSeason:
-            self.seasonStatsDict['defense']['passTargets'] += 1
-            self.careerStatsDict['defense']['passTargets'] += 1
-
-    def addPassDisruption(self, isRegularSeason):
-        self.gameStatsDict['defense']['passDisruptions'] += 1
-
-        if isRegularSeason:
-            self.seasonStatsDict['defense']['passDisruptions'] += 1
-            self.careerStatsDict['defense']['passDisruptions'] += 1
-
-    def addDefInterception(self, isRegularSeason):
-        self.gameStatsDict['defense']['ints'] += 1
-
-        if isRegularSeason:
-            self.seasonStatsDict['defense']['ints'] += 1
-            self.careerStatsDict['defense']['ints'] += 1
-
-    def addFumbleRecovery(self, isRegularSeason):
-        self.gameStatsDict['defense']['fumRec'] += 1
-
-        if isRegularSeason:
-            self.seasonStatsDict['defense']['fumRec'] += 1
-            self.careerStatsDict['defense']['fumRec'] += 1
-
-    def addTackle(self, isRegularSeason):
-        self.gameStatsDict['defense']['tackles'] += 1
-
-        if isRegularSeason:
-            self.seasonStatsDict['defense']['tackles'] += 1
-            self.careerStatsDict['defense']['tackles'] += 1
-
-    def addSack(self, isRegularSeason):
-        self.gameStatsDict['defense']['sacks'] += 1
-
-        if isRegularSeason:
-            self.seasonStatsDict['defense']['sacks'] += 1
-            self.careerStatsDict['defense']['sacks'] += 1
-
     def addCarry(self, isRegularSeason):
         self.gameStatsDict['rushing']['carries'] += 1
 
@@ -415,18 +383,58 @@ class Player:
         if yards >= 45:
             self.gameStatsDict['kicking']['fg45+'] += 1
 
+
         if isRegularSeason:
             self.seasonStatsDict['kicking']['fgs'] += 1
+            self.careerStatsDict['kicking']['fgs'] += 1
+            self.seasonStatsDict['kicking']['fgYards'] += yards
             self.careerStatsDict['kicking']['fgYards'] += yards
             if yards >= 45:
                 self.seasonStatsDict['kicking']['fg45+'] += 1
                 self.careerStatsDict['kicking']['fg45+'] += 1
 
-    def addMissedFg(self, yards):
+            if yards < 50 and yards > 39:
+                self.seasonStatsDict['kicking']['fg40to50att'] += 1
+                self.seasonStatsDict['kicking']['fg40to50'] += 1
+                self.careerStatsDict['kicking']['fg40to50att'] += 1
+                self.careerStatsDict['kicking']['fg40to50'] += 1
+            elif yards < 40 and yards > 19:
+                self.seasonStatsDict['kicking']['fg20to40att'] += 1
+                self.seasonStatsDict['kicking']['fg20to40'] += 1
+                self.careerStatsDict['kicking']['fg20to40att'] += 1
+                self.careerStatsDict['kicking']['fg20to40'] += 1
+            elif yards < 20:
+                self.seasonStatsDict['kicking']['fgUnder20att'] += 1
+                self.seasonStatsDict['kicking']['fgUnder20'] += 1
+                self.careerStatsDict['kicking']['fgUnder20att'] += 1
+                self.careerStatsDict['kicking']['fgUnder20'] += 1
+            else:
+                self.seasonStatsDict['kicking']['fgOver50att'] += 1
+                self.seasonStatsDict['kicking']['fgOver50'] += 1
+                self.careerStatsDict['kicking']['fgOver50att'] += 1
+                self.careerStatsDict['kicking']['fgOver50'] += 1
+
+
+    def addMissedFg(self, yards, isRegularSeason):
         if yards >= 40 and yards < 50:
             self.gameStatsDict['fantasyPoints'] += -1
         elif yards < 40:
             self.gameStatsDict['fantasyPoints'] += -2
+
+        if isRegularSeason:
+            if yards < 50 and yards > 39:
+                self.seasonStatsDict['kicking']['fg40to50att'] += 1
+                self.careerStatsDict['kicking']['fg40to50att'] += 1
+            elif yards < 40 and yards >= 20:
+                self.seasonStatsDict['kicking']['fg20to40att'] += 1
+                self.careerStatsDict['kicking']['fg20to40att'] += 1
+            elif yards < 20:
+                self.seasonStatsDict['kicking']['fgUnder20att'] += 1
+                self.careerStatsDict['kicking']['fgUnder20att'] += 1
+            else:
+                self.seasonStatsDict['kicking']['fgOver50att'] += 1
+                self.careerStatsDict['kicking']['fgOver50att'] += 1
+
 
     def addExtraPoint(self):
         self.gameStatsDict['fantasyPoints'] += 1
@@ -459,11 +467,10 @@ class PlayerAttributes:
         self.potentialSkillRating = 0
 
         #skills
-        self.passRush = 0
-        self.passCoverage = 0
         self.routeRunning = 0
         self.vision = 0
         self.blocking = 0
+        self.blockingModifier = 0
         
         #intangibles
         self.discipline = 0
@@ -485,14 +492,15 @@ class PlayerAttributes:
         
     def calculateIntangibles(self):
         self.playMakingAbility = round((self.instinct+self.creativity)/2)
-        self.xFactor = round((((self.focus*1.8) + (self.discipline*1.2))/3) + ((self.confidenceModifier*1.8)+(self.determinationModifier*1.2)/2) + (self.luckModifier))
+        self.xFactor = round((((self.focus*1.8) + (self.discipline*1.2))/3) + ((self.confidenceModifier*1.8)+(self.determinationModifier*1.2)/3) + (self.luckModifier))
+        if self.xFactor > 100:
+            self.xFactor = 100
 
     def calculateSkills(self):
-        self.passRush = round(((self.power*1.2) + (self.agility*1) + (self.xFactor*.8) + (self.playMakingAbility))/4)
-        self.passCoverage = round(((self.speed*1.2) + (self.agility*1) + (self.xFactor*.8) + (self.playMakingAbility))/4)
         self.routeRunning = round(((self.speed*1.2) + (self.agility*1) + (self.xFactor*.8) + (self.playMakingAbility))/4)
         self.vision = round((self.discipline + self.instinct + self.focus)/3)
         self.blocking = round(((self.power*1.2) + (self.xFactor*.8))/2)
+        self.blockingModifier = math.floor((self.blocking - 60)/6)
 
 
     def getPlayerAttributes(self, position, seed = None):
@@ -531,7 +539,7 @@ class PlayerAttributes:
             self.speed = skillValList.pop(randint(0, len(skillValList)) - 1)
             self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
             self.hands = randint(60, 100)
-        elif position is Position.WR or position is Position.DB:
+        elif position is Position.WR:
             self.hands = skillValList.pop(randint(0, len(skillValList)) - 1)
             self.speed = skillValList.pop(randint(0, len(skillValList)) - 1)
             self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
@@ -1501,393 +1509,5 @@ class PlayerK(Player):
             self.attributes.accuracy = self.attributes.potentialAccuracy
         if self.attributes.accuracy < 60:
             self.attributes.accuracy = 60
-
-        self.updateRating()
-
-class PlayerDB(Player):
-    def __init__(self, seed = None):
-        super().__init__()
-        self.position = Position.DB
-        self.attributes.getPlayerAttributes(self.position, seed)
-
-        self.updateRating()
-
-        self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
-        self.attributes.potentialHands = self.attributes.hands + randint(0,30)
-        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
-        if self.attributes.potentialSpeed > 100:
-            self.attributes.potentialSpeed = 100
-        if self.attributes.potentialHands > 100:
-            self.attributes.potentialHands = 100
-        if self.attributes.potentialAgility > 100:
-            self.attributes.potentialAgility = 100
-        self.attributes.potentialSkillRating = round(((self.attributes.potentialHands*.7) + (self.attributes.potentialSpeed*1) + (self.attributes.potentialAgility*1.3))/3)
-
-    def updateInGameRating(self):
-        self.gameAttributes.calculateIntangibles()
-        self.gameAttributes.calculateSkills()
-        self.gameAttributes.skillRating = round(((self.gameAttributes.speed*1) + (self.gameAttributes.hands*.7) + (self.gameAttributes.agility*1.3))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
-        if self.gameAttributes.overallRating > 100:
-            self.gameAttributes.overallRating = 100
-
-    def updateRating(self):
-        self.attributes.calculateIntangibles()
-        self.attributes.calculateSkills()
-        self.attributes.skillRating = round(((self.attributes.speed*1) + (self.attributes.hands*.7) + (self.attributes.agility*1.3))/3)
-        self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        self.playerRating = self.attributes.overallRating
-
-
-    def offseasonTraining(self):
-        self.attributes.attitude += randint(-5,5)
-        if self.attributes.attitude > 100:
-            self.attributes.attitude = 100
-        if self.attributes.attitude < 0:
-            self.attributes.attitude = 0
-        self.attributes.discipline += randint(-5,5)
-        if self.attributes.discipline > 100:
-            self.attributes.discipline = 100
-        self.attributes.calculateIntangibles()
-
-        if self.seasonsPlayed > self.attributes.longevity:
-            if self.attributes.xFactor > 90:
-                if self.attributes.hands >= 95:
-                    self.attributes.hands += randint(0,2)
-                elif self.attributes.hands <= 70:
-                    self.attributes.hands += randint(0,10)
-                else:
-                    self.attributes.hands += randint(0,5)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(0,3)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(0,10)
-                else:
-                    self.attributes.speed += randint(0,5)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(0,2)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(0,10)
-                else:
-                    self.attributes.agility += randint(0,5)
-
-            elif self.attributes.xFactor > 75:
-                if self.attributes.hands >= 95:
-                    self.attributes.hands += randint(-1,2)
-                elif self.attributes.hands <= 70:
-                    self.attributes.hands += randint(0,7)
-                else:
-                    self.attributes.hands += randint(-2,3)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-1,2)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(0,7)
-                else:
-                    self.attributes.speed += randint(-2,3)
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-1,2)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(0,7)
-                else:
-                    self.attributes.agility += randint(-2,3)
-
-            else:
-                if self.attributes.hands >= 95:
-                    self.attributes.hands += randint(-5,1)
-                elif self.attributes.hands <= 70:
-                    self.attributes.hands += randint(0,5)
-                else:
-                    self.attributes.hands += randint(-5,5)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-5,1)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(0,5)
-                else:
-                    self.attributes.speed += randint(-5,5)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-5,1)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(0,5)
-                else:
-                    self.attributes.agility += randint(-5,5)
-        else:
-            if self.attributes.xFactor > 90:
-                if self.attributes.hands >= 95:
-                    self.attributes.hands += randint(-3,0)
-                elif self.attributes.hands <= 70:
-                    self.attributes.hands += randint(-1,5)
-                else:
-                    self.attributes.hands += randint(-3,3)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-3,0)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(-1,5)
-                else:
-                    self.attributes.speed += randint(-3,3)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-3,0)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(-1,5)
-                else:
-                    self.attributes.agility += randint(-3,3)
-
-            elif self.attributes.xFactor > 75:
-                if self.attributes.hands >= 95:
-                    self.attributes.hands += randint(-5,0)
-                elif self.attributes.hands <= 70:
-                    self.attributes.hands += randint(-3,3)
-                else:
-                    self.attributes.hands += randint(-5,2)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-5,0)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(-3,3)
-                else:
-                    self.attributes.speed += randint(-5,2)
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-5,0)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(-3,3)
-                else:
-                    self.attributes.agility += randint(-5,2)
-
-            else:
-                if self.attributes.hands >= 95:
-                    self.attributes.hands += randint(-10,0)
-                elif self.attributes.hands <= 70:
-                    self.attributes.hands += randint(-5,2)
-                else:
-                    self.attributes.hands += randint(-7,1)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-10,0)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(-5,2)
-                else:
-                    self.attributes.speed += randint(-7,1)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-10,0)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(-5,2)
-                else:
-                    self.attributes.agility += randint(-7,1)
-
-        if self.attributes.hands > self.attributes.potentialPower:
-            self.attributes.hands = self.attributes.potentialPower
-        if self.attributes.hands < 60:
-            self.attributes.hands = 60
-        if self.attributes.speed > self.attributes.potentialSpeed:
-            self.attributes.speed = self.attributes.potentialSpeed
-        if self.attributes.speed < 60:
-            self.attributes.speed = 60
-        if self.attributes.agility > self.attributes.potentialAgility:
-            self.attributes.agility = self.attributes.potentialAgility 
-        if self.attributes.agility < 60:
-            self.attributes.agility = 60
-
-        self.updateRating()
-
-
-
-class PlayerDefBasic(Player):
-    def __init__(self, pos: Position, seed = None):
-        super().__init__()
-        self.position = pos
-        self.attributes.getPlayerAttributes(self.position, seed)
-        self.updateRating()
-
-        self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
-        self.attributes.potentialPower = self.attributes.power + randint(0,30)
-        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
-        if self.attributes.potentialSpeed > 100:
-            self.attributes.potentialSpeed = 100
-        if self.attributes.potentialPower > 100:
-            self.attributes.potentialPower = 100
-        if self.attributes.potentialAgility > 100:
-            self.attributes.potentialAgility = 100
-        self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*.7) + (self.attributes.potentialSpeed*1) + (self.attributes.potentialAgility*1.3))/3)
-
-    def updateInGameRating(self):
-        self.gameAttributes.calculateIntangibles()
-        self.gameAttributes.calculateSkills()
-        self.gameAttributes.skillRating = round(((self.gameAttributes.speed*.5) + (self.gameAttributes.power*1.2) + (self.gameAttributes.agility*1.3))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
-        if self.gameAttributes.overallRating > 100:
-            self.gameAttributes.overallRating = 100
-
-    def updateRating(self):
-        self.attributes.calculateIntangibles()
-        self.attributes.calculateSkills()
-        self.attributes.skillRating = round(((self.attributes.speed*.5) + (self.attributes.power*1.2) + (self.attributes.agility*1.3))/3)
-        self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        self.playerRating = self.attributes.overallRating
-
-    def offseasonTraining(self):
-        self.attributes.attitude += randint(-5,5)
-        if self.attributes.attitude > 100:
-            self.attributes.attitude = 100
-        if self.attributes.attitude < 0:
-            self.attributes.attitude = 0
-        self.attributes.discipline += randint(-5,5)
-        if self.attributes.discipline > 100:
-            self.attributes.discipline = 100
-        self.attributes.calculateIntangibles()
-
-        if self.seasonsPlayed > self.attributes.longevity:
-            if self.attributes.xFactor > 90:
-                if self.attributes.power >= 95:
-                    self.attributes.power += randint(0,2)
-                elif self.attributes.power <= 70:
-                    self.attributes.power += randint(0,10)
-                else:
-                    self.attributes.power += randint(0,5)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(0,3)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(0,10)
-                else:
-                    self.attributes.speed += randint(0,5)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(0,2)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(0,10)
-                else:
-                    self.attributes.agility += randint(0,5)
-
-            elif self.attributes.xFactor > 75:
-                if self.attributes.power >= 95:
-                    self.attributes.power += randint(-1,2)
-                elif self.attributes.power <= 70:
-                    self.attributes.power += randint(0,7)
-                else:
-                    self.attributes.power += randint(-2,3)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-1,2)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(0,7)
-                else:
-                    self.attributes.speed += randint(-2,3)
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-1,2)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(0,7)
-                else:
-                    self.attributes.agility += randint(-2,3)
-
-            else:
-                if self.attributes.power >= 95:
-                    self.attributes.power += randint(-5,1)
-                elif self.attributes.power <= 70:
-                    self.attributes.power += randint(0,5)
-                else:
-                    self.attributes.power += randint(-5,5)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-5,1)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(0,5)
-                else:
-                    self.attributes.speed += randint(-5,5)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-5,1)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(0,5)
-                else:
-                    self.attributes.agility += randint(-5,5)
-        else:
-            if self.attributes.xFactor > 90:
-                if self.attributes.power >= 95:
-                    self.attributes.power += randint(-3,0)
-                elif self.attributes.power <= 70:
-                    self.attributes.power += randint(-1,5)
-                else:
-                    self.attributes.power += randint(-3,3)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-3,0)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(-1,5)
-                else:
-                    self.attributes.speed += randint(-3,3)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-3,0)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(-1,5)
-                else:
-                    self.attributes.agility += randint(-3,3)
-
-            elif self.attributes.xFactor > 75:
-                if self.attributes.power >= 95:
-                    self.attributes.power += randint(-5,0)
-                elif self.attributes.power <= 70:
-                    self.attributes.power += randint(-3,3)
-                else:
-                    self.attributes.power += randint(-5,2)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-5,0)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(-3,3)
-                else:
-                    self.attributes.speed += randint(-5,2)
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-5,0)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(-3,3)
-                else:
-                    self.attributes.agility += randint(-5,2)
-
-            else:
-                if self.attributes.power >= 95:
-                    self.attributes.power += randint(-10,0)
-                elif self.attributes.power <= 70:
-                    self.attributes.power += randint(-5,2)
-                else:
-                    self.attributes.power += randint(-7,1)
-
-                if self.attributes.speed >= 95:
-                    self.attributes.speed += randint(-10,0)
-                elif self.attributes.speed <= 70:
-                    self.attributes.speed += randint(-5,2)
-                else:
-                    self.attributes.speed += randint(-7,1)  
-
-                if self.attributes.agility >= 95:
-                    self.attributes.agility += randint(-10,0)
-                elif self.attributes.agility <= 70:
-                    self.attributes.agility += randint(-5,2)
-                else:
-                    self.attributes.agility += randint(-7,1)
-
-        if self.attributes.power > self.attributes.potentialPower:
-            self.attributes.power = self.attributes.potentialPower
-        if self.attributes.power < 60:
-            self.attributes.power = 60
-        if self.attributes.speed > self.attributes.potentialSpeed:
-            self.attributes.speed = self.attributes.potentialSpeed
-        if self.attributes.speed < 60:
-            self.attributes.speed = 60
-        if self.attributes.agility > self.attributes.potentialAgility:
-            self.attributes.agility = self.attributes.potentialAgility 
-        if self.attributes.agility < 60:
-            self.attributes.agility = 60
 
         self.updateRating()
