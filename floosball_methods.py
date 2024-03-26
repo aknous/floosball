@@ -49,7 +49,7 @@ def _prepare_for_serialization(obj):
     serialized_dict = dict()
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if v != 0:
+            if v is not None:
                 if isinstance(v, list):
                     tempDict = {}
                     y = 0
@@ -132,35 +132,34 @@ def _prepare_for_serialization(obj):
         serialized_dict[y] = tempDict
     else:
         for k, v in obj.__dict__.items():
-            if v != 0:
-                if isinstance(v, list):
-                    tempDict = {}
-                    y = 0
-                    for item in v:
-                        y += 1
-                        tempDict[y] = _prepare_for_serialization(item)
-                    serialized_dict[k] = tempDict
-                elif isinstance(v, dict):
-                    tempDict = {}
-                    for a, b in v.items():
-                        if isinstance(b, FloosPlayer.Player):
-                            tempDict[a] = _prepare_for_serialization(b)
-                        else:
-                            tempDict[a] = b.name if isinstance(b, FloosPlayer.Position) else b
-                    serialized_dict[k] = tempDict
-                else: 
-                    if isinstance(v, FloosPlayer.Position):
-                        serialized_dict[k] = v.name 
-                    elif isinstance(v, FloosPlayer.PlayerTier):
-                        serialized_dict[k] = v.name 
-                    elif isinstance(v, FloosGame.PlayType):
-                        serialized_dict[k] = v.name
-                    elif isinstance(v, FloosTeam.Team):
-                        serialized_dict[k] = v.name
-                    elif isinstance(v, FloosPlayer.PlayerAttributes):
-                        serialized_dict[k] = _prepare_for_serialization(v)
+            if isinstance(v, list):
+                tempDict = {}
+                y = 0
+                for item in v:
+                    y += 1
+                    tempDict[y] = _prepare_for_serialization(item)
+                serialized_dict[k] = tempDict
+            elif isinstance(v, dict):
+                tempDict = {}
+                for a, b in v.items():
+                    if isinstance(b, FloosPlayer.Player):
+                        tempDict[a] = _prepare_for_serialization(b)
                     else:
-                        serialized_dict[k] = v
+                        tempDict[a] = b.name if isinstance(b, FloosPlayer.Position) else b
+                serialized_dict[k] = tempDict
+            else: 
+                if isinstance(v, FloosPlayer.Position):
+                    serialized_dict[k] = v.name 
+                elif isinstance(v, FloosPlayer.PlayerTier):
+                    serialized_dict[k] = v.name 
+                elif isinstance(v, FloosGame.PlayType):
+                    serialized_dict[k] = v.name
+                elif isinstance(v, FloosTeam.Team):
+                    serialized_dict[k] = v.name
+                elif isinstance(v, FloosPlayer.PlayerAttributes):
+                    serialized_dict[k] = _prepare_for_serialization(v)
+                else:
+                    serialized_dict[k] = v
     return serialized_dict                    
 
 

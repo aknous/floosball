@@ -14,6 +14,7 @@ import floosball_player as FloosPlayer
 import floosball_methods as FloosMethods
 import datetime
 import math
+import glob
  
 
 __version__ = '0.9.0_alpha'
@@ -1152,9 +1153,8 @@ class Season:
 
     def saveSeasonStats(self):
         global standingsHistory
-        dict = {}
-        jsonFile = open("data/teamData.json", "w+")
         for team in teamList:
+            jsonFile = open("data/teamData/team{}.json".format(team.id), "w+")
             team: FloosTeam.Team
             teamDict = {}
             rosterDict = {}
@@ -1227,6 +1227,7 @@ class Season:
                 playerDict['termRemaining'] = player.termRemaining
                 playerDict['capHit'] = player.capHit
                 playerDict['seasonStats'] = player.seasonStatsDict
+                playerDict['currentNumber'] = player.currentNumber
                 rosterDict[pos] = playerDict
 
 
@@ -1250,8 +1251,10 @@ class Season:
             teamDict['color'] = team.color
             teamDict['id'] = team.id
             teamDict['offenseRating'] = team.offenseRating
-            teamDict['runDefenseRating'] = team.defenseRunCoverageRating
-            teamDict['passDefenseRating'] = team.defensePassCoverageRating
+            teamDict['defenseRunCoverageRating'] = team.defenseRunCoverageRating
+            teamDict['defensePassCoverageRating'] = team.defensePassCoverageRating
+            teamDict['defensePassRushRating'] = team.defensePassRushRating
+            teamDict['defensePassRating'] = team.defensePassRating
             teamDict['defenseRating'] = team.defenseRating
             #teamDict['defenseLuck'] = team.defenseLuck
             #teamDict['defenseDiscipline'] = team.defenseDiscipline
@@ -1262,13 +1265,14 @@ class Season:
             teamDict['gmScore'] = team.gmScore
             teamDict['defenseTier'] = team.defenseOverallTier
             teamDict['leagueChampionships'] = team.leagueChampionships
+            teamDict['divisionChampionships'] = team.divisionChampionships
+            teamDict['regularSeasonChampions'] = team.regularSeasonChampions
             teamDict['rosterHistory'] = team.rosterHistory
             teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
             teamDict['roster'] = rosterDict
-            dict[team.id] = teamDict
+            jsonFile.write(json.dumps(teamDict, indent=4))
+            jsonFile.close()
 
-        jsonFile.write(json.dumps(dict, indent=4))
-        jsonFile.close()
         savePlayerData()
 
         divList = []
@@ -1895,51 +1899,50 @@ def playerDraft():
         freeAgentList.append(player)
 
 def savePlayerData():
-    playerDict = {}
-    tempPlayerDict = {}
-    for x in range(len(activePlayerList)):
-        key = 'Player {}'.format(x + 1)
-        newDict = tempPlayerDict.copy()
-        newDict['name'] = activePlayerList[x].name
-        newDict['id'] = activePlayerList[x].id
-        newDict['currentNumber'] = activePlayerList[x].currentNumber
-        newDict['preferredNumber'] = activePlayerList[x].preferredNumber
-        newDict['tier'] = activePlayerList[x].playerTier.name
-        newDict['team'] = activePlayerList[x].team
-        newDict['position'] = activePlayerList[x].position
-        newDict['seasonsPlayed'] = activePlayerList[x].seasonsPlayed
-        newDict['term'] = activePlayerList[x].term
-        newDict['termRemaining'] = activePlayerList[x].termRemaining
-        newDict['capHit'] = activePlayerList[x].capHit
-        newDict['seasonPerformanceRating'] = activePlayerList[x].seasonPerformanceRating
-        newDict['playerRating'] = activePlayerList[x].playerRating
-        newDict['freeAgentYears'] = activePlayerList[x].freeAgentYears
-        newDict['serviceTime'] = activePlayerList[x].serviceTime.name
-        newDict['attributes'] = activePlayerList[x].attributes
-        newDict['careerStats'] = activePlayerList[x].careerStatsDict
+    if not os.path.exists('data/playerData'):
+        os.makedirs('data/playerData')
+    for player in activePlayerList:
+        player:FloosPlayer.Player
+        playerDict = {}
+        playerDict['name'] = player.name
+        playerDict['id'] = player.id
+        playerDict['currentNumber'] = player.currentNumber
+        playerDict['preferredNumber'] = player.preferredNumber
+        playerDict['tier'] = player.playerTier.name
+        playerDict['team'] = player.team
+        playerDict['position'] = player.position
+        playerDict['seasonsPlayed'] = player.seasonsPlayed
+        playerDict['term'] = player.term
+        playerDict['termRemaining'] = player.termRemaining
+        playerDict['capHit'] = player.capHit
+        playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
+        playerDict['playerRating'] = player.playerRating
+        playerDict['freeAgentYears'] = player.freeAgentYears
+        playerDict['serviceTime'] = player.serviceTime.name
+        playerDict['attributes'] = player.attributes
+        playerDict['careerStats'] = player.careerStatsDict
 
         archiveDict = {}
         y = 0
-        for item in activePlayerList[x].seasonStatsArchive:
+        for item in player.seasonStatsArchive:
             y += 1
             archiveDict[y] = item
 
-        newDict['seasonStatsArchive'] = archiveDict
-        playerDict[key] = newDict
+        playerDict['seasonStatsArchive'] = archiveDict
 
-    dict = FloosMethods._prepare_for_serialization(playerDict)
-    jsonFile = open("data/playerData.json", "w+") 
-    jsonFile.write(json.dumps(dict, indent=4))
-    jsonFile.close()
+        dict = FloosMethods._prepare_for_serialization(playerDict)
+        jsonFile = open("data/playerData/player{}.json".format(player.id), "w+") 
+        jsonFile.write(json.dumps(dict, indent=4))
+        jsonFile.close()
 
     
 def getPlayers(_config):
 
-    if os.path.exists("data/playerData.json"):
-        with open('data/playerData.json') as jsonFile:
-            playerData = json.load(jsonFile)
-            for x in playerData:
-                player = playerData[x]
+    if os.path.exists("data/playerData"):
+        fileList = glob.glob("data/playerData/player*.json")
+        for file in fileList:
+            with open(file) as jsonFile:
+                player = json.load(jsonFile)
                 if player['position'] == 'QB':
                     newPlayer = FloosPlayer.PlayerQB()
                     activeQbList.append(newPlayer)
@@ -1972,7 +1975,7 @@ def getPlayers(_config):
                 newPlayer.team = player['team']
                 newPlayer.term = player['term']
                 newPlayer.currentNumber = player['currentNumber']
-                newPlayer.preferredNumber = player['prefferedNumber']
+                newPlayer.preferredNumber = player['preferredNumber']
                 newPlayer.termRemaining = player['termRemaining']
                 newPlayer.capHit = player['capHit']
                 newPlayer.seasonsPlayed = player['seasonsPlayed']
@@ -1995,11 +1998,11 @@ def getPlayers(_config):
                     newPlayer.attributes.potentialArmStrength = player['attributes']['potentialArmStrength']
                     newPlayer.attributes.potentialAccuracy = player['attributes']['potentialAccuracy']
                     newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
-                elif newPlayer.position is FloosPlayer.Position.RB or isinstance(newPlayer, FloosPlayer.PlayerDefBasic):
+                elif newPlayer.position is FloosPlayer.Position.RB:
                     newPlayer.attributes.potentialArmStrength = player['attributes']['potentialSpeed']
                     newPlayer.attributes.potentialAccuracy = player['attributes']['potentialPower']
                     newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
-                elif newPlayer.position is FloosPlayer.Position.WR or newPlayer.position is FloosPlayer.Position.DB:
+                elif newPlayer.position is FloosPlayer.Position.WR:
                     newPlayer.attributes.potentialArmStrength = player['attributes']['potentialSpeed']
                     newPlayer.attributes.potentialAccuracy = player['attributes']['potentialHands']
                     newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
@@ -2012,13 +2015,12 @@ def getPlayers(_config):
                     newPlayer.attributes.potentialAccuracy = player['attributes']['potentialAccuracy']
 
 
-                newPlayer.attributes.confidenceModifier = player['attributes']['confidence']
-                newPlayer.attributes.determinationModifier = player['attributes']['determination']
+                newPlayer.attributes.confidenceModifier = player['attributes']['confidenceModifier']
+                newPlayer.attributes.determinationModifier = player['attributes']['determinationModifier']
                 newPlayer.attributes.discipline = player['attributes']['discipline']
                 newPlayer.attributes.focus = player['attributes']['focus']
                 newPlayer.attributes.instinct = player['attributes']['instinct']
                 newPlayer.attributes.creativity = player['attributes']['creativity']
-                newPlayer.attributes.luckModifier = player['attributes']['luck']
                 newPlayer.attributes.attitude = player['attributes']['attitude']
                 newPlayer.attributes.playMakingAbility = player['attributes']['playMakingAbility']
                 newPlayer.attributes.xFactor = player['attributes']['xFactor']
@@ -2033,7 +2035,8 @@ def getPlayers(_config):
 
                 activePlayerList.append(newPlayer)
 
-        jsonFile.close()
+            jsonFile.close()
+            
         getUnusedNames()
 
     else:
@@ -2073,19 +2076,20 @@ def getPlayers(_config):
 
 def getTeams(_config):
 
-    if os.path.exists("data/teamData.json"):
-        with open('data/teamData.json') as jsonFile:
-            teamData = json.load(jsonFile)
-            for x in teamData:
-                team = teamData[x]
+    if os.path.exists("data/teamData"):
+        fileList = glob.glob("data/teamData/team*.json")
+        for file in fileList:
+            with open(file) as jsonFile:
+                team = json.load(jsonFile)
                 newTeam = FloosTeam.Team(team['name'])
                 newTeam.id = team['id']
                 newTeam.city = team['city']
                 newTeam.abbr = team['abbr']
                 newTeam.color = team['color']
                 newTeam.offenseRating = team['offenseRating']
-                newTeam.defenseRunCoverageRating = team['runDefenseRating']
-                newTeam.defensePassCoverageRating = team['passDefenseRating']
+                newTeam.defenseRunCoverageRating = team['defenseRunCoverageRating']
+                newTeam.defensePassCoverageRating = team['defensePassCoverageRating']
+                newTeam.defensePassRushRating = team['defensePassRushRating']
                 newTeam.defenseRating = team['defenseRating']
                 newTeam.gmScore = team['gmScore']
                 newTeam.defenseOverallTier = team['defenseTier']
@@ -2137,17 +2141,16 @@ def getDivisons(_config):
                             division.teamList.append(y)
                             break
                 divisionList.append(division)
-
-
     else:
         for x in _config['divisions']:
             division = Division(x)
             divisionList.append(division)
 
 def initTeams():
-    dict = {}
-    jsonFile = open("data/teamData.json", "w+")
+    if not os.path.exists('data/teamData'):
+        os.makedirs('data/teamData')
     for team in teamList:
+        jsonFile = open("data/teamData/team{}.json".format(team.id), "w+")
         team: FloosTeam.Team
         team.setupTeam()
         teamDict = {}
@@ -2157,8 +2160,10 @@ def initTeams():
         teamDict['color'] = team.color
         teamDict['id'] = team.id
         teamDict['offenseRating'] = team.offenseRating
-        teamDict['runDefenseRating'] = team.defenseRunCoverageRating
-        teamDict['passDefenseRating'] = team.defensePassCoverageRating
+        teamDict['defenseRunCoverageRating'] = team.defenseRunCoverageRating
+        teamDict['defensePassRating'] = team.defensePassRating
+        teamDict['defensePassCoverageRating'] = team.defensePassCoverageRating
+        teamDict['defensePassRushRating'] = team.defensePassRushRating
         teamDict['defenseRating'] = team.defenseRating
         #teamDict['defenseLuck'] = team.defenseLuck
         #teamDict['defenseDiscipline'] = team.defenseDiscipline
@@ -2192,10 +2197,10 @@ def initTeams():
 
         teamDict['roster'] = rosterDict
 
-        dict[team.id] = teamDict
+        jsonFile.write(json.dumps(teamDict, indent=4))
+        jsonFile.close()
+
     sortDefenses()
-    jsonFile.write(json.dumps(dict, indent=4))
-    jsonFile.close()
 
 
 def initPlayers():
@@ -3003,7 +3008,7 @@ async def startLeague():
     getTeams(config)
     #print('Team creation done')
 
-    if not os.path.exists("data/teamData.json"):
+    if not os.path.exists("data/teamData"):
         #print('Starting player draft...')
         playerDraft()
         #print('Draft complete')

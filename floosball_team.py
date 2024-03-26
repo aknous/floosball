@@ -76,6 +76,8 @@ class Team:
         self.offenseRating = 0
         self.defenseRunCoverageRating = 0
         self.defensePassCoverageRating = 0
+        self.defensePassRushRating = 0
+        self.defensePassRating = 0
         self.elo = 1500
         self._gameDefenseConfidence = randint(-2,2)
         self._gameDefenseDetermination = randint(-2,2)
