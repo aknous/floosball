@@ -2,7 +2,7 @@
     "leagueConfig": {
         "cap": 30,
         "totalSeasons": 20,
-        "deleteDataOnRestart": true,
+        "deleteDataOnRestart": false,
         "saveSeasonProgress": false,
         "lastSeason": 0
     },

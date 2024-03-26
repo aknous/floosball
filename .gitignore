@@ -1,7 +1,6 @@
-
-teamData.json
+data/teamData/team*.json
+data/playerData/player*.json
 divisionData.json
-playerData.json
 season1/seasonData.json
 season2/games/postseason.json
 season2/games/postseason.json
