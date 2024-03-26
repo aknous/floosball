@@ -29,6 +29,7 @@ rookieDraftList = []
 retiredPlayersList = []
 newlyRetiredPlayersList = []
 hallOfFame = []
+standingsHistory = []
 
 activeQbList = []
 activeRbList = []
@@ -1150,6 +1151,7 @@ class Season:
             
 
     def saveSeasonStats(self):
+        global standingsHistory
         dict = {}
         jsonFile = open("data/teamData.json", "w+")
         for team in teamList:
@@ -1268,6 +1270,42 @@ class Season:
         jsonFile.write(json.dumps(dict, indent=4))
         jsonFile.close()
         savePlayerData()
+
+        divList = []
+        for division in divisionList:
+            divDict = {}
+            tempTeamList = []
+            divDict['divisionName'] = division.name
+            division: Division
+            for team in division.teamList:
+                team: FloosTeam.Team
+                teamDict = {}
+                teamDict['name'] = team.name
+                teamDict['city'] = team.city
+                teamDict['color'] = team.color
+                teamDict['id'] = team.id
+                teamDict['elo'] = team.elo
+                teamDict['wins'] = team.seasonTeamStats['wins']
+                teamDict['losses'] = team.seasonTeamStats['losses']
+                teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
+                teamDict['clinchedDivision'] = team.clinchedDivision
+                teamDict['clinchedTopSeed'] = team.clinchedTopSeed
+                teamDict['leagueChampion'] = team.leagueChampion
+                if (team.seasonTeamStats['wins']+team.seasonTeamStats['losses']) > 0:
+                    teamDict['winPerc'] = '{:.3f}'.format(round(team.seasonTeamStats['wins']/(team.seasonTeamStats['wins']+team.seasonTeamStats['losses']),3))
+                else:
+                    teamDict['winPerc'] = '0.000'
+
+                if team.seasonTeamStats['scoreDiff'] >= 0:
+                    teamDict['pointDiff'] = '+{}'.format(team.seasonTeamStats['scoreDiff'])
+                else:
+                    teamDict['pointDiff'] = '{}'.format(team.seasonTeamStats['scoreDiff'])
+                tempTeamList.append(teamDict)
+            list.sort(tempTeamList, key=lambda team: team['winPerc'], reverse=True)
+            divDict['teams'] = tempTeamList
+            divList.append(divDict)
+        standingsHistory.append(divList)
+        
 
     def clearPlayerSeasonStats(self):
         for player in activePlayerList:
@@ -1420,6 +1458,8 @@ class Season:
         bestTeam.regularSeasonChampions.append('Season {}'.format(seasonsPlayed+1))
         #seasonDict['games'] = weekDict
         leagueChampion = await self.playPlayoffs()
+        leagueChampion.seasonTeamStats['leagueChamp'] = True
+        leagueChampion.leagueChampion = True
 
         self.saveSeasonStats()
 
@@ -1439,8 +1479,6 @@ class Season:
 
         seasonDict['standings'] = standingsDict
         seasonDict['champion'] = leagueChampion.name
-        leagueChampion.seasonTeamStats['leagueChamp'] = True
-        leagueChampion.leagueChampion = True
 
         _serialzedDict = FloosMethods._prepare_for_serialization(seasonDict)
 

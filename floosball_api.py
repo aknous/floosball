@@ -693,6 +693,11 @@ async def returnSeasonResults(season = None):
 async def returnChampionshipHistory():
     return floosball.championshipHistory
 
+@app.get('/standingsHistory')
+async def returnStandingsHistory(season):
+    if season and len(floosball.standingsHistory):
+        return floosball.standingsHistory[int(season) - 1]
+
 @app.get('/records')
 async def returnRecords(selection):
     gameRecordsList = []
