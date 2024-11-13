@@ -41,13 +41,13 @@ async def startup_event():
 @app.get('/teams')
 async def returnTeams(id = None):
     if id is None:
-        divList = []
-        for division in floosball.divisionList:
-            divDict = {}
+        leagueList = []
+        for league in floosball.leagueList:
+            leagueDict = {}
             teamList = []
-            divDict['divisionName'] = division.name
-            division: floosball.Division
-            for team in division.teamList:
+            leagueDict['leagueName'] = league.name
+            league: floosball.League
+            for team in league.teamList:
                 team: Team
                 teamDict = {}
                 teamDict['name'] = team.name
@@ -59,9 +59,9 @@ async def returnTeams(id = None):
                 teamDict['wins'] = team.seasonTeamStats['wins']
                 teamDict['losses'] = team.seasonTeamStats['losses']
                 teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-                teamDict['clinchedDivision'] = team.clinchedDivision
                 teamDict['clinchedTopSeed'] = team.clinchedTopSeed
                 teamDict['leagueChampion'] = team.leagueChampion
+                teamDict['floosbowlChampion'] = team.floosbowlChampion
                 teamDict['winningStreak'] = team.winningStreak
                 if (team.seasonTeamStats['wins']+team.seasonTeamStats['losses']) > 0:
                     teamDict['winPerc'] = '{:.3f}'.format(round(team.seasonTeamStats['wins']/(team.seasonTeamStats['wins']+team.seasonTeamStats['losses']),3))
@@ -73,19 +73,16 @@ async def returnTeams(id = None):
                 else:
                     teamDict['pointDiff'] = '{}'.format(team.seasonTeamStats['scoreDiff'])
 
-                teamDict['divWins'] = team.seasonTeamStats['divWins']
-                teamDict['divLosses'] = team.seasonTeamStats['divLosses']
-                teamDict['divWinPerc'] = team.seasonTeamStats['divWinPerc']
                 if team.seasonTeamStats['streak'] >= 0:
                     teamDict['streak'] = 'W{}'.format(team.seasonTeamStats['streak'])
                 else:
                     teamDict['streak'] = 'L{}'.format(abs(team.seasonTeamStats['streak']))
                 teamList.append(teamDict)
             list.sort(teamList, key=lambda team: team['winPerc'], reverse=True)
-            divDict['teams'] = teamList
-            divList.append(divDict)
-        list.sort(divList, key=lambda division: division['divisionName'])
-        return divList
+            leagueDict['teams'] = teamList
+            leagueList.append(leagueDict)
+        list.sort(leagueList, key=lambda league: league['leagueName'])
+        return leagueList
     else:
         for team in floosball.teamList:
             if team.id == int(id):
@@ -95,11 +92,11 @@ async def returnTeams(id = None):
                 teamDict['color'] = team.color
                 teamDict['id'] = team.id
                 teamDict['elo'] = team.elo
-                teamDict['division'] = team.division
+                teamDict['league'] = team.league
                 teamDict['eliminated'] = team.eliminated
-                teamDict['championships'] = team.leagueChampionships
+                teamDict['leagueChampionships'] = team.leagueChampionships
                 teamDict['regularSeasonChampions'] = team.regularSeasonChampions
-                teamDict['divisionChampionships'] = team.divisionChampionships
+                teamDict['floosbowlChampionships'] = team.floosbowlChampionships
                 teamDict['ratingStars'] = round((((team.overallRating - 60)/60)*4)+1)
                 teamDict['offenseRatingStars'] = round((((team.offenseRating - 60)/40)*4)+1)
                 teamDict['defenseRatingStars'] = team.defenseOverallTier
@@ -111,7 +108,7 @@ async def returnTeams(id = None):
                 teamDict['allTimeStats'] = team.allTimeTeamStats
                 teamDict['history'] = team.statArchive
                 teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-                teamDict['clinchedDivision'] = team.clinchedDivision
+                teamDict['floosbowlChampion'] = team.floosbowlChampion
                 teamDict['clinchedTopSeed'] = team.clinchedTopSeed
                 teamDict['leagueChampion'] = team.leagueChampion
                 teamDict['winningStreak'] = team.winningStreak
@@ -304,12 +301,12 @@ async def returnPlayers(id = None):
 @app.get('/standings')
 async def returnStandings():
     standingsList = []
-    for division in floosball.divisionList:
-        division: floosball.Division
-        divDict = {}
+    for league in floosball.leagueList:
+        league: floosball.League
+        leagueDict = {}
         teamsList = []
-        divDict['name'] = division.name
-        for team in division.teamList:
+        leagueDict['name'] = league.name
+        for team in league.teamList:
             team: Team
             teamDict = {}
             teamDict['name'] = '{0} {1}'.format(team.city, team.name)
@@ -325,8 +322,8 @@ async def returnStandings():
             else:
                 teamDict['streak'] = 'L{}'.format(abs(team.seasonTeamStats['streak']))
             teamsList.append(teamDict)
-            divDict['standings'] = teamsList
-        standingsList.append(divDict)
+            leagueDict['standings'] = teamsList
+        standingsList.append(leagueDict)
     return standingsList
 
 @app.get('/schedule')
@@ -612,67 +609,50 @@ async def returnPowerRankings():
 @app.get('/playoffPicture')
 async def returnPlayoffPicture():
     playoffList = []
-    divisionLeadersList = []
-    playoffTeamsList = []
-    nonPlayoffTeamsList = []
+    for league in floosball.leagueList:
+        leagueList = []
+        playoffTeamsList = []
+        nonPlayoffTeamsList = []
 
-    for team in floosball.activeSeason.divisionLeadersList:
-        team: Team
-        teamDict = {}
-        teamDict['name'] = team.name
-        teamDict['city'] = team.city
-        teamDict['color'] = team.color
-        teamDict['id'] = team.id
-        teamDict['elo'] = team.elo
-        teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-        teamDict['eliminated'] = team.eliminated
-        teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-        teamDict['clinchedDivision'] = team.clinchedDivision
-        teamDict['clinchedTopSeed'] = team.clinchedTopSeed
-        teamDict['leagueChampion'] = team.leagueChampion
-        teamDict['winningStreak'] = team.winningStreak
-        divisionLeadersList.append(teamDict)
+        for team in floosball.activeSeason.playoffTeams[league.name]:
+            team: Team
+            teamDict = {}
+            teamDict['name'] = team.name
+            teamDict['city'] = team.city
+            teamDict['color'] = team.color
+            teamDict['id'] = team.id
+            teamDict['elo'] = team.elo
+            teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
+            teamDict['eliminated'] = team.eliminated
+            teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
+            teamDict['clinchedTopSeed'] = team.clinchedTopSeed
+            teamDict['leagueChampion'] = team.leagueChampion
+            teamDict['floosbowlChampion'] = team.floosbowlChampion
+            teamDict['winningStreak'] = team.winningStreak
+            playoffTeamsList.append(teamDict)
 
-    for team in floosball.activeSeason.nonDivisionLeaderPlayoffTeamsList:
-        team: Team
-        teamDict = {}
-        teamDict['name'] = team.name
-        teamDict['city'] = team.city
-        teamDict['color'] = team.color
-        teamDict['id'] = team.id
-        teamDict['elo'] = team.elo
-        teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-        teamDict['eliminated'] = team.eliminated
-        teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-        teamDict['clinchedDivision'] = team.clinchedDivision
-        teamDict['clinchedTopSeed'] = team.clinchedTopSeed
-        teamDict['leagueChampion'] = team.leagueChampion
-        teamDict['winningStreak'] = team.winningStreak
-        playoffTeamsList.append(teamDict)
+        for team in floosball.activeSeason.nonPlayoffTeams[league.name]:
+            team: Team
+            teamDict = {}
+            teamDict['name'] = team.name
+            teamDict['city'] = team.city
+            teamDict['color'] = team.color
+            teamDict['id'] = team.id
+            teamDict['elo'] = team.elo
+            teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
+            teamDict['eliminated'] = team.eliminated
+            teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
+            teamDict['clinchedTopSeed'] = team.clinchedTopSeed
+            teamDict['leagueChampion'] = team.leagueChampion
+            teamDict['floosbowlChampion'] = team.floosbowlChampion
+            teamDict['winningStreak'] = team.winningStreak
+            nonPlayoffTeamsList.append(teamDict)
 
-    for team in floosball.activeSeason.nonPlayoffTeamsList:
-        team: Team
-        teamDict = {}
-        teamDict['name'] = team.name
-        teamDict['city'] = team.city
-        teamDict['color'] = team.color
-        teamDict['id'] = team.id
-        teamDict['elo'] = team.elo
-        teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-        teamDict['eliminated'] = team.eliminated
-        teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-        teamDict['clinchedDivision'] = team.clinchedDivision
-        teamDict['clinchedTopSeed'] = team.clinchedTopSeed
-        teamDict['leagueChampion'] = team.leagueChampion
-        teamDict['winningStreak'] = team.winningStreak
-        nonPlayoffTeamsList.append(teamDict)
-
-    divisionLeadersDict = {'divisionLeaders': divisionLeadersList}
-    playoffTeamsDict = {'playoffTeams': playoffTeamsList}
-    nonPlayoffTeamsDict = {'nonPlayoffTeams': nonPlayoffTeamsList}
-    playoffList.append(divisionLeadersDict)
-    playoffList.append(playoffTeamsDict)
-    playoffList.append(nonPlayoffTeamsDict)
+        #playoffTeamsDict = {'playoffTeams': playoffTeamsList}
+        #nonPlayoffTeamsDict = {'nonPlayoffTeams': nonPlayoffTeamsList}
+        leagueList.append(playoffTeamsList)
+        leagueList.append(nonPlayoffTeamsList)
+        playoffList.append(leagueList)
     return playoffList
 
 
@@ -1270,8 +1250,8 @@ async def returnSeasonInfo():
 
 @app.get('/champion')
 async def returnChampion():
-    if isinstance(floosball.leagueChampion, Team):
-        return {'team': '{} {}'.format(floosball.leagueChampion.city, floosball.leagueChampion.name), 'color': floosball.leagueChampion.color, 'id': floosball.leagueChampion.id}
+    if isinstance(floosball.floosbowlChampion, Team):
+        return {'team': '{} {}'.format(floosball.floosbowlChampion.city, floosball.floosbowlChampion.name), 'color': floosball.floosbowlChampion.color, 'id': floosball.floosbowlChampion.id}
     else: return {}
             
 

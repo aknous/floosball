@@ -12,17 +12,13 @@ teamStatsDict = {
                     'elo': 0,
                     'overallRating': 0,
                     'madePlayoffs': False,
-                    'divPlace': 0,
-                    'divisionChamp': False,
                     'leagueChamp': False,
+                    'floosbowlChamp': False,
                     'topSeed': False,
                     'wins': 0, 
                     'losses': 0, 
                     'winPerc': 0, 
                     'streak': 0, 
-                    'divWins': 0, 
-                    'divLosses': 0, 
-                    'divWinPerc': 0, 
                     'scoreDiff': 0,
                     'Offense': {
                         'runTds': 0,
@@ -72,7 +68,7 @@ class Team:
         self.city = None
         self.abbr = None
         self.color = None
-        self.division = None
+        self.league = None
         self.offenseRating = 0
         self.defenseRunCoverageRating = 0
         self.defensePassCoverageRating = 0
@@ -90,8 +86,8 @@ class Team:
         self.defensePassTier = 0
         self.defenseRunTier = 0
         self.overallRating = 0
-        self.divisionChampionships = []
         self.leagueChampionships = []
+        self.floosbowlChampionships = []
         self.regularSeasonChampions = []
         self.playoffAppearances = 0
         self.defenseSeasonPerformanceRating = 0
@@ -104,9 +100,9 @@ class Team:
         self.rosterHistory = []
         self.statArchive = []
         self.clinchedPlayoffs = False
-        self.clinchedDivision = False
         self.clinchedTopSeed = False
         self.leagueChampion = False
+        self.floosbowlChampion = False
         self.winningStreak = False
 
         self.playerNumbersList = []

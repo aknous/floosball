@@ -2,15 +2,17 @@
     "leagueConfig": {
         "cap": 30,
         "totalSeasons": 20,
-        "deleteDataOnRestart": false,
+        "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
         "lastSeason": 0
     },
-    "divisions": [
-        "Silicon",
-        "Neon",
-        "Hydrogen",
-        "Tungsten"
+    "leagues": [
+        {
+            "name": "League 1"
+        },
+        {
+            "name": "League 2"
+        }
     ],
     "teams": [
         {
@@ -18,12 +20,6 @@
             "name": "Strangers",
             "abbr": "NYS",
             "color": "#E93479"
-        },
-        {
-            "city": "Chicago",
-            "name": "Beans",
-            "abbr": "CHI",
-            "color": "#651FFF"
         },
         {
             "city": "Boston",
@@ -38,10 +34,10 @@
             "color": "#26A69A"
         },
         {
-            "city": "Georgia",
-            "name": "Classics",
-            "abbr": "GAC",
-            "color": "#3498db"
+            "city": "Maryland",
+            "name": "Drivers",
+            "abbr": "MDD",
+            "color": "#ffa801"
         },
         {
             "city": "Pittsburgh",
@@ -50,10 +46,28 @@
             "color": "#27ae60"
         },
         {
-            "city": "Denver",
-            "name": "Leg Warmers",
-            "abbr": "DEN",
-            "color": "#1e3799"
+            "city": "Cleveland",
+            "name": "Rocks",
+            "abbr": "CLE",
+            "color": "#26C6DA"
+        },
+        {
+            "city": "Chicago",
+            "name": "Beans",
+            "abbr": "CHI",
+            "color": "#651FFF"
+        },
+        {
+            "city": "Detroit",
+            "name": "Caddies",
+            "abbr": "DET",
+            "color": "#1B9CFC"
+        },
+        {
+            "city": "Minnesota",
+            "name": "Blouses",
+            "abbr": "MIN",
+            "color": "#D500F9"
         },
         {
             "city": "Seattle",
@@ -62,34 +76,28 @@
             "color": "#60a3bc"
         },
         {
-            "city": "Cleveland",
-            "name": "Rocks",
-            "abbr": "CLE",
-            "color": "#26C6DA"
+            "city": "Vancouver",
+            "name": "Pinecones",
+            "abbr": "VAN",
+            "color": "#ff6348"
         },
         {
-            "city": "San Francisco",
-            "name": "Phones",
-            "abbr": "SFP",
-            "color": "#0fbcf9"
+            "city": "Colorado",
+            "name": "Leg Warmers",
+            "abbr": "DEN",
+            "color": "#1e3799"
         },
         {
-            "city": "Tampa",
-            "name": "Babies",
-            "abbr": "TAM",
-            "color": "#FFC400"
+            "city": "Austin",
+            "name": "Moonlight",
+            "abbr": "AUS",
+            "color": "#FF6D00"
         },
         {
-            "city": "Miami",
-            "name": "Jetskis",
-            "abbr": "MIA",
-            "color": "#ff00a0"
-        },
-        {
-            "city": "Minnesota",
-            "name": "Blouses",
-            "abbr": "MIN",
-            "color": "#D500F9"
+            "city": "Kansas City",
+            "name": "Slippers",
+            "abbr": "KCS",
+            "color": "#EA2027"
         },
         {
             "city": "San Diego",
@@ -128,34 +136,28 @@
             "color": "#B53471"
         },
         {
-            "city": "Vancouver",
-            "name": "Pinecones",
-            "abbr": "VAN",
-            "color": "#ff6348"
+            "city": "Miami",
+            "name": "Jetskis",
+            "abbr": "MIA",
+            "color": "#ff00a0"
         },
         {
-            "city": "Maryland",
-            "name": "Drivers",
-            "abbr": "MDD",
-            "color": "#ffa801"
+            "city": "San Francisco",
+            "name": "Phones",
+            "abbr": "SFP",
+            "color": "#0fbcf9"
         },
         {
-            "city": "Austin",
-            "name": "Moonlight",
-            "abbr": "AUS",
-            "color": "#FF6D00"
+            "city": "Tampa",
+            "name": "Babies",
+            "abbr": "TAM",
+            "color": "#FFC400"
         },
         {
-            "city": "Kansas City",
-            "name": "Slippers",
-            "abbr": "KCS",
-            "color": "#EA2027"
-        },
-        {
-            "city": "Detroit",
-            "name": "Caddies",
-            "abbr": "DET",
-            "color": "#1B9CFC"
+            "city": "Georgia",
+            "name": "Classics",
+            "abbr": "GAC",
+            "color": "#3498db"
         }
     ],
     "players": [
@@ -218,8 +220,6 @@
         "Spike Pavidis",
         "Boony Kohn",
         "Patti Jee",
-        "Avie Gilat",
-        "Rachel Chachki",
         "Alaska Markova",
         "Callaway Casey",
         "Ocean Emerson",
@@ -234,14 +234,11 @@
         "Tender Jordan",
         "Johny Frankly",
         "Tomorrow McIntyre",
-        "Jurj Clooners",
         "Heavenly Sparrow",
         "The Duchess",
         "Lambert Puddlefoot",
         "Charlotte Ramsbottom",
         "Talon Roseberg",
-        "Naitou Ujitsune",
-        "Hatano Akimoro",
         "Willow O'Hanlon",
         "Thony Jacques",
         "Inne Blomme",
@@ -368,10 +365,6 @@
         "Petty Lord Aedilhun",
         "Yric, Warrior of Fangs",
         "Grand Preacher Sighard",
-        "Enraged Patriarch Eadric",
-        "Wulfrun, Paragon of Sunlight",
-        "Winfred, Minister of Eternity",
-        "Nocturnal Eminence Eadwynn",
         "Pepper Juneberry",
         "Prince Elms",
         "Jonathan Hornette",
@@ -507,7 +500,6 @@
         "Airbreak Blacksmith",
         "Esmerelda Winedrunk",
         "Candi Milkwater",
-        "Shaq Again",
         "Olive Churro",
         "Coconut Deep",
         "Sonora Powercry",
@@ -712,12 +704,6 @@
         "Tincan Ferguson",
         "Subray Wizzbang",
         "Georgetta Wickerbottom",
-        "Shoji-san",
-        "Kimio-kun",
-        "Hiroyoshi-san",
-        "Hishashi-kun",
-        "Tomomi-chan",
-        "Fumi-chan",
         "Musty Washington",
         "Sweaty Protoge",
         "Charming Netizen",
@@ -896,7 +882,7 @@
         "Reegis Toulouse",
         "Gregothy Soupson",
         "Primrose Bannister",
-        "Huberto Endzone",
+        "Humberto Endzone",
         "Venezuela Vibes",
         "Crummy Kettlecorn",
         "Baker Time",
@@ -912,21 +898,37 @@
         "Cries Cabrera",
         "Sobbing Child",
         "Yorky Gleason",
-        "McBain",
         "Grunge McBlaze",
-        "Supernintendo Chalmers",
-        "Bread Poot",
-        "Mitt Dermon",
-        "Lernernerner Dicapricorn",
         "Duffy Welsh",
         "Ronnie Nightman",
-        "Trevor",
         "Grary Wingnuts",
         "Ronna McDonna",
         "Invader Jim",
         "Ralphonso Lightgun",
         "Tupelo Dunmore",
         "Pweston",
-        "Walter Cordon Bleu"
+        "Walter Cordon Bleu",
+        "Toadstool Nightmare",
+        "Torque Manderlay",
+        "Fex Mundaroo",
+        "Gordy Wrangles",
+        "Fletch Mumbleton",
+        "Bark Wendleton",
+        "Jessie Jockjams",
+        "Bobbo Montblanc",
+        "Velka, Seeker of Sins",
+        "Roderic, The Undying",
+        "Vortigern, the Faded King",
+        "Gregorlando Turner",
+        "Brantoniel DeSilvo",
+        "Loubert Andrett",
+        "Tuchus Freckle",
+        "Keene Rockaway",
+        "Shaggy Porcelain",
+        "Edgar Bongos",
+        "Doghair Springer",
+        "Spuds Gato",
+        "Pacman Cassanova",
+        "Powershell Flashmob"
     ]
 }

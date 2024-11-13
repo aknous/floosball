@@ -15,6 +15,8 @@ import floosball_methods as FloosMethods
 import datetime
 import math
 import glob
+import itertools
+import random
  
 
 __version__ = '0.9.0_alpha'
@@ -41,11 +43,11 @@ activeKList = []
 freeAgencyOrder = []
 freeAgencyHistoryDict = {}
 teamList = []
-divisionList = []   
+leagueList = []   
 scheduleList = []
 seasonList = []
 activeSeason = None
-leagueChampion: FloosTeam.Team = None
+floosbowlChampion: FloosTeam.Team = None
 championshipHistory = []
 scheduleScheme = [
     ('1112','1314','1516','2122','2324','2526','3132','3334','3536','4142','4344','4546'),
@@ -80,7 +82,6 @@ scheduleScheme = [
     ('1611','1312','1514','2621','2322','2524','3631','3332','3534','4641','4342','4544'),
     ('1411','1216','1315','2421','2226','2325','3431','3236','3335','4441','4246','4345'),
     ('1115','1214','1613','2125','2224','2623','3135','3234','3633','4145','4244','4643')]
-
 
 allTimeRecordsDict = {
     'players': {
@@ -464,8 +465,8 @@ allTimeRecordsDict = {
                 'id': 0,
                 'value': 0,
             },
-            'divTitles': {
-                'record': 'Division Titles',
+            'leagueTitles': {
+                'record': 'League Titles',
                 'name': None,
                 'id': 0,
                 'value': 0,
@@ -524,79 +525,6 @@ allTimeRecordsDict = {
     }
 }
 
-
-colorList = [   
-                '#F1C40F',
-                '#651FFF',
-                '#C0392B',
-                '#58D68D',
-                '#F39C12',
-                '#7FB3D5',
-                '#FF6D00',
-                '#2980B9',
-                '#FF1744',
-                '#FF4081',
-                '#D500F9',
-                '#9C27B0',
-                '#304FFE',
-                '#64B5F6',
-                '#2196F3',
-                '#00B0FF',
-                '#26C6DA',
-                '#00E5FF',
-                '#26A69A',
-                '#1DE9B6',
-                '#00C853',
-                '#F57F17',
-                '#FFC400',
-                '#FF3D00',
-                '#1abc9c',
-                '#e74c3c',
-                '#2ecc71',
-                '#3498db',
-                '#2980b9',
-                '#27ae60',
-                '#d35400',
-                '#c0392b',
-                '#e67e22',
-                '#8e44ad',
-                '#9b59b6',
-                '#f39c12',
-                '#44bd32',
-                '#e84118',
-                '#00a8ff',
-                '#487eb0',
-                '#EA2027',
-                '#009432',
-                '#EE5A24',
-                '#0652DD',
-                '#B53471',
-                '#ED4C67',
-                '#B33771',
-                '#FC427B',
-                '#20bf6b',
-                '#eb3b5a',
-                '#3867d6',
-                '#2d98da',
-                '#fc5c65',
-                '#fa8231',
-                '#f7b731',
-                '#0fb9b1',
-                '#a55eea',
-                '#b71540',
-                '#2ed573',
-                '#3742fa',
-                '#ff4757',
-                '#ff6348',
-                '#1e90ff',
-                '#05c46b',
-                '#ff3f34',
-                '#3c40c6',
-                '#00d8d6',
-                '#ffa801',
-                '#0fbcf9',
-                '#f53b57'
-            ]
 
 dateNow = datetime.datetime.now()
 dateNowUtc = datetime.datetime.utcnow()
@@ -806,15 +734,15 @@ def checkCareerRecords():
                 allTimeRecordsDict['team']['allTime']['losses']['name'] = '{} {}'.format(team.city, team.name)
                 allTimeRecordsDict['team']['allTime']['losses']['id'] = team.id
 
-            if len(team.leagueChampionships) > allTimeRecordsDict['team']['allTime']['titles']['value']:
-                allTimeRecordsDict['team']['allTime']['titles']['value'] = len(team.leagueChampionships)
+            if len(team.floosbowlChampionships) > allTimeRecordsDict['team']['allTime']['titles']['value']:
+                allTimeRecordsDict['team']['allTime']['titles']['value'] = len(team.floosbowlChampionships)
                 allTimeRecordsDict['team']['allTime']['titles']['name'] = '{} {}'.format(team.city, team.name)
                 allTimeRecordsDict['team']['allTime']['titles']['id'] = team.id
 
-            if len(team.divisionChampionships) > allTimeRecordsDict['team']['allTime']['divTitles']['value']:
-                allTimeRecordsDict['team']['allTime']['divTitles']['value'] = len(team.divisionChampionships)
-                allTimeRecordsDict['team']['allTime']['divTitles']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['allTime']['divTitles']['id'] = team.id
+            if len(team.leagueChampionships) > allTimeRecordsDict['team']['allTime']['leagueTitles']['value']:
+                allTimeRecordsDict['team']['allTime']['leagueTitles']['value'] = len(team.leagueChampionships)
+                allTimeRecordsDict['team']['allTime']['leagueTitles']['name'] = '{} {}'.format(team.city, team.name)
+                allTimeRecordsDict['team']['allTime']['leagueTitles']['id'] = team.id
 
             if len(team.regularSeasonChampions) > allTimeRecordsDict['team']['allTime']['regSeasonTitles']['value']:
                 allTimeRecordsDict['team']['allTime']['regSeasonTitles']['value'] = len(team.regularSeasonChampions)
@@ -952,14 +880,10 @@ def checkSeasonRecords(season):
                 allTimeRecordsDict['team']['season']['elo']['id'] = team.id
                 allTimeRecordsDict['team']['season']['elo']['season'] = season
 
-
-
-
-
     
-class Division:
-    def __init__(self, name):
-        self.name = name
+class League:
+    def __init__(self, config):
+        self.name = config['name']
         self.teamList = []
 
 class Season:
@@ -969,107 +893,168 @@ class Season:
         self.currentWeek = None
         self.currentWeekText = None
         self.leagueHighlights = []
-        self.divisionLeadersList = []
-        self.nonDivisionLeaderPlayoffTeamsList = []
-        self.nonPlayoffTeamsList = []
+        self.playoffTeams = {}
+        self.nonPlayoffTeams = {}
 
     def updatePlayoffPicture(self):
-        nonDivisionLeaderTeamList = []
-        self.divisionLeadersList.clear()
-        self.nonDivisionLeaderPlayoffTeamsList.clear()
-        self.nonPlayoffTeamsList.clear()
 
-        for division in divisionList:
-                division: Division
-                for t in range(len(division.teamList)):
-                    if t == 0:
-                        self.divisionLeadersList.append(division.teamList[t])
-                    else:
-                        nonDivisionLeaderTeamList.append(division.teamList[t])
-
-        list.sort(self.divisionLeadersList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-        list.sort(nonDivisionLeaderTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-
-        for t in range(len(nonDivisionLeaderTeamList)):
-            if t < 8:
-                self.nonDivisionLeaderPlayoffTeamsList.append(nonDivisionLeaderTeamList[t])
-            else:
-                self.nonPlayoffTeamsList.append(nonDivisionLeaderTeamList[t])
-
-        list.sort(self.nonDivisionLeaderPlayoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-        list.sort(self.nonPlayoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+        for league in leagueList:
+            league: League
+            sliceIndex = int(len(league.teamList)/2)
+            playoffTeams = league.teamList[:sliceIndex]
+            nonPlayoffTeams = league.teamList[sliceIndex:]
+            list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            self.playoffTeams[league.name] = playoffTeams
+            self.nonPlayoffTeams[league.name] = nonPlayoffTeams
 
 
 
     def checkForClinches(self):
-        team1: FloosTeam.Team = teamList[0]
-        team2: FloosTeam.Team = teamList[1]
-        team12: FloosTeam.Team = self.nonDivisionLeaderPlayoffTeamsList[7]
-        team13: FloosTeam.Team = self.nonPlayoffTeamsList[0]
-        for division in divisionList:
-            division: Division
-            divTeam1: FloosTeam.Team = division.teamList[0]
-            divTeam2: FloosTeam.Team = division.teamList[1] 
 
-            if not divTeam1.clinchedDivision:
-                divTeam1.clinchedDivision = FloosMethods.checkIfClinched(divTeam1.seasonTeamStats['wins'], divTeam2.seasonTeamStats['wins'], 28 - self.currentWeek)
-                if divTeam1.clinchedDivision:
-                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have won the {2} Division'.format(divTeam1.city, divTeam1.name, divTeam1.division)}})
-                    if not divTeam1.clinchedPlayoffs:
-                        divTeam1.clinchedPlayoffs = True
-                        self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(divTeam1.city, divTeam1.name)}})
+        for league in leagueList:
+            team1: FloosTeam.Team = league.teamList[0]
+            team2: FloosTeam.Team = league.teamList[1]
+            playoffTeamList = self.playoffTeams[league.name]
+            nonPlayoffTeamsList = self.nonPlayoffTeams[league.name]
+
+            lastTeamIn = playoffTeamList[len(playoffTeamList)-1]
+            firstTeamOut = nonPlayoffTeamsList[0]
+
+            if not team1.clinchedTopSeed:
+                team1.clinchedTopSeed = FloosMethods.checkIfClinched(team1.seasonTeamStats['wins'], team2.seasonTeamStats['wins'], 28 - self.currentWeek)
+                if team1.clinchedTopSeed:
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched the #1 seed'.format(team1.city, team1.name)}})
                 elif self.currentWeek == 28:
-                    divTeam1.clinchedDivision =  True
-                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have won the {2} Division'.format(divTeam1.city, divTeam1.name, divTeam1.division)}})
-                    if not divTeam1.clinchedPlayoffs:
-                        divTeam1.clinchedPlayoffs = True
-                        self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(divTeam1.city, divTeam1.name)}})
+                    team1.clinchedTopSeed = True
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched the #1 seed'.format(team1.city, team1.name)}})
 
-        for team in self.divisionLeadersList:
-            team: FloosTeam.Team
-            if not team.clinchedPlayoffs:
-                team.clinchedPlayoffs = FloosMethods.checkIfClinched(team.seasonTeamStats['wins'], team13.seasonTeamStats['wins'], 28 - self.currentWeek)
-                if team.clinchedPlayoffs:
-                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}}) 
-
-        if not team1.clinchedTopSeed:
-            team1.clinchedTopSeed = FloosMethods.checkIfClinched(team1.seasonTeamStats['wins'], team2.seasonTeamStats['wins'], 28 - self.currentWeek)
-            if team1.clinchedTopSeed:
-                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched the #1 seed'.format(team1.city, team1.name)}})
-            elif self.currentWeek == 28:
-                team1.clinchedTopSeed = True
-                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched the #1 seed'.format(team1.city, team1.name)}})
-
-        
-
-        if self.currentWeek == 28:
-            for team in self.nonDivisionLeaderPlayoffTeamsList:
-                team: FloosTeam.Team
-                if not team.clinchedPlayoffs:
-                    team.clinchedPlayoffs = True
-                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
-            for team in self.nonPlayoffTeamsList:
-                team: FloosTeam.Team
-                if not team.eliminated:
-                    team.eliminated = True
-                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
-        else:
-            for team in self.nonDivisionLeaderPlayoffTeamsList:
-                team:FloosTeam.Team
-                if not team.clinchedPlayoffs and not team.eliminated:
-                    team.clinchedPlayoffs = FloosMethods.checkIfClinched(team.seasonTeamStats['wins'], team13.seasonTeamStats['wins'], 28 - self.currentWeek)
-                    if team.clinchedPlayoffs:
+            if self.currentWeek == 28:
+                for team in playoffTeamList:
+                    team: FloosTeam.Team
+                    if not team.clinchedPlayoffs:
+                        team.clinchedPlayoffs = True
                         self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
-            for team in self.nonPlayoffTeamsList:
-                team:FloosTeam.Team
-                if not team.clinchedPlayoffs and not team.eliminated:
-                    team.eliminated = FloosMethods.checkIfEliminated(team.seasonTeamStats['wins'], team12.seasonTeamStats['wins'], 28 - self.currentWeek)
-                    if team.eliminated:
+                for team in nonPlayoffTeamsList:
+                    team: FloosTeam.Team
+                    if not team.eliminated:
+                        team.eliminated = True
                         self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+            else:
+                for team in playoffTeamList:
+                    team:FloosTeam.Team
+                    if not team.clinchedPlayoffs and not team.eliminated:
+                        team.clinchedPlayoffs = FloosMethods.checkIfClinched(team.seasonTeamStats['wins'], firstTeamOut.seasonTeamStats['wins'], 28 - self.currentWeek)
+                        if team.clinchedPlayoffs:
+                            self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+                for team in nonPlayoffTeamsList:
+                    team:FloosTeam.Team
+                    if not team.clinchedPlayoffs and not team.eliminated:
+                        team.eliminated = FloosMethods.checkIfEliminated(team.seasonTeamStats['wins'], lastTeamIn.seasonTeamStats['wins'], 28 - self.currentWeek)
+                        if team.eliminated:
+                            self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+
+
+    def generateSchedule(self):
+        schedule = []
+
+        league1Teams = list.copy(leagueList[0].teamList)
+        league2Teams = list.copy(leagueList[1].teamList)
+        intraleagueGames = []
+        league1Games = self.generateIntraleagueGames(league1Teams)
+        league2Games = self.generateIntraleagueGames(league2Teams)
+        interleagueGames = self.generateInterleagueGames(league1Teams,league2Teams)
+
+        for x in range(len(league1Games)):
+            week = []
+            week.extend(league1Games[x])
+            week.extend(league2Games[x])
+            intraleagueGames.append(week)
+
+        schedule = interleagueGames + intraleagueGames
+        random.shuffle(schedule)
+        return schedule
+
+
+    def generateIntraleagueGames(self, teams):
+        n = len(teams)
+        tempTeams = teams.copy()
+        weeks = []
+
+        for week in range(n - 1):
+            games = []
+            for i in range(n // 2):
+                if week % 2 == 0:
+                    home = tempTeams[i]
+                    away = tempTeams[n - 1 - i]
+                    games.append((home, away))
+                else:
+                    home = tempTeams[n - 1 - i]
+                    away = tempTeams[i]
+                    games.append((home, away))
+
+            weeks.append(games)
+            tempTeams.insert(1, tempTeams.pop())
+
+        reverseWeeks = []
+        for week in weeks:
+            reverse = [(away, home) for home, away in week]
+            reverseWeeks.append(reverse)
+
+        weeks.extend(reverseWeeks)
+        return weeks
+
+    
+    def generateInterleagueGames(self, league1, league2):
+        weeks = []
+        group1Weeks = []
+        group2Weeks = []
+        league1Group1Teams = []
+        league1Group2Teams = []
+        league2Group1Teams = []
+        league2Group2Teams = []
+
+        for x in range(len(leagueList[0].teamList)):
+            if x < (len(leagueList[0].teamList) / 2):
+                league1Group1Teams.append(league1.pop(random.randrange(len(league1))))
+                league2Group1Teams.append(league2.pop(random.randrange(len(league2))))
+            else:
+                league1Group2Teams.append(league1.pop(random.randrange(len(league1))))
+                league2Group2Teams.append(league2.pop(random.randrange(len(league2))))
+
+        for x in range(len(league1Group1Teams)):
+            games = []
+            for y in range(len(league1Group1Teams)):
+                a = x+y
+                z = int(a % (len(league1Group1Teams)))
+                if y % 2 == 0:
+                    games.append((league1Group1Teams[y], league2Group1Teams[z]))
+                else:
+                    games.append((league2Group1Teams[z], league1Group1Teams[y]))
+            group1Weeks.append(games)
+
+        for x in range(len(league1Group2Teams)):
+            games = []
+            for y in range(len(league1Group2Teams)):
+                a = x+y
+                z = int(a % (len(league1Group2Teams)))
+                if y % 2 == 0:
+                    games.append((league1Group2Teams[y], league2Group2Teams[z]))
+                else:
+                    games.append((league2Group2Teams[z], league1Group2Teams[y]))
+            group2Weeks.append(games)
+
+        for x in range(len(group1Weeks)):
+            week = []
+            week.extend(group1Weeks[x])
+            week.extend(group2Weeks[x])
+            weeks.append(week)
+
+        return weeks
 
 
     def createSchedule(self):
-        numOfWeeks = len(scheduleScheme)
+        numOfWeeks = int(((len(leagueList[0].teamList) - 1) * 2) + (len(leagueList[0].teamList) / 2))
+        schedule = self.generateSchedule()
         scheduleList.clear()
         dateTimeNow = datetime.datetime.utcnow()
         for week in range(0, numOfWeeks):
@@ -1077,9 +1062,9 @@ class Season:
             numOfGames = int(len(teamList)/2)
             weekStartTime = self.getWeekStartTime(dateTimeNow, week)
             for x in range(0, numOfGames):
-                game = scheduleScheme[week][x]
-                homeTeam:FloosTeam.Team = divisionList[int(game[0]) - 1].teamList[int(game[1]) - 1]
-                awayTeam:FloosTeam.Team = divisionList[int(game[2]) - 1].teamList[int(game[3]) - 1]
+                game = schedule[week][x]
+                homeTeam:FloosTeam.Team = game[0]
+                awayTeam:FloosTeam.Team = game[1]
                 newGame = FloosGame.Game(homeTeam,awayTeam)
                 newGame.id = 's{0}w{1}g{2}'.format(self.currentSeason, week+1, x+1)
                 newGame.status = FloosGame.GameStatus.Scheduled
@@ -1089,6 +1074,7 @@ class Season:
                 awayTeam.schedule.append(newGame)
                 gameList.append(newGame)
             scheduleList.append({'startTime': weekStartTime, 'games': gameList})
+
 
     def getWeekStartTime(self, now:datetime.datetime, week:int):
         global dateNowUtc
@@ -1260,12 +1246,11 @@ class Season:
             #teamDict['defenseDiscipline'] = team.defenseDiscipline
             teamDict['overallRating'] = team.overallRating
             teamDict['allTimeTeamStats'] = team.allTimeTeamStats
-            teamDict['leagueChampionships'] = team.leagueChampionships
             teamDict['playoffAppearances'] = team.playoffAppearances
             teamDict['gmScore'] = team.gmScore
             teamDict['defenseTier'] = team.defenseOverallTier
             teamDict['leagueChampionships'] = team.leagueChampionships
-            teamDict['divisionChampionships'] = team.divisionChampionships
+            teamDict['floosbowlChampionships'] = team.floosbowlChampionships
             teamDict['regularSeasonChampions'] = team.regularSeasonChampions
             teamDict['rosterHistory'] = team.rosterHistory
             teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
@@ -1275,13 +1260,13 @@ class Season:
 
         savePlayerData()
 
-        divList = []
-        for division in divisionList:
-            divDict = {}
+        leagueList = []
+        for league in leagueList:
+            leagueDict = {}
             tempTeamList = []
-            divDict['divisionName'] = division.name
-            division: Division
-            for team in division.teamList:
+            leagueDict['leagueName'] = league.name
+            league: League
+            for team in league.teamList:
                 team: FloosTeam.Team
                 teamDict = {}
                 teamDict['name'] = team.name
@@ -1292,9 +1277,9 @@ class Season:
                 teamDict['wins'] = team.seasonTeamStats['wins']
                 teamDict['losses'] = team.seasonTeamStats['losses']
                 teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-                teamDict['clinchedDivision'] = team.clinchedDivision
                 teamDict['clinchedTopSeed'] = team.clinchedTopSeed
                 teamDict['leagueChampion'] = team.leagueChampion
+                teamDict['floosbowlChampion'] = team.floosbowlChampion
                 if (team.seasonTeamStats['wins']+team.seasonTeamStats['losses']) > 0:
                     teamDict['winPerc'] = '{:.3f}'.format(round(team.seasonTeamStats['wins']/(team.seasonTeamStats['wins']+team.seasonTeamStats['losses']),3))
                 else:
@@ -1306,9 +1291,9 @@ class Season:
                     teamDict['pointDiff'] = '{}'.format(team.seasonTeamStats['scoreDiff'])
                 tempTeamList.append(teamDict)
             list.sort(tempTeamList, key=lambda team: team['winPerc'], reverse=True)
-            divDict['teams'] = tempTeamList
-            divList.append(divDict)
-        standingsHistory.append(divList)
+            leagueDict['teams'] = tempTeamList
+            leagueList.append(leagueDict)
+        standingsHistory.append(leagueList)
         
 
     def clearPlayerSeasonStats(self):
@@ -1334,7 +1319,7 @@ class Season:
 
     async def startSeason(self):
         global freeAgencyOrder
-        global leagueChampion
+        global floosbowlChampion
         weekDict = {}
         seasonDict = {}
         gameDictTemp = {}
@@ -1344,10 +1329,10 @@ class Season:
         for team in teamList:
             team: FloosTeam.Team
             team.eliminated = False
-            team.clinchedDivision = False
             team.clinchedPlayoffs = False
             team.clinchedTopSeed = False
             team.leagueChampion = False
+            team.floosbowlChampion = False
             team.winningStreak = False
             team.seasonTeamStats['season'] = self.currentSeason
             rosterDict = {}
@@ -1426,7 +1411,7 @@ class Season:
 
             gamesList = [self.activeGames[game].playGame() for game in range(0,len(self.activeGames))]
 
-            #await asyncio.sleep(30)
+            await asyncio.sleep(30)
             # while datetime.datetime.utcnow() < weekStartTime:
             #     await asyncio.sleep(30)
 
@@ -1443,8 +1428,8 @@ class Season:
             jsonFile.write(json.dumps(weekDict, indent=4))
             jsonFile.close()
             
-            for division in divisionList:
-                list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            for league in leagueList:
+                list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             getPerformanceRating()
             sortPlayers()
@@ -1455,34 +1440,34 @@ class Season:
             checkCareerRecords()
             checkSeasonRecords(self.currentSeason)
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
-            #await asyncio.sleep(30)
+            await asyncio.sleep(30)
 
         list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
         bestTeam:FloosTeam.Team = teamList[0]
         bestTeam.regularSeasonChampions.append('Season {}'.format(seasonsPlayed+1))
         #seasonDict['games'] = weekDict
-        leagueChampion = await self.playPlayoffs()
-        leagueChampion.seasonTeamStats['leagueChamp'] = True
-        leagueChampion.leagueChampion = True
+        floosbowlChampion = await self.playPlayoffs()
+        floosbowlChampion.seasonTeamStats['floosbowlChamp'] = True
+        floosbowlChampion.floosbowlChampion = True
 
         self.saveSeasonStats()
 
         standingsDict = {}
-        divStandingsTempDict = {}
-        jsonFile = open("data/divisionData.json", "w+")
-        for division in divisionList:
-            list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-            divStandingsDict = divStandingsTempDict.copy()
+        leagueStandingsTempDict = {}
+        jsonFile = open("data/leagueData.json", "w+")
+        for league in leagueList:
+            list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            leagueStandingsDict = leagueStandingsTempDict.copy()
             #print("\n{0} Division".format(division.name))
-            for team in division.teamList:
-                divStandingsDict[team.name] = '{0} - {1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-            standingsDict[division.name] = divStandingsDict
+            for team in league.teamList:
+                leagueStandingsDict[team.name] = '{0} - {1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
+            standingsDict[league.name] = leagueStandingsDict
 
         jsonFile.write(json.dumps(standingsDict, indent=4))
         jsonFile.close()
 
         seasonDict['standings'] = standingsDict
-        seasonDict['champion'] = leagueChampion.name
+        seasonDict['champion'] = floosbowlChampion.name
 
         _serialzedDict = FloosMethods._prepare_for_serialization(seasonDict)
 
@@ -1508,6 +1493,7 @@ class Season:
             dict['runDefenseRating'] = team.defenseRunCoverageRating
             dict['passDefenseRating'] = team.defensePassCoverageRating
             dict['leagueChampionships'] = team.leagueChampionships
+            dict['floosbowlChampionships'] = team.floosbowlChampionships
             dict['playoffAppearances'] = team.playoffAppearances
             dict['seasonTeamStats'] = team.seasonTeamStats
             dict['playerCap'] = team.playerCap
@@ -1534,71 +1520,50 @@ class Season:
         list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
 
     async def playPlayoffs(self):
+        global scheduleList
         champ = None
         playoffDict = {}
-        nonDivisionWinnersList = []
-        playoffTeamsList = []
-        playoffsByeTeamList = []
-        playoffsNonByeTeamList = []
+        playoffTeams = {}
+        playoffsByeTeams = {}
+        playoffsNonByeTeams = {}
         nonPlayoffTeamList = []
         strCurrentSeason = 'season{}'.format(self.currentSeason)
         x = 0
-        for division in divisionList:
-            list.sort(division.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-            division.teamList[0].clinchedDivision = True
-            division.teamList[0].divisionChampionships.append('Season {}'.format(seasonsPlayed+1))
-            division.teamList[0].seasonTeamStats['divPlace'] = '1st'
-            division.teamList[0].seasonTeamStats['divisionChamp'] = True
-            division.teamList[1].seasonTeamStats['divPlace'] = '2nd'
-            division.teamList[2].seasonTeamStats['divPlace'] = '3rd'
-            division.teamList[3].seasonTeamStats['divPlace'] = '4th'
-            division.teamList[4].seasonTeamStats['divPlace'] = '5th'
-            division.teamList[5].seasonTeamStats['divPlace'] = '6th'
+        for league in leagueList:
+            playoffTeamsList = []
+            playoffsByeTeamList = []
+            playoffsNonByeTeamList = []
+            list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
-            playoffsByeTeamList.append(division.teamList[0])
-            nonDivisionWinnersList.append(division.teamList[1])
-            nonDivisionWinnersList.append(division.teamList[2])
-            nonDivisionWinnersList.append(division.teamList[3])
-            nonDivisionWinnersList.append(division.teamList[4])
-            nonDivisionWinnersList.append(division.teamList[5])
+            playoffTeamsList.extend(league.teamList[:int(len(league.teamList)/2)])
+            nonPlayoffTeamList.extend(league.teamList[int(len(league.teamList)/2):])
+            playoffsByeTeamList.extend(playoffTeamsList[:2])
+            playoffsNonByeTeamList.extend(playoffTeamsList[2:])
+            list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
-        list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            playoffsByeTeamList[0].clinchedTopSeed = True
+            playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
 
-        for team in nonDivisionWinnersList:
-            team: FloosTeam.Team
-            if team.clinchedPlayoffs:
-                playoffsNonByeTeamList.append(team)
-            elif team.eliminated:
-                nonPlayoffTeamList.append(team)
+            playoffTeams[league.name] = playoffTeamsList.copy()
+            playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
+            playoffsNonByeTeams[league.name] = playoffsNonByeTeamList.copy()
 
-        list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-
-        playoffsByeTeamList[0].clinchedTopSeed = True
-        playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
-        
-        freeAgencyOrder.extend(nonPlayoffTeamList)
-        list.sort(freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
-
-        numOfRounds = FloosMethods.getPower(2, len(playoffsByeTeamList) + len(playoffsNonByeTeamList))
-
-        while len(playoffsNonByeTeamList) > 8:
-            playoffsNonByeTeamList.pop()
-
-        for team in playoffsByeTeamList:
-            team: FloosTeam.Team
-            team.playoffAppearances += 1
-            team.seasonTeamStats['madePlayoffs'] = True
-            team.clinchedPlayoffs = True
-            team.winningStreak = False
-        for team in playoffsNonByeTeamList:
-            team: FloosTeam.Team
-            team.playoffAppearances += 1
-            team.seasonTeamStats['madePlayoffs'] = True
-            team.winningStreak = False
-            if not team.clinchedPlayoffs:
+            for team in playoffsByeTeamList:
+                team: FloosTeam.Team
+                team.playoffAppearances += 1
+                team.seasonTeamStats['madePlayoffs'] = True
                 team.clinchedPlayoffs = True
-                team.eliminated = False
-                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+                team.winningStreak = False
+            for team in playoffsNonByeTeamList:
+                team: FloosTeam.Team
+                team.playoffAppearances += 1
+                team.seasonTeamStats['madePlayoffs'] = True
+                team.winningStreak = False
+                if not team.clinchedPlayoffs:
+                    team.clinchedPlayoffs = True
+                    team.eliminated = False
+                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
 
         for team in nonPlayoffTeamList:
             team: FloosTeam.Team
@@ -1607,10 +1572,16 @@ class Season:
                 team.eliminated = True
                 team.clinchedPlayoffs = False
                 self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
-                
+        
+
+        freeAgencyOrder.extend(nonPlayoffTeamList)
+        list.sort(freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
+
+        numOfRounds = FloosMethods.getPower(2, len(teamList)/2)
 
         for x in range(numOfRounds):
 
+            playoffGamesDict = {}
             playoffGamesList = []
             playoffGamesTaskList = []
             self.leagueHighlights = []
@@ -1618,24 +1589,52 @@ class Season:
             gameNumber = 1
             roundStartTime = self.getWeekStartTime(datetime.datetime.utcnow(), 28 + currentRound)
 
-            if currentRound == 1:
-                playoffTeamsList.extend(playoffsNonByeTeamList)
 
-            list.sort(playoffTeamsList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            if x < numOfRounds - 1:
+                for league in leagueList:
+                    teamsInRound = []
+                    gamesList = []
 
-            if currentRound == 2:
+                    if currentRound == 1:
+                        teamsInRound.extend(playoffsNonByeTeams[league.name])
 
-                for z in range(len(playoffsByeTeamList)):
-                    playoffTeamsList.insert(0, playoffsByeTeamList.pop())
+                    else:
+                        teamsInRound.extend(playoffTeams[league.name])
 
-                playoffsByeTeamList.clear()
-                playoffsNonByeTeamList.clear()
+                    list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
-            hiSeed = 0
-            lowSeed = len(playoffTeamsList) - 1
+                    hiSeed = 0
+                    lowSeed = len(teamsInRound) - 1
 
-            while lowSeed > hiSeed:
-                newGame = FloosGame.Game(playoffTeamsList[hiSeed], playoffTeamsList[lowSeed])
+                    while lowSeed > hiSeed:
+                        newGame = FloosGame.Game(teamsInRound[hiSeed], teamsInRound[lowSeed])
+                        newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
+                        newGame.status = FloosGame.GameStatus.Scheduled
+                        newGame.startTime = roundStartTime
+                        newGame.isRegularSeasonGame = False
+                        newGame.calculateWinProbability()
+                        gamesList.append(newGame)
+                        playoffGamesTaskList.append(newGame.playGame())
+                        newGame.leagueHighlights = self.leagueHighlights
+                        hiSeed += 1
+                        lowSeed -= 1
+                        gameNumber += 1
+                    
+                    playoffGamesDict[league.name] = gamesList.copy()
+                    playoffGamesList.extend(gamesList)
+
+                
+
+                self.currentWeek = 'Playoffs Round {}'.format(x+1)
+                self.currentWeekText = 'Playoffs Round {}'.format(x+1)
+            else:
+                floosbowlTeams = []
+                for league in leagueList:
+                    floosbowlTeams.extend(playoffTeams[league.name])
+                for team in floosbowlTeams:
+                    team.leagueChampion = True
+                list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+                newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1])
                 newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.startTime = roundStartTime
@@ -1644,67 +1643,63 @@ class Season:
                 playoffGamesList.append(newGame)
                 playoffGamesTaskList.append(newGame.playGame())
                 newGame.leagueHighlights = self.leagueHighlights
-                hiSeed += 1
-                lowSeed -= 1
-                gameNumber += 1
-            
-            scheduleList.append({'startTime': roundStartTime, 'games': playoffGamesList})
-
-            self.activeGames = playoffGamesList
-            if x < numOfRounds - 1:
-                self.currentWeek = 'Playoffs Round {}'.format(x+1)
-                self.currentWeekText = 'Playoffs Round {}'.format(x+1)
-            else:
                 self.currentWeek = 'Floos Bowl'
                 self.currentWeekText = 'Floos Bowl'
 
+            self.activeGames = playoffGamesList
+            scheduleList.append({'startTime': roundStartTime, 'games': playoffGamesList})
+
             self.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
 
-            #await asyncio.sleep(30)
+            await asyncio.sleep(30)
             # while datetime.datetime.utcnow() < roundStartTime:
             #     await asyncio.sleep(30)
                 
             self.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeekText)}})
             await asyncio.wait(playoffGamesTaskList)
 
-            for game in playoffGamesList:
-                game: FloosGame.Game
-                gameResults = game.gameDict
-                if len(playoffGamesList) == 1:
-                    playoffTeamsList.clear()
-                    game.winningTeam.leagueChampionships.append('Season {}'.format(seasonsPlayed+1))
-                    champ: FloosTeam.Team = game.winningTeam
-                    runnerUp: FloosTeam.Team = game.losingTeam
-                    runnerUp.eliminated = True
-                    self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} are Floos Bowl champions!'.format(champ.city, champ.name)}})
-                    playoffDict['Floos Bowl'] = gameResults
-                    freeAgencyOrder.append(runnerUp)
-                    freeAgencyOrder.append(champ)
-                    for player in champ.rosterDict.values():
-                        player:FloosPlayer.Player
-                        player.leagueChampionships.append({'Season': seasonsPlayed+1, 'team': player.team.abbr, 'teamColor': player.team.color})
-                    
-                    championshipHistory.insert(0, { 'season': self.currentSeason,
-                                                    'champion': '{} {}'.format(game.winningTeam.city, game.winningTeam.name),
-                                                    'championColor': game.winningTeam.color,
-                                                    'championId': game.winningTeam.id,
-                                                    'championRecord': '{}-{}'.format(game.winningTeam.seasonTeamStats['wins'],game.winningTeam.seasonTeamStats['losses']),
-                                                    'championElo': game.winningTeam.elo,
-                                                    'runnerUp': '{} {}'.format(game.losingTeam.city, game.losingTeam.name),
-                                                    'runnerUpColor': game.losingTeam.color,
-                                                    'runnerUpId': game.losingTeam.id,
-                                                    'runnerUpRecord': '{}-{}'.format(game.losingTeam.seasonTeamStats['wins'],game.losingTeam.seasonTeamStats['losses']),
-                                                    'runnerUpElo': game.losingTeam.elo
-                                                    })
-                else:
-                    playoffDict[game.id] = gameResults
-                    for team in playoffTeamsList:
-                        if team.name == gameResults['losingTeam']:
-                            team.eliminated = True
-                            self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
-                            freeAgencyOrder.append(team)
-                            playoffTeamsList.remove(team)
-                            break
+            if len(playoffGamesList) == 1:
+                game: FloosGame.Game = playoffGamesList[0]
+                playoffTeamsList.clear()
+                game.winningTeam.leagueChampionships.append('Season {}'.format(seasonsPlayed+1))
+                champ: FloosTeam.Team = game.winningTeam
+                runnerUp: FloosTeam.Team = game.losingTeam
+                runnerUp.eliminated = True
+                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} are Floos Bowl champions!'.format(champ.city, champ.name)}})
+                playoffDict['Floos Bowl'] = gameResults
+                freeAgencyOrder.append(runnerUp)
+                freeAgencyOrder.append(champ)
+                for player in champ.rosterDict.values():
+                    player:FloosPlayer.Player
+                    player.leagueChampionships.append({'Season': seasonsPlayed+1, 'team': player.team.abbr, 'teamColor': player.team.color})
+                
+                championshipHistory.insert(0, { 'season': self.currentSeason,
+                                                'champion': '{} {}'.format(game.winningTeam.city, game.winningTeam.name),
+                                                'championColor': game.winningTeam.color,
+                                                'championId': game.winningTeam.id,
+                                                'championRecord': '{}-{}'.format(game.winningTeam.seasonTeamStats['wins'],game.winningTeam.seasonTeamStats['losses']),
+                                                'championElo': game.winningTeam.elo,
+                                                'runnerUp': '{} {}'.format(game.losingTeam.city, game.losingTeam.name),
+                                                'runnerUpColor': game.losingTeam.color,
+                                                'runnerUpId': game.losingTeam.id,
+                                                'runnerUpRecord': '{}-{}'.format(game.losingTeam.seasonTeamStats['wins'],game.losingTeam.seasonTeamStats['losses']),
+                                                'runnerUpElo': game.losingTeam.elo
+                                                })
+            else:
+                for league in leagueList:
+                    for game in playoffGamesDict[league.name]:
+                        game: FloosGame.Game
+                        gameResults = game.gameDict
+                        playoffDict[game.id] = gameResults
+                        for team in playoffTeams[league.name]:
+                            if team.name == gameResults['losingTeam']:
+                                team.eliminated = True
+                                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+                                freeAgencyOrder.append(team)
+                                playoffTeams[league.name].remove(team)
+                                break
+
+                
 
             jsonFile = open(os.path.join('{}/games'.format(strCurrentSeason), 'postseason.json'), "w+")
             jsonFile.write(json.dumps(playoffDict, indent=4))
@@ -1712,7 +1707,7 @@ class Season:
             if x < numOfRounds - 1:
                 sortPlayers()
                 sortDefenses()
-                #await asyncio.sleep(30)
+                await asyncio.sleep(30)
 
         return champ
 
@@ -2097,7 +2092,7 @@ def getTeams(_config):
                 newTeam.overallRating = team['overallRating']
                 newTeam.allTimeTeamStats = team['allTimeTeamStats']
                 newTeam.leagueChampionships = team['leagueChampionships']
-                newTeam.divisionChampionships = team['divisionChampionships']
+                newTeam.floosbowlChampionships = team['floosbowlChampionships']
                 newTeam.regularSeasonChampions = team['regularSeasonChampions']
                 newTeam.playoffAppearances = team['playoffAppearances']
                 if 'rosterHistory' in team:
@@ -2127,24 +2122,24 @@ def getTeams(_config):
             teamList.append(team)
             id += 1
 
-def getDivisons(_config):
+def getLeagues(_config):
 
-    if os.path.exists("data/divisionData.json"):
-        with open('data/divisionData.json') as jsonFile:
-            divisionData = json.load(jsonFile)
-            for x in divisionData:
-                division = Division(x)
-                jteamList = divisionData[x]
+    if os.path.exists("data/leagueData.json"):
+        with open('data/leagueData.json') as jsonFile:
+            leagueData = json.load(jsonFile)
+            for x in leagueData:
+                league = League(x)
+                jteamList = leagueData[x]
                 for team in jteamList:
                     for y in teamList:
                         if y.name == team:
-                            division.teamList.append(y)
+                            league.teamList.append(y)
                             break
-                divisionList.append(division)
+                leagueList.append(league)
     else:
-        for x in _config['divisions']:
-            division = Division(x)
-            divisionList.append(division)
+        for x in _config['leagues']:
+            league = League(x)
+            leagueList.append(league)
 
 def initTeams():
     if not os.path.exists('data/teamData'):
@@ -2169,9 +2164,9 @@ def initTeams():
         #teamDict['defenseDiscipline'] = team.defenseDiscipline
         teamDict['overallRating'] = team.overallRating
         teamDict['allTimeTeamStats'] = team.allTimeTeamStats
-        teamDict['leagueChampionships'] = team.leagueChampionships
+        teamDict['floosbowlChampionships'] = team.floosbowlChampionships
         teamDict['regularSeasonChampions'] = team.regularSeasonChampions
-        teamDict['divisionChampionships'] = team.divisionChampionships
+        teamDict['leagueChampionships'] = team.leagueChampionships
         teamDict['playoffAppearances'] = team.playoffAppearances
         teamDict['gmScore'] = team.gmScore
         teamDict['defenseTier'] = team.defenseOverallTier
@@ -2297,9 +2292,9 @@ def sortDefenses():
 
 
         
-def initDivisions():
+def initLeagues():
     tempTeamList = teamList.copy()
-    numOfDivisions = len(divisionList)
+    numOfLeagues = len(leagueList)
     y = 0
     while len(tempTeamList) > 0:
         x = randint(0,len(tempTeamList)-1)
@@ -2307,14 +2302,14 @@ def initDivisions():
         #     divisionList[0].teamList.append(tempTeamList[x])
         # else:
         #     divisionList[1].teamList.append(tempTeamList[x])
-        divisionList[y].teamList.append(tempTeamList[x])
+        leagueList[y].teamList.append(tempTeamList[x])
         y += 1
-        if y == numOfDivisions:
+        if y == numOfLeagues:
             y = 0
         tempTeamList.remove(tempTeamList[x])
-    for division in divisionList:
-        for team in division.teamList:
-            team.division = division.name
+    for league in leagueList:
+        for team in league.teamList:
+            team.league = league.name
 
 async def offseason():
     activeSeason.currentWeek = 'Offseason'
@@ -2570,7 +2565,7 @@ async def offseason():
                 teamsComplete += 1
                 continue
                 
-            #await asyncio.sleep(2)
+            await asyncio.sleep(2)
 
             if team.cutsAvailable > 0:
                 cutPlayer:FloosPlayer.Player = None
@@ -3022,9 +3017,9 @@ async def startLeague():
     #print('Saving player data...')
     savePlayerData()
     #print('Creating divisions...')
-    getDivisons(config)
-    if not os.path.exists("data/divisionData.json"):
-        initDivisions()
+    getLeagues(config)
+    if not os.path.exists("data/leagueData.json"):
+        initLeagues()
 
     print('Initialization complete!')
     while seasonsPlayed < totalSeasons:
@@ -3039,8 +3034,8 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        #await asyncio.sleep(30)
+        await asyncio.sleep(30)
         await offseason()
-        #await asyncio.sleep(120)
+        await asyncio.sleep(120)
         activeSeason.clearPlayerSeasonStats()
         activeSeason.clearTeamSeasonStats()

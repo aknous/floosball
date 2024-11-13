@@ -121,7 +121,7 @@ passPlayBook = {
                             'wr1': PassType.long,
                             'wr2': PassType.medium,
                             'te': PassType.medium,
-                            'rb': PassType.short
+                            'rb': None
                         }
                     },
                     'Play2': {
@@ -130,7 +130,7 @@ passPlayBook = {
                             'wr1': PassType.long,
                             'wr2': PassType.long,
                             'te': PassType.medium,
-                            'rb': PassType.short
+                            'rb': None
                         }
                     },
                     'Play3': {
@@ -156,7 +156,7 @@ passPlayBook = {
                         'targets': {
                             'wr1': PassType.long,
                             'wr2': PassType.medium,
-                            'te': PassType.short,
+                            'te': PassType.medium,
                             'rb': None
                         }
                     },
@@ -166,16 +166,16 @@ passPlayBook = {
                             'wr1': PassType.medium,
                             'wr2': PassType.medium,
                             'te': PassType.medium,
-                            'rb': PassType.short
+                            'rb': None
                         }
                     },
                     'Play7': {
                         'dropback': QbDropback.medium,
                         'targets': {
                             'wr1': PassType.medium,
-                            'wr2': PassType.medium,
+                            'wr2': None,
                             'te': PassType.medium,
-                            'rb': PassType.medium
+                            'rb': None
                         }
                     },
                     'Play8': {
@@ -184,7 +184,7 @@ passPlayBook = {
                             'wr1': PassType.short,
                             'wr2': PassType.short,
                             'te': PassType.short,
-                            'rb': PassType.short
+                            'rb': None
                         }
                     },
                     'Play9': {
@@ -204,14 +204,41 @@ passPlayBook = {
                             'te': None,
                             'rb': PassType.short
                         }
+                    },
+                    'Play11': {
+                        'dropback': QbDropback.short,
+                        'targets': {
+                            'wr1': None,
+                            'wr2': None,
+                            'te': PassType.short,
+                            'rb': PassType.short
+                        }
+                    },
+                    'Play12': {
+                        'dropback': QbDropback.short,
+                        'targets': {
+                            'wr1': None,
+                            'wr2': None,
+                            'te': PassType.short,
+                            'rb': None
+                        }
+                    },
+                    'Play13': {
+                        'dropback': QbDropback.medium,
+                        'targets': {
+                            'wr1': None,
+                            'wr2': None,
+                            'te': PassType.medium,
+                            'rb': None
+                        }
                     }
                 }
 
 def returnShortPassPlay():
-    return choice(['Play8','Play10'])
+    return choice(['Play8','Play10', 'Play11', 'Play12'])
 
 def returnMediumPassPlay():
-    return choice(['Play3','Play6','Play7'])
+    return choice(['Play3','Play6','Play7', 'Play13'])
 
 def returnLongPassPlay():
     return choice(['Play1','Play2','Play4','Play5'])
@@ -1316,7 +1343,6 @@ class Game:
             self.winningTeam.seasonTeamStats['Defense']['tdsAlwd'] += self.winningTeam.gameDefenseStats['tdsAlwd']
             self.winningTeam.seasonTeamStats['Defense']['ptsAlwd'] += self.winningTeam.gameDefenseStats['ptsAlwd']
             self.winningTeam.seasonTeamStats['winPerc'] = round(self.winningTeam.seasonTeamStats['wins']/(self.winningTeam.seasonTeamStats['wins']+self.winningTeam.seasonTeamStats['losses']),3)
-            self.winningTeam.seasonTeamStats['divWinPerc'] = round(self.winningTeam.seasonTeamStats['divWins']/(self.winningTeam.seasonTeamStats['divWins']+self.winningTeam.seasonTeamStats['divLosses']),3)
 
 
             if self.losingTeam.seasonTeamStats['streak'] >= 0:
@@ -1340,7 +1366,6 @@ class Game:
             self.losingTeam.seasonTeamStats['Defense']['tdsAlwd'] += self.losingTeam.gameDefenseStats['tdsAlwd']
             self.losingTeam.seasonTeamStats['Defense']['ptsAlwd'] += self.losingTeam.gameDefenseStats['ptsAlwd']
             self.losingTeam.seasonTeamStats['winPerc'] = round(self.losingTeam.seasonTeamStats['wins']/(self.losingTeam.seasonTeamStats['wins']+self.losingTeam.seasonTeamStats['losses']),3)
-            self.losingTeam.seasonTeamStats['divWinPerc'] = round(self.losingTeam.seasonTeamStats['divWins']/(self.losingTeam.seasonTeamStats['divWins']+self.losingTeam.seasonTeamStats['divLosses']),3)
         
 
         if self.homeTeam.gameDefenseStats['ptsAlwd'] >= 35:
@@ -1697,7 +1722,7 @@ class Game:
                         #     self.awayTeam.teamUnderPerform()
                 elif self.totalPlays >= 33 and self.totalPlays < 66:
                     if self.currentQuarter != 2:
-                        #await asyncio.sleep(15)
+                        await asyncio.sleep(15)
                         self.currentQuarter = 2
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 2nd Quarter',
@@ -1714,7 +1739,7 @@ class Game:
                                                 'playsRemaining': 132 - self.totalPlays
                                             }
                                         })
-                        #await asyncio.sleep(60)
+                        await asyncio.sleep(60)
                         self.isHalftime = False
                     if self.currentQuarter != 3:
                         self.currentQuarter = 3
@@ -1742,7 +1767,7 @@ class Game:
                         #     self.awayTeam.resetDetermination()
                 elif self.totalPlays >= 100 and self.totalPlays < 132:
                     if self.currentQuarter != 4:
-                        #await asyncio.sleep(15)
+                        await asyncio.sleep(15)
                         self.currentQuarter = 4
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 4th Quarter',
@@ -1766,7 +1791,7 @@ class Game:
                             otContinue = False
                             break
                     if self.currentQuarter != 5:
-                        #await asyncio.sleep(15)
+                        await asyncio.sleep(15)
                         self.currentQuarter = 5
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start Overtime',
@@ -1798,7 +1823,7 @@ class Game:
 
                 self.play = Play(self)
                 
-                #await asyncio.sleep(randint(8,20))
+                await asyncio.sleep(randint(8,20))
 
                 self.playCaller()
                 self.totalPlays += 1
@@ -2193,10 +2218,6 @@ class Game:
             self.winningTeam.seasonTeamStats['wins'] += 1
             self.losingTeam.seasonTeamStats['losses'] += 1
 
-            if self.winningTeam.division is self.losingTeam.division:
-                self.winningTeam.seasonTeamStats['divWins'] += 1
-                self.losingTeam.seasonTeamStats['divLosses'] += 1
-
         
         self.status = GameStatus.Final
         self.gameDict['winningTeam'] = self.winningTeam.name
@@ -2463,8 +2484,12 @@ class Play():
                 if targets[key] is not None:
                     receiver = self.offense.rosterDict[key]
                     receiverStatusDict = {'receiver': receiver, 'isOpen': False, 'route': targets[key]}
-                    if (receiver.gameAttributes.routeRunning + randint(-10,10)) > (self.defense.defensePassCoverageRating + randint(-10,10)):
-                        receiverStatusDict['isOpen'] = True
+                    if receiver is FloosPlayer.PlayerTE:
+                        if (receiver.gameAttributes.routeRunning + randint(0,15)) > (self.defense.defensePassCoverageRating + randint(-15,0)):
+                            receiverStatusDict['isOpen'] = True
+                    else:
+                        if (receiver.gameAttributes.routeRunning + randint(-10,10)) > (self.defense.defensePassCoverageRating + randint(-10,10)):
+                            receiverStatusDict['isOpen'] = True
                     targetList.append(receiverStatusDict)
             
             tempTargetList:list = copy.copy(targetList)
