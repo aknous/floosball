@@ -2281,68 +2281,65 @@ class Play():
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
         self.fgDistance = yardsToFG
+        distanceFactor = 0.15   # Influences how sharply success drops with distance
+        skillFactor = 2      # Scales how impactful kicker skill is
+
+        baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 50))), 2)
+        normalizedSkill = (self.kicker.gameAttributes.overallRating - 60) / 40
+        probability = round(baseProbability * (normalizedSkill * skillFactor), 2)
+        probability = round(max(0, min(1, probability)) * 100)
+
         x = randint(1,100)
-        if yardsToFG <= 20:
-            if (self.kicker.gameAttributes.overallRating + 15) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.005)
-            else:
-                self.kicker.updateInGameConfidence(-.02)
-        elif yardsToFG > 20 and yardsToFG <= 30:
-            if (self.kicker.gameAttributes.overallRating + 10) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.01)
-            else:
-                self.kicker.updateInGameConfidence(-.015)
-        elif yardsToFG > 30 and yardsToFG <= 40:
-            if (self.kicker.gameAttributes.overallRating + 7) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.01)
-            else:
-                self.kicker.updateInGameConfidence(-.015)
-        elif yardsToFG > 40 and yardsToFG <= 45:
-            if (self.kicker.gameAttributes.overallRating) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.015)
-            else:
-                self.kicker.updateInGameConfidence(-.01)
-        elif yardsToFG > 45 and yardsToFG <= 50:
-            if (self.kicker.gameAttributes.overallRating - 10) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.015)
-            else:
-                self.kicker.updateInGameConfidence(-.01)
-        elif yardsToFG > 50 and yardsToFG <= 55:
-            if (self.kicker.gameAttributes.overallRating - 20) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.015)
-            else:
-                self.kicker.updateInGameConfidence(-.01)
-        elif yardsToFG > 55 and yardsToFG <= 60:
-            if (self.kicker.gameAttributes.overallRating - 35) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.02)
-            else:
-                self.kicker.updateInGameConfidence(-.005)
-        else:
-            if (self.kicker.gameAttributes.overallRating - 50) >= x:
-                self.isFgGood = True
-                self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
-                self.kicker.updateInGameConfidence(.025)
-            else:
-                self.kicker.updateInGameConfidence(-.005)
-        if self.isFgGood:
+
+        if x <= probability:
+            self.isFgGood = True
+            self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
             if yardsToFG > self.kicker.gameStatsDict['kicking']['longest']:
                 self.kicker.gameStatsDict['kicking']['longest'] = yardsToFG
         else:
             self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
+
+        if yardsToFG <= 20:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.005)
+            else:
+                self.kicker.updateInGameConfidence(-.02)
+        elif yardsToFG > 20 and yardsToFG <= 30:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.01)
+            else:
+                self.kicker.updateInGameConfidence(-.015)
+        elif yardsToFG > 30 and yardsToFG <= 40:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.01)
+            else:
+                self.kicker.updateInGameConfidence(-.015)
+        elif yardsToFG > 40 and yardsToFG <= 45:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.015)
+            else:
+                self.kicker.updateInGameConfidence(-.01)
+        elif yardsToFG > 45 and yardsToFG <= 50:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.015)
+            else:
+                self.kicker.updateInGameConfidence(-.01)
+        elif yardsToFG > 50 and yardsToFG <= 55:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.015)
+            else:
+                self.kicker.updateInGameConfidence(-.01)
+        elif yardsToFG > 55 and yardsToFG <= 60:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.02)
+            else:
+                self.kicker.updateInGameConfidence(-.005)
+        else:
+            if self.isFgGood:
+                self.kicker.updateInGameConfidence(.025)
+            else:
+                self.kicker.updateInGameConfidence(-.005)
+
         self.kicker.updateInGameRating()
 
     def extraPointTry(self, offense: FloosTeam.Team):
