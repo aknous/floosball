@@ -3,6 +3,7 @@ from os import stat
 import math
 from random import randint
 import copy
+import numpy as np
 import floosball_methods as FloosMethods
 from floosball_team import Team
 
@@ -159,7 +160,7 @@ class Player:
         self.preferredNumber = randint(0,99)
         self.team: Team = None
         self.previousTeam = None
-        self.attributes = PlayerAttributes(seed)
+        self.attributes = PlayerAttributes()
         self.gameAttributes: PlayerAttributes = None
         self.playerTier = PlayerTier
         self.seasonsPlayed = 0
@@ -444,10 +445,10 @@ class Player:
 
 
 class PlayerAttributes:
-    def __init__(self, seed = None):
+    def __init__(self):
         self.overallRating = 0
 
-        #attributes
+        #physical attributes
         self.speed = 0
         self.hands = 0
         self.agility = 0
@@ -466,18 +467,22 @@ class PlayerAttributes:
         self.potentialLegStrength = 0
         self.potentialSkillRating = 0
 
-        #skills
+        #physical skills
         self.routeRunning = 0
         self.vision = 0
         self.blocking = 0
         self.blockingModifier = 0
         
-        #intangibles
+        #dynamic personality attributes
         self.discipline = 0
+        self.attitude = 0
+
+        #static personality intangibles
         self.focus = 0
         self.instinct = 0
         self.creativity = 0
-        self.attitude = 0
+        self.resilience = 0
+        self.clutchFactor = 0
 
 
         self.longevity = randint(4,10)
@@ -509,59 +514,51 @@ class PlayerAttributes:
             x = randint(1, 100)
         else:
             x = seed
-
-        skillValList = []
-        if x >= 97:
-            # Tier S array
-           for y in range(8):
-                if y <= 3:
-                    skillValList.append(randint(90, 100))
-                else:
-                    skillValList.append(randint(75, 89))
-        elif x >= 80 and x < 95:
-            # Tier A array
-           for y in range(8):
-                if y < 1:
-                    skillValList.append(randint(90, 100))
-                else:
-                    skillValList.append(randint(75, 89))
-        else:
-           for y in range(8):
-                skillValList.append(randint(60, 100))
+        stdDev = 5
+        numSkills = 3
+        skillValList = np.random.normal(seed, stdDev, numSkills)
+        skillValList = np.clip(skillValList, 60, 100)
+        skillValList: list = skillValList.tolist()
 
 
         if position is Position.QB:
-            self.armStrength = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.accuracy = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
+            self.armStrength = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.accuracy = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
         elif position is Position.RB:
-            self.power = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.speed = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.hands = randint(60, 100)
+            self.power = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.hands = np.random.normal(80, stdDev)
+            self.hands = int(np.clip(self.hands, 60, 100))
         elif position is Position.WR:
-            self.hands = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.speed = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
+            self.hands = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
         elif position is Position.TE:
-            self.hands = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.power = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
+            self.hands = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.power = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
         elif position is Position.K:
-            self.legStrength = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.accuracy = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
+            self.legStrength = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.accuracy = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
         else:
-            self.power = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.speed = skillValList.pop(randint(0, len(skillValList)) - 1)
-            self.agility = skillValList.pop(randint(0, len(skillValList)) - 1)
+            self.power = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
 
+        stdDev = 10
+        numSkills = 5
+        intSkillValList = np.random.normal(80, stdDev, numSkills)
+        intSkillValList = np.clip(intSkillValList, 60, 100)
+        intSkillValList: list = intSkillValList.tolist()
 
-        self.instinct = skillValList.pop(randint(0, len(skillValList)) - 1)
-        self.focus = skillValList.pop(randint(0, len(skillValList)) - 1)
-        self.creativity = skillValList.pop(randint(0, len(skillValList)) - 1)
-        self.discipline = skillValList.pop(randint(0, len(skillValList)) - 1)
-        self.attitude = skillValList.pop(randint(0, len(skillValList)) - 1)
+        self.instinct = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        self.focus = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        self.creativity = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        self.discipline = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
 
     def changeStat(self, value):
         if value >= 95:
@@ -578,6 +575,7 @@ class PlayerQB(Player):
         self.position = Position.QB
         self.attributes.getPlayerAttributes(self.position, seed)
         self.updateRating()
+        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialArmStrength = self.attributes.armStrength + randint(0,30)
         self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
@@ -603,7 +601,6 @@ class PlayerQB(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        self.playerRating = self.attributes.overallRating
 
 
     def offseasonTraining(self):
@@ -772,8 +769,8 @@ class PlayerRB(Player):
         self.position = Position.RB
         self.isOpen = False
         self.attributes.getPlayerAttributes(self.position, seed)
-
         self.updateRating()
+        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
         self.attributes.potentialPower = self.attributes.power + randint(0,30)
@@ -799,7 +796,6 @@ class PlayerRB(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.power*1.3) + (self.attributes.agility*1))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        self.playerRating = self.attributes.overallRating
 
 
     def offseasonTraining(self):
@@ -967,8 +963,8 @@ class PlayerWR(Player):
         self.position = Position.WR
         self.isOpen = False
         self.attributes.getPlayerAttributes(self.position, seed)
-
         self.updateRating()
+        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
         self.attributes.potentialHands = self.attributes.hands + randint(0,30)
@@ -994,7 +990,6 @@ class PlayerWR(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.hands*1.5) + (self.attributes.agility*.8))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        self.playerRating = self.attributes.overallRating
 
 
     def offseasonTraining(self):
@@ -1175,8 +1170,8 @@ class PlayerTE(Player):
         self.position = Position.TE
         self.isOpen = False
         self.attributes.getPlayerAttributes(self.position, seed)
-
         self.updateRating()
+        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialHands = self.attributes.hands + randint(0,30)
         self.attributes.potentialPower = self.attributes.power + randint(0,30)
@@ -1370,8 +1365,8 @@ class PlayerK(Player):
         self.position = Position.K
         self.maxFgDistance = 0
         self.attributes.getPlayerAttributes(self.position, seed)
-
         self.updateRating()
+        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialLegStrength = self.attributes.legStrength + randint(0,30)
         self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
@@ -1394,7 +1389,6 @@ class PlayerK(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round((self.attributes.legStrength + self.attributes.accuracy)/2)
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        self.playerRating = self.attributes.overallRating
         self.maxFgDistance = round(70*(self.attributes.legStrength/100))
 
 

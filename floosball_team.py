@@ -90,6 +90,8 @@ class Team:
         self.floosbowlChampionships = []
         self.regularSeasonChampions = []
         self.playoffAppearances = 0
+        self.defenseRunCoverageSeasonPerformanceRating = 0
+        self.defensePassCoverageSeasonPerformanceRating = 0
         self.defenseSeasonPerformanceRating = 0
         self.playerCap = 0
         self.gmScore = 0
@@ -136,9 +138,7 @@ class Team:
         self.defenseRating = round((((self.defenseRunCoverageRating*.8)+(self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*1))/3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination)/2))
         self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
         self.overallRating = round(statistics.mean([self.offenseRating, self.defenseRunCoverageRating, self.defensePassCoverageRating]))
-        if self.defenseSeasonPerformanceRating > 0:
-            self.defenseOverallRating = round(((self.defenseRating*.8)+(self.defenseSeasonPerformanceRating*1.2))/2)
-        else:
+        if self.defenseSeasonPerformanceRating < 0:
             self.defenseOverallRating = self.defenseRating
 
     def updateDefense(self):

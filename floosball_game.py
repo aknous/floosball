@@ -4,6 +4,7 @@ from random import randint
 import copy
 import asyncio
 import math
+import statistics
 from secrets import choice
 from time import sleep
 import floosball_player as FloosPlayer
@@ -342,7 +343,8 @@ class Game:
             playerDict['name'] = player.name
             playerDict['id'] = player.id
             playerDict['number'] = player.currentNumber
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = copy.deepcopy(player.gameStatsDict)
 
             homeTeamStatsDict[pos] = playerDict
@@ -378,7 +380,8 @@ class Game:
             playerDict['name'] = player.name
             playerDict['id'] = player.id
             playerDict['number'] = player.currentNumber
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = copy.deepcopy(player.gameStatsDict)
 
             awayTeamStatsDict[pos] = playerDict
@@ -534,7 +537,8 @@ class Game:
 
             playerDict['name'] = player.name
             playerDict['id'] = player.id
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = copy.deepcopy(player.gameStatsDict)
 
             homeTeamStatsDict[pos] = playerDict
@@ -569,7 +573,8 @@ class Game:
 
             playerDict['name'] = player.name
             playerDict['id'] = player.id
-            playerDict['ratingStars'] = player.playerTier.value
+            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = copy.deepcopy(player.gameStatsDict)
 
             awayTeamStatsDict[pos] = playerDict
@@ -680,6 +685,30 @@ class Game:
 
 
     def playCaller(self):
+        runDefenseFactor = 0.0015 * self.defensiveTeam.defenseRunCoverageRating   # Influences how sharply success drops with distance
+        passDefenseFactor = 0.0015 * self.defensiveTeam.defensePassRating 
+        skillFactor = 2      # Scales how impactful kicker skill is
+
+        runBaseProbability = round(1 / (1 + math.exp(runDefenseFactor * (self.yardsToFirstDown - 3))), 2)
+        rbNormalizedSkill = (self.offensiveTeam.rosterDict["rb"].gameAttributes.overallRating - 60) / 40
+        runSuccessProbability = round(runBaseProbability * (rbNormalizedSkill * skillFactor), 2)
+        runSuccessProbability = round(max(0, min(1, runSuccessProbability)) * 100)
+
+        passOffenseNormalizedSkill = (round(statistics.mean([self.offensiveTeam.rosterDict["qb"].gameAttributes.overallRating, self.offensiveTeam.rosterDict["wr1"].gameAttributes.overallRating, self.offensiveTeam.rosterDict["wr2"].gameAttributes.overallRating, self.offensiveTeam.rosterDict["te"].gameAttributes.overallRating])) - 60 )/ 40
+       
+        shortPassBaseProbability = round(1 / (1 + math.exp(passDefenseFactor * (self.yardsToFirstDown - 7))), 2)
+        shortPassSuccessProbability = round(shortPassBaseProbability * (passOffenseNormalizedSkill * skillFactor), 2)
+        shortPassSuccessProbability = round(max(0, min(1, shortPassSuccessProbability)) * 100)
+
+        medPassBaseProbability = round(1 / (1 + math.exp(passDefenseFactor * (self.yardsToFirstDown - 3))), 2)
+        medPassSuccessProbability = round(medPassBaseProbability * (passOffenseNormalizedSkill * skillFactor), 2)
+        medPassSuccessProbability = round(max(0, min(1, medPassSuccessProbability)) * 100)
+
+        longPassBaseProbability = round(1 / (1 + math.exp(passDefenseFactor * (self.yardsToFirstDown + 2))), 2)
+        longPassSuccessProbability = round(longPassBaseProbability * (passOffenseNormalizedSkill * skillFactor), 2)
+        longPassSuccessProbability = round(max(0, min(1, longPassSuccessProbability)) * 100)
+
+
         if self.currentQuarter == 5:
             if self.homeScore == self.awayScore:
                 if self.otHomeHadPos and self.otAwayHadPos:
@@ -1411,12 +1440,6 @@ class Game:
                     player.gameStatsDict['passing']['compPerc'] = round((player.gameStatsDict['passing']['comp']/player.gameStatsDict['passing']['att'])*100)
 
                 if self.isRegularSeasonGame: 
-                    #player.seasonStatsDict['passing']['att'] += player.gameStatsDict['passing']['att']
-                    #player.seasonStatsDict['passing']['comp'] += player.gameStatsDict['passing']['comp']
-                    #player.seasonStatsDict['passing']['tds'] += player.gameStatsDict['passing']['tds']
-                    #player.seasonStatsDict['passing']['ints'] += player.gameStatsDict['passing']['ints']
-                    #player.seasonStatsDict['passing']['yards'] += player.gameStatsDict['passing']['yards']
-                    #player.seasonStatsDict['passing']['missedPass'] += player.gameStatsDict['passing']['missedPass']
                     player.seasonStatsDict['passing']['20+'] += player.gameStatsDict['passing']['20+']
 
                     if player.gameStatsDict['passing']['longest'] > player.seasonStatsDict['passing']['longest']:
@@ -1432,12 +1455,6 @@ class Game:
                     player.gameStatsDict['receiving']['rcvPerc'] = round((player.gameStatsDict['receiving']['receptions']/player.gameStatsDict['receiving']['targets'])*100)
 
                 if self.isRegularSeasonGame:
-                    #player.seasonStatsDict['receiving']['targets'] += player.gameStatsDict['receiving']['targets']
-                    #player.seasonStatsDict['receiving']['receptions'] += player.gameStatsDict['receiving']['receptions']
-                    #player.seasonStatsDict['receiving']['yac'] += player.gameStatsDict['receiving']['yac']
-                    #player.seasonStatsDict['receiving']['yards'] += player.gameStatsDict['receiving']['yards']
-                    #player.seasonStatsDict['receiving']['tds'] += player.gameStatsDict['receiving']['tds']
-                    #player.seasonStatsDict['receiving']['drops'] += player.gameStatsDict['receiving']['drops']
                     player.seasonStatsDict['receiving']['20+'] += player.gameStatsDict['receiving']['20+']
 
                     if player.gameStatsDict['receiving']['longest'] > player.seasonStatsDict['receiving']['longest']:
@@ -1452,10 +1469,6 @@ class Game:
                 player.gameStatsDict['rushing']['ypc'] = round(player.gameStatsDict['rushing']['yards']/player.gameStatsDict['rushing']['carries'],2)
 
                 if self.isRegularSeasonGame:
-                    #player.seasonStatsDict['rushing']['carries'] += player.gameStatsDict['rushing']['carries']
-                    #player.seasonStatsDict['rushing']['yards'] += player.gameStatsDict['rushing']['yards']
-                    #player.seasonStatsDict['rushing']['tds'] += player.gameStatsDict['rushing']['tds']
-                    #player.seasonStatsDict['rushing']['fumblesLost'] += player.gameStatsDict['rushing']['fumblesLost']
                     player.seasonStatsDict['rushing']['20+'] += player.gameStatsDict['rushing']['20+']
 
                     if player.gameStatsDict['rushing']['longest'] > player.seasonStatsDict['rushing']['longest']:
@@ -1471,10 +1484,6 @@ class Game:
                     player.gameStatsDict['kicking']['fgPerc'] = 0
 
                 if self.isRegularSeasonGame:
-                    #player.seasonStatsDict['kicking']['fgAtt'] += player.gameStatsDict['kicking']['fgAtt']
-                    #player.seasonStatsDict['kicking']['fg45+'] += player.gameStatsDict['kicking']['fg45+']
-                    #player.seasonStatsDict['kicking']['fgs'] += player.gameStatsDict['kicking']['fgs']
-                    #player.seasonStatsDict['kicking']['fgYards'] += player.gameStatsDict['kicking']['fgYards']
 
                     if player.gameStatsDict['kicking']['longest'] > player.seasonStatsDict['kicking']['longest']:
                         player.seasonStatsDict['kicking']['longest'] = player.gameStatsDict['kicking']['longest']
@@ -1517,13 +1526,7 @@ class Game:
                     player.gameStatsDict['passing']['ypc'] = round(player.gameStatsDict['passing']['yards']/player.gameStatsDict['passing']['comp'], 2)
                     player.gameStatsDict['passing']['compPerc'] = round((player.gameStatsDict['passing']['comp']/player.gameStatsDict['passing']['att'])*100)
 
-                if self.isRegularSeasonGame: 
-                    #player.seasonStatsDict['passing']['att'] += player.gameStatsDict['passing']['att']
-                    #player.seasonStatsDict['passing']['comp'] += player.gameStatsDict['passing']['comp']
-                    #player.seasonStatsDict['passing']['tds'] += player.gameStatsDict['passing']['tds']
-                    #player.seasonStatsDict['passing']['ints'] += player.gameStatsDict['passing']['ints']
-                    #player.seasonStatsDict['passing']['yards'] += player.gameStatsDict['passing']['yards']
-                    #player.seasonStatsDict['passing']['missedPass'] += player.gameStatsDict['passing']['missedPass']
+                if self.isRegularSeasonGame:
                     player.seasonStatsDict['passing']['20+'] += player.gameStatsDict['passing']['20+']
 
                     if player.gameStatsDict['passing']['longest'] > player.seasonStatsDict['passing']['longest']:
@@ -1539,12 +1542,6 @@ class Game:
                     player.gameStatsDict['receiving']['rcvPerc'] = round((player.gameStatsDict['receiving']['receptions']/player.gameStatsDict['receiving']['targets'])*100)
 
                 if self.isRegularSeasonGame:
-                    #player.seasonStatsDict['receiving']['targets'] += player.gameStatsDict['receiving']['targets']
-                    #player.seasonStatsDict['receiving']['receptions'] += player.gameStatsDict['receiving']['receptions']
-                    #player.seasonStatsDict['receiving']['yac'] += player.gameStatsDict['receiving']['yac']
-                    #player.seasonStatsDict['receiving']['yards'] += player.gameStatsDict['receiving']['yards']
-                    #player.seasonStatsDict['receiving']['tds'] += player.gameStatsDict['receiving']['tds']
-                    #player.seasonStatsDict['receiving']['drops'] += player.gameStatsDict['receiving']['drops']
                     player.seasonStatsDict['receiving']['20+'] += player.gameStatsDict['receiving']['20+']
 
                     if player.gameStatsDict['receiving']['longest'] > player.seasonStatsDict['receiving']['longest']:
@@ -1559,10 +1556,6 @@ class Game:
                 player.gameStatsDict['rushing']['ypc'] = round(player.gameStatsDict['rushing']['yards']/player.gameStatsDict['rushing']['carries'],2)
 
                 if self.isRegularSeasonGame:
-                    #player.seasonStatsDict['rushing']['carries'] += player.gameStatsDict['rushing']['carries']
-                    #player.seasonStatsDict['rushing']['yards'] += player.gameStatsDict['rushing']['yards']
-                    #player.seasonStatsDict['rushing']['tds'] += player.gameStatsDict['rushing']['tds']
-                    #player.seasonStatsDict['rushing']['fumblesLost'] += player.gameStatsDict['rushing']['fumblesLost']
                     player.seasonStatsDict['rushing']['20+'] += player.gameStatsDict['rushing']['20+']
 
                     if player.gameStatsDict['rushing']['longest'] > player.seasonStatsDict['rushing']['longest']:
@@ -1578,10 +1571,6 @@ class Game:
                     player.gameStatsDict['kicking']['fgPerc'] = 0
 
                 if self.isRegularSeasonGame:
-                    #player.seasonStatsDict['kicking']['fgAtt'] += player.gameStatsDict['kicking']['fgAtt']
-                    #player.seasonStatsDict['kicking']['fg45+'] += player.gameStatsDict['kicking']['fg45+']
-                    #player.seasonStatsDict['kicking']['fgs'] += player.gameStatsDict['kicking']['fgs']
-                    #player.seasonStatsDict['kicking']['fgYards'] += player.gameStatsDict['kicking']['fgYards']
 
                     if player.gameStatsDict['kicking']['longest'] > player.seasonStatsDict['kicking']['longest']:
                         player.seasonStatsDict['kicking']['longest'] = player.gameStatsDict['kicking']['longest']
@@ -1722,7 +1711,7 @@ class Game:
                         #     self.awayTeam.teamUnderPerform()
                 elif self.totalPlays >= 33 and self.totalPlays < 66:
                     if self.currentQuarter != 2:
-                        await asyncio.sleep(15)
+                        #await asyncio.sleep(15)
                         self.currentQuarter = 2
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 2nd Quarter',
@@ -1739,7 +1728,7 @@ class Game:
                                                 'playsRemaining': 132 - self.totalPlays
                                             }
                                         })
-                        await asyncio.sleep(60)
+                        #await asyncio.sleep(60)
                         self.isHalftime = False
                     if self.currentQuarter != 3:
                         self.currentQuarter = 3
@@ -1767,7 +1756,7 @@ class Game:
                         #     self.awayTeam.resetDetermination()
                 elif self.totalPlays >= 100 and self.totalPlays < 132:
                     if self.currentQuarter != 4:
-                        await asyncio.sleep(15)
+                        #await asyncio.sleep(15)
                         self.currentQuarter = 4
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 4th Quarter',
@@ -1791,7 +1780,7 @@ class Game:
                             otContinue = False
                             break
                     if self.currentQuarter != 5:
-                        await asyncio.sleep(15)
+                        #await asyncio.sleep(15)
                         self.currentQuarter = 5
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start Overtime',
@@ -1823,7 +1812,7 @@ class Game:
 
                 self.play = Play(self)
                 
-                await asyncio.sleep(randint(8,20))
+                #await asyncio.sleep(randint(5,15))
 
                 self.playCaller()
                 self.totalPlays += 1
