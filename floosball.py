@@ -1339,7 +1339,7 @@ class Season:
             for pos, player in team.rosterDict.items():
                 player: FloosPlayer.Player
                 rosterDict[pos] = {'name': player.name, 'pos': player.position.name, 'rating': player.attributes.overallRating, 'stars': player.playerTier.value, 'termRemaining': player.termRemaining, 'id': player.id, 'number': player.currentNumber}
-            rosterDict['defense'] = {'passDefenseStars': team.defensePassTier, 'runDefenseStars': team.defenseRunTier, 'passDefenseRating': team.defensePassRating, 'runDefenseRating': team.defenseRunCoverageRating}
+            rosterDict['defense'] = {'passDefenseStars': round((((team.defensePassRating - 60)/40)*4)+1), 'runDefenseStars': round((((team.defenseRunCoverageRating - 60)/40)*4)+1), 'passDefenseRating': team.defensePassRating, 'runDefenseRating': team.defenseRunCoverageRating}
             team.rosterHistory.append({'season': self.currentSeason, 'roster': rosterDict})
 
 
@@ -1431,7 +1431,7 @@ class Season:
             for league in leagueList:
                 list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-            getPerformanceRating()
+            getPerformanceRating(self.currentWeek)
             sortPlayers()
             sortDefenses()
             self.updatePlayoffPicture()
@@ -1873,7 +1873,7 @@ def playerDraft():
 
             #assign player number
             team.assignPlayerNumber(selectedPlayer)
-            team.playerCap += selectedPlayer.capHit
+            #team.playerCap += selectedPlayer.capHit
 
         draftOrderList.reverse()
                 
@@ -2036,29 +2036,38 @@ def getPlayers(_config):
 
     else:
         numOfPlayers = 144
+        meanPlayerSkill = 80
+        stdDevPlayerSkill = 7
+
         id = 1
+
+        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
+        playerAverages = np.clip(playerAverages, 60, 100)
+        playerAverages: list = playerAverages.tolist()
+
         for x in _config['players']:
             unusedNamesList.append(x)
         for x in range(numOfPlayers):
             player = None
+            seed = int(playerAverages.pop(randint(0,len(playerAverages)-1)))
             y = x%6
             if y == 0:
-                player = FloosPlayer.PlayerQB()
+                player = FloosPlayer.PlayerQB(seed)
                 activeQbList.append(player)
             elif y == 1:
-                player = FloosPlayer.PlayerRB()
+                player = FloosPlayer.PlayerRB(seed)
                 activeRbList.append(player)
             elif y == 2:
-                player = FloosPlayer.PlayerWR()
+                player = FloosPlayer.PlayerWR(seed)
                 activeWrList.append(player)
             elif y == 3:
-                player = FloosPlayer.PlayerWR()
+                player = FloosPlayer.PlayerWR(seed)
                 activeWrList.append(player)
             elif y == 4:
-                player = FloosPlayer.PlayerTE()
+                player = FloosPlayer.PlayerTE(seed)
                 activeTeList.append(player)
             elif y == 5:
-                player = FloosPlayer.PlayerK()
+                player = FloosPlayer.PlayerK(seed)
                 activeKList.append(player)
             player.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
             player.id = id
@@ -2206,10 +2215,10 @@ def sortPlayers():
     for player in activePlayerList:
         player: FloosPlayer.Player
         ratingList.append(player.playerRating)
-    tierS = np.percentile(ratingList, 96)
-    tierA = np.percentile(ratingList, 85)
-    tierB = np.percentile(ratingList, 40)
-    tierC = np.percentile(ratingList, 10)
+    tierS = 92
+    tierA = 85
+    tierB = 75
+    tierC = 68
     for player in activePlayerList:
         if player.playerRating >= tierS:
             player.playerTier = FloosPlayer.PlayerTier.TierS
@@ -2472,24 +2481,34 @@ async def offseason():
         player.offseasonTraining()
         player.seasonPerformanceRating = 0
 
+    numOfPlayers = newPlayerCount
+    if len(newlyRetiredPlayersList) > newPlayerCount:
+        numOfPlayers = len(newlyRetiredPlayersList)
+    meanPlayerSkill = 80
+    stdDevPlayerSkill = 7
+
+    playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
+    playerAverages = np.clip(playerAverages, 60, 100)
+    playerAverages: list = playerAverages.tolist()
 
     for player in newlyRetiredPlayersList:
         player: FloosPlayer.Player
         newPlayer: FloosPlayer.Player = None
+        seed = int(playerAverages.pop(randint(0,len(playerAverages)-1)))
         if player.position is FloosPlayer.Position.QB:
-            newPlayer = FloosPlayer.PlayerQB()
+            newPlayer = FloosPlayer.PlayerQB(seed)
             activeQbList.append(newPlayer)
         elif player.position is FloosPlayer.Position.RB:
-            newPlayer = FloosPlayer.PlayerRB()
+            newPlayer = FloosPlayer.PlayerRB(seed)
             activeRbList.append(newPlayer)
         elif player.position is FloosPlayer.Position.WR:
-            newPlayer = FloosPlayer.PlayerWR()
+            newPlayer = FloosPlayer.PlayerWR(seed)
             activeWrList.append(newPlayer)
         elif player.position is FloosPlayer.Position.TE:
-            newPlayer = FloosPlayer.PlayerTE()
+            newPlayer = FloosPlayer.PlayerTE(seed)
             activeTeList.append(newPlayer)
         elif player.position is FloosPlayer.Position.K:
-            newPlayer = FloosPlayer.PlayerK()
+            newPlayer = FloosPlayer.PlayerK(seed)
             activeKList.append(newPlayer)
         
         newPlayer.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
@@ -2500,24 +2519,25 @@ async def offseason():
 
     if newPlayerCount > len(newlyRetiredPlayersList):
         posList = [FloosPlayer.Position.QB, FloosPlayer.Position.RB, FloosPlayer.Position.WR, FloosPlayer.Position.TE, FloosPlayer.Position.K]
+        seed = int(playerAverages.pop(randint(0,len(playerAverages)-1)))
         for x in range(newPlayerCount - len(newlyRetiredPlayersList)):
             r = randint(0, len(posList)-1)
             pos = posList[r]
             player = None
             if pos is FloosPlayer.Position.QB:
-                player = FloosPlayer.PlayerQB()
+                player = FloosPlayer.PlayerQB(seed)
                 activeQbList.append(player)
             if pos is FloosPlayer.Position.RB:
-                player = FloosPlayer.PlayerRB()
+                player = FloosPlayer.PlayerRB(seed)
                 activeRbList.append(player)
             if pos is FloosPlayer.Position.WR:
-                player = FloosPlayer.PlayerWR()
+                player = FloosPlayer.PlayerWR(seed)
                 activeWrList.append(player)
             if pos is FloosPlayer.Position.TE:
-                player = FloosPlayer.PlayerTE()
+                player = FloosPlayer.PlayerTE(seed)
                 activeTeList.append(player)
             if pos is FloosPlayer.Position.K:
-                player = FloosPlayer.PlayerK()
+                player = FloosPlayer.PlayerK(seed)
                 activeKList.append(player)
 
             player.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
@@ -2770,159 +2790,263 @@ async def offseason():
     sortDefenses()
     inductHallOfFame()
     
-def getPerformanceRating():
-    qbStatsPassCompList = []
-    qbStatsPassMissList = []
-    qbStatsPassYardsList = []
-    qbStatsTdsList = []
-    qbStatsIntsList = []
-    for qb in activeQbList:
-        qb: FloosPlayer.PlayerQB
-        if qb.seasonStatsDict['passing']['yards'] > 0:
-            qbStatsPassCompList.append(qb.seasonStatsDict['passing']['compPerc'])
-            qbStatsPassMissList.append(qb.seasonStatsDict['passing']['missedPass'])
-            qbStatsPassYardsList.append(qb.seasonStatsDict['passing']['yards'])
-            qbStatsTdsList.append(qb.seasonStatsDict['passing']['tds'])
-            qbStatsIntsList.append(qb.seasonStatsDict['passing']['ints'])
+def getPerformanceRating(week):
+    baseAdjustmentFactor = .2
+    gameFactor = min(1, week / 4)
+    effectiveAdjustment = baseAdjustmentFactor * gameFactor
+
+    qbStats = {
+        "passComp": [qb.seasonStatsDict['passing']['compPerc'] for qb in activeQbList if qb.seasonStatsDict['passing']['yards'] > 0],
+        "passYards": [qb.seasonStatsDict['passing']['yards'] for qb in activeQbList if qb.seasonStatsDict['passing']['yards'] > 0],
+        "tds": [qb.seasonStatsDict['passing']['tds'] for qb in activeQbList if qb.seasonStatsDict['passing']['yards'] > 0],
+        "ints": [qb.seasonStatsDict['passing']['ints'] for qb in activeQbList if qb.seasonStatsDict['passing']['yards'] > 0]
+    }
 
     for qb in activeQbList:
-        qb: FloosPlayer.PlayerQB
         if qb.seasonStatsDict['passing']['yards'] > 0:
-            passCompPercRating = stats.percentileofscore(qbStatsPassCompList, qb.seasonStatsDict['passing']['compPerc'], 'rank')
-            passMissesRating = 100 - stats.percentileofscore(qbStatsPassMissList, qb.seasonStatsDict['passing']['missedPass'], 'rank')
-            passYardsRating = stats.percentileofscore(qbStatsPassYardsList, qb.seasonStatsDict['passing']['yards'], 'rank')
-            tdsRating = stats.percentileofscore(qbStatsTdsList, qb.seasonStatsDict['passing']['tds'], 'rank')
-            intsRating = 100 - stats.percentileofscore(qbStatsIntsList, qb.seasonStatsDict['passing']['ints'], 'rank')
-            qb.seasonPerformanceRating = round(((passCompPercRating*.8)+(passYardsRating*1.2)+(tdsRating*1.2)+(intsRating*1)+(passMissesRating*.8))/5)
+            compPerc = qb.seasonStatsDict['passing']['compPerc']
+            passYards = qb.seasonStatsDict['passing']['yards']
+            tds = qb.seasonStatsDict['passing']['tds']
+            ints = qb.seasonStatsDict['passing']['ints']
 
-    rbStatsYprList = []
-    rbStatsRunYardsList = []
-    rbStatsTdsList = []
-    rbStatsFumblesList = []
+            passCompPercRating = stats.percentileofscore(qbStats["passComp"], compPerc, 'rank')
+            passYardsRating = stats.percentileofscore(qbStats["passYards"], passYards, 'rank')
+            tdsRating = stats.percentileofscore(qbStats["tds"], tds, 'rank')
+            intsRating = 100 - stats.percentileofscore(qbStats["ints"], ints, 'rank')
+
+            weightedScore = round(((passCompPercRating * 1.2) + (passYardsRating * 1.0) + (tdsRating * 1.0) + (intsRating * .8)) / 4)
+
+            qb.seasonPerformanceRating = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+    qbBaseSkills = [p.attributes.skillRating for p in activeQbList]
+    qbPerformances = [p.seasonPerformanceRating for p in activeQbList]
+
+    qbBaseSkillPercentiles = [stats.percentileofscore(qbBaseSkills, x) for x in qbBaseSkills]
+    qbPerformancePercentiles = [stats.percentileofscore(qbPerformances, x) for x in qbPerformances]
+
+    for i, player in enumerate(activeQbList):
+        player: FloosPlayer.Player
+        percentileDifference = qbPerformancePercentiles[i] - qbBaseSkillPercentiles[i]
+        adjustment = effectiveAdjustment * percentileDifference
+        player.playerRating = round(player.attributes.skillRating + adjustment)
+
+    rbStats = {
+        "ypc": [rb.seasonStatsDict['rushing']['ypc'] for rb in activeRbList if rb.seasonStatsDict['rushing']['yards'] > 0],
+        "rushYards": [rb.seasonStatsDict['rushing']['yards'] for rb in activeRbList if rb.seasonStatsDict['rushing']['yards'] > 0],
+        "tds": [rb.seasonStatsDict['rushing']['tds'] for rb in activeRbList if rb.seasonStatsDict['rushing']['yards'] > 0],
+        "fumbles": [rb.seasonStatsDict['rushing']['fumblesLost'] for rb in activeRbList if rb.seasonStatsDict['rushing']['yards'] > 0]
+    }
+
     for rb in activeRbList:
-        rb: FloosPlayer.PlayerRB
         if rb.seasonStatsDict['rushing']['yards'] > 0:
-            rbStatsYprList.append(rb.seasonStatsDict['rushing']['ypc'])
-            rbStatsRunYardsList.append(rb.seasonStatsDict['rushing']['yards'])
-            rbStatsTdsList.append(rb.seasonStatsDict['rushing']['tds'])
-            rbStatsFumblesList.append(rb.seasonStatsDict['rushing']['fumblesLost'])
+            ypc = rb.seasonStatsDict['rushing']['ypc']
+            rushYards = rb.seasonStatsDict['rushing']['yards']
+            tds = rb.seasonStatsDict['rushing']['tds']
+            fumbles = rb.seasonStatsDict['rushing']['fumblesLost']
 
-    for rb in activeRbList:
-        rb: FloosPlayer.PlayerRB
-        if rb.seasonStatsDict['rushing']['yards'] > 0:
-            yprRating = stats.percentileofscore(rbStatsYprList, rb.seasonStatsDict['rushing']['ypc'], 'rank')
-            runYardsRating = stats.percentileofscore(rbStatsRunYardsList, rb.seasonStatsDict['rushing']['yards'], 'rank')
-            tdsRating = stats.percentileofscore(rbStatsTdsList, rb.seasonStatsDict['rushing']['tds'], 'rank')
-            fumblesRating = 100 - stats.percentileofscore(rbStatsFumblesList, rb.seasonStatsDict['rushing']['fumblesLost'], 'rank')
-            rb.seasonPerformanceRating = round(((yprRating*1)+(runYardsRating*1.2)+(tdsRating*1.2)+(fumblesRating*.6))/4)
+            ypcRating = stats.percentileofscore(rbStats["ypc"], ypc, 'rank')
+            rushYardsRating = stats.percentileofscore(rbStats["rushYards"], rushYards, 'rank')
+            tdsRating = stats.percentileofscore(rbStats["tds"], tds, 'rank')
+            fumblesRating = 100 - stats.percentileofscore(rbStats["fumbles"], fumbles, 'rank')
 
-    wrStatsReceptionsList = []
-    wrStatsDropsList = []
-    wrStatsRcvPercList = []
-    wrStatsRcvYardsList = []
-    wrStatsYACList = []
-    wrStatsTdsList = []
+            weightedScore = ((ypcRating * 1.2) + (rushYardsRating * 1.2) + (tdsRating * 1.0) + (fumblesRating * .6)) / 4
+
+            rb.seasonPerformanceRating = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+    rbBaseSkills = [p.attributes.skillRating for p in activeRbList]
+    rbPerformances = [p.seasonPerformanceRating for p in activeRbList]
+
+    rbBaseSkillPercentiles = [stats.percentileofscore(rbBaseSkills, x) for x in rbBaseSkills]
+    rbPerformancePercentiles = [stats.percentileofscore(rbPerformances, x) for x in rbPerformances]
+
+    for i, player in enumerate(activeRbList):
+        player: FloosPlayer.Player
+        percentileDifference = rbPerformancePercentiles[i] - rbBaseSkillPercentiles[i]
+        adjustment = effectiveAdjustment * percentileDifference
+        player.playerRating = round(player.attributes.skillRating + adjustment)
+
+    wrStats = {
+        "receptions": [wr.seasonStatsDict['receiving']['receptions'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0],
+        "drops": [wr.seasonStatsDict['receiving']['drops'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0],
+        "rcvPerc": [wr.seasonStatsDict['receiving']['rcvPerc'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0],
+        "rcvYards": [wr.seasonStatsDict['receiving']['yards'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0],
+        "ypr": [wr.seasonStatsDict['receiving']['ypr'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0],
+        "yac": [wr.seasonStatsDict['receiving']['yac'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0],
+        "tds": [wr.seasonStatsDict['receiving']['tds'] for wr in activeWrList if wr.seasonStatsDict['receiving']['yards'] > 0]
+    }
+
     for wr in activeWrList:
-        wr: FloosPlayer.PlayerWR
-        if wr.seasonStatsDict['receiving']['receptions'] > 0:
-            wrStatsReceptionsList.append(wr.seasonStatsDict['receiving']['receptions'])
-            wrStatsDropsList.append(wr.seasonStatsDict['receiving']['drops'])
-            wrStatsRcvPercList.append(wr.seasonStatsDict['receiving']['rcvPerc'])
-            wrStatsRcvYardsList.append(wr.seasonStatsDict['receiving']['yards'])
-            wrStatsYACList.append(wr.seasonStatsDict['receiving']['yac'])
-            wrStatsTdsList.append(wr.seasonStatsDict['receiving']['tds'])
+        if wr.seasonStatsDict['receiving']['yards'] > 0:
+            receptions = wr.seasonStatsDict['receiving']['receptions']
+            drops = wr.seasonStatsDict['receiving']['drops']
+            rcvPerc = wr.seasonStatsDict['receiving']['rcvPerc']
+            rcvYards = wr.seasonStatsDict['receiving']['yards']
+            ypr = wr.seasonStatsDict['receiving']['ypr']
+            yac = wr.seasonStatsDict['receiving']['yac']
+            tds = wr.seasonStatsDict['receiving']['tds']
 
-    for wr in activeWrList:
-        wr: FloosPlayer.PlayerWR
-        if wr.seasonStatsDict['receiving']['receptions'] > 0:
-            receptionsRating = stats.percentileofscore(wrStatsReceptionsList, wr.seasonStatsDict['receiving']['receptions'], 'rank')
-            dropsRating = 100 - stats.percentileofscore(wrStatsDropsList, wr.seasonStatsDict['receiving']['drops'], 'rank')
-            rcvPercRating = stats.percentileofscore(wrStatsRcvPercList, wr.seasonStatsDict['receiving']['rcvPerc'], 'rank')
-            rcvYardsRating = stats.percentileofscore(wrStatsRcvYardsList, wr.seasonStatsDict['receiving']['yards'], 'rank')
-            yacRating = stats.percentileofscore(wrStatsYACList, wr.seasonStatsDict['receiving']['yac'], 'rank')
-            tdsRating = stats.percentileofscore(wrStatsTdsList, wr.seasonStatsDict['receiving']['tds'], 'rank')
-            wr.seasonPerformanceRating = round(((rcvPercRating*.4)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(yacRating*1.2)+(receptionsRating*1)+(dropsRating*1))/6)
+            recRating = stats.percentileofscore(wrStats["ypr"], receptions, 'rank')
+            dropsRating = 100 - stats.percentileofscore(wrStats["drops"], drops, 'rank')
+            rcvPercRating = stats.percentileofscore(wrStats["rcvPerc"], rcvPerc, 'rank')
+            rcvYardsRating = stats.percentileofscore(wrStats["rcvYards"], rcvYards, 'rank')
+            yprRating = stats.percentileofscore(wrStats["ypr"], ypr, 'rank')
+            yacRating = stats.percentileofscore(wrStats["yac"], yac, 'rank')
+            tdsRating = stats.percentileofscore(wrStats["tds"], tds, 'rank')
 
-    teStatsReceptionsList = []
-    teStatsDropsList = []
-    teStatsRcvPercList = []
-    teStatsRcvYardsList = []
-    teStatsTdsList = []
+            weightedScore = ((recRating * .8) + (dropsRating * 1.2) + (rcvPercRating * 1.4) + (rcvYardsRating * 1.0) + (yprRating * 1.0) + (yacRating * 1) + (tdsRating * .6)) / 7
+
+            wr.seasonPerformanceRating = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+    wrBaseSkills = [p.attributes.skillRating for p in activeWrList]
+    wrPerformances = [p.seasonPerformanceRating for p in activeWrList]
+
+    wrBaseSkillPercentiles = [stats.percentileofscore(wrBaseSkills, x) for x in wrBaseSkills]
+    wrPerformancePercentiles = [stats.percentileofscore(wrPerformances, x) for x in wrPerformances]
+
+    for i, player in enumerate(activeWrList):
+        player: FloosPlayer.Player
+        percentileDifference = wrPerformancePercentiles[i] - wrBaseSkillPercentiles[i]
+        adjustment = effectiveAdjustment * percentileDifference
+        player.playerRating = round(player.attributes.skillRating + adjustment)
+
+    teStats = {
+        "receptions": [te.seasonStatsDict['receiving']['receptions'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0],
+        "drops": [te.seasonStatsDict['receiving']['drops'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0],
+        "rcvPerc": [te.seasonStatsDict['receiving']['rcvPerc'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0],
+        "rcvYards": [te.seasonStatsDict['receiving']['yards'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0],
+        "ypr": [te.seasonStatsDict['receiving']['ypr'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0],
+        "yac": [te.seasonStatsDict['receiving']['yac'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0],
+        "tds": [te.seasonStatsDict['receiving']['tds'] for te in activeTeList if te.seasonStatsDict['receiving']['yards'] > 0]
+    }
+
     for te in activeTeList:
-        te: FloosPlayer.PlayerTE
-        if te.seasonStatsDict['receiving']['receptions'] > 0:
-            teStatsReceptionsList.append(te.seasonStatsDict['receiving']['receptions'])
-            teStatsDropsList.append(te.seasonStatsDict['receiving']['drops'])
-            teStatsRcvPercList.append(te.seasonStatsDict['receiving']['rcvPerc'])
-            teStatsRcvYardsList.append(te.seasonStatsDict['receiving']['yards'])
-            teStatsTdsList.append(te.seasonStatsDict['receiving']['tds'])
+        if te.seasonStatsDict['receiving']['yards'] > 0:
+            receptions = te.seasonStatsDict['receiving']['receptions']
+            drops = te.seasonStatsDict['receiving']['drops']
+            rcvPerc = te.seasonStatsDict['receiving']['rcvPerc']
+            rcvYards = te.seasonStatsDict['receiving']['yards']
+            ypr = te.seasonStatsDict['receiving']['ypr']
+            yac = te.seasonStatsDict['receiving']['yac']
+            tds = te.seasonStatsDict['receiving']['tds']
 
-    for te in activeTeList:
-        te: FloosPlayer.PlayerTE
-        if te.seasonStatsDict['receiving']['receptions'] > 0:
-            receptionsRating = stats.percentileofscore(teStatsReceptionsList, te.seasonStatsDict['receiving']['receptions'], 'rank')
-            dropsRating = 100 - stats.percentileofscore(teStatsDropsList, te.seasonStatsDict['receiving']['drops'], 'rank')
-            rcvPercRating = stats.percentileofscore(teStatsRcvPercList, te.seasonStatsDict['receiving']['rcvPerc'], 'rank')
-            rcvYardsRating = stats.percentileofscore(teStatsRcvYardsList, te.seasonStatsDict['receiving']['yards'], 'rank')
-            tdsRating = stats.percentileofscore(teStatsTdsList, te.seasonStatsDict['receiving']['tds'], 'rank')
-            te.seasonPerformanceRating = round(((rcvPercRating*.6)+(rcvYardsRating*1.2)+(tdsRating*1.2)+(receptionsRating*1)+(dropsRating*1))/5)
+            recRating = stats.percentileofscore(teStats["ypr"], receptions, 'rank')
+            dropsRating = 100 - stats.percentileofscore(teStats["drops"], drops, 'rank')
+            rcvPercRating = stats.percentileofscore(teStats["rcvPerc"], rcvPerc, 'rank')
+            rcvYardsRating = stats.percentileofscore(teStats["rcvYards"], rcvYards, 'rank')
+            yprRating = stats.percentileofscore(teStats["ypr"], ypr, 'rank')
+            yacRating = stats.percentileofscore(teStats["yac"], yac, 'rank')
+            tdsRating = stats.percentileofscore(teStats["tds"], tds, 'rank')
 
-    kStatsFgPercList = []
-    kStatsFgsList = []
-    kStatsFgAvgList = []
+            weightedScore = ((recRating * .8) + (dropsRating * 1.2) + (rcvPercRating * 1.4) + (rcvYardsRating * 1.0) + (yprRating * 1.0) + (yacRating * 1) + (tdsRating * .6)) / 7
+
+            te.seasonPerformanceRating = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+    teBaseSkills = [p.attributes.skillRating for p in activeTeList]
+    tePerformances = [p.seasonPerformanceRating for p in activeTeList]
+
+    teBaseSkillPercentiles = [stats.percentileofscore(teBaseSkills, x) for x in teBaseSkills]
+    tePerformancePercentiles = [stats.percentileofscore(tePerformances, x) for x in tePerformances]
+
+    for i, player in enumerate(activeTeList):
+        player: FloosPlayer.Player
+        percentileDifference = tePerformancePercentiles[i] - teBaseSkillPercentiles[i]
+        adjustment = effectiveAdjustment * percentileDifference
+        player.playerRating = round(player.attributes.skillRating + adjustment)
+
+    kStats = {
+        "fgPerc": [k.seasonStatsDict['kicking']['fgPerc'] for k in activeKList if k.seasonStatsDict['kicking']['fgPerc'] > 0],
+        "fgs": [k.seasonStatsDict['kicking']['fgs'] for k in activeKList if k.seasonStatsDict['kicking']['fgs'] > 0],
+        "fgAvg": [k.seasonStatsDict['kicking']['fgAvg'] for k in activeKList if k.seasonStatsDict['kicking']['fgAvg'] > 0]
+    }
+
     for k in activeKList:
-        k: FloosPlayer.PlayerK
-        if k.seasonStatsDict['kicking']['fgAtt'] > 0:
-            kStatsFgPercList.append(k.seasonStatsDict['kicking']['fgPerc'])
-            kStatsFgsList.append(k.seasonStatsDict['kicking']['fgs'])
-            kStatsFgAvgList.append(k.seasonStatsDict['kicking']['fgAvg'])
+        if k.seasonStatsDict['kicking']['fgs'] > 0:
+            fgPerc = k.seasonStatsDict['kicking']['fgPerc']
+            fgs = k.seasonStatsDict['kicking']['fgs']
+            fgAvg = k.seasonStatsDict['kicking']['fgAvg']
 
-    for k in activeKList:
-        k: FloosPlayer.PlayerK
-        if k.seasonStatsDict['kicking']['fgAtt'] > 0:
-            fgPercRating = stats.percentileofscore(kStatsFgPercList, k.seasonStatsDict['kicking']['fgPerc'], 'rank')
-            fgsRating = stats.percentileofscore(kStatsFgsList, k.seasonStatsDict['kicking']['fgs'], 'rank')
-            fgAvgRating = stats.percentileofscore(kStatsFgAvgList, k.seasonStatsDict['kicking']['fgAvg'], 'rank')
-            k.seasonPerformanceRating = round(((fgPercRating*1.3)+(fgsRating*.5)+(fgAvgRating*1.2))/3)
+            fgPercRating = stats.percentileofscore(kStats["fgPerc"], fgPerc, 'rank')
+            fgsRating = stats.percentileofscore(kStats["fgs"], fgs, 'rank')
+            fgAvgRating = stats.percentileofscore(kStats["fgAvg"], fgAvg, 'rank')
 
-    defenseStatsSacksList = []
-    defenseStatsIntsList = []
-    defenseStatsFumblesList = []
-    defenseStatsPassYardsList = []
-    defenseStatsRunYardsList = []
-    defenseStatsTotalYardsList = []
-    defenseStatsPassTdsList = []
-    defenseStatsRunTdsList = []
-    defenseStatsTotalTdsList = []
-    defenseStatsTotalPtsList = []
-    
+            weightedScore = ((fgPercRating * 1.3) + (fgsRating * .7) + (fgAvgRating * 1)) / 3
+
+            k.seasonPerformanceRating = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+    kBaseSkills = [p.attributes.skillRating for p in activeKList]
+    kPerformances = [p.seasonPerformanceRating for p in activeKList]
+
+    kBaseSkillPercentiles = [stats.percentileofscore(kBaseSkills, x) for x in kBaseSkills]
+    kPerformancePercentiles = [stats.percentileofscore(kPerformances, x) for x in kPerformances]
+
+    for i, player in enumerate(activeKList):
+        player: FloosPlayer.Player
+        percentileDifference = kPerformancePercentiles[i] - kBaseSkillPercentiles[i]
+        adjustment = effectiveAdjustment * percentileDifference
+        player.playerRating = round(player.attributes.skillRating + adjustment)
+
+
+    defStats = {
+        "runYardsAlwd": [team.seasonTeamStats['Defense']['runYardsAlwd'] for team in teamList],
+        "runTdsAlwd": [team.seasonTeamStats['Defense']['runTdsAlwd'] for team in teamList],
+        "passYardsAlwd": [team.seasonTeamStats['Defense']['passYardsAlwd'] for team in teamList],
+        "passTdsAlwd": [team.seasonTeamStats['Defense']['passTdsAlwd'] for team in teamList],
+        "ints": [team.seasonTeamStats['Defense']['ints'] for team in teamList],
+        "sacks": [team.seasonTeamStats['Defense']['sacks'] for team in teamList],
+        "fumRec": [team.seasonTeamStats['Defense']['fumRec'] for team in teamList],
+        "safeties": [team.seasonTeamStats['Defense']['safeties'] for team in teamList],
+        "totalYardsAlwd": [team.seasonTeamStats['Defense']['totalYardsAlwd'] for team in teamList],
+        "ptsAlwd": [team.seasonTeamStats['Defense']['ptsAlwd'] for team in teamList]
+    }
+
     for team in teamList:
         team: FloosTeam.Team
-        defenseStatsSacksList.append(team.seasonTeamStats['Defense']['avgSacks'])
-        defenseStatsIntsList.append(team.seasonTeamStats['Defense']['avgInts'])
-        defenseStatsFumblesList.append(team.seasonTeamStats['Defense']['avgFumRec'])
-        defenseStatsPassYardsList.append(team.seasonTeamStats['Defense']['avgPassYardsAlwd'])
-        defenseStatsRunYardsList.append(team.seasonTeamStats['Defense']['avgRunYardsAlwd'])
-        defenseStatsTotalYardsList.append(team.seasonTeamStats['Defense']['avgYardsAlwd'])
-        defenseStatsPassTdsList.append(team.seasonTeamStats['Defense']['avgPassTdsAlwd'])
-        defenseStatsRunTdsList.append(team.seasonTeamStats['Defense']['avgRunTdsAlwd'])
-        defenseStatsTotalTdsList.append(team.seasonTeamStats['Defense']['avgTdsAlwd'])
-        defenseStatsTotalPtsList.append(team.seasonTeamStats['Defense']['avgPtsAlwd'])
+        runYardsAlwd = team.seasonTeamStats['Defense']['runYardsAlwd']
+        runTdsAlwd = team.seasonTeamStats['Defense']['runTdsAlwd']
+        passYardsAlwd = team.seasonTeamStats['Defense']['passYardsAlwd']
+        passTdsAlwd = team.seasonTeamStats['Defense']['passTdsAlwd']
+        ints = team.seasonTeamStats['Defense']['ints']
+        sacks = team.seasonTeamStats['Defense']['sacks']
+        fumRec = team.seasonTeamStats['Defense']['fumRec']
+        safeties = team.seasonTeamStats['Defense']['safeties']
+        totalYardsAlwd = team.seasonTeamStats['Defense']['totalYardsAlwd']
+        ptsAlwd = team.seasonTeamStats['Defense']['ptsAlwd']
 
-    for team in teamList:
-        team: FloosTeam.Team
-        sacksRating = stats.percentileofscore(defenseStatsSacksList, team.seasonTeamStats['Defense']['avgSacks'], 'rank')
-        intsRating = stats.percentileofscore(defenseStatsIntsList, team.seasonTeamStats['Defense']['avgInts'], 'rank')
-        fumblesRating = stats.percentileofscore(defenseStatsFumblesList, team.seasonTeamStats['Defense']['avgFumRec'], 'rank')
-        passYardsRating = 100 - stats.percentileofscore(defenseStatsPassYardsList, team.seasonTeamStats['Defense']['avgPassYardsAlwd'], 'rank')
-        runYardsRating = 100 - stats.percentileofscore(defenseStatsRunYardsList, team.seasonTeamStats['Defense']['avgRunYardsAlwd'], 'rank')
-        totalYardsRating = 100 - stats.percentileofscore(defenseStatsTotalYardsList, team.seasonTeamStats['Defense']['avgYardsAlwd'], 'rank')
-        passTdsRating = 100 - stats.percentileofscore(defenseStatsPassTdsList, team.seasonTeamStats['Defense']['avgPassTdsAlwd'], 'rank')
-        runTdsRating = 100 - stats.percentileofscore(defenseStatsRunTdsList, team.seasonTeamStats['Defense']['avgRunTdsAlwd'], 'rank')
-        totalTdsRating = 100 - stats.percentileofscore(defenseStatsTotalTdsList, team.seasonTeamStats['Defense']['avgTdsAlwd'], 'rank')
-        totalPtsRating = 100 - stats.percentileofscore(defenseStatsTotalPtsList, team.seasonTeamStats['Defense']['avgPtsAlwd'], 'rank')
+        runYardsAlwdRating = 100 - stats.percentileofscore(defStats["runYardsAlwd"], runYardsAlwd, 'rank')
+        runTdsAlwdRating = 100 - stats.percentileofscore(defStats["runTdsAlwd"], runTdsAlwd, 'rank')
+        passYardsAlwdRating = 100 - stats.percentileofscore(defStats["passYardsAlwd"], passYardsAlwd, 'rank')
+        passTdsAlwdRating = 100 - stats.percentileofscore(defStats["passTdsAlwd"], passTdsAlwd, 'rank')
+        intsRating = stats.percentileofscore(defStats["ints"], ints, 'rank')
+        sacksRating = stats.percentileofscore(defStats["sacks"], sacks, 'rank')
+        fumRecRating = stats.percentileofscore(defStats["fumRec"], fumRec, 'rank')
+        safetiesRating = stats.percentileofscore(defStats["safeties"], safeties, 'rank')
+        totalYardsAlwdRating = 100 - stats.percentileofscore(defStats["totalYardsAlwd"], totalYardsAlwd, 'rank')
+        ptsAlwdRating = 100 - stats.percentileofscore(defStats["ptsAlwd"], ptsAlwd, 'rank')
+
+        runDefWeightedScore = ((runYardsAlwdRating * 1.2) + (runTdsAlwdRating * .8)) / 2
+        passDefWeightedScore = ((passYardsAlwdRating * 1.4) + (passTdsAlwdRating * 1) + (intsRating * 1) + (sacksRating * .6)) / 4
+        generalDefWeightedScore = ((fumRecRating * .6) + (safetiesRating * .4) + (totalYardsAlwdRating * 1.4) + (ptsAlwdRating * 1.6)) / 4
+
+        team.defenseRunCoverageSeasonPerformanceRating = np.clip(round(runDefWeightedScore), 60, 100)
+        team.defensePassCoverageSeasonPerformanceRating = np.clip(round(passDefWeightedScore), 60, 100)
+        generalDefSeasonPerformanceRating = np.clip(round(generalDefWeightedScore), 60, 100)
+
+        weightedScore = round(np.mean([team.defenseRunCoverageSeasonPerformanceRating, team.defensePassCoverageSeasonPerformanceRating, generalDefSeasonPerformanceRating]))
         
-        team.defenseSeasonPerformanceRating = round(((sacksRating*.6)+(intsRating*.8)+(fumblesRating*.8)+(passYardsRating*1)+(runYardsRating*1)+(totalYardsRating*1.2)+(passTdsRating*1)+(runTdsRating*1)+(totalTdsRating*1.2)+(totalPtsRating*1.4))/10)
+        team.defenseSeasonPerformanceRating = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+    defBaseSkills = [t.defenseRating for t in teamList]
+    defPerformances = [t.defenseSeasonPerformanceRating for t in teamList]
+
+    defBaseSkillPercentiles = [stats.percentileofscore(defBaseSkills, x) for x in defBaseSkills]
+    defPerformancePercentiles = [stats.percentileofscore(defPerformances, x) for x in defPerformances]
+
+    for i, team in enumerate(teamList):
+        team: FloosTeam.Team
+        percentileDifference = defPerformancePercentiles[i] - defBaseSkillPercentiles[i]
+        adjustment = effectiveAdjustment * percentileDifference
+        team.defenseOverallTier = round(team.defenseRating + adjustment)
+    
 
     list.sort(activeQbList, key=lambda player: player.seasonPerformanceRating, reverse=True)
     list.sort(activeRbList, key=lambda player: player.seasonPerformanceRating, reverse=True)
