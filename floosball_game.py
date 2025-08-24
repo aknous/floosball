@@ -11,6 +11,9 @@ import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
 import datetime
+import numpy as np
+import matplotlib.pyplot as plt
+
 
 class PlayType(enum.Enum):
     Run = 'Run'
@@ -296,6 +299,7 @@ class Game:
         self.startTime: datetime.datetime = None
         self.isTwoPtConv = False
         self.isOnsideKick = False
+        self.gamePressure = 0
 
     def getGameData(self):
         homeTeamOffenseStatsDict = {}
@@ -708,6 +712,9 @@ class Game:
         longPassSuccessProbability = round(longPassBaseProbability * (passOffenseNormalizedSkill * skillFactor), 2)
         longPassSuccessProbability = round(max(0, min(1, longPassSuccessProbability)) * 100)
 
+        if self.homeTeam == self.play.offense:
+            scoreDiff = self.awayScore - self.homeScore
+        else: scoreDiff = self.homeScore - self.awayScore
 
         if self.currentQuarter == 5:
             if self.homeScore == self.awayScore:
@@ -739,33 +746,7 @@ class Game:
                             self.play.playType = PlayType.FieldGoal
                             return
             if self.down == 4:
-                if self.homeTeam == self.play.offense and self.homeScore < self.awayScore:
-                    scoreDiff = self.awayScore - self.homeScore
-                    if scoreDiff <= 3:
-                        if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        elif self.yardsToFirstDown <= 2:
-                            self.play.passPlay(returnShortPassPlay())
-                            return
-                        elif self.yardsToFirstDown <= 8:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-                    else:
-                        if self.yardsToFirstDown <= 2:
-                            self.play.passPlay(returnShortPassPlay())
-                            return
-                        elif self.yardsToFirstDown <= 8:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-                elif self.awayTeam == self.play.offense and self.awayScore < self.homeScore:
-                    scoreDiff = self.homeScore - self.awayScore
+                if scoreDiff > 0:
                     if scoreDiff <= 3:
                         if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
                             self.play.playType = PlayType.FieldGoal
@@ -824,23 +805,7 @@ class Game:
                     self.play.passPlay(returnMediumPassPlay())
                 return
         if self.totalPlays == 131:
-            if self.homeTeam == self.play.offense and self.homeScore <= self.awayScore:
-                scoreDiff = self.awayScore - self.homeScore
-                if scoreDiff <= 3 and self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    self.play.playType = PlayType.FieldGoal
-                    return
-                elif self.yardsToEndzone >= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    self.play.passPlay('Play9')
-                    return
-                else:
-                    #self.homeTeam.inGamePush()
-                    if self.yardsToEndzone > 15:
-                        self.play.passPlay(returnLongPassPlay())
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                    return
-            elif self.awayTeam == self.play.offense and self.awayScore <= self.homeScore:
-                scoreDiff = self.homeScore - self.awayScore
+            if scoreDiff >= 0:
                 if scoreDiff <= 3 and self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
                     self.play.playType = PlayType.FieldGoal
                     return
@@ -859,24 +824,8 @@ class Game:
                 return
         elif self.down <= 2:
             if self.currentQuarter == 4:
-                if self.homeTeam == self.play.offense and self.homeScore < self.awayScore:
+                if scoreDiff > 0:
                     scoreDiff = self.awayScore - self.homeScore
-                    x = randint(1,10)
-                    if x < 5:
-                        self.play.runPlay()
-                        return
-                    elif self.yardsToEndzone > 15:
-                        if x >= 4 and x < 9:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-                elif self.awayTeam == self.play.offense and self.awayScore < self.homeScore:
-                    scoreDiff = self.homeScore - self.awayScore
                     x = randint(1,10)
                     if x < 5:
                         self.play.runPlay()
@@ -952,26 +901,16 @@ class Game:
     
         elif self.down == 3:
             if self.currentQuarter == 4:
-                if self.homeTeam == self.play.offense and self.homeScore < self.awayScore:
-                    scoreDiff = self.awayScore - self.homeScore
+                if scoreDiff > 0:
                     x = randint(1,10)
-                    if x < 5:
-                        self.play.runPlay()
-                        return
-                    elif self.yardsToEndzone > 15:
-                        if x >= 3 and x < 7:
+                    if self.totalPlays <=15 and scoreDiff <=7:
+                        if x < 7:
                             self.play.passPlay(returnMediumPassPlay())
                             return
                         else:
-                            self.play.passPlay(returnLongPassPlay())
+                            self.play.passPlay(returnShortPassPlay())
                             return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-                elif self.awayTeam == self.play.offense and self.awayScore < self.homeScore:
-                    scoreDiff = self.homeScore - self.awayScore
-                    x = randint(1,10)
-                    if x < 5:
+                    if x < 3:
                         self.play.runPlay()
                         return
                     elif self.yardsToEndzone > 15:
@@ -1007,8 +946,7 @@ class Game:
                     self.play.passPlay(returnLongPassPlay())
                     return
         elif self.down == 4:
-            if self.currentQuarter == 4 and self.awayTeam == self.play.offense and self.awayScore < self.homeScore:
-                scoreDiff = self.homeScore - self.awayScore
+            if scoreDiff > 0:
                 if self.totalPlays > 120 and self.yardsToEndzone < 20:
                     if scoreDiff <= 3:
                         self.play.playType = PlayType.FieldGoal
@@ -1069,76 +1007,7 @@ class Game:
                     else:
                         self.play.passPlay(returnMediumPassPlay())
                         return
-            elif self.currentQuarter == 4 and self.homeTeam == self.play.offense and self.homeScore < self.awayScore:
-                scoreDiff = self.awayScore - self.homeScore
-                if self.totalPlays > 120 and self.yardsToEndzone < 20:
-                    if scoreDiff <= 3:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-                elif self.totalPlays > 120 and self.yardsToEndzone > 20:
-                    if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17) and scoreDiff <= 3:
-                        x = randint(1,10)
-                        if x > 3:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-                    else:
-                        self.play.passPlay(returnLongPassPlay())
-                        return
-                elif self.yardsToFirstDown <= 2:
-                    if self.yardsToSafety > 20:
-                        if self.yardsToEndzone <= 30:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        else:
-                            x = randint(1,3)
-                            if x <= 2:
-                                self.play.passPlay(returnShortPassPlay())
-                                return
-                            else:
-                                self.play.passPlay(returnMediumPassPlay())
-                                return
-                    else:
-                        x = randint(1,10)
-                        if x > 8:
-                            self.play.playType = PlayType.Punt
-                            return
-                        else:
-                            x = randint(1,3)
-                            if x == 1:
-                                self.play.runPlay()
-                                return
-                            elif x == 2:
-                                self.play.passPlay(returnShortPassPlay())
-                                return
-                            else:
-                                self.play.passPlay(returnMediumPassPlay())
-                                return         
-                else:
-                    if self.yardsToEndzone > 30 and self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17) and self.yardsToFirstDown > 6:
-                        x = randint(1,10)
-                        if x > 3:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        else:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-            elif self.currentQuarter == 4 and self.homeTeam == self.play.offense and self.homeScore > self.awayScore:
-                if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    self.play.playType = PlayType.FieldGoal
-                    return
-                else:
-                    self.play.playType = PlayType.Punt
-                    return
-            elif self.currentQuarter == 4 and self.awayTeam == self.play.offense and self.awayScore > self.homeScore:
+            elif self.currentQuarter == 4 and scoreDiff > 0:
                 if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
                     self.play.playType = PlayType.FieldGoal
                     return
@@ -1677,7 +1546,6 @@ class Game:
             self.down = 1
 
             while self.down <= 4:
-
                 if self.totalPlays > 0:
                     self.formatPlayText()
                     if self.play.isSack:
@@ -2219,6 +2087,48 @@ class Game:
         self.calculateEloChange()
         self.postgame()
 
+    def calculateGamePressure(self):
+        pressure = 0
+
+        # Quarter pressure (0-40)
+        if self.currentQuarter == 4:
+            # Pressure increases as 4th quarter progresses
+            pressure += 20 + min(20, 20 * ((132 - self.totalPlays) / 33))
+        elif self.currentQuarter == 5:  # Overtime
+            pressure += 40
+        else:
+            pressure += 5 * self.currentQuarter
+
+        # Score differential pressure (0-30)
+        score_diff = abs(self.homeScore - self.awayScore)
+        if score_diff == 0:
+            pressure += 30  # Tie game
+        elif score_diff <= 3:
+            pressure += 25  # One field goal difference
+        elif score_diff <= 7:
+            pressure += 20  # One possession game
+        elif score_diff <= 14:
+            pressure += 10  # Two possession game
+
+        # Down and distance pressure (0-20)
+        if self.down == 4:
+            pressure += 20  # Fourth down
+        elif self.down == 3:
+            pressure += 15  # Third down
+        elif self.down == 2:
+            pressure += 5   # Second down
+
+        # Field position pressure (0-10)
+        if self.yardsToEndzone <= 10:  # Red zone
+            pressure += 10
+        elif self.yardsToEndzone <= 30:
+            pressure += 5
+
+        # Apply the modifier
+        pressure = pressure * self.offensiveTeam.pressureModifier
+
+        return min(100, pressure)  # Cap at 100
+
 
 
 class Play():
@@ -2266,6 +2176,7 @@ class Play():
         self.playText = ''
 
     def fieldGoalTry(self):
+        self.game.gamePressure = self.game.calculateGamePressure()
         self.kicker = self.offense.rosterDict['k']
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
@@ -2346,6 +2257,7 @@ class Play():
         self.playType = PlayType.Run
         self.runner = self.offense.rosterDict['rb']
         blocker: FloosPlayer.PlayerTE = self.offense.rosterDict['te']
+
         x = randint(1,100)
         fumbleRoll = randint(1,100)
         fumbleResist = round(((self.runner.gameAttributes.power*.8) + (self.runner.gameAttributes.discipline*1.2)/2) + self.runner.gameAttributes.luckModifier)
@@ -2359,7 +2271,7 @@ class Play():
         elif fumbleResist >= 60 and fumbleResist <= 67:
             fumbleResistModifyer = 2
 
-        playStrength = (((self.runner.gameAttributes.overallRating*1.2) + (blocker.gameAttributes.blocking*.8))/2) + randint(-10,10)
+        """ playStrength = (((self.runner.gameAttributes.overallRating*1.2) + (blocker.gameAttributes.blocking*.8))/2) + randint(-10,10)
         defenseStrength = self.defense.defenseRunCoverageRating + randint(-10,10)
 
         if defenseStrength >= playStrength:
@@ -2393,9 +2305,53 @@ class Play():
                 else:
                     self.yardage = randint(20, self.yardsToEndzone)
                 self.runner.updateInGameConfidence(.01)
-                fumbleRoll = 0
+                fumbleRoll = 0 """
+        stage1Offense = (((((self.runner.attributes.power*1.5) + (self.runner.attributes.agility*1.2) + (self.runner.attributes.playMakingAbility*.8) + (self.runner.attributes.xFactor*.5))/4) * 0.8) + blocker.attributes.blocking * 0.2)
+        stage2Offense = ((self.runner.attributes.speed*1.5) + (self.runner.attributes.agility*1.2) + (self.runner.attributes.playMakingAbility*.8) + (self.runner.attributes.xFactor*.5))/4
+        offenseContribution2 = (1.2 * stage2Offense) / 100
+        defenseContribution = .4 * self.defense.defenseRunCoverageRating / 100
+
+        stage2DecayRate = round(0.1 + .1 * (np.exp(defenseContribution) - offenseContribution2),3)
+
+        if self.yardsToEndzone >= 10:
+            stage1MaxYards = 10
+        else:
+            stage1MaxYards = self.yardsToEndzone+5
+
+        stage1Yardages = np.arange(0,stage1MaxYards+1)
+
+        mean_stage1 = (stage1Offense - self.defense.defenseRunCoverageRating) / 5
+        mean_stage1 = min(stage1MaxYards+1, max(0, mean_stage1))  # Clamp to range [0, 10]
+        relative_strength = ((stage1Offense*2) - self.defense.defenseRunCoverageRating) / 100
+        absolute_skill = (stage1Offense + self.defense.defenseRunCoverageRating) / 200
+        std_dev_stage1 = max(1, (stage1MaxYards+1 - 0) / 4 * (1 + relative_strength) * absolute_skill)
+
+        # Create a bell curve (Gaussian distribution)
+        stage1Curve = np.exp(-((stage1Yardages - mean_stage1) ** 2) / (2 * std_dev_stage1 ** 2))
+        stage1Curve /= np.sum(stage1Curve)  # Normalize to ensure it sums to 1
 
         
+        stage1YardsGained = np.random.choice(stage1Yardages, p=stage1Curve)
+        
+        self.yardage += int(stage1YardsGained)
+
+        if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * .5:
+            self.runner.updateInGameConfidence(.005)
+            if self.yardsToEndzone >= 10:
+                stage2MaxYards = 10
+            else:
+                stage2MaxYards = self.yardsToEndzone+5
+
+            stage2Yardages = np.arange(0,stage2MaxYards+1)
+
+            stage2Curve = np.exp(-stage2DecayRate * stage2Yardages)
+            stage2Curve /= np.sum(stage2Curve)  # Normalize
+
+
+            stage2YardsGained = np.random.choice(stage2Yardages, p=stage2Curve)
+            self.yardage += int(stage2YardsGained)
+
+
         if (fumbleRoll+fumbleResistModifyer) > 97:
             #fumble
             self.isFumble = True

@@ -484,7 +484,6 @@ class PlayerAttributes:
         self.resilience = 0
         self.clutchFactor = 0
 
-
         self.longevity = randint(4,10)
         self.playMakingAbility = 0
         self.xFactor = 0

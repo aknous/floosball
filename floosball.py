@@ -948,10 +948,18 @@ class Season:
                             self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
                 for team in nonPlayoffTeamsList:
                     team:FloosTeam.Team
+                    if team.seasonTeamStats['winPerc'] < .45 and self.currentWeek >= 14:
+                        team.pressureModifier = .9
                     if not team.clinchedPlayoffs and not team.eliminated:
                         team.eliminated = FloosMethods.checkIfEliminated(team.seasonTeamStats['wins'], lastTeamIn.seasonTeamStats['wins'], 28 - self.currentWeek)
                         if team.eliminated:
                             self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+                            team.pressureModifier = .7
+                        else:
+                            if team.seasonTeamStats['wins'] + (28 - self.currentWeek) == lastTeamIn.seasonTeamStats['wins']:
+                                self.leagueHighlights.insert(0, {'event': {'text': '{0} {1} are on the brink of elimination!'.format(team.city, team.name)}})
+                                if (28-self.currentWeek) <= 5:
+                                    team.pressureModifier = 2
 
 
     def generateSchedule(self):
@@ -1342,6 +1350,26 @@ class Season:
             rosterDict['defense'] = {'passDefenseStars': round((((team.defensePassRating - 60)/40)*4)+1), 'runDefenseStars': round((((team.defenseRunCoverageRating - 60)/40)*4)+1), 'passDefenseRating': team.defensePassRating, 'runDefenseRating': team.defenseRunCoverageRating}
             team.rosterHistory.append({'season': self.currentSeason, 'roster': rosterDict})
 
+            if self.currentSeason > 1:
+                previousSeason = team.statArchive[0]
+                if previousSeason['madePlayoffs']:
+                    if not previousSeason['floosbowlChamp']:
+                        if previousSeason['leageChamp'] and previousSeason['topSeed']:
+                            team.pressureModifier = 1.5
+                        elif previousSeason['leageChamp'] or previousSeason['topSeed']:
+                            team.pressureModifier = 1.4
+                        else:
+                            team.pressureModifier = 1.2
+                else:
+                    if previousSeason['winPerc'] < .25:
+                        team.pressureModifier = .7
+                    elif previousSeason['winPerc'] < .4:
+                        team.pressureModifier = .8
+                    elif previousSeason['winPerc'] < .5:
+                        team.pressureModifier = .9
+                    else:
+                        team.pressureModifier = 1
+
 
         weekFilePath = '{}/games'.format(strCurrentSeason)
         if os.path.isdir(weekFilePath):
@@ -1411,7 +1439,7 @@ class Season:
 
             gamesList = [self.activeGames[game].playGame() for game in range(0,len(self.activeGames))]
 
-            await asyncio.sleep(30)
+            #await asyncio.sleep(30)
             # while datetime.datetime.utcnow() < weekStartTime:
             #     await asyncio.sleep(30)
 
@@ -1440,7 +1468,7 @@ class Season:
             checkCareerRecords()
             checkSeasonRecords(self.currentSeason)
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
-            await asyncio.sleep(30)
+            #await asyncio.sleep(120)
 
         list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
         bestTeam:FloosTeam.Team = teamList[0]
@@ -1597,9 +1625,15 @@ class Season:
 
                     if currentRound == 1:
                         teamsInRound.extend(playoffsNonByeTeams[league.name])
+                        for team in playoffTeams[league.name]:
+                            team: FloosTeam.Team
+                            team.pressureModifier = 1.5
 
                     else:
                         teamsInRound.extend(playoffTeams[league.name])
+                        for team in playoffTeams[league.name]:
+                            team: FloosTeam.Team
+                            team.pressureModifier += .2
 
                     list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
@@ -1645,13 +1679,15 @@ class Season:
                 newGame.leagueHighlights = self.leagueHighlights
                 self.currentWeek = 'Floos Bowl'
                 self.currentWeekText = 'Floos Bowl'
+                newGame.homeTeam.pressureModifier = 2.5
+                newGame.awayTeam.pressureModifier = 2.5
 
             self.activeGames = playoffGamesList
             scheduleList.append({'startTime': roundStartTime, 'games': playoffGamesList})
 
             self.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
 
-            await asyncio.sleep(30)
+            #await asyncio.sleep(30)
             # while datetime.datetime.utcnow() < roundStartTime:
             #     await asyncio.sleep(30)
                 
@@ -1707,7 +1743,7 @@ class Season:
             if x < numOfRounds - 1:
                 sortPlayers()
                 sortDefenses()
-                await asyncio.sleep(30)
+                #await asyncio.sleep(30)
 
         return champ
 
@@ -2585,7 +2621,7 @@ async def offseason():
                 teamsComplete += 1
                 continue
                 
-            await asyncio.sleep(2)
+            #await asyncio.sleep(2)
 
             if team.cutsAvailable > 0:
                 cutPlayer:FloosPlayer.Player = None
@@ -3158,8 +3194,8 @@ async def startLeague():
         if saveSeasonProgress:
             #print('Updating config after season end...')
             FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
-        await asyncio.sleep(30)
+        #await asyncio.sleep(30)
         await offseason()
-        await asyncio.sleep(120)
+        #await asyncio.sleep(120)
         activeSeason.clearPlayerSeasonStats()
         activeSeason.clearTeamSeasonStats()

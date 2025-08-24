@@ -86,6 +86,7 @@ class Team:
         self.defensePassTier = 0
         self.defenseRunTier = 0
         self.overallRating = 0
+        self.pressureModifier = 1.0
         self.leagueChampionships = []
         self.floosbowlChampionships = []
         self.regularSeasonChampions = []
