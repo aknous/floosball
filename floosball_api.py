@@ -1,5 +1,6 @@
 import math
 from random import randint
+from random_batch import batched_randint
 from re import T
 #from turtle import home
 import floosball
@@ -8,6 +9,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import os
+from constants import (
+    RATING_SCALE_MIN, RATING_RANGE, STARS_MAX, PERCENTAGE_MULTIPLIER, GAME_MAX_PLAYS
+)
+from api_response_builders import (
+    TeamResponseBuilder, PlayerResponseBuilder, GameResponseBuilder, 
+    LeagueResponseBuilder, build_success_response, build_error_response
+)
 import json
 import uvicorn
 import datetime
@@ -38,6 +46,21 @@ async def startup_event():
     loop = asyncio.get_event_loop()
     loop.create_task(floosball.startLeague())
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    from service_container import shutdown_services, get_service, container
+    
+    # Log service usage statistics before shutdown
+    try:
+        if container.has_service('random_batch'):
+            random_batch = get_service('random_batch')
+            stats = random_batch.get_stats()
+            print(f"Random batch performance: {stats}")
+    except Exception as e:
+        print(f"Could not get random batch stats: {e}")
+    
+    shutdown_services()
+
 @app.get('/teams')
 async def returnTeams(id = None):
     if id is None:
@@ -49,25 +72,9 @@ async def returnTeams(id = None):
             league: floosball.League
             for team in league.teamList:
                 team: Team
-                teamDict = {}
-                teamDict['name'] = team.name
-                teamDict['city'] = team.city
-                teamDict['color'] = team.color
-                teamDict['id'] = team.id
-                teamDict['elo'] = team.elo
-                teamDict['eliminated'] = team.eliminated
-                teamDict['wins'] = team.seasonTeamStats['wins']
-                teamDict['losses'] = team.seasonTeamStats['losses']
-                teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-                teamDict['clinchedTopSeed'] = team.clinchedTopSeed
-                teamDict['leagueChampion'] = team.leagueChampion
-                teamDict['floosbowlChampion'] = team.floosbowlChampion
-                teamDict['winningStreak'] = team.winningStreak
-                if (team.seasonTeamStats['wins']+team.seasonTeamStats['losses']) > 0:
-                    teamDict['winPerc'] = '{:.3f}'.format(round(team.seasonTeamStats['wins']/(team.seasonTeamStats['wins']+team.seasonTeamStats['losses']),3))
-                else:
-                    teamDict['winPerc'] = '0.000'
-
+                teamDict = TeamResponseBuilder.build_basic_team_dict(team)
+                
+                # Add league standings specific fields
                 if team.seasonTeamStats['scoreDiff'] >= 0:
                     teamDict['pointDiff'] = '+{}'.format(team.seasonTeamStats['scoreDiff'])
                 else:
@@ -86,32 +93,17 @@ async def returnTeams(id = None):
     else:
         for team in floosball.teamList:
             if team.id == int(id):
-                teamDict = {}
-                teamDict['name'] = team.name
-                teamDict['city'] = team.city
-                teamDict['color'] = team.color
-                teamDict['id'] = team.id
-                teamDict['elo'] = team.elo
+                teamDict = TeamResponseBuilder.build_team_with_ratings(team)
+                
+                # Add single team specific fields
                 teamDict['league'] = team.league
-                teamDict['eliminated'] = team.eliminated
                 teamDict['leagueChampionships'] = team.leagueChampionships
                 teamDict['regularSeasonChampions'] = team.regularSeasonChampions
                 teamDict['floosbowlChampionships'] = team.floosbowlChampionships
-                teamDict['ratingStars'] = round((((team.overallRating - 60)/60)*4)+1)
-                teamDict['offenseRatingStars'] = round((((team.offenseRating - 60)/40)*4)+1)
-                teamDict['defenseRatingStars'] = team.defenseOverallTier
-                teamDict['runDefenseRating'] = round((((team.defenseRunCoverageRating - 60)/40)*4)+1)
-                teamDict['passDefenseRating'] = round((((team.defensePassCoverageRating - 60)/60)*4)+1)
-                teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
-                teamDict['wins'] = team.seasonTeamStats['wins']
-                teamDict['losses'] = team.seasonTeamStats['losses']
                 teamDict['allTimeStats'] = team.allTimeTeamStats
                 teamDict['history'] = team.statArchive
-                teamDict['clinchedPlayoffs'] = team.clinchedPlayoffs
-                teamDict['floosbowlChampion'] = team.floosbowlChampion
-                teamDict['clinchedTopSeed'] = team.clinchedTopSeed
-                teamDict['leagueChampion'] = team.leagueChampion
-                teamDict['winningStreak'] = team.winningStreak
+                teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
+                teamDict['defenseRatingStars'] = team.defenseOverallTier
 
                 pointDiff = team.seasonTeamStats['Offense']['pts'] - team.seasonTeamStats['Defense']['ptsAlwd']
                 if pointDiff >= 0:
@@ -127,56 +119,39 @@ async def returnPlayers(id = None):
     if id is None:
         for player in floosball.activePlayerList:
             player: Player
-            playerDict = {}
-            playerDict['name'] = player.name
+            playerDict = PlayerResponseBuilder.build_basic_player_dict(player)
             playerDict['rank'] = player.serviceTime
-            playerDict['id'] = player.id
-            playerDict['position'] = player.position.name
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['ratingTier'] = player.playerTier.value
             playerDict['seasons'] = player.seasonsPlayed
+            # Handle special team cases
             if isinstance(player.team, str):
                 playerDict['team'] = player.team
             elif player.team is None:
                 playerDict['team'] = 'Free Agent'
-            else:
-                playerDict['team'] = player.team.name
             playerList.append(playerDict)
         return playerList
     elif id == 'FA':
         for player in floosball.freeAgentList:
-            playerDict = {}
-            playerDict['name'] = player.name
+            playerDict = PlayerResponseBuilder.build_basic_player_dict(player)
             playerDict['rank'] = player.serviceTime
-            playerDict['id'] = player.id
-            playerDict['team'] = 'Free Agent'
-            playerDict['position'] = player.position.name
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['seasons'] = player.seasonsPlayed
+            playerDict['team'] = 'Free Agent'
             playerList.append(playerDict)
         return playerList
     elif id == 'Retired':
         for player in floosball.retiredPlayersList:
-            playerDict = {}
-            playerDict['name'] = player.name
+            playerDict = PlayerResponseBuilder.build_basic_player_dict(player)
             playerDict['rank'] = player.serviceTime
-            playerDict['id'] = player.id
-            playerDict['team'] = 'Retired'
-            playerDict['position'] = player.position.name
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['seasons'] = player.seasonsPlayed
+            playerDict['team'] = 'Retired'
             playerList.append(playerDict)
         return playerList
     elif id == 'HoF':
         for player in floosball.hallOfFame:
-            playerDict = {}
-            playerDict['name'] = player.name
+            playerDict = PlayerResponseBuilder.build_basic_player_dict(player)
             playerDict['rank'] = player.serviceTime
-            playerDict['id'] = player.id
-            playerDict['team'] = 'Retired'
-            playerDict['position'] = player.position.name
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['seasons'] = player.seasonsPlayed
+            playerDict['team'] = 'Retired'
             playerList.append(playerDict)
         return playerList
     else:
@@ -196,108 +171,29 @@ async def returnPlayers(id = None):
                     selectedPlayer = player
 
         if selectedPlayer is not None:
-            dict = {}
-            dict['name'] = selectedPlayer.name
+            dict = PlayerResponseBuilder.build_player_with_attributes(selectedPlayer)
+            
+            # Add detailed player specific fields
             dict['rank'] = selectedPlayer.serviceTime
             dict['number'] = selectedPlayer.currentNumber
-            if selectedPlayer.serviceTime.value == 'Retired':
-                dict['team'] = 'Retired'
-                dict['city'] = ''
-                dict['color'] = '#94a3b8'
-            elif selectedPlayer.team is None or selectedPlayer.team == 'Free Agent':
-                dict['team'] = 'Free Agent'
-                dict['city'] = ''
-                dict['color'] = '#94a3b8'
-            else:
-                dict['team'] = selectedPlayer.team.name
-                dict['city'] = selectedPlayer.team.city
-                dict['color'] = selectedPlayer.team.color
-            dict['position'] = selectedPlayer.position.name
             dict['tierStars'] = selectedPlayer.playerTier.value
             dict['ratingValue'] = selectedPlayer.playerRating
-            dict['ratingStars'] = round((((selectedPlayer.playerRating - 60)/40)*4)+1)
             dict['term'] = selectedPlayer.term
             dict['termRemaining'] = selectedPlayer.termRemaining
             dict['championships'] = selectedPlayer.leagueChampionships
-            attDict = {}
-            if selectedPlayer.position is Position.QB:
-                attDict['att1Name'] = 'Arm Strength'
-                attDict['att2Name'] = 'Accuracy'
-                attDict['att3Name'] = 'Agility'
-                attDict['att1stars'] = round((((selectedPlayer.attributes.armStrength - 60)/40)*4)+1)
-                attDict['att2stars'] = round((((selectedPlayer.attributes.accuracy - 60)/40)*4)+1)
-                attDict['att3stars'] = round((((selectedPlayer.attributes.agility - 60)/40)*4)+1)
-                attDict['att1value'] = selectedPlayer.attributes.armStrength
-                attDict['att2value'] = selectedPlayer.attributes.accuracy
-                attDict['att3value'] = selectedPlayer.attributes.agility
-                attDict['att1PotStars'] = round((((selectedPlayer.attributes.potentialArmStrength - 60)/40)*4)+1)
-                attDict['att2PotStars'] = round((((selectedPlayer.attributes.potentialAccuracy - 60)/40)*4)+1)
-                attDict['att3PotStars'] = round((((selectedPlayer.attributes.potentialAgility - 60)/40)*4)+1)
-            elif selectedPlayer.position is Position.RB:
-                attDict['att1Name'] = 'Speed'
-                attDict['att2Name'] = 'Power'
-                attDict['att3Name'] = 'Agility'
-                attDict['att1stars'] = round((((selectedPlayer.attributes.speed - 60)/40)*4)+1)
-                attDict['att2stars'] = round((((selectedPlayer.attributes.power - 60)/40)*4)+1)
-                attDict['att3stars'] = round((((selectedPlayer.attributes.agility - 60)/40)*4)+1)
-                attDict['att1value'] = selectedPlayer.attributes.speed
-                attDict['att2value'] = selectedPlayer.attributes.power
-                attDict['att3value'] = selectedPlayer.attributes.agility
-                attDict['att1PotStars'] = round((((selectedPlayer.attributes.potentialSpeed - 60)/40)*4)+1)
-                attDict['att2PotStars'] = round((((selectedPlayer.attributes.potentialPower - 60)/40)*4)+1)
-                attDict['att3PotStars'] = round((((selectedPlayer.attributes.potentialAgility - 60)/40)*4)+1)
-            elif selectedPlayer.position is Position.WR:
-                attDict['att1Name'] = 'Speed'
-                attDict['att2Name'] = 'Hands'
-                attDict['att3Name'] = 'Agility'
-                attDict['att1stars'] = round((((selectedPlayer.attributes.speed - 60)/40)*4)+1)
-                attDict['att2stars'] = round((((selectedPlayer.attributes.hands - 60)/40)*4)+1)
-                attDict['att3stars'] = round((((selectedPlayer.attributes.agility - 60)/40)*4)+1)
-                attDict['att1value'] = selectedPlayer.attributes.speed
-                attDict['att2value'] = selectedPlayer.attributes.hands
-                attDict['att3value'] = selectedPlayer.attributes.agility
-                attDict['att1PotStars'] = round((((selectedPlayer.attributes.potentialSpeed - 60)/40)*4)+1)
-                attDict['att2PotStars'] = round((((selectedPlayer.attributes.potentialHands - 60)/40)*4)+1)
-                attDict['att3PotStars'] = round((((selectedPlayer.attributes.potentialAgility - 60)/40)*4)+1)
-            elif selectedPlayer.position is Position.TE:
-                attDict['att1Name'] = 'Hands'
-                attDict['att2Name'] = 'Power'
-                attDict['att3Name'] = 'Agility'
-                attDict['att1stars'] = round((((selectedPlayer.attributes.hands - 60)/40)*4)+1)
-                attDict['att2stars'] = round((((selectedPlayer.attributes.power - 60)/40)*4)+1)
-                attDict['att3stars'] = round((((selectedPlayer.attributes.agility - 60)/40)*4)+1)
-                attDict['att1value'] = selectedPlayer.attributes.hands
-                attDict['att2value'] = selectedPlayer.attributes.power
-                attDict['att3value'] = selectedPlayer.attributes.agility
-                attDict['att1PotStars'] = round((((selectedPlayer.attributes.potentialHands - 60)/40)*4)+1)
-                attDict['att2PotStars'] = round((((selectedPlayer.attributes.potentialPower - 60)/40)*4)+1)
-                attDict['att3PotStars'] = round((((selectedPlayer.attributes.potentialAgility - 60)/40)*4)+1)
-            elif selectedPlayer.position is Position.K:
-                attDict['att1Name'] = 'Leg Strength'
-                attDict['att2Name'] = 'Accuracy'
-                attDict['att3Name'] = ''
-                attDict['att1stars'] = round((((selectedPlayer.attributes.legStrength - 60)/40)*4)+1)
-                attDict['att2stars'] = round((((selectedPlayer.attributes.accuracy - 60)/40)*4)+1)
-                attDict['att3stars'] = 0
-                attDict['att1value'] = selectedPlayer.attributes.legStrength
-                attDict['att2value'] = selectedPlayer.attributes.accuracy
-                attDict['att3value'] = 0
-                attDict['att1PotStars'] = round((((selectedPlayer.attributes.potentialLegStrength - 60)/40)*4)+1)
-                attDict['att2PotStars'] = round((((selectedPlayer.attributes.potentialAccuracy - 60)/40)*4)+1)
-                attDict['att3PotStars'] = 0
-            attDict['playmakingStars'] = round((((selectedPlayer.attributes.playMakingAbility - 60)/40)*4)+1)
-            attDict['playmakingValue'] = selectedPlayer.attributes.playMakingAbility
-            attDict['xFactorStars'] = round((((selectedPlayer.attributes.xFactor - 60)/40)*4)+1)
-            attDict['xFactorValue'] = selectedPlayer.attributes.xFactor
-            dict['attributes'] = attDict
-            if selectedPlayer.seasonPerformanceRating > 0:
-                dict['seasonPerformanceRatingStars'] = round((((selectedPlayer.seasonPerformanceRating - 60)/40)*4)+1)
-                dict['seasonPerformanceRatingValue'] = selectedPlayer.seasonPerformanceRating
-            else:
-                dict['seasonPerformanceRatingStars'] = 0
-                dict['seasonPerformanceRatingValue'] = 0
             dict['stats'] = selectedPlayer.seasonStatsArchive
             dict['allTimeStats'] = selectedPlayer.careerStatsDict
+            
+            # Override team display for special cases
+            if selectedPlayer.serviceTime.value == 'Retired':
+                dict['team'] = 'Retired'
+                dict['teamCity'] = ''
+                dict['teamColor'] = '#94a3b8'
+            elif selectedPlayer.team is None or selectedPlayer.team == 'Free Agent':
+                dict['team'] = 'Free Agent'
+                dict['teamCity'] = ''
+                dict['teamColor'] = '#94a3b8'
+            
             return dict
 
 @app.get('/standings')
@@ -308,23 +204,21 @@ async def returnStandings():
         leagueDict = {}
         teamsList = []
         leagueDict['name'] = league.name
-        for team in league.teamList:
-            team: Team
-            teamDict = {}
-            teamDict['name'] = '{0} {1}'.format(team.city, team.name)
-            teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-            teamDict['winPerc'] = team.seasonTeamStats['winPerc']
-            pointDiff = team.seasonTeamStats['Offense']['pts'] - team.seasonTeamStats['Defense']['ptsAlwd']
-            if pointDiff >= 0:
-                teamDict['pointDiff'] = '+{}'.format(pointDiff)
-            else:
-                teamDict['pointDiff'] = '{}'.format(pointDiff)
-            if team.seasonTeamStats['streak'] >= 0:
-                teamDict['streak'] = 'W{}'.format(team.seasonTeamStats['streak'])
-            else:
-                teamDict['streak'] = 'L{}'.format(abs(team.seasonTeamStats['streak']))
-            teamsList.append(teamDict)
-            leagueDict['standings'] = teamsList
+        standings_data = LeagueResponseBuilder.build_standings_response(league.teamList)
+        teamsList = standings_data['standings']
+        
+        # Add league-specific formatting for team names and records
+        for teamDict in teamsList:
+            # Format team name as "City Name"
+            team_name = teamDict['name']
+            team_city = teamDict.get('city', '')
+            teamDict['name'] = f"{team_city} {team_name}"
+            
+            # Add record string format
+            teamDict['record'] = '{0}-{1}'.format(teamDict['wins'], teamDict['losses'])
+            teamDict['winPerc'] = TeamResponseBuilder.calculate_win_percentage(teamDict['wins'], teamDict['losses'])
+        
+        leagueDict['standings'] = teamsList
         standingsList.append(leagueDict)
     return standingsList
 
@@ -376,7 +270,7 @@ async def returnSchedule(id = None):
                         down = '4th'
                     else:
                         down = '1st'
-                    gameDict['playsLeft'] = 132 - game.totalPlays
+                    gameDict['playsLeft'] = GAME_MAX_PLAYS - game.totalPlays
                     if game.yardsToEndzone < 10:
                         gameDict['yardsTo1stDwn'] = game.yardsToEndzone
                         gameDict['downText'] = '{0} & Goal'.format(down)
@@ -413,15 +307,9 @@ async def returnGame(id = None):
                     gameDict['homeCity'] = game.homeTeam.city
                     gameDict['homeTeam'] = game.homeTeam.name
                     gameDict['homeTeamColor'] = game.homeTeam.color
-                    gameDict['homeTeamWinProbability'] = round(game.homeTeamWinProbability*100)
+                    gameDict.update(GameResponseBuilder.build_game_with_probabilities(game))
                     gameDict['homeTeamRecord'] = '{0}-{1}'.format(game.homeTeam.seasonTeamStats['wins'], game.homeTeam.seasonTeamStats['losses'])
-                    gameDict['awayCity'] = game.awayTeam.city
-                    gameDict['awayTeam'] = game.awayTeam.name
-                    gameDict['awayTeamColor'] = game.awayTeam.color
-                    gameDict['awayTeamWinProbability'] = round(game.awayTeamWinProbability*100)
                     gameDict['awayTeamRecord'] = '{0}-{1}'.format(game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'])
-                    gameDict['homeScore'] = game.homeScore
-                    gameDict['awayScore'] = game.awayScore
                     if game.currentQuarter == 5:
                         gameDict['quarter'] = 'OT'
                     else:
@@ -456,7 +344,7 @@ async def returnGame(id = None):
                         gameDict['downText'] = '{0} & {1}'.format(down, game.yardsToFirstDown)
                     gameDict['yardsToEZ'] = game.yardsToEndzone
                     gameDict['yardLine'] = game.yardLine
-                    gameDict['playsLeft'] = 132 - game.totalPlays
+                    gameDict['playsLeft'] = GAME_MAX_PLAYS - game.totalPlays
                     if game.status is FloosGame.GameStatus.Scheduled:
                         gameDict['homeTeamElo'] = game.homeTeam.elo
                         gameDict['awayTeamElo'] = game.awayTeam.elo
@@ -473,26 +361,15 @@ async def returnCurrentGames():
     gameList = []
     activeGameList = floosball.activeSeason.activeGames
     for x in range(0,len(activeGameList)):
-        gameDict = {}
         game: FloosGame.Game = activeGameList[x]
-        gameDict['id'] = game.id
+        gameDict = GameResponseBuilder.build_game_with_probabilities(game)
         gameDict['startTime'] = datetime.datetime.timestamp(game.startTime)
         gameDict['game'] = x+1
         gameDict['status'] = game.status.name
         gameDict['isHalftime'] = game.isHalftime
         gameDict['isOvertime'] = game.isOvertime
-        gameDict['homeCity'] = game.homeTeam.city
-        gameDict['homeTeam'] = game.homeTeam.name
-        gameDict['homeTeamColor'] = game.homeTeam.color
-        gameDict['homeTeamWinProbability'] = round(game.homeTeamWinProbability*100)
         gameDict['homeTeamRecord'] = '{0}-{1}'.format(game.homeTeam.seasonTeamStats['wins'], game.homeTeam.seasonTeamStats['losses'])
-        gameDict['awayCity'] = game.awayTeam.city
-        gameDict['awayTeam'] = game.awayTeam.name
-        gameDict['awayTeamColor'] = game.awayTeam.color
-        gameDict['awayTeamWinProbability'] = round(game.awayTeamWinProbability*100)
         gameDict['awayTeamRecord'] = '{0}-{1}'.format(game.awayTeam.seasonTeamStats['wins'], game.awayTeam.seasonTeamStats['losses'])
-        gameDict['homeScore'] = game.homeScore
-        gameDict['awayScore'] = game.awayScore
         gameDict['homeIsEliminated'] = game.homeTeam.eliminated
         gameDict['awayIsEliminated'] = game.awayTeam.eliminated
         if game.currentQuarter == 5:
@@ -517,7 +394,7 @@ async def returnCurrentGames():
             down = '4th'
         else:
             down = '1st'
-        gameDict['playsLeft'] = 132 - game.totalPlays
+        gameDict['playsLeft'] = GAME_MAX_PLAYS - game.totalPlays
         if game.yardsToEndzone < 10:
             gameDict['yardsTo1stDwn'] = game.yardsToEndzone
             gameDict['downText'] = '{0} & Goal'.format(down)
@@ -596,15 +473,8 @@ async def returnPowerRankings():
     teamList = []
     for team in teamListRanked:
         team: Team
-        teamDict = {}
-        teamDict['name'] = team.name
-        teamDict['city'] = team.city
-        teamDict['color'] = team.color
-        teamDict['id'] = team.id
-        teamDict['elo'] = team.elo
+        teamDict = TeamResponseBuilder.build_basic_team_dict(team)
         teamDict['record'] = '{0}-{1}'.format(team.seasonTeamStats['wins'], team.seasonTeamStats['losses'])
-        teamDict['eliminated'] = team.eliminated
-        teamDict['winningStreak'] = team.winningStreak
         teamList.append(teamDict)
     return teamList
 
@@ -934,7 +804,7 @@ async def returnPlayerStats(pos = None):
                 playerDict['pos'] = player.position.name
                 playerDict['abbr'] = player.team.abbr
                 playerDict['rank'] = player.serviceTime
-                playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+                playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
                 if pos == 'Passing':
                     playerDict['stat1'] = player.seasonStatsDict['passing']['att']
                     playerDict['stat2'] = player.seasonStatsDict['passing']['comp']
@@ -996,7 +866,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
             playerDict['ratingTier'] = player.playerTier.value
             playerDict['yards'] = player.seasonStatsDict['passing']['yards']
             playerDict['tds'] = player.seasonStatsDict['passing']['tds']
@@ -1028,7 +898,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
             playerDict['ratingTier'] = player.playerTier.value
             playerDict['yards'] = player.seasonStatsDict['rushing']['yards']
             playerDict['tds'] = player.seasonStatsDict['rushing']['tds']
@@ -1060,7 +930,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
             playerDict['ratingTier'] = player.playerTier.value
             playerDict['yards'] = player.seasonStatsDict['receiving']['yards']
             playerDict['tds'] = player.seasonStatsDict['receiving']['tds']
@@ -1092,7 +962,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
             playerDict['ratingTier'] = player.playerTier.value
             playerDict['yards'] = player.seasonStatsDict['receiving']['yards']
             playerDict['tds'] = player.seasonStatsDict['receiving']['tds']
@@ -1124,7 +994,7 @@ async def returnTopPlayers(pos = None):
             playerDict['abbr'] = player.team.abbr
             playerDict['city'] = player.team.city
             playerDict['color'] = player.team.color
-            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
             playerDict['ratingTier'] = player.playerTier.value
             playerDict['pts'] = player.seasonStatsDict['fantasyPoints']
             playerList.append(playerDict)
@@ -1199,7 +1069,7 @@ async def returnFantasySeason(pos = None):
                 playerDict['abbr'] = player.team.abbr
                 playerDict['city'] = player.team.city
                 playerDict['color'] = player.team.color
-                playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+                playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
                 playerDict['fantasyPoints'] = player.seasonStatsDict['fantasyPoints']
                 fantasyList.append(playerDict)
 
@@ -1249,7 +1119,7 @@ async def returnFantasyGame(pos = None):
                 playerDict['city'] = player.team.city
                 playerDict['color'] = player.team.color
                 playerDict['ratingTier'] = player.playerTier.value
-                playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
+                playerDict['ratingStars'] = round((((player.playerRating - RATING_SCALE_MIN)/RATING_RANGE)*STARS_MAX)+1)
                 playerDict['fantasyPoints'] = player.gameStatsDict['fantasyPoints']
                 fantasyList.append(playerDict)
         list.sort(fantasyList, key=lambda player: player['fantasyPoints'], reverse=True)
@@ -1270,6 +1140,36 @@ async def returnChampion():
 @app.get('/info')
 async def returnInfo():
     return floosball.__version__
+
+@app.get('/performance')
+async def returnPerformance():
+    """Return performance statistics from service container"""
+    from service_container import get_service, container
+    
+    performance_stats = {
+        'available_services': container.list_services()
+    }
+    
+    try:
+        if container.has_service('random_batch'):
+            random_batch = get_service('random_batch')
+            performance_stats['random_batch'] = random_batch.get_stats()
+    except Exception as e:
+        performance_stats['random_batch_error'] = str(e)
+    
+    try:
+        if container.has_service('stats_pool'):
+            stats_pool = get_service('stats_pool')
+            available, in_use = stats_pool.get_pool_size()
+            performance_stats['stats_pool'] = {
+                'available': available,
+                'in_use': in_use,
+                'total_size': available + in_use
+            }
+    except Exception as e:
+        performance_stats['stats_pool_error'] = str(e)
+        
+    return performance_stats
 
 
 

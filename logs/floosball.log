@@ -1,0 +1,16 @@
+2025-09-08 11:12:27 - floosball.services - INFO - Initializing service container...
+2025-09-08 11:12:27 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-08 11:12:45 - floosball.services - INFO - Initializing service container...
+2025-09-08 11:12:45 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-08 11:12:45 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-08 11:12:45 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-08 11:12:45 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-08 11:14:02 - floosball.services - INFO - Initializing service container...
+2025-09-08 11:14:02 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-08 11:14:02 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-08 11:14:02 - floosball.playerManager - INFO - Loaded 771 unused names from data/unusedNames.json
+2025-09-08 11:18:41 - floosball.services - INFO - Initializing service container...
+2025-09-08 11:18:41 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-08 11:18:42 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-08 11:18:42 - floosball.playerManager - INFO - Loaded 771 unused names from data/unusedNames.json
+2025-09-08 11:18:42 - floosball.playerManager - INFO - Saved 769 unused names to data/unusedNames.json

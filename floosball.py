@@ -1,6 +1,7 @@
 import json
 import os
 from random import randint, seed, shuffle
+from random_batch import batched_randint
 import copy
 import asyncio
 from secrets import choice
@@ -15,8 +16,11 @@ import floosball_methods as FloosMethods
 import datetime
 import math
 import glob
-import itertools
 import random
+from logger_config import main_logger
+from serializers import ModernSerializer
+from managers.playerManager import PlayerManager
+from config_manager import get_config, save_config_value
  
 
 __version__ = '0.9.0_alpha'
@@ -25,6 +29,7 @@ config = None
 totalSeasons = 0
 seasonsPlayed = 0
 cap = 0
+playerManager = None
 activePlayerList = []
 unusedNamesList = []
 freeAgentList = []
@@ -1266,7 +1271,7 @@ class Season:
             jsonFile.write(json.dumps(teamDict, indent=4))
             jsonFile.close()
 
-        savePlayerData()
+        playerManager.savePlayerData()
 
         leagueList = []
         for league in leagueList:
@@ -1451,7 +1456,7 @@ class Season:
                 gameResults = self.activeGames[game].gameDict
                 gameDict[strGame] = gameResults
                 checkTeamGameRecords(self.activeGames[game])
-            weekDict = FloosMethods._prepare_for_serialization(gameDict)
+            weekDict = ModernSerializer.serialize(gameDict)
             jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentWeekText)), "w+")
             jsonFile.write(json.dumps(weekDict, indent=4))
             jsonFile.close()
@@ -1460,7 +1465,7 @@ class Season:
                 list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             getPerformanceRating(self.currentWeek)
-            sortPlayers()
+            playerManager.sortPlayersByPosition()
             sortDefenses()
             self.updatePlayoffPicture()
             self.checkForClinches()
@@ -1497,7 +1502,7 @@ class Season:
         seasonDict['standings'] = standingsDict
         seasonDict['champion'] = floosbowlChampion.name
 
-        _serialzedDict = FloosMethods._prepare_for_serialization(seasonDict)
+        _serialzedDict = ModernSerializer.serialize(seasonDict)
 
         if os.path.isdir(strCurrentSeason):
             for f in os.listdir(strCurrentSeason):
@@ -1741,7 +1746,7 @@ class Season:
             jsonFile.write(json.dumps(playoffDict, indent=4))
             jsonFile.close()
             if x < numOfRounds - 1:
-                sortPlayers()
+                playerManager.sortPlayersByPosition()
                 sortDefenses()
                 #await asyncio.sleep(30)
 
@@ -1777,341 +1782,6 @@ def getPlayerTerm(tier: FloosPlayer.PlayerTier):
         else:
             return randint(1,3)
 
-def playerDraft():
-    draftOrderList = []
-    draftQueueList = teamList.copy()
-    playerDraftList = activePlayerList.copy()
-    rounds = 6
-
-    draftQbList : list[FloosPlayer.Player] = []
-    draftRbList : list[FloosPlayer.Player] = []
-    draftWrList : list[FloosPlayer.Player] = []
-    draftTeList : list[FloosPlayer.Player] = []
-    draftKList : list[FloosPlayer.Player] = []
-
-    for player in activePlayerList:
-        if player.position.value == 1:
-            draftQbList.append(player)
-        elif player.position.value == 2:
-            draftRbList.append(player)
-        elif player.position.value == 3:
-            draftWrList.append(player)
-        elif player.position.value == 4:
-            draftTeList.append(player)
-        elif player.position.value == 5:
-            draftKList.append(player)
-    
-    list.sort(draftQbList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftRbList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftWrList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftTeList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(draftKList, key=lambda player: player.attributes.skillRating, reverse=True)
-    list.sort(playerDraftList, key=lambda player: player.attributes.skillRating, reverse=True)
-
-
-    for x in range(len(teamList)):
-        rand = randint(0,len(draftQueueList) - 1)
-        draftOrderList.insert(x, draftQueueList[rand])
-        draftQueueList.pop(rand)
-
-    for x in range(1, int(rounds+1)):
-        #print('\nRound {0}'.format(x))
-        for team in draftOrderList:
-            team: FloosTeam.Team
-            openPosList = []
-            selectedPlayer = None
-            bestAvailablePlayer: FloosPlayer.Player = playerDraftList[0]
-            if x == 1:
-                if bestAvailablePlayer.position.value == 1:
-                    selectedPlayer = draftQbList.pop(0)
-                    team.rosterDict['qb'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif bestAvailablePlayer.position.value == 2:
-                    selectedPlayer = draftRbList.pop(0)
-                    team.rosterDict['rb'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif bestAvailablePlayer.position.value == 3:
-                    selectedPlayer = draftWrList.pop(0)
-                    if team.rosterDict['wr1'] is None:
-                        team.rosterDict['wr1'] = selectedPlayer
-                    elif team.rosterDict['wr2'] is None:
-                        team.rosterDict['wr2'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif bestAvailablePlayer.position.value == 4:
-                    selectedPlayer = draftTeList.pop(0)
-                    team.rosterDict['te'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif bestAvailablePlayer.position.value == 5:
-                    selectedPlayer = draftKList.pop(0)
-                    team.rosterDict['k'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-            else:
-                if team.rosterDict['qb'] is None:
-                    openPosList.append(FloosPlayer.Position.QB.value)
-                if team.rosterDict['rb'] is None:
-                    openPosList.append(FloosPlayer.Position.RB.value)
-                if team.rosterDict['wr1'] is None or team.rosterDict['wr2'] is None:
-                    openPosList.append(FloosPlayer.Position.WR.value)
-                if team.rosterDict['te'] is None:
-                    openPosList.append(FloosPlayer.Position.TE.value)
-                if team.rosterDict['k'] is None:
-                    openPosList.append(FloosPlayer.Position.K.value)
-                z = choice(openPosList)
-
-                if z == FloosPlayer.Position.QB.value:
-                    if team.gmScore >= len(draftQbList):
-                        i = len(draftQbList) - 1
-                    else:
-                        i = team.gmScore
-                    selectedPlayer = draftQbList.pop(randint(0,i))
-                    team.rosterDict['qb'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif z == FloosPlayer.Position.RB.value:
-                    if team.gmScore >= len(draftRbList):
-                        i = len(draftRbList) - 1
-                    else:
-                        i = team.gmScore
-                    selectedPlayer = draftRbList.pop(randint(0,i))
-                    team.rosterDict['rb'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif z == FloosPlayer.Position.WR.value:
-                    if team.gmScore >= len(draftWrList):
-                        i = len(draftWrList) - 1
-                    else:
-                        i = team.gmScore
-                    selectedPlayer = draftWrList.pop(randint(0,i))
-                    if team.rosterDict['wr1'] is None:
-                        team.rosterDict['wr1'] = selectedPlayer
-                    elif team.rosterDict['wr2'] is None:
-                        team.rosterDict['wr2'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif z == FloosPlayer.Position.TE.value:
-                    if team.gmScore >= len(draftTeList):
-                        i = len(draftTeList) - 1
-                    else:
-                        i = team.gmScore
-                    selectedPlayer = draftTeList.pop(randint(0,i))
-                    team.rosterDict['te'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-                elif z == FloosPlayer.Position.K.value:
-                    if team.gmScore >= len(draftKList):
-                        i = len(draftKList) - 1
-                    else:
-                        i = team.gmScore
-                    selectedPlayer = draftKList.pop(randint(0,i))
-                    team.rosterDict['k'] = selectedPlayer
-                    playerDraftList.remove(selectedPlayer)
-
-            selectedPlayer.team = team
-            selectedPlayer.term = getPlayerTerm(selectedPlayer.playerTier)
-            selectedPlayer.termRemaining = selectedPlayer.term
-            selectedPlayer.seasonStatsDict['team'] = selectedPlayer.team.name
-
-            #assign player number
-            team.assignPlayerNumber(selectedPlayer)
-            #team.playerCap += selectedPlayer.capHit
-
-        draftOrderList.reverse()
-                
-    for player in draftQbList:
-        player.team = 'Free Agent'
-        freeAgentList.append(player)
-    for player in draftRbList:
-        player.team = 'Free Agent'
-        freeAgentList.append(player)
-    for player in draftWrList:
-        player.team = 'Free Agent'
-        freeAgentList.append(player)
-    for player in draftTeList:
-        player.team = 'Free Agent'
-        freeAgentList.append(player)
-    for player in draftKList:
-        player.team = 'Free Agent'
-        freeAgentList.append(player)
-
-def savePlayerData():
-    if not os.path.exists('data/playerData'):
-        os.makedirs('data/playerData')
-    for player in activePlayerList:
-        player:FloosPlayer.Player
-        playerDict = {}
-        playerDict['name'] = player.name
-        playerDict['id'] = player.id
-        playerDict['currentNumber'] = player.currentNumber
-        playerDict['preferredNumber'] = player.preferredNumber
-        playerDict['tier'] = player.playerTier.name
-        playerDict['team'] = player.team
-        playerDict['position'] = player.position
-        playerDict['seasonsPlayed'] = player.seasonsPlayed
-        playerDict['term'] = player.term
-        playerDict['termRemaining'] = player.termRemaining
-        playerDict['capHit'] = player.capHit
-        playerDict['seasonPerformanceRating'] = player.seasonPerformanceRating
-        playerDict['playerRating'] = player.playerRating
-        playerDict['freeAgentYears'] = player.freeAgentYears
-        playerDict['serviceTime'] = player.serviceTime.name
-        playerDict['attributes'] = player.attributes
-        playerDict['careerStats'] = player.careerStatsDict
-
-        archiveDict = {}
-        y = 0
-        for item in player.seasonStatsArchive:
-            y += 1
-            archiveDict[y] = item
-
-        playerDict['seasonStatsArchive'] = archiveDict
-
-        dict = FloosMethods._prepare_for_serialization(playerDict)
-        jsonFile = open("data/playerData/player{}.json".format(player.id), "w+") 
-        jsonFile.write(json.dumps(dict, indent=4))
-        jsonFile.close()
-
-    
-def getPlayers(_config):
-
-    if os.path.exists("data/playerData"):
-        fileList = glob.glob("data/playerData/player*.json")
-        for file in fileList:
-            with open(file) as jsonFile:
-                player = json.load(jsonFile)
-                if player['position'] == 'QB':
-                    newPlayer = FloosPlayer.PlayerQB()
-                    activeQbList.append(newPlayer)
-                elif player['position'] == 'RB':
-                    newPlayer = FloosPlayer.PlayerRB()
-                    activeRbList.append(newPlayer)
-                elif player['position'] == 'WR':
-                    newPlayer = FloosPlayer.PlayerWR()
-                    activeWrList.append(newPlayer)
-                elif player['position'] == 'TE':
-                    newPlayer = FloosPlayer.PlayerTE()
-                    activeTeList.append(newPlayer)
-                elif player['position'] == 'K':
-                    newPlayer = FloosPlayer.PlayerK()
-                    activeKList.append(newPlayer)
-
-                if player['serviceTime'] == 'Rookie':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
-                elif player['serviceTime'] == 'Veteran1':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
-                elif player['serviceTime'] == 'Veteran2':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran2
-                elif player['serviceTime'] == 'Veteran3':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Veteran3
-                elif player['serviceTime'] == 'Retired':
-                    newPlayer.serviceTime = FloosPlayer.PlayerServiceTime.Retired
-
-                newPlayer.name = player['name']
-                newPlayer.id = player['id']
-                newPlayer.team = player['team']
-                newPlayer.term = player['term']
-                newPlayer.currentNumber = player['currentNumber']
-                newPlayer.preferredNumber = player['preferredNumber']
-                newPlayer.termRemaining = player['termRemaining']
-                newPlayer.capHit = player['capHit']
-                newPlayer.seasonsPlayed = player['seasonsPlayed']
-                newPlayer.playerRating = player['playerRating']
-                newPlayer.freeAgentYears = player['freeAgentYears']
-                newPlayer.seasonPerformanceRating = player['seasonPerformanceRating']
-                newPlayer.attributes.overallRating = player['attributes']['overallRating']
-                newPlayer.attributes.skillRating = player['attributes']['skillRating']
-                newPlayer.attributes.speed = player['attributes']['speed']
-                newPlayer.attributes.hands = player['attributes']['hands']
-                newPlayer.attributes.agility = player['attributes']['agility']
-                newPlayer.attributes.power = player['attributes']['power']
-                newPlayer.attributes.armStrength = player['attributes']['armStrength']
-                newPlayer.attributes.accuracy = player['attributes']['accuracy']
-                newPlayer.attributes.legStrength = player['attributes']['legStrength']
-
-                newPlayer.attributes.potentialSkillRating = player['attributes']['potentialSkillRating']
-
-                if newPlayer.position is FloosPlayer.Position.QB:
-                    newPlayer.attributes.potentialArmStrength = player['attributes']['potentialArmStrength']
-                    newPlayer.attributes.potentialAccuracy = player['attributes']['potentialAccuracy']
-                    newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
-                elif newPlayer.position is FloosPlayer.Position.RB:
-                    newPlayer.attributes.potentialArmStrength = player['attributes']['potentialSpeed']
-                    newPlayer.attributes.potentialAccuracy = player['attributes']['potentialPower']
-                    newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
-                elif newPlayer.position is FloosPlayer.Position.WR:
-                    newPlayer.attributes.potentialArmStrength = player['attributes']['potentialSpeed']
-                    newPlayer.attributes.potentialAccuracy = player['attributes']['potentialHands']
-                    newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
-                elif newPlayer.position is FloosPlayer.Position.TE:
-                    newPlayer.attributes.potentialArmStrength = player['attributes']['potentialPower']
-                    newPlayer.attributes.potentialAccuracy = player['attributes']['potentialHands']
-                    newPlayer.attributes.potentialAgility = player['attributes']['potentialAgility']
-                elif newPlayer.position is FloosPlayer.Position.K:
-                    newPlayer.attributes.potentialArmStrength = player['attributes']['potentialLegStrength']
-                    newPlayer.attributes.potentialAccuracy = player['attributes']['potentialAccuracy']
-
-
-                newPlayer.attributes.confidenceModifier = player['attributes']['confidenceModifier']
-                newPlayer.attributes.determinationModifier = player['attributes']['determinationModifier']
-                newPlayer.attributes.discipline = player['attributes']['discipline']
-                newPlayer.attributes.focus = player['attributes']['focus']
-                newPlayer.attributes.instinct = player['attributes']['instinct']
-                newPlayer.attributes.creativity = player['attributes']['creativity']
-                newPlayer.attributes.attitude = player['attributes']['attitude']
-                newPlayer.attributes.playMakingAbility = player['attributes']['playMakingAbility']
-                newPlayer.attributes.xFactor = player['attributes']['xFactor']
-
-                newPlayer.careerStatsDict = player['careerStats']
-
-                statArchive: dict = player['seasonStatsArchive']
-
-                for k,v in statArchive.items():
-                    index = int(k) - 1
-                    newPlayer.seasonStatsArchive.insert(index, v)
-
-                activePlayerList.append(newPlayer)
-
-            jsonFile.close()
-            
-        getUnusedNames()
-
-    else:
-        numOfPlayers = 144
-        meanPlayerSkill = 80
-        stdDevPlayerSkill = 7
-
-        id = 1
-
-        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
-        playerAverages = np.clip(playerAverages, 60, 100)
-        playerAverages: list = playerAverages.tolist()
-
-        for x in _config['players']:
-            unusedNamesList.append(x)
-        for x in range(numOfPlayers):
-            player = None
-            seed = int(playerAverages.pop(randint(0,len(playerAverages)-1)))
-            y = x%6
-            if y == 0:
-                player = FloosPlayer.PlayerQB(seed)
-                activeQbList.append(player)
-            elif y == 1:
-                player = FloosPlayer.PlayerRB(seed)
-                activeRbList.append(player)
-            elif y == 2:
-                player = FloosPlayer.PlayerWR(seed)
-                activeWrList.append(player)
-            elif y == 3:
-                player = FloosPlayer.PlayerWR(seed)
-                activeWrList.append(player)
-            elif y == 4:
-                player = FloosPlayer.PlayerTE(seed)
-                activeTeList.append(player)
-            elif y == 5:
-                player = FloosPlayer.PlayerK(seed)
-                activeKList.append(player)
-            player.name = unusedNamesList.pop(randint(0,len(unusedNamesList)-1))
-            player.id = id
-            activePlayerList.append(player)
-            id += 1
-        saveUnusedNames()
-
-    sortPlayers()
 
 
 def getTeams(_config):
@@ -2246,28 +1916,6 @@ def initTeams():
 def initPlayers():
     pass
 
-def sortPlayers():
-    ratingList = []
-    for player in activePlayerList:
-        player: FloosPlayer.Player
-        ratingList.append(player.playerRating)
-    tierS = 92
-    tierA = 85
-    tierB = 75
-    tierC = 68
-    for player in activePlayerList:
-        if player.playerRating >= tierS:
-            player.playerTier = FloosPlayer.PlayerTier.TierS
-        elif player.playerRating >= tierA:
-            player.playerTier = FloosPlayer.PlayerTier.TierA
-        elif player.playerRating >= tierB:
-            player.playerTier = FloosPlayer.PlayerTier.TierB
-        elif player.playerRating >= tierC:
-            player.playerTier = FloosPlayer.PlayerTier.TierC
-        else:
-            player.playerTier = FloosPlayer.PlayerTier.TierD
-        if player.team is None or player.team == 'Free Agent':
-            player.capHit = player.playerTier.value
 
 
 def sortDefenses():
@@ -2557,7 +2205,7 @@ async def offseason():
         posList = [FloosPlayer.Position.QB, FloosPlayer.Position.RB, FloosPlayer.Position.WR, FloosPlayer.Position.TE, FloosPlayer.Position.K]
         seed = int(playerAverages.pop(randint(0,len(playerAverages)-1)))
         for x in range(newPlayerCount - len(newlyRetiredPlayersList)):
-            r = randint(0, len(posList)-1)
+            r = batched_randint(0, len(posList)-1)
             pos = posList[r]
             player = None
             if pos is FloosPlayer.Position.QB:
@@ -2582,8 +2230,8 @@ async def offseason():
             activePlayerList.append(player)
             freeAgentList.append(player)
 
-    saveUnusedNames()
-    sortPlayers()
+    playerManager.saveUnusedNames()
+    playerManager.sortPlayersByPosition()
 
     freeAgentQbList : list[FloosPlayer.Player] = []
     freeAgentRbList : list[FloosPlayer.Player] = []
@@ -3090,26 +2738,6 @@ def getPerformanceRating(week):
     list.sort(activeTeList, key=lambda player: player.seasonPerformanceRating, reverse=True)
     list.sort(activeKList, key=lambda player: player.seasonPerformanceRating, reverse=True)
 
-def saveUnusedNames():
-    global unusedNamesList
-    jsonFile = open("data/unusedNames.json", "w+")
-    unusedNamesDict = {}
-    y = 0
-    for item in unusedNamesList:
-        y += 1
-        unusedNamesDict[y] = item
-    jsonFile.write(json.dumps(unusedNamesDict, indent=4))
-    jsonFile.close()
-
-def getUnusedNames():
-    global unusedNamesList
-    jsonFile = open("data/unusedNames.json", "r")
-    if os.path.exists("data/unusedNames.json"):
-        with open('data/unusedNames.json') as jsonFile:
-            unusedNames:dict = json.load(jsonFile)
-            for name in unusedNames.values():
-                unusedNamesList.append(name)
-    jsonFile.close()
 
 def inductHallOfFame():
     if len(newlyRetiredPlayersList) > 0:
@@ -3130,21 +2758,68 @@ async def startLeague():
     global config
     global activeSeason
     global seasonList
+    
+    # Initialize service container at application startup
+    from service_container import initializeServices, setGameState, getGameState, loadGameConfig, getService
+    initializeServices()
+    
+    # Initialize default game state values
+    setGameState('cap', 0)
+    setGameState('totalSeasons', 0)
+    setGameState('seasonsPlayed', 0)
+    setGameState('seasonList', [])
+    setGameState('activeSeason', None)
+    
+    # Initialize PlayerManager
+    global playerManager
+    playerManager = PlayerManager(getService('game_state'))
+    
+    # Set up backward compatibility - global variables now reference PlayerManager
+    global activePlayerList, freeAgentList, retiredPlayersList, hallOfFame
+    global activeQbList, activeRbList, activeWrList, activeTeList, activeKList
+    global rookieDraftList, newlyRetiredPlayersList
+    
+    activePlayerList = playerManager.activePlayers
+    freeAgentList = playerManager.freeAgents  
+    retiredPlayersList = playerManager.retiredPlayers
+    hallOfFame = playerManager.hallOfFame
+    rookieDraftList = playerManager.rookieDraftList
+    newlyRetiredPlayersList = playerManager.newlyRetiredPlayers
+    
+    activeQbList = playerManager.activeQbs
+    activeRbList = playerManager.activeRbs
+    activeWrList = playerManager.activeWrs
+    activeTeList = playerManager.activeTes
+    activeKList = playerManager.activeKs
 
-    print('Floosball v{}'.format(__version__))
+    main_logger.info('Floosball v{}'.format(__version__))
     #print('Reading config...')
-    config = FloosMethods.getConfig()
-    leagueConfig = config['leagueConfig']
-    cap = leagueConfig['cap']
-    totalSeasons = leagueConfig['totalSeasons']
-    deleteDataOnStart = leagueConfig['deleteDataOnRestart']
-    saveSeasonProgress = leagueConfig['saveSeasonProgress']
+    config = get_config()
+    loadGameConfig(config)
+    
+    # Use service container for cleaner config access
+    from service_container import update_game_state, get_nested_game_config
+    cap = get_nested_game_config('leagueConfig', 'cap')
+    totalSeasons = get_nested_game_config('leagueConfig', 'totalSeasons')
+    deleteDataOnStart = get_nested_game_config('leagueConfig', 'deleteDataOnRestart')
+    saveSeasonProgress = get_nested_game_config('leagueConfig', 'saveSeasonProgress')
+    
+    # Use update_state for more efficient batch updates
+    update_game_state({
+        'cap': cap,
+        'totalSeasons': totalSeasons
+    })
     #print('Config done')
 
     if saveSeasonProgress:
         #print('Save Season Progress enabled')
-        seasonsPlayed = config['leagueConfig']['lastSeason']
+        seasonsPlayed = get_nested_game_config('leagueConfig', 'lastSeason')
         totalSeasons += seasonsPlayed
+        # Use batch update for better performance
+        update_game_state({
+            'seasonsPlayed': seasonsPlayed,
+            'totalSeasons': totalSeasons
+        })
 
     if os.path.isdir('data'):
         if deleteDataOnStart:
@@ -3157,43 +2832,52 @@ async def startLeague():
         os.mkdir('data')
 
     #print('Creating players...')
-    getPlayers(config)
+    playerManager.generatePlayers(config)
     #print('Player creation done')
     #print('Creating teams...')
     getTeams(config)
     #print('Team creation done')
+    
+    # Store team list in service container for PlayerManager access
+    setGameState('teamList', teamList)
 
     if not os.path.exists("data/teamData"):
         #print('Starting player draft...')
-        playerDraft()
+        playerManager.conductInitialDraft()
         #print('Draft complete')
     else:
-        print('Skipping draft')
+        main_logger.info('Skipping draft')
 
     #print('Initializing teams...')
     initTeams()
     #print('Cleaning up players...')
     #initPlayers()
     #print('Saving player data...')
-    savePlayerData()
+    playerManager.savePlayerData()
     #print('Creating divisions...')
     getLeagues(config)
     if not os.path.exists("data/leagueData.json"):
         initLeagues()
 
-    print('Initialization complete!')
+    main_logger.info('Initialization complete!')
     while seasonsPlayed < totalSeasons:
-        print('Season {} start'.format(seasonsPlayed+1))
+        main_logger.info('Season {} start'.format(seasonsPlayed+1))
         setNewElo()
         activeSeason = Season()
         seasonList.append(activeSeason)
+        # Use batch update for season state
+        update_game_state({
+            'activeSeason': activeSeason,
+            'seasonList': seasonList
+        })
         activeSeason.createSchedule()
         await activeSeason.startSeason()
         seasonsPlayed += 1
+        setGameState('seasonsPlayed', seasonsPlayed)
 
         if saveSeasonProgress:
             #print('Updating config after season end...')
-            FloosMethods.saveConfig(seasonsPlayed, 'leagueConfig', 'lastSeason')
+            save_config_value(seasonsPlayed, 'leagueConfig', 'lastSeason')
         #await asyncio.sleep(30)
         await offseason()
         #await asyncio.sleep(120)
