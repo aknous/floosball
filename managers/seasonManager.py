@@ -5,9 +5,11 @@ Replaces the scattered season-related functions and global variables from floosb
 
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
+import datetime
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
 from logger_config import get_logger
+from .timingManager import TimingManager, TimingMode
 
 logger = get_logger("floosball.seasonManager")
 
@@ -16,12 +18,18 @@ class Season:
     
     def __init__(self, seasonNumber: int):
         self.seasonNumber = seasonNumber
+        self.currentSeason = seasonNumber  # Backward compatibility
         self.currentWeek = 0
+        self.currentWeekText = None
+        self.activeGames = None
         self.schedule: List[Dict[str, Any]] = []
         self.playoffBracket: List[Dict[str, Any]] = []
         self.isComplete = False
         self.champion: Optional[FloosTeam.Team] = None
         self.leagueChampions: Dict[str, FloosTeam.Team] = {}
+        self.playoffTeams: Dict[str, List[FloosTeam.Team]] = {}
+        self.nonPlayoffTeams: Dict[str, List[FloosTeam.Team]] = {}
+        self.leagueHighlights: List[Dict[str, Any]] = []
         
     def addGame(self, homeTeam: FloosTeam.Team, awayTeam: FloosTeam.Team, week: int, gameType: str = 'regular') -> None:
         """Add a game to the season schedule"""
@@ -48,11 +56,40 @@ class SeasonManager:
         self.seasonHistory: List[Season] = []
         self.schedule: List[Dict[str, Any]] = []
         
+        # Initialize timing manager with default fast mode
+        self.timingManager = TimingManager(TimingMode.FAST)
+        
         logger.info("SeasonManager initialized")
+    
+    def setTimingMode(self, mode: TimingMode) -> None:
+        """Set timing mode for simulation"""
+        self.timingManager.setMode(mode)
+        logger.info(f"Season timing mode set to {mode.value}")
+    
+    def setTimingModeFromString(self, mode_str: str) -> None:
+        """Set timing mode from string (scheduled/sequential/fast)"""
+        mode_str = mode_str.lower()
+        if mode_str == 'scheduled':
+            self.setTimingMode(TimingMode.SCHEDULED)
+        elif mode_str == 'sequential':
+            self.setTimingMode(TimingMode.SEQUENTIAL)
+        elif mode_str == 'fast':
+            self.setTimingMode(TimingMode.FAST)
+        else:
+            logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
+            self.setTimingMode(TimingMode.FAST)
+    
+    def setCustomTimingDelays(self, delays: Dict[str, float]) -> None:
+        """Set custom timing delays"""
+        self.timingManager.setCustomDelays(delays)
+    
+    def getTimingMode(self) -> str:
+        """Get current timing mode as string"""
+        return self.timingManager.getModeString()
     
     async def startNewSeason(self) -> None:
         """Initialize and start a new season"""
-        seasonNumber = self.serviceContainer.get_game_state('seasonsPlayed', 0) + 1
+        seasonNumber = self.serviceContainer.getService('game_state').getState('seasonsPlayed', 0) + 1
         logger.info(f"Starting season {seasonNumber}")
         
         self.currentSeason = Season(seasonNumber)
@@ -102,19 +139,59 @@ class SeasonManager:
                 weekGroups[week] = []
             weekGroups[week].append(game)
         
-        # Simulate each week
+        # Simulate each week with timing delays
         for week in sorted(weekGroups.keys()):
-            logger.info(f"Simulating week {week}")
+            logger.info(f"Simulating week {week} in {self.timingManager.getModeString()} mode")
             
+            # Calculate week timing (for scheduled mode)
+            weekStartTime = datetime.datetime.utcnow() + datetime.timedelta(days=week * 7)
+            weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
+            
+            # Wait for week setup time
+            await self.timingManager.waitForWeekSetup(weekSetupTime)
+            
+            # Update season state
+            self.currentSeason.currentWeek = week
+            self.currentSeason.currentWeekText = f'Week {week}'
+            
+            # Add league highlight for week starting
+            if hasattr(self.currentSeason, 'leagueHighlights'):
+                self.currentSeason.leagueHighlights.insert(0, {
+                    'event': {'text': f'{self.currentSeason.currentWeekText} Starting Soon...'}
+                })
+            
+            # Wait for games to start
+            await self.timingManager.waitForGamesStart(weekStartTime)
+            
+            # Add game start highlight
+            if hasattr(self.currentSeason, 'leagueHighlights'):
+                self.currentSeason.leagueHighlights.insert(0, {
+                    'event': {'text': f'{self.currentSeason.currentWeekText} Start'}
+                })
+            
+            # Simulate games in the week
             weekGames = weekGroups[week]
-            for game in weekGames:
+            for i, game in enumerate(weekGames):
+                if i > 0:  # Add delay between games
+                    await self.timingManager.waitBetweenGames()
                 await self._simulateGame(game)
+            
+            # Add game end highlight
+            if hasattr(self.currentSeason, 'leagueHighlights'):
+                self.currentSeason.leagueHighlights.insert(0, {
+                    'event': {'text': f'{self.currentSeason.currentWeekText} End'}
+                })
             
             # Update weekly stats and standings
             self._updateWeeklyStats()
             self._updateStandings()
             
-            self.currentSeason.currentWeek = week
+            # Update playoff picture and check for clinches (matches original)
+            self.updatePlayoffPicture()
+            self.checkForClinches()
+            
+            # Wait after week completes
+            await self.timingManager.waitAfterWeek()
     
     async def _simulatePlayoffs(self) -> None:
         """Simulate playoff games"""
@@ -134,11 +211,14 @@ class SeasonManager:
         import floosball_game as FloosGame
         
         try:
-            # Create game instance
-            gameInstance = FloosGame.Game(game['homeTeam'], game['awayTeam'])
+            # Create game instance with timing manager
+            gameInstance = FloosGame.Game(game['homeTeam'], game['awayTeam'], self.timingManager)
+            
+            # Set game type (regular season vs playoff)
+            gameInstance.isRegularSeasonGame = (game.get('gameType', 'regular') == 'regular')
             
             # Simulate the game
-            await gameInstance.simulate()
+            await gameInstance.playGame()
             
             # Update game result
             game['completed'] = True
@@ -157,107 +237,197 @@ class SeasonManager:
     
     def _updateTeamRecords(self, game) -> None:
         """Update team win/loss records"""
-        homeTeam = game.homeTeam
-        awayTeam = game.awayTeam
-        
-        # Initialize season stats if needed
-        if not hasattr(homeTeam, 'seasonTeamStats'):
-            homeTeam.seasonTeamStats = {'wins': 0, 'losses': 0}
-        if not hasattr(awayTeam, 'seasonTeamStats'):
-            awayTeam.seasonTeamStats = {'wins': 0, 'losses': 0}
-        
-        # Update records based on game result
-        if game.homeScore > game.awayScore:
-            # Home team wins
-            homeTeam.seasonTeamStats['wins'] += 1
-            awayTeam.seasonTeamStats['losses'] += 1
-        else:
-            # Away team wins
-            awayTeam.seasonTeamStats['wins'] += 1
-            homeTeam.seasonTeamStats['losses'] += 1
-        
-        # Update all-time records
-        if not hasattr(homeTeam, 'allTimeTeamStats'):
-            homeTeam.allTimeTeamStats = {'wins': 0, 'losses': 0}
-        if not hasattr(awayTeam, 'allTimeTeamStats'):
-            awayTeam.allTimeTeamStats = {'wins': 0, 'losses': 0}
+        try:
+            homeTeam = game.homeTeam
+            awayTeam = game.awayTeam
             
-        if game.homeScore > game.awayScore:
-            homeTeam.allTimeTeamStats['wins'] += 1
-            awayTeam.allTimeTeamStats['losses'] += 1
-        else:
-            awayTeam.allTimeTeamStats['wins'] += 1
-            homeTeam.allTimeTeamStats['losses'] += 1
+            # Check if game has score attributes
+            if not hasattr(game, 'homeScore') or not hasattr(game, 'awayScore'):
+                logger.error(f"Game object missing score attributes: {dir(game)}")
+                return
+                
+            # Initialize season stats if needed
+            if not hasattr(homeTeam, 'seasonTeamStats'):
+                homeTeam.seasonTeamStats = {'wins': 0, 'losses': 0}
+            if not hasattr(awayTeam, 'seasonTeamStats'):
+                awayTeam.seasonTeamStats = {'wins': 0, 'losses': 0}
+            
+            # Ensure stats are initialized
+            homeTeam.seasonTeamStats.setdefault('wins', 0)
+            homeTeam.seasonTeamStats.setdefault('losses', 0)
+            awayTeam.seasonTeamStats.setdefault('wins', 0)
+            awayTeam.seasonTeamStats.setdefault('losses', 0)
+            
+            # Update records based on game result
+            if game.homeScore > game.awayScore:
+                # Home team wins
+                homeTeam.seasonTeamStats['wins'] += 1
+                awayTeam.seasonTeamStats['losses'] += 1
+            else:
+                # Away team wins
+                awayTeam.seasonTeamStats['wins'] += 1
+                homeTeam.seasonTeamStats['losses'] += 1
+            
+            # Update all-time records
+            if not hasattr(homeTeam, 'allTimeTeamStats'):
+                homeTeam.allTimeTeamStats = {'wins': 0, 'losses': 0}
+            if not hasattr(awayTeam, 'allTimeTeamStats'):
+                awayTeam.allTimeTeamStats = {'wins': 0, 'losses': 0}
+                
+            if game.homeScore > game.awayScore:
+                homeTeam.allTimeTeamStats['wins'] += 1
+                awayTeam.allTimeTeamStats['losses'] += 1
+            else:
+                awayTeam.allTimeTeamStats['wins'] += 1
+                homeTeam.allTimeTeamStats['losses'] += 1
+                
+        except Exception as e:
+            logger.error(f"Error updating team records: {e}")
+            logger.error(f"Game attributes: {dir(game) if hasattr(game, '__dict__') else 'No __dict__'}")
     
     def createSchedule(self) -> None:
-        """Generate season schedule"""
+        """Generate season schedule (matches original floosball.py algorithm)"""
         if not self.currentSeason:
             return
             
-        logger.info("Creating season schedule")
+        logger.info("Creating season schedule using original algorithm")
         
-        # Get all teams from league manager
-        allTeams = self.leagueManager.teams
-        
-        if len(allTeams) < 2:
-            logger.error("Need at least 2 teams to create schedule")
-            return
-        
-        # Create round-robin schedule within each league
-        for league in self.leagueManager.leagues:
-            if len(league.teamList) < 2:
-                continue
-                
-            # Generate round-robin for this league
-            self._generateRoundRobin(league.teamList)
-        
-        # Add inter-league games if multiple leagues exist
-        if len(self.leagueManager.leagues) > 1:
-            self._addInterLeagueGames()
-        
-        logger.info(f"Created schedule with {len(self.currentSeason.schedule)} games")
-    
-    def _generateRoundRobin(self, teams: List[FloosTeam.Team]) -> None:
-        """Generate round-robin schedule for a list of teams"""
-        import itertools
-        
-        week = 1
-        
-        # Generate all possible pairings
-        pairings = list(itertools.combinations(teams, 2))
-        
-        # Distribute games across weeks
-        gamesPerWeek = max(1, len(teams) // 2)
-        
-        for i in range(0, len(pairings), gamesPerWeek):
-            weekPairings = pairings[i:i + gamesPerWeek]
-            
-            for homeTeam, awayTeam in weekPairings:
-                self.currentSeason.addGame(homeTeam, awayTeam, week, 'regular')
-            
-            week += 1
-    
-    def _addInterLeagueGames(self) -> None:
-        """Add games between different leagues"""
-        if len(self.leagueManager.leagues) < 2:
+        # Ensure we have exactly 2 leagues (original assumption)
+        if len(self.leagueManager.leagues) != 2:
+            logger.error(f"Original algorithm expects exactly 2 leagues, found {len(self.leagueManager.leagues)}")
             return
             
-        # Simple inter-league scheduling: each team plays one team from other leagues
-        for i, league1 in enumerate(self.leagueManager.leagues):
-            for j, league2 in enumerate(self.leagueManager.leagues):
-                if i >= j:  # Only schedule once between each pair of leagues
-                    continue
-                
-                # Pair teams from different leagues
-                minTeams = min(len(league1.teamList), len(league2.teamList))
-                
-                for k in range(minTeams):
-                    homeTeam = league1.teamList[k]
-                    awayTeam = league2.teamList[k]
-                    
-                    # Add to later week to avoid conflicts
-                    week = len(self.currentSeason.schedule) // max(1, len(self.leagueManager.teams) // 2) + 1
-                    self.currentSeason.addGame(homeTeam, awayTeam, week, 'regular')
+        # Generate full season schedule using original algorithm
+        schedule = self._generateSchedule()
+        
+        # Calculate number of weeks (original formula)
+        numOfWeeks = int(((len(self.leagueManager.leagues[0].teamList) - 1) * 2) + (len(self.leagueManager.leagues[0].teamList) / 2))
+        
+        # Convert generated schedule to our current season format
+        for week in range(numOfWeeks):
+            if week < len(schedule):
+                weekGames = schedule[week]
+                for game in weekGames:
+                    homeTeam = game[0] 
+                    awayTeam = game[1]
+                    self.currentSeason.addGame(homeTeam, awayTeam, week + 1, 'regular')
+        
+        logger.info(f"Created {numOfWeeks}-week schedule with {len(self.currentSeason.schedule)} games")
+    
+    def _generateSchedule(self) -> List[List[tuple]]:
+        """Generate full season schedule using original algorithm"""
+        import random
+        import copy
+        
+        schedule = []
+        
+        # Get copies of league team lists
+        league1Teams = copy.copy(self.leagueManager.leagues[0].teamList)
+        league2Teams = copy.copy(self.leagueManager.leagues[1].teamList)
+        
+        # Generate different types of games
+        league1Games = self._generateIntraleagueGames(league1Teams)
+        league2Games = self._generateIntraleagueGames(league2Teams)
+        interleagueGames = self._generateInterleagueGames(copy.copy(league1Teams), copy.copy(league2Teams))
+        
+        # Combine intra-league games by week
+        intraleagueGames = []
+        for x in range(len(league1Games)):
+            week = []
+            week.extend(league1Games[x])
+            week.extend(league2Games[x])
+            intraleagueGames.append(week)
+        
+        # Combine all games and shuffle (matches original)
+        schedule = interleagueGames + intraleagueGames
+        random.shuffle(schedule)
+        
+        return schedule
+    
+    def _generateIntraleagueGames(self, teams: List[FloosTeam.Team]) -> List[List[tuple]]:
+        """Generate intra-league games using original round-robin algorithm"""
+        n = len(teams)
+        tempTeams = teams.copy()
+        weeks = []
+        
+        # First round-robin
+        for week in range(n - 1):
+            games = []
+            for i in range(n // 2):
+                if week % 2 == 0:
+                    home = tempTeams[i]
+                    away = tempTeams[n - 1 - i]
+                    games.append((home, away))
+                else:
+                    home = tempTeams[n - 1 - i]
+                    away = tempTeams[i]
+                    games.append((home, away))
+            
+            weeks.append(games)
+            tempTeams.insert(1, tempTeams.pop())
+        
+        # Second round-robin (reverse home/away)
+        reverseWeeks = []
+        for week in weeks:
+            reverse = [(away, home) for home, away in week]
+            reverseWeeks.append(reverse)
+        
+        weeks.extend(reverseWeeks)
+        return weeks
+    
+    def _generateInterleagueGames(self, league1: List[FloosTeam.Team], league2: List[FloosTeam.Team]) -> List[List[tuple]]:
+        """Generate inter-league games using original complex algorithm"""
+        import random
+        
+        weeks = []
+        group1Weeks = []
+        group2Weeks = []
+        league1Group1Teams = []
+        league1Group2Teams = []
+        league2Group1Teams = []
+        league2Group2Teams = []
+        
+        # Split leagues into groups
+        for x in range(len(league1)):
+            if x < (len(league1) / 2):
+                league1Group1Teams.append(league1.pop(random.randrange(len(league1))))
+                league2Group1Teams.append(league2.pop(random.randrange(len(league2))))
+            else:
+                league1Group2Teams.append(league1.pop(random.randrange(len(league1))))
+                league2Group2Teams.append(league2.pop(random.randrange(len(league2))))
+        
+        # Generate Group 1 matchups
+        for x in range(len(league1Group1Teams)):
+            games = []
+            for y in range(len(league1Group1Teams)):
+                a = x + y
+                z = int(a % (len(league1Group1Teams)))
+                if y % 2 == 0:
+                    games.append((league1Group1Teams[y], league2Group1Teams[z]))
+                else:
+                    games.append((league2Group1Teams[z], league1Group1Teams[y]))
+            group1Weeks.append(games)
+        
+        # Generate Group 2 matchups
+        for x in range(len(league1Group2Teams)):
+            games = []
+            for y in range(len(league1Group2Teams)):
+                a = x + y
+                z = int(a % (len(league1Group2Teams)))
+                if y % 2 == 0:
+                    games.append((league1Group2Teams[y], league2Group2Teams[z]))
+                else:
+                    games.append((league2Group2Teams[z], league1Group2Teams[y]))
+            group2Weeks.append(games)
+        
+        # Combine group weeks
+        for x in range(len(group1Weeks)):
+            week = []
+            week.extend(group1Weeks[x])
+            week.extend(group2Weeks[x])
+            weeks.append(week)
+        
+        return weeks
     
     def _createPlayoffBracket(self, playoffTeams: Dict[str, List[FloosTeam.Team]]) -> None:
         """Create playoff bracket from qualified teams"""
@@ -307,6 +477,9 @@ class SeasonManager:
             if len(roundWinners) > 1:
                 nextRound = 'finals' if currentRound == 'semifinals' else 'championship'
                 
+                # Wait between playoff rounds
+                await self.timingManager.waitForPlayoffRound()
+                
                 # Pair winners for next round
                 for i in range(0, len(roundWinners), 2):
                     if i + 1 < len(roundWinners):
@@ -321,6 +494,10 @@ class SeasonManager:
                         self.currentSeason.playoffBracket.append(nextGame)
                 
                 currentRound = nextRound
+                
+                # Extra delay for championship game
+                if nextRound == 'championship':
+                    await self.timingManager.waitForChampionship()
             elif len(roundWinners) == 1:
                 # Single champion
                 self.currentSeason.champion = roundWinners[0]
@@ -333,11 +510,14 @@ class SeasonManager:
         import floosball_game as FloosGame
         
         try:
-            # Create game instance
-            gameInstance = FloosGame.Game(game['homeTeam'], game['awayTeam'])
+            # Create game instance with timing manager
+            gameInstance = FloosGame.Game(game['homeTeam'], game['awayTeam'], self.timingManager)
+            
+            # Set game type (playoff games)
+            gameInstance.isRegularSeasonGame = False
             
             # Simulate the game
-            await gameInstance.simulate()
+            await gameInstance.playGame()
             
             # Determine winner
             winner = game['homeTeam'] if gameInstance.homeScore > gameInstance.awayScore else game['awayTeam']
@@ -383,12 +563,15 @@ class SeasonManager:
         # Handle player season progression
         await self._handlePlayerSeasonProgression()
         
+        # Save season statistics
+        self.saveSeasonStats()
+        
         # Add to season history
         self.seasonHistory.append(self.currentSeason)
         
         # Update game state
         seasonNumber = self.currentSeason.seasonNumber
-        self.serviceContainer.set_game_state('seasonsPlayed', seasonNumber)
+        self.serviceContainer.getService('game_state').setState('seasonsPlayed', seasonNumber)
         
         logger.info(f"Season {seasonNumber} completed. Champion: {self.currentSeason.champion.name if self.currentSeason.champion else 'None'}")
     
@@ -399,6 +582,14 @@ class SeasonManager:
     async def _handleOffseason(self) -> None:
         """Handle offseason activities"""
         logger.info("Processing offseason activities")
+        
+        # Set offseason status
+        if self.currentSeason:
+            self.currentSeason.currentWeek = 'Offseason'
+            self.currentSeason.currentWeekText = 'Offseason'
+        
+        # Wait for offseason timing
+        await self.timingManager.waitForOffseason()
         
         # Handle player offseason activities
         self.playerManager.handleOffseasonActivities()
@@ -419,10 +610,10 @@ class SeasonManager:
         logger.info("Processing free agency")
         
         # Get contract manager if available
-        contractManager = self.serviceContainer.getService('contract_manager')
-        if contractManager:
+        try:
+            contractManager = self.serviceContainer.getService('contract_manager')
             await contractManager.handleFreeAgency()
-        else:
+        except ValueError:
             # Basic free agency handling without contract manager
             await self._basicFreeAgencyHandling()
     
@@ -522,9 +713,37 @@ class SeasonManager:
                 team.seasonTeamStats = {
                     'wins': 0,
                     'losses': 0,
-                    'Offense': {'totalYards': 0, 'tds': 0, 'pts': 0},
-                    'Defense': {'ints': 0, 'fumRec': 0, 'sacks': 0}
+                    'winPerc': 0.0,
+                    'streak': 0,
+                    'scoreDiff': 0,
+                    'Offense': {
+                        'pts': 0,
+                        'runTds': 0,
+                        'passTds': 0,
+                        'tds': 0,
+                        'fgs': 0,
+                        'passYards': 0,
+                        'runYards': 0,
+                        'totalYards': 0
+                    },
+                    'Defense': {
+                        'ints': 0,
+                        'fumRec': 0,
+                        'sacks': 0,
+                        'safeties': 0,
+                        'runYardsAlwd': 0,
+                        'passYardsAlwd': 0,
+                        'totalYardsAlwd': 0,
+                        'runTdsAlwd': 0,
+                        'passTdsAlwd': 0,
+                        'tdsAlwd': 0,
+                        'ptsAlwd': 0
+                    }
                 }
+            
+            # Initialize additional team attributes that Game class may need
+            if not hasattr(team, 'winningStreak'):
+                team.winningStreak = False
     
     def _updateWeeklyStats(self) -> None:
         """Update weekly statistics"""
@@ -537,12 +756,216 @@ class SeasonManager:
         for league in self.leagueManager.leagues:
             league.getStandings()
     
+    def updatePlayoffPicture(self) -> None:
+        """Update playoff picture based on current standings (matches original Season.updatePlayoffPicture)"""
+        if not self.currentSeason:
+            return
+            
+        self.currentSeason.playoffTeams = {}
+        nonPlayoffTeams = {}
+        
+        for league in self.leagueManager.leagues:
+            # Sort teams by win percentage and score differential
+            standings = league.getStandings()
+            teams = [standing['team'] for standing in standings]
+            
+            # Split into playoff and non-playoff teams (half make playoffs)
+            sliceIndex = len(teams) // 2
+            playoffTeams = teams[:sliceIndex]
+            nonPlayoffTeams_league = teams[sliceIndex:]
+            
+            self.currentSeason.playoffTeams[league.name] = playoffTeams
+            nonPlayoffTeams[league.name] = nonPlayoffTeams_league
+        
+        # Store non-playoff teams for clinching logic
+        self.currentSeason.nonPlayoffTeams = nonPlayoffTeams
+    
+    def checkForClinches(self) -> None:
+        """Check for playoff clinches and top seed clinches (matches original Season.checkForClinches)"""
+        if not self.currentSeason or not hasattr(self.currentSeason, 'playoffTeams'):
+            return
+            
+        remainingWeeks = 28 - self.currentSeason.currentWeek if self.currentSeason.currentWeek else 28
+        
+        for league in self.leagueManager.leagues:
+            standings = league.getStandings()
+            if len(standings) < 2:
+                continue
+                
+            team1 = standings[0]['team']  # First place team
+            team2 = standings[1]['team']  # Second place team
+            
+            playoffTeamList = self.currentSeason.playoffTeams.get(league.name, [])
+            nonPlayoffTeamsList = self.currentSeason.nonPlayoffTeams.get(league.name, [])
+            
+            # Check for top seed clinch
+            if not getattr(team1, 'clinchedTopSeed', False):
+                team1_wins = team1.seasonTeamStats.get('wins', 0) if hasattr(team1, 'seasonTeamStats') else 0
+                team2_wins = team2.seasonTeamStats.get('wins', 0) if hasattr(team2, 'seasonTeamStats') else 0
+                
+                # Simple clinch check: if team1 wins + remaining weeks < team2 max possible wins
+                if team1_wins > team2_wins + remainingWeeks or remainingWeeks == 0:
+                    team1.clinchedTopSeed = True
+                    if hasattr(self.currentSeason, 'leagueHighlights'):
+                        highlight = {
+                            'event': {
+                                'text': f'{team1.city} {team1.name} have clinched the #1 seed'
+                            }
+                        }
+                        self.currentSeason.leagueHighlights.insert(0, highlight)
+            
+            # Check for playoff clinches on final week
+            if remainingWeeks == 0:  # Final week
+                for team in playoffTeamList:
+                    if not getattr(team, 'clinchedPlayoffs', False):
+                        team.clinchedPlayoffs = True
+                        if hasattr(self.currentSeason, 'leagueHighlights'):
+                            highlight = {
+                                'event': {
+                                    'text': f'{team.city} {team.name} have clinched a playoff berth'
+                                }
+                            }
+                            self.currentSeason.leagueHighlights.insert(0, highlight)
+                
+                # Mark eliminated teams
+                for team in nonPlayoffTeamsList:
+                    if not getattr(team, 'eliminated', False):
+                        team.eliminated = True
+    
+    def saveSeasonStats(self) -> None:
+        """Save season statistics to file (matches original Season.saveSeasonStats)"""
+        if not self.currentSeason:
+            return
+            
+        import json
+        import os
+        
+        # Create season directory
+        seasonDir = f'season{self.currentSeason.seasonNumber}'
+        if not os.path.exists(seasonDir):
+            os.makedirs(seasonDir)
+        
+        # Save standings history
+        standingsData = {}
+        for league in self.leagueManager.leagues:
+            standings = league.getStandings()
+            standingsData[league.name] = []
+            
+            for standing in standings:
+                team = standing['team']
+                teamData = {
+                    'name': f"{team.city} {team.name}",
+                    'wins': standing['wins'],
+                    'losses': standing['losses'],
+                    'winPct': standing['winPct'],
+                    'id': team.id
+                }
+                standingsData[league.name].append(teamData)
+        
+        # Save standings to file
+        standingsFile = os.path.join(seasonDir, 'standings.json')
+        try:
+            with open(standingsFile, 'w') as f:
+                json.dump(standingsData, f, indent=4)
+            logger.info(f"Saved season {self.currentSeason.seasonNumber} standings")
+        except Exception as e:
+            logger.error(f"Failed to save standings: {e}")
+        
+        # Save season highlights if available
+        if hasattr(self.currentSeason, 'leagueHighlights') and self.currentSeason.leagueHighlights:
+            highlightsFile = os.path.join(seasonDir, 'highlights.json')
+            try:
+                with open(highlightsFile, 'w') as f:
+                    json.dump(self.currentSeason.leagueHighlights, f, indent=4)
+                logger.info(f"Saved season {self.currentSeason.seasonNumber} highlights")
+            except Exception as e:
+                logger.error(f"Failed to save highlights: {e}")
+    
     def advanceToNextSeason(self) -> None:
         """Move to next season"""
         if self.currentSeason:
             self.currentSeason = None
         
         logger.info("Advanced to next season")
+    
+    def clearPlayerSeasonStats(self) -> None:
+        """Clear and archive player season stats (matches original Season.clearPlayerSeasonStats)"""
+        import copy
+        
+        for player in self.playerManager.activePlayers:
+            if player.seasonsPlayed > 0:
+                # Set final rating for the season
+                player.seasonStatsDict['rating'] = player.playerTier.value
+                
+                # Archive the season stats
+                seasonStatsCopy = copy.deepcopy(player.seasonStatsDict)
+                
+                # Remove old archive entry and insert new one at beginning
+                if hasattr(player, 'seasonStatsArchive') and player.seasonStatsArchive:
+                    player.seasonStatsArchive.pop(0)
+                player.seasonStatsArchive.insert(0, seasonStatsCopy)
+                
+                # Reset season stats to default
+                import floosball_player as FloosPlayer
+                if hasattr(FloosPlayer, 'playerStatsDict'):
+                    player.seasonStatsDict = copy.deepcopy(FloosPlayer.playerStatsDict)
+                else:
+                    # Default reset if playerStatsDict not available
+                    player.seasonStatsDict = {
+                        'passing': {'att': 0, 'comp': 0, 'yards': 0, 'tds': 0, 'ints': 0},
+                        'rushing': {'carries': 0, 'yards': 0, 'tds': 0, 'fumblesLost': 0},
+                        'receiving': {'targets': 0, 'receptions': 0, 'yards': 0, 'tds': 0},
+                        'kicking': {'fgAtt': 0, 'fgs': 0, 'xpAtt': 0, 'xps': 0, 'fgYards': 0},
+                        'defense': {'tackles': 0, 'sacks': 0, 'interceptions': 0, 'fumbleRecoveries': 0},
+                        'fantasyPoints': 0,
+                        'team': '',
+                        'season': 0,
+                        'rating': 0,
+                        'gp': 0
+                    }
+                
+                # Reset games played
+                player.gamesPlayed = 0
+        
+        logger.info("Cleared player season stats")
+    
+    def clearTeamSeasonStats(self) -> None:
+        """Clear and archive team season stats (matches original Season.clearTeamSeasonStats)"""
+        import copy
+        
+        for team in self.leagueManager.teams:
+            # Archive current season stats
+            if hasattr(team, 'seasonTeamStats'):
+                # Set final values
+                team.seasonTeamStats['elo'] = getattr(team, 'elo', 1500)
+                team.seasonTeamStats['overallRating'] = getattr(team, 'overallRating', 80)
+                
+                # Archive the stats
+                if not hasattr(team, 'statArchive'):
+                    team.statArchive = []
+                team.statArchive.insert(0, team.seasonTeamStats.copy())
+                
+                # Reset season stats
+                import floosball_team as FloosTeam
+                if hasattr(FloosTeam, 'teamStatsDict'):
+                    team.seasonTeamStats = copy.deepcopy(FloosTeam.teamStatsDict)
+                else:
+                    # Default reset if teamStatsDict not available
+                    team.seasonTeamStats = {
+                        'wins': 0,
+                        'losses': 0,
+                        'winPerc': 0.0,
+                        'scoreDiff': 0,
+                        'season': 0,
+                        'Offense': {'totalYards': 0, 'tds': 0, 'pts': 0},
+                        'Defense': {'ints': 0, 'fumRec': 0, 'sacks': 0}
+                    }
+            
+            # Clear schedule
+            if hasattr(team, 'schedule'):
+                team.schedule = []
+        
+        logger.info("Cleared team season stats")
     
     def getSeasonStats(self) -> Dict[str, Any]:
         """Get current season statistics"""

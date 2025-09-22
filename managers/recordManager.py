@@ -458,6 +458,25 @@ class RecordManager:
                         'value': 0,
                         'season': 0
                     }
+                },
+                'fantasy': {
+                    'career': {
+                        'fantasyPoints': {
+                            'record': 'Career Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        }
+                    },
+                    'season': {
+                        'fantasyPoints': {
+                            'record': 'Season Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0,
+                            'season': 0
+                        }
+                    }
                 }
             }
         }

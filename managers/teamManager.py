@@ -32,6 +32,9 @@ class TeamManager:
         
         if os.path.exists("data/teamData"):
             self._loadTeamsFromData()
+            # If no teams were loaded, fall back to config
+            if len(self.teams) == 0:
+                self._createTeamsFromConfig(config)
         else:
             self._createTeamsFromConfig(config)
             

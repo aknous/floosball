@@ -1,0 +1,81 @@
+{
+  "timingModes": {
+    "fast": {
+      "description": "No delays - instant simulation",
+      "timingMode": "fast",
+      "useCase": "Development, testing, bulk simulations"
+    },
+    
+    "sequential": {
+      "description": "Fixed delays between events - predictable timing",
+      "timingMode": "sequential",
+      "useCase": "Demo mode, presentations, controlled simulation",
+      "timingDelays": {
+        "week_setup": 5.0,
+        "week_start_wait": 3.0,
+        "week_end_wait": 10.0,
+        "between_games": 1.0,
+        "game_announcement": 2.0,
+        "offseason": 5.0,
+        "season_transition": 15.0,
+        "playoff_round": 5.0,
+        "championship": 10.0,
+        "quarter_break": 3.0,
+        "halftime": 8.0,
+        "between_plays": 2.0
+      }
+    },
+    
+    "scheduled": {
+      "description": "Real-time scheduling - games at specific times",
+      "timingMode": "scheduled", 
+      "useCase": "Live simulation, real-world timing",
+      "timingDelays": {
+        "daily_check": 60.0,
+        "week_end_wait": 300.0,
+        "offseason": 15.0,
+        "season_transition": 30.0
+      }
+    }
+  },
+  
+  "examples": {
+    "quickDemo": {
+      "description": "Fast demo with minimal delays",
+      "timingMode": "sequential",
+      "timingDelays": {
+        "week_setup": 1.0,
+        "week_start_wait": 0.5,
+        "week_end_wait": 2.0,
+        "between_games": 0.2,
+        "offseason": 1.0,
+        "playoff_round": 1.0,
+        "quarter_break": 0.5,
+        "halftime": 1.0,
+        "between_plays": 0.3
+      }
+    },
+    
+    "presentation": {
+      "description": "Good for live presentations",
+      "timingMode": "sequential",
+      "timingDelays": {
+        "week_setup": 3.0,
+        "week_start_wait": 2.0,
+        "week_end_wait": 5.0,
+        "between_games": 1.0,
+        "offseason": 3.0,
+        "playoff_round": 3.0,
+        "championship": 5.0,
+        "quarter_break": 2.0,
+        "halftime": 4.0,
+        "between_plays": 1.5
+      }
+    },
+    
+    "development": {
+      "description": "No delays for development",
+      "timingMode": "fast"
+    }
+  }
+}

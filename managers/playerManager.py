@@ -68,12 +68,12 @@ class PlayerManager:
             except Exception as e:
                 logger.warning(f"Failed to load unusedNames.json: {e}, falling back to config")
         
-        # If unusedNames.json doesn't exist, load from config and create it
-        if 'players' in config:
+        # If unusedNames.json doesn't exist or is empty, load from config and create it
+        if not self.unusedNames and 'players' in config:
             self.unusedNames = config['players'].copy()
             logger.info(f"Loaded {len(self.unusedNames)} names from config")
             self.saveUnusedNames()  # Create initial unusedNames.json
-        else:
+        elif not self.unusedNames:
             logger.error("No player names found in config!")
             self.unusedNames = []
     
@@ -182,6 +182,17 @@ class PlayerManager:
         except ValueError:
             logger.warning(f"Player {player.name} not found in position list")
     
+    def _getPlayerTerm(self, tier: FloosPlayer.PlayerTier) -> int:
+        """Get contract term for player tier (avoiding circular import)"""
+        tier_terms = {
+            FloosPlayer.PlayerTier.TierD: 1,
+            FloosPlayer.PlayerTier.TierC: 2,
+            FloosPlayer.PlayerTier.TierB: 3,
+            FloosPlayer.PlayerTier.TierA: 3,
+            FloosPlayer.PlayerTier.TierS: 4
+        }
+        return tier_terms.get(tier, 2)
+    
     def conductInitialDraft(self) -> None:
         """Conduct the initial draft (replaces playerDraft function)"""
         from random import randint, choice
@@ -190,10 +201,16 @@ class PlayerManager:
         logger.info("Starting initial player draft")
         
         # Get teams from service container
-        teams = self.serviceContainer.get_game_state('teamList', [])
+        # Get teams from team manager service
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
         
         if not teams:
             logger.error("No teams available for draft!")
+            return
+        
+        if not self.activePlayers:
+            logger.error("No players available for draft!")
             return
         
         # Create position-specific draft lists (matches original)
@@ -230,7 +247,7 @@ class PlayerManager:
                 selectedPlayer = None
                 bestAvailablePlayer = playerDraftList[0] if playerDraftList else None
                 
-                if x == 1:  # First round - best available
+                if x == 1 and bestAvailablePlayer:  # First round - best available
                     if bestAvailablePlayer.position.value == 1:
                         selectedPlayer = draftQbList.pop(0)
                         team.rosterDict['qb'] = selectedPlayer
@@ -300,9 +317,18 @@ class PlayerManager:
                 
                 if selectedPlayer:
                     selectedPlayer.team = team
-                    selectedPlayer.term = FloosMethods.getPlayerTerm(selectedPlayer.playerTier)
+                    # Set player term based on tier (avoiding circular import)
+                    selectedPlayer.term = self._getPlayerTerm(selectedPlayer.playerTier)
                     selectedPlayer.termRemaining = selectedPlayer.term
+                    
+                    # Ensure seasonStatsDict exists and has team info
+                    if not hasattr(selectedPlayer, 'seasonStatsDict') or selectedPlayer.seasonStatsDict is None:
+                        selectedPlayer.seasonStatsDict = {}
                     selectedPlayer.seasonStatsDict['team'] = selectedPlayer.team.name
+                    
+                    # Ensure seasonStatsArchive exists
+                    if not hasattr(selectedPlayer, 'seasonStatsArchive'):
+                        selectedPlayer.seasonStatsArchive = []
                     
                     # Assign player number
                     team.assignPlayerNumber(selectedPlayer)
@@ -487,8 +513,8 @@ class PlayerManager:
             playerDict['currentNumber'] = player.currentNumber
             playerDict['preferredNumber'] = player.preferredNumber
             playerDict['tier'] = player.playerTier.name
-            playerDict['team'] = player.team
-            playerDict['position'] = player.position
+            playerDict['team'] = player.team.name if hasattr(player.team, 'name') else str(player.team)
+            playerDict['position'] = player.position.value if hasattr(player.position, 'value') else str(player.position)
             playerDict['seasonsPlayed'] = player.seasonsPlayed
             playerDict['term'] = player.term
             playerDict['termRemaining'] = player.termRemaining
@@ -497,15 +523,21 @@ class PlayerManager:
             playerDict['playerRating'] = player.playerRating
             playerDict['freeAgentYears'] = player.freeAgentYears
             playerDict['serviceTime'] = player.serviceTime.name
-            playerDict['attributes'] = player.attributes
+            # Handle attributes safely to avoid circular references
+            if hasattr(player, 'attributes') and player.attributes:
+                try:
+                    playerDict['attributes'] = vars(player.attributes) if hasattr(player.attributes, '__dict__') else player.attributes
+                except:
+                    playerDict['attributes'] = {}
             playerDict['careerStats'] = player.careerStatsDict
             
             # Handle seasonStatsArchive as numbered dictionary (matches original)
             archiveDict = {}
-            y = 0
-            for item in player.seasonStatsArchive:
-                y += 1
-                archiveDict[y] = item
+            if hasattr(player, 'seasonStatsArchive') and player.seasonStatsArchive:
+                y = 0
+                for item in player.seasonStatsArchive:
+                    y += 1
+                    archiveDict[y] = item
             playerDict['seasonStatsArchive'] = archiveDict
             
             # Serialize and save individual file (matches original)
@@ -546,11 +578,11 @@ class PlayerManager:
         # Check for retirements
         self.processRetirements()
         
-        # Check for Hall of Fame promotions
-        self.processHofPromotions()
+        # Check for Hall of Fame promotions (using original logic)
+        self.inductHallOfFame()
         
-        # Clear newly retired list for next season
-        self.newlyRetiredPlayers.clear()
+        # Additional HoF promotions for edge cases
+        self.processHofPromotions()
     
     def processRetirements(self) -> None:
         """Process player retirements"""
@@ -578,3 +610,34 @@ class PlayerManager:
         
         for player in hofCandidates:
             self.promoteToHallOfFame(player)
+    
+    def inductHallOfFame(self) -> None:
+        """Induct newly retired players into Hall of Fame (matches original inductHallOfFame function)"""
+        if len(self.newlyRetiredPlayers) > 0:
+            for player in self.newlyRetiredPlayers:
+                # HoF criteria from original: TierS players or TierA players with championships
+                if player.playerTier.value == 5:  # TierS
+                    self.hallOfFame.append(player)
+                    # Add highlight if season context is available
+                    seasonManager = self.serviceContainer.getService('season_manager')
+                    if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
+                        highlight = {
+                            'event': {
+                                'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
+                            }
+                        }
+                        seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
+                elif player.playerTier.value == 4 and hasattr(player, 'leagueChampionships') and len(player.leagueChampionships):  # TierA with championships
+                    self.hallOfFame.append(player)
+                    # Add highlight if season context is available  
+                    seasonManager = self.serviceContainer.getService('season_manager')
+                    if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
+                        highlight = {
+                            'event': {
+                                'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
+                            }
+                        }
+                        seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
+            
+            # Clear newly retired list
+            self.newlyRetiredPlayers.clear()

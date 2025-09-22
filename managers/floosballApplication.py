@@ -69,10 +69,9 @@ class FloosballApplication:
         self.playerManager.generatePlayers(config)
         self.playerManager.sortPlayersByPosition()
         
-        # Generate and setup teams
+        # Generate teams (but don't initialize yet - need players first)
         logger.info("Setting up teams...")
         self.teamManager.generateTeams(config)
-        self.teamManager.initializeTeams()
         
         # Create leagues and distribute teams
         logger.info("Setting up leagues...")
@@ -83,6 +82,10 @@ class FloosballApplication:
             logger.info("Conducting initial draft...")
             self.playerManager.conductInitialDraft()
         
+        # Now initialize teams after players are assigned
+        logger.info("Initializing teams with rosters...")
+        self.teamManager.initializeTeams()
+        
         # Save initial state
         await self._saveInitialState()
         
@@ -90,13 +93,24 @@ class FloosballApplication:
     
     def _loadConfiguration(self, config: Dict[str, Any]) -> None:
         """Load and validate configuration"""
-        # Store essential config in service container
-        self.serviceContainer.set_game_state('totalSeasons', config.get('totalSeasons', 10))
-        self.serviceContainer.set_game_state('seasonsPlayed', config.get('seasonsPlayed', 0))
+        # Get game state manager from service container
+        gameState = self.serviceContainer.getService('game_state')
+        
+        # Store essential config in game state
+        gameState.setState('totalSeasons', config.get('totalSeasons', 10))
+        gameState.setState('seasonsPlayed', config.get('seasonsPlayed', 0))
         
         # Set any other global configuration
         if 'salaryCap' in config:
-            self.serviceContainer.set_game_state('salaryCap', config['salaryCap'])
+            gameState.setState('salaryCap', config['salaryCap'])
+        
+        # Configure timing mode
+        if 'timingMode' in config:
+            self.setTimingMode(config['timingMode'])
+        
+        # Set custom timing delays
+        if 'timingDelays' in config:
+            self.setCustomTimingDelays(config['timingDelays'])
     
     def _needsInitialDraft(self) -> bool:
         """Check if we need to conduct an initial draft"""
@@ -120,8 +134,9 @@ class FloosballApplication:
         """Run the main league simulation"""
         logger.info("Starting league simulation")
         
-        totalSeasons = self.serviceContainer.get_game_state('totalSeasons', 0)
-        seasonsPlayed = self.serviceContainer.get_game_state('seasonsPlayed', 0)
+        gameState = self.serviceContainer.getService('game_state')
+        totalSeasons = gameState.getState('totalSeasons', 0)
+        seasonsPlayed = gameState.getState('seasonsPlayed', 0)
         
         logger.info(f"Simulating {totalSeasons - seasonsPlayed} seasons")
         
@@ -139,7 +154,8 @@ class FloosballApplication:
             
             # Update season counter
             seasonsPlayed += 1
-            self.serviceContainer.set_game_state('seasonsPlayed', seasonsPlayed)
+            gameState = self.serviceContainer.getService('game_state')
+            gameState.setState('seasonsPlayed', seasonsPlayed)
             
             # Save state after each season
             await self._saveSeasonState()
@@ -158,7 +174,7 @@ class FloosballApplication:
         self.recordsManager.saveRecordsToFile()
         
         # Save team data periodically
-        seasonsPlayed = self.serviceContainer.get_game_state('seasonsPlayed', 0)
+        seasonsPlayed = self.serviceContainer.getService('game_state').getState('seasonsPlayed', 0)
         if seasonsPlayed % 5 == 0:  # Every 5 seasons
             for team in self.teamManager.teams:
                 self.teamManager._setupAndSaveTeam(team)
@@ -179,6 +195,20 @@ class FloosballApplication:
         
         logger.info("Final simulation tasks complete")
     
+    def setTimingMode(self, mode: str) -> None:
+        """Set timing mode for simulation (scheduled/sequential/fast)"""
+        self.seasonManager.setTimingModeFromString(mode)
+        logger.info(f"Application timing mode set to {mode}")
+    
+    def setCustomTimingDelays(self, delays: Dict[str, float]) -> None:
+        """Set custom timing delays"""
+        self.seasonManager.setCustomTimingDelays(delays)
+        logger.info(f"Custom timing delays configured: {delays}")
+    
+    def getTimingMode(self) -> str:
+        """Get current timing mode"""
+        return self.seasonManager.getTimingMode()
+    
     def getLeagueState(self) -> Dict[str, Any]:
         """Get current state of the entire league"""
         return {
@@ -189,8 +219,9 @@ class FloosballApplication:
             'totalRetiredPlayers': len(self.playerManager.retiredPlayers),
             'hallOfFameCount': len(self.playerManager.hallOfFame),
             'currentSeason': self.seasonManager.currentSeason.seasonNumber if self.seasonManager.currentSeason else None,
-            'seasonsPlayed': self.serviceContainer.get_game_state('seasonsPlayed', 0),
-            'totalSeasons': self.serviceContainer.get_game_state('totalSeasons', 0),
+            'seasonsPlayed': self.serviceContainer.getService('game_state').getState('seasonsPlayed', 0),
+            'totalSeasons': self.serviceContainer.getService('game_state').getState('totalSeasons', 0),
+            'timingMode': self.getTimingMode(),
             'records': self.recordsManager.getRecordStatistics()
         }
     
@@ -221,8 +252,9 @@ class FloosballApplication:
         await self.seasonManager.handleOffseason()
         
         # Update counters
-        seasonsPlayed = self.serviceContainer.get_game_state('seasonsPlayed', 0) + 1
-        self.serviceContainer.set_game_state('seasonsPlayed', seasonsPlayed)
+        gameState = self.serviceContainer.getService('game_state')
+        seasonsPlayed = gameState.getState('seasonsPlayed', 0) + 1
+        gameState.setState('seasonsPlayed', seasonsPlayed)
         
         # Save state
         await self._saveSeasonState()

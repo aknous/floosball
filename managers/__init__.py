@@ -5,6 +5,7 @@ from .teamManager import TeamManager
 from .leagueManager import LeagueManager
 from .seasonManager import SeasonManager
 from .recordManager import RecordManager
+from .timingManager import TimingManager, TimingMode
 from .floosballApplication import FloosballApplication
 
 __all__ = [
@@ -13,5 +14,7 @@ __all__ = [
     'LeagueManager',
     'SeasonManager',
     'RecordManager',
+    'TimingManager',
+    'TimingMode',
     'FloosballApplication'
 ]

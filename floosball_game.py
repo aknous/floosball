@@ -21,6 +21,16 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR
 )
 
+# Import TimingManager for game-level timing control
+try:
+    from managers.timingManager import TimingManager, TimingMode
+    TIMING_AVAILABLE = True
+except ImportError:
+    # Fallback if timing manager not available
+    TIMING_AVAILABLE = False
+    TimingManager = None
+    TimingMode = None
+
 
 class PlayType(enum.Enum):
     Run = 'Run'
@@ -255,13 +265,22 @@ def returnLongPassPlay():
     return choice(['Play1','Play2','Play4','Play5'])
     
 class Game:
-    def __init__(self, homeTeam, awayTeam):
+    def __init__(self, homeTeam, awayTeam, timingManager=None):
         self.id = None
         self.status = None
         self.homeTeam : FloosTeam.Team = homeTeam
         self.awayTeam : FloosTeam.Team = awayTeam
         self.awayScore = 0
         self.homeScore = 0
+        
+        # Set up timing manager for game-level delays
+        if timingManager is not None:
+            self.timingManager = timingManager
+        elif TIMING_AVAILABLE:
+            # Create default fast timing manager if none provided
+            self.timingManager = TimingManager(TimingMode.FAST)
+        else:
+            self.timingManager = None
         self.homeScoreQ1 = 0
         self.homeScoreQ2 = 0
         self.homeScoreQ3 = 0
@@ -1587,7 +1606,9 @@ class Game:
                         #     self.awayTeam.teamUnderPerform()
                 elif self.totalPlays >= 33 and self.totalPlays < 66:
                     if self.currentQuarter != 2:
-                        #await asyncio.sleep(15)
+                        # Quarter break timing
+                        if self.timingManager:
+                            await self.timingManager.waitForQuarterBreak()
                         self.currentQuarter = 2
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 2nd Quarter',
@@ -1604,7 +1625,9 @@ class Game:
                                                 'playsRemaining': 132 - self.totalPlays
                                             }
                                         })
-                        #await asyncio.sleep(60)
+                        # Halftime timing
+                        if self.timingManager:
+                            await self.timingManager.waitForHalftime()
                         self.isHalftime = False
                     if self.currentQuarter != 3:
                         self.currentQuarter = 3
@@ -1632,7 +1655,9 @@ class Game:
                         #     self.awayTeam.resetDetermination()
                 elif self.totalPlays >= PLAYS_TO_FOURTH_QUARTER and self.totalPlays < GAME_MAX_PLAYS:
                     if self.currentQuarter != 4:
-                        #await asyncio.sleep(15)
+                        # Quarter break timing
+                        if self.timingManager:
+                            await self.timingManager.waitForQuarterBreak()
                         self.currentQuarter = 4
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start 4th Quarter',
@@ -1656,7 +1681,9 @@ class Game:
                             otContinue = False
                             break
                     if self.currentQuarter != 5:
-                        #await asyncio.sleep(15)
+                        # Quarter break timing for overtime
+                        if self.timingManager:
+                            await self.timingManager.waitForQuarterBreak()
                         self.currentQuarter = 5
                         self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Start Overtime',
@@ -1688,7 +1715,9 @@ class Game:
 
                 self.play = Play(self)
                 
-                #await asyncio.sleep(randint(5,15))
+                # Between-plays timing (replaces original random 5-15s delay)
+                if self.timingManager:
+                    await self.timingManager.waitBetweenPlays()
 
                 self.playCaller()
                 self.totalPlays += 1
