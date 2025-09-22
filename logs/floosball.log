@@ -19420,3 +19420,597 @@
 2025-09-21 22:14:03 - floosball.seasonManager - ERROR - Error simulating playoff game: 'wins'
 2025-09-21 22:14:03 - floosball.seasonManager - ERROR - Error simulating playoff game: 'wins'
 2025-09-21 22:14:03 - floosball.seasonManager - INFO - Completing season simulation
+2025-09-22 15:24:15 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast
+2025-09-22 15:24:15 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-22 15:24:15 - floosball.services - INFO - Initializing service container...
+2025-09-22 15:24:15 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-22 15:24:15 - floosball.config - INFO - Cached configuration from config.json
+2025-09-22 15:24:15 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-22 15:24:15 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-22 15:24:15 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-22 15:24:15 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-22 15:24:15 - floosball.application - INFO - Registered all managers with service container
+2025-09-22 15:24:15 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-22 15:24:15 - floosball.application - INFO - Initializing league system
+2025-09-22 15:24:15 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-22 15:24:15 - floosball.application - INFO - Application timing mode set to fast
+2025-09-22 15:24:15 - floosball.record_manager - INFO - Loaded records from data/allTimeRecords.json and validated structure
+2025-09-22 15:24:15 - floosball.application - INFO - Setting up players...
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Loaded 51 unused names from data/unusedNames.json
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Saved 0 unused names to data/unusedNames.json
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Generated 51 total players
+2025-09-22 15:24:15 - floosball.application - INFO - Setting up teams...
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Loaded 24 teams from data
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-22 15:24:15 - floosball.application - INFO - Setting up leagues...
+2025-09-22 15:24:15 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-22 15:24:15 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-22 15:24:15 - floosball.application - INFO - Conducting initial draft...
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Draft complete. 51 players drafted, 0 free agents
+2025-09-22 15:24:15 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Saving player data
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Saved data for 51 active players
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Saved 0 unused names to data/unusedNames.json
+2025-09-22 15:24:15 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-22 15:24:15 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-22 15:24:15 - floosball.application - INFO - League initialization complete
+2025-09-22 15:24:15 - floosball.application - INFO - Starting league simulation
+2025-09-22 15:24:15 - floosball.application - INFO - Simulating 10 seasons
+2025-09-22 15:24:15 - floosball.application - INFO - === SEASON 1 ===
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Starting season 1
+2025-09-22 15:24:15 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Processing offseason activities
+2025-09-22 15:24:15 - floosball.playerManager - INFO - Processing offseason player activities
+2025-09-22 15:24:15 - floosball.development - INFO - Player Jollyroger Favicon development: {'attitude': {'from': 68, 'to': 65, 'change': -3}, 'discipline': {'from': 84, 'to': 81, 'change': -3}, 'armStrength': {'from': 61, 'to': 63, 'change': 2}, 'accuracy': {'from': 71, 'to': 74, 'change': 3}, 'agility': {'from': 71, 'to': 74, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Kraina Pearwiggler development: {'attitude': {'from': 78, 'to': 73, 'change': -5}, 'discipline': {'from': 76, 'to': 74, 'change': -2}, 'speed': {'from': 87, 'to': 89, 'change': 2}, 'agility': {'from': 81, 'to': 79, 'change': -2}, 'power': {'from': 88, 'to': 89, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Zeal Fletcher development: {'attitude': {'from': 78, 'to': 75, 'change': -3}, 'discipline': {'from': 68, 'to': 73, 'change': 5}, 'speed': {'from': 82, 'to': 85, 'change': 3}, 'agility': {'from': 72, 'to': 71, 'change': -1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Senator Shoe development: {'discipline': {'from': 81, 'to': 78, 'change': -3}, 'speed': {'from': 80, 'to': 81, 'change': 1}, 'agility': {'from': 76, 'to': 78, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Archduke Beefcake development: {'attitude': {'from': 81, 'to': 77, 'change': -4}, 'discipline': {'from': 78, 'to': 73, 'change': -5}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 74, 'to': 76, 'change': 2}, 'hands': {'from': 77, 'to': 72, 'change': -5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Bleeb Refurb development: {'attitude': {'from': 87, 'to': 85, 'change': -2}, 'legStrength': {'from': 92, 'to': 88, 'change': -4}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Finnegan Facepuncher development: {'attitude': {'from': 81, 'to': 76, 'change': -5}, 'discipline': {'from': 96, 'to': 99, 'change': 3}, 'armStrength': {'from': 79, 'to': 81, 'change': 2}, 'accuracy': {'from': 76, 'to': 80, 'change': 4}, 'agility': {'from': 70, 'to': 76, 'change': 6}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Jamie Bassclef development: {'discipline': {'from': 85, 'to': 89, 'change': 4}, 'speed': {'from': 79, 'to': 81, 'change': 2}, 'agility': {'from': 88, 'to': 93, 'change': 5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Cael Lingardo development: {'discipline': {'from': 76, 'to': 71, 'change': -5}, 'speed': {'from': 85, 'to': 83, 'change': -2}, 'agility': {'from': 88, 'to': 87, 'change': -1}, 'hands': {'from': 96, 'to': 95, 'change': -1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Punchy MacMillan development: {'attitude': {'from': 75, 'to': 74, 'change': -1}, 'discipline': {'from': 85, 'to': 82, 'change': -3}, 'speed': {'from': 81, 'to': 84, 'change': 3}, 'agility': {'from': 90, 'to': 88, 'change': -2}, 'hands': {'from': 80, 'to': 82, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Benanaiah Haskamp development: {'attitude': {'from': 86, 'to': 91, 'change': 5}, 'discipline': {'from': 84, 'to': 79, 'change': -5}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 90, 'to': 92, 'change': 2}, 'hands': {'from': 79, 'to': 81, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Pillow Chamberlain development: {'attitude': {'from': 83, 'to': 82, 'change': -1}, 'discipline': {'from': 81, 'to': 76, 'change': -5}, 'legStrength': {'from': 64, 'to': 66, 'change': 2}, 'accuracy': {'from': 66, 'to': 69, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Wesley Potpourri development: {'attitude': {'from': 72, 'to': 68, 'change': -4}, 'discipline': {'from': 67, 'to': 62, 'change': -5}, 'armStrength': {'from': 84, 'to': 83, 'change': -1}, 'accuracy': {'from': 77, 'to': 72, 'change': -5}, 'agility': {'from': 80, 'to': 85, 'change': 5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Haircut LaRoy development: {'attitude': {'from': 87, 'to': 83, 'change': -4}, 'speed': {'from': 93, 'to': 92, 'change': -1}, 'agility': {'from': 86, 'to': 87, 'change': 1}, 'power': {'from': 80, 'to': 79, 'change': -1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Emily Birthmarks development: {'attitude': {'from': 65, 'to': 70, 'change': 5}, 'discipline': {'from': 99, 'to': 95, 'change': -4}, 'agility': {'from': 75, 'to': 76, 'change': 1}, 'hands': {'from': 73, 'to': 74, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Wolfgang Sykes development: {'attitude': {'from': 80, 'to': 85, 'change': 5}, 'discipline': {'from': 74, 'to': 75, 'change': 1}, 'speed': {'from': 66, 'to': 68, 'change': 2}, 'agility': {'from': 69, 'to': 72, 'change': 3}, 'hands': {'from': 92, 'to': 87, 'change': -5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Vesper Tamualsson development: {'attitude': {'from': 71, 'to': 70, 'change': -1}, 'discipline': {'from': 92, 'to': 88, 'change': -4}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 79, 'to': 80, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Grifford Pardillac development: {'discipline': {'from': 93, 'to': 98, 'change': 5}, 'accuracy': {'from': 95, 'to': 97, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Terrycloth Fitz-John development: {'attitude': {'from': 78, 'to': 80, 'change': 2}, 'armStrength': {'from': 74, 'to': 73, 'change': -1}, 'accuracy': {'from': 68, 'to': 75, 'change': 7}, 'agility': {'from': 77, 'to': 80, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Sonora Powercry development: {'attitude': {'from': 71, 'to': 67, 'change': -4}, 'discipline': {'from': 86, 'to': 85, 'change': -1}, 'speed': {'from': 81, 'to': 82, 'change': 1}, 'agility': {'from': 88, 'to': 90, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Alvin DeTamble development: {'attitude': {'from': 81, 'to': 77, 'change': -4}, 'discipline': {'from': 79, 'to': 81, 'change': 2}, 'speed': {'from': 89, 'to': 87, 'change': -2}, 'hands': {'from': 90, 'to': 91, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Thrush Goodwin development: {'attitude': {'from': 64, 'to': 69, 'change': 5}, 'discipline': {'from': 67, 'to': 69, 'change': 2}, 'speed': {'from': 81, 'to': 77, 'change': -4}, 'hands': {'from': 72, 'to': 68, 'change': -4}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Flash Bobby development: {'discipline': {'from': 80, 'to': 77, 'change': -3}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 85, 'to': 86, 'change': 1}, 'hands': {'from': 80, 'to': 83, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Jessie Jockjams development: {'attitude': {'from': 62, 'to': 66, 'change': 4}, 'discipline': {'from': 70, 'to': 65, 'change': -5}, 'legStrength': {'from': 88, 'to': 83, 'change': -5}, 'accuracy': {'from': 81, 'to': 76, 'change': -5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Ellington Chadward development: {'attitude': {'from': 82, 'to': 78, 'change': -4}, 'discipline': {'from': 68, 'to': 69, 'change': 1}, 'armStrength': {'from': 67, 'to': 74, 'change': 7}, 'accuracy': {'from': 60, 'to': 65, 'change': 5}, 'agility': {'from': 71, 'to': 72, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Airbreak Blacksmith development: {'attitude': {'from': 78, 'to': 81, 'change': 3}, 'discipline': {'from': 80, 'to': 76, 'change': -4}, 'speed': {'from': 96, 'to': 95, 'change': -1}, 'agility': {'from': 90, 'to': 91, 'change': 1}, 'power': {'from': 84, 'to': 86, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Capslock Monroe development: {'attitude': {'from': 69, 'to': 64, 'change': -5}, 'discipline': {'from': 76, 'to': 80, 'change': 4}, 'speed': {'from': 85, 'to': 90, 'change': 5}, 'hands': {'from': 78, 'to': 80, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Mulch Goblin development: {'attitude': {'from': 77, 'to': 82, 'change': 5}, 'discipline': {'from': 67, 'to': 64, 'change': -3}, 'agility': {'from': 90, 'to': 88, 'change': -2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Switch Supertoe development: {'attitude': {'from': 73, 'to': 71, 'change': -2}, 'discipline': {'from': 87, 'to': 82, 'change': -5}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 88, 'to': 86, 'change': -2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Winnipeg Kennedy development: {'attitude': {'from': 78, 'to': 74, 'change': -4}, 'discipline': {'from': 96, 'to': 93, 'change': -3}, 'legStrength': {'from': 97, 'to': 98, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Bronk Hunknar development: {'attitude': {'from': 70, 'to': 72, 'change': 2}, 'discipline': {'from': 77, 'to': 81, 'change': 4}, 'armStrength': {'from': 75, 'to': 77, 'change': 2}, 'accuracy': {'from': 67, 'to': 70, 'change': 3}, 'agility': {'from': 76, 'to': 79, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Coco Mattel development: {'attitude': {'from': 70, 'to': 73, 'change': 3}, 'discipline': {'from': 78, 'to': 76, 'change': -2}, 'speed': {'from': 78, 'to': 81, 'change': 3}, 'power': {'from': 87, 'to': 85, 'change': -2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Droop Sixcrabs development: {'attitude': {'from': 74, 'to': 71, 'change': -3}, 'discipline': {'from': 86, 'to': 90, 'change': 4}, 'agility': {'from': 75, 'to': 77, 'change': 2}, 'hands': {'from': 81, 'to': 86, 'change': 5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Toon Van Laethem development: {'attitude': {'from': 79, 'to': 83, 'change': 4}, 'discipline': {'from': 76, 'to': 77, 'change': 1}, 'agility': {'from': 82, 'to': 79, 'change': -3}, 'hands': {'from': 89, 'to': 94, 'change': 5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Gimbal Pimente development: {'attitude': {'from': 71, 'to': 68, 'change': -3}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 81, 'to': 83, 'change': 2}, 'hands': {'from': 73, 'to': 76, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Coconut Deep development: {'attitude': {'from': 77, 'to': 79, 'change': 2}, 'discipline': {'from': 90, 'to': 88, 'change': -2}, 'legStrength': {'from': 65, 'to': 66, 'change': 1}, 'accuracy': {'from': 69, 'to': 74, 'change': 5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Woof McNewberry development: {'attitude': {'from': 64, 'to': 66, 'change': 2}, 'discipline': {'from': 90, 'to': 86, 'change': -4}, 'armStrength': {'from': 78, 'to': 79, 'change': 1}, 'accuracy': {'from': 73, 'to': 76, 'change': 3}, 'agility': {'from': 73, 'to': 78, 'change': 5}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Pretzel Windchime development: {'attitude': {'from': 87, 'to': 82, 'change': -5}, 'discipline': {'from': 98, 'to': 100, 'change': 2}, 'speed': {'from': 90, 'to': 92, 'change': 2}, 'agility': {'from': 90, 'to': 94, 'change': 4}, 'power': {'from': 89, 'to': 93, 'change': 4}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Package Murfee development: {'attitude': {'from': 80, 'to': 82, 'change': 2}, 'discipline': {'from': 69, 'to': 70, 'change': 1}, 'speed': {'from': 82, 'to': 87, 'change': 5}, 'agility': {'from': 82, 'to': 86, 'change': 4}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Cantina Fawcette development: {'attitude': {'from': 67, 'to': 68, 'change': 1}, 'discipline': {'from': 88, 'to': 84, 'change': -4}, 'agility': {'from': 76, 'to': 79, 'change': 3}, 'hands': {'from': 76, 'to': 79, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Holland Hokeman development: {'attitude': {'from': 79, 'to': 82, 'change': 3}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'hands': {'from': 76, 'to': 75, 'change': -1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Straycat Doughty development: {'attitude': {'from': 74, 'to': 72, 'change': -2}, 'discipline': {'from': 72, 'to': 68, 'change': -4}, 'legStrength': {'from': 70, 'to': 74, 'change': 4}, 'accuracy': {'from': 68, 'to': 72, 'change': 4}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Swap Dreamy development: {'attitude': {'from': 91, 'to': 94, 'change': 3}, 'discipline': {'from': 78, 'to': 79, 'change': 1}, 'armStrength': {'from': 71, 'to': 73, 'change': 2}, 'accuracy': {'from': 67, 'to': 74, 'change': 7}, 'agility': {'from': 80, 'to': 82, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Spike Pavidis development: {'attitude': {'from': 83, 'to': 88, 'change': 5}, 'speed': {'from': 79, 'to': 81, 'change': 2}, 'agility': {'from': 81, 'to': 82, 'change': 1}, 'power': {'from': 80, 'to': 83, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Perky Omen development: {'discipline': {'from': 88, 'to': 89, 'change': 1}, 'speed': {'from': 74, 'to': 73, 'change': -1}, 'agility': {'from': 79, 'to': 78, 'change': -1}, 'hands': {'from': 84, 'to': 87, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Jott Trinkens development: {'attitude': {'from': 85, 'to': 83, 'change': -2}, 'discipline': {'from': 83, 'to': 84, 'change': 1}, 'speed': {'from': 82, 'to': 79, 'change': -3}, 'agility': {'from': 82, 'to': 83, 'change': 1}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Spit Odilon development: {'attitude': {'from': 76, 'to': 75, 'change': -1}, 'discipline': {'from': 73, 'to': 78, 'change': 5}, 'speed': {'from': 0, 'to': 60, 'change': 60}, 'agility': {'from': 76, 'to': 78, 'change': 2}, 'hands': {'from': 74, 'to': 77, 'change': 3}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Cube Kettle development: {'attitude': {'from': 87, 'to': 88, 'change': 1}, 'discipline': {'from': 93, 'to': 95, 'change': 2}, 'legStrength': {'from': 92, 'to': 90, 'change': -2}, 'accuracy': {'from': 83, 'to': 85, 'change': 2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Minotaur Petit development: {'attitude': {'from': 83, 'to': 85, 'change': 2}, 'discipline': {'from': 82, 'to': 86, 'change': 4}, 'armStrength': {'from': 74, 'to': 73, 'change': -1}, 'accuracy': {'from': 78, 'to': 81, 'change': 3}, 'agility': {'from': 73, 'to': 71, 'change': -2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Inne Blomme development: {'attitude': {'from': 69, 'to': 67, 'change': -2}, 'discipline': {'from': 75, 'to': 74, 'change': -1}, 'speed': {'from': 80, 'to': 78, 'change': -2}, 'agility': {'from': 82, 'to': 83, 'change': 1}, 'power': {'from': 83, 'to': 81, 'change': -2}}
+2025-09-22 15:24:15 - floosball.development - INFO - Player Matik Hipbreak development: {'attitude': {'from': 100, 'to': 97, 'change': -3}, 'discipline': {'from': 91, 'to': 93, 'change': 2}, 'speed': {'from': 73, 'to': 75, 'change': 2}, 'hands': {'from': 83, 'to': 84, 'change': 1}}
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Processing free agency
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Generating rookie class
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.playerManager - WARNING - No more unused names available
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Generated 0 rookies
+2025-09-22 15:24:15 - floosball.team_manager - INFO - Updated team ratings for all teams
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Offseason activities complete
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Created 28-week schedule with 312 games
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Season 1 initialized with 312 games
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-22 15:24:15 - floosball.seasonManager - INFO - Simulating week 1 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 2 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 3 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 4 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 5 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 6 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 7 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 8 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 9 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 10 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 11 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 12 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 13 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 14 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 15 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 16 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 17 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 18 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 19 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 20 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 21 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 22 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 23 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 24 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 25 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating week 26 in fast mode
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Starting playoff simulation
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Created playoff bracket with 4 matchups
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Simulating semifinals
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating playoff game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating playoff game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating playoff game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating playoff game: 'NoneType' object has no attribute 'attributes'
+2025-09-22 15:24:16 - floosball.seasonManager - INFO - Completing season simulation

@@ -442,6 +442,124 @@ class TeamManager:
         
         self.logger.info("Cleared season stats for all teams")
     
+    def setNewElo(self) -> None:
+        """
+        Complete ELO Rating System that calculates team ELO based on overall rating and historical performance.
+        Replaces the original setNewElo() function.
+        """
+        import statistics
+        
+        self.logger.info("Calculating new ELO ratings for all teams")
+        
+        ratingList = []
+        eloList = []
+        
+        # Collect current ratings and ELOs
+        for team in self.teams:
+            ratingList.append(team.overallRating)
+            eloList.append(getattr(team, 'elo', 1500))
+        
+        meanRating = round(statistics.mean(ratingList)) if ratingList else 80
+        
+        # Update ELO for each team
+        for team in self.teams:
+            # Initialize ELO if not present
+            if not hasattr(team, 'elo'):
+                team.elo = 1500  # Default starting ELO
+            
+            # Check if team has historical data (stat archives)
+            if hasattr(team, 'statArchive') and len(team.statArchive) > 0:
+                # For teams with historical data: average current ELO with 1500 (regression to mean)
+                team.elo = round((team.elo + 1500) / 2)
+                self.logger.debug(f"Team {team.name}: ELO updated with history regression to {team.elo}")
+            else:
+                # For new teams: adjust ELO based on overall rating relative to league mean
+                teamRatingRank = round(team.overallRating / meanRating, 2) if meanRating > 0 else 1.0
+                team.elo = round(team.elo * teamRatingRank)
+                self.logger.debug(f"Team {team.name}: ELO updated for new team to {team.elo} (rank: {teamRatingRank})")
+            
+            # Ensure ELO is stored in season stats
+            if hasattr(team, 'seasonTeamStats'):
+                team.seasonTeamStats['elo'] = team.elo
+        
+        self.logger.info(f"ELO ratings updated for {len(self.teams)} teams (mean rating: {meanRating})")
+    
+    def calculateWinProbability(self, homeTeam, awayTeam) -> tuple:
+        """
+        Calculate win probabilities for two teams based on their ELO ratings
+        Returns tuple of (home_win_probability, away_win_probability)
+        """
+        import math
+        
+        ELO_DIVISOR = 400  # Standard ELO divisor constant
+        
+        homeTeamElo = getattr(homeTeam, 'elo', 1500)
+        awayTeamElo = getattr(awayTeam, 'elo', 1500)
+        
+        # Use standard ELO probability calculation
+        homeTeamWinProbability = round(1.0 / (1 + math.pow(10, (awayTeamElo - homeTeamElo) / ELO_DIVISOR)), 2)
+        awayTeamWinProbability = round(1.0 / (1 + math.pow(10, (homeTeamElo - awayTeamElo) / ELO_DIVISOR)), 2)
+        
+        return homeTeamWinProbability, awayTeamWinProbability
+    
+    def updateEloAfterGame(self, homeTeam, awayTeam, homeScore: int, awayScore: int, winningTeam) -> None:
+        """
+        Update ELO ratings for both teams after a game based on the result and margin of victory
+        """
+        import math
+        
+        k = 35  # K-factor for ELO calculations - controls rating volatility
+        
+        homeTeamElo = getattr(homeTeam, 'elo', 1500)
+        awayTeamElo = getattr(awayTeam, 'elo', 1500)
+        
+        # Calculate pre-game win probabilities
+        homeTeamWinProbability, awayTeamWinProbability = self.calculateWinProbability(homeTeam, awayTeam)
+        
+        # Calculate margin of victory multiplier (accounts for score differential)
+        scoreDiff = abs(homeScore - awayScore)
+        
+        if winningTeam == homeTeam:
+            # Home team won
+            marginOfVictoryMultiplier = math.log(scoreDiff + 1) * (2.2 / ((homeTeamElo - awayTeamElo) * 0.001 + 2.2))
+            homeTeam.elo = round(homeTeamElo + (k * marginOfVictoryMultiplier) * (1 - homeTeamWinProbability))
+            awayTeam.elo = round(awayTeamElo + (k * marginOfVictoryMultiplier) * (0 - awayTeamWinProbability))
+        else:
+            # Away team won  
+            marginOfVictoryMultiplier = math.log(scoreDiff + 1) * (2.2 / ((awayTeamElo - homeTeamElo) * 0.001 + 2.2))
+            homeTeam.elo = round(homeTeamElo + (k * marginOfVictoryMultiplier) * (0 - homeTeamWinProbability))
+            awayTeam.elo = round(awayTeamElo + (k * marginOfVictoryMultiplier) * (1 - awayTeamWinProbability))
+        
+        # Update season stats with new ELO
+        if hasattr(homeTeam, 'seasonTeamStats'):
+            homeTeam.seasonTeamStats['elo'] = homeTeam.elo
+        if hasattr(awayTeam, 'seasonTeamStats'):
+            awayTeam.seasonTeamStats['elo'] = awayTeam.elo
+        
+        self.logger.debug(f"ELO updated after game: {homeTeam.name}={homeTeam.elo}, {awayTeam.name}={awayTeam.elo}")
+    
+    def getTeamsByEloRanking(self) -> List[FloosTeam.Team]:
+        """Get teams sorted by ELO rating (highest first)"""
+        return sorted(self.teams, key=lambda team: getattr(team, 'elo', 1500), reverse=True)
+    
+    def getEloStatistics(self) -> Dict[str, Any]:
+        """Get ELO statistics for all teams"""
+        import statistics
+        
+        eloRatings = [getattr(team, 'elo', 1500) for team in self.teams]
+        
+        if not eloRatings:
+            return {}
+        
+        return {
+            'mean': round(statistics.mean(eloRatings)),
+            'median': round(statistics.median(eloRatings)),
+            'min': min(eloRatings),
+            'max': max(eloRatings),
+            'range': max(eloRatings) - min(eloRatings),
+            'standardDeviation': round(statistics.stdev(eloRatings)) if len(eloRatings) > 1 else 0
+        }
+    
     def getTeamById(self, teamId: int) -> Optional[FloosTeam.Team]:
         """Get team by ID"""
         for team in self.teams:

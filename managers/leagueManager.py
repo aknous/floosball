@@ -552,8 +552,9 @@ class LeagueManager:
         logger.info(f"Playoffs completed for season {currentSeason}, champion: {champ.name if champ else 'None'}")
         return champ
     
-    def _getPlayoffStartTime(self, week: int) -> datetime.datetime:
+    def _getPlayoffStartTime(self, week: int):
         """Calculate start time for playoff rounds"""
+        import datetime
         now = datetime.datetime.utcnow()
         return now + datetime.timedelta(days=week)
     
