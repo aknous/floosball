@@ -15,11 +15,12 @@ import floosball_player as FloosPlayer
 import floosball_methods as FloosMethods
 import datetime
 import math
-import glob
 import random
 from logger_config import main_logger
 from serializers import ModernSerializer
 from managers.playerManager import PlayerManager
+from managers.teamManager import TeamManager
+from managers.recordManager import RecordManager
 from config_manager import get_config, save_config_value
  
 
@@ -88,447 +89,7 @@ scheduleScheme = [
     ('1411','1216','1315','2421','2226','2325','3431','3236','3335','4441','4246','4345'),
     ('1115','1214','1613','2125','2224','2623','3135','3234','3633','4145','4244','4643')]
 
-allTimeRecordsDict = {
-    'players': {
-        'passing': {
-            'game': {
-                'yards': {
-                    'record': 'Pass Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'tds': {
-                    'record': 'Pass TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'comps': {
-                    'record': 'Completions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'ints': {
-                    'record': 'Most Interceptions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'career': {
-                'yards': {
-                    'record': 'Pass Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'tds': {
-                    'record': 'Pass TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'comps': {
-                    'record': 'Completions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'ints': {
-                    'record': 'Most Interceptions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'season': {
-                'yards': {
-                    'record': 'Pass Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'tds': {
-                    'record': 'Pass TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'comps': {
-                    'record': 'Completions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'ints': {
-                    'record': 'Most Interceptions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                }
-            }
-        },
-        'rushing': {
-            'game': {
-                'yards': {
-                    'record': 'Rush Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'tds': {
-                    'record': 'Rush TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'fumbles': {
-                    'record': 'Most Fumbles',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'career': {
-                'yards': {
-                    'record': 'Rush Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'tds': {
-                    'record': 'Rush TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'fumbles': {
-                    'record': 'Most Fumbles',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'season': {
-                'yards': {
-                    'record': 'Rush Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'tds': {
-                    'record': 'Rush TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'fumbles': {
-                    'record': 'Most Fumbles',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                }
-            }
-        },
-        'receiving': {
-            'game': {
-                'yards': {
-                    'record': 'Receiving Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'tds': {
-                    'record': 'Receiving TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'receptions': {
-                    'record': 'Receptions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'career': {
-                'yards': {
-                    'record': 'Receiving Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'tds': {
-                    'record': 'Receiving TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'receptions': {
-                    'record': 'Receptions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'season': {
-                'yards': {
-                    'record': 'Receiving Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'tds': {
-                    'record': 'Receiving TDs',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'receptions': {
-                    'record': 'Receptions',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                }
-            }
-        },
-        'kicking': {
-            'game': {
-                'fgs': {
-                    'record': 'Field Goals',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'fgYards': {
-                    'record': 'Total FG Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'career': {
-                'fgs': {
-                    'record': 'Field Goals',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'fgYards': {
-                    'record': 'Total FG Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0
-                }
-            },
-            'season': {
-                'fgs': {
-                    'record': 'Field Goals',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'fgYards': {
-                    'record': 'Total FG Yards',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                },
-                'points': {
-                    'record': 'Fantasy Points',
-                    'name': None,
-                    'id': 0,
-                    'value': 0,
-                    'season': 0
-                }
-            }
-        }
-    },
-    'team': {
-        'game': {
-            'yards': {
-                'record': 'Yards',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'tds': {
-                'record': 'TDs',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'pts': {
-                'record': 'Total Points',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            }
-        },
-        'allTime': {
-            'wins': {
-                'record': 'Most Wins',
-                'name': None,
-                'id': 0,
-                'value': 0,
-            },
-            'losses': {
-                'record': 'Most Losses',
-                'name': None,
-                'id': 0,
-                'value': 0,
-            },
-            'titles': {
-                'record': 'FloosBowl Titles',
-                'name': None,
-                'id': 0,
-                'value': 0,
-            },
-            'leagueTitles': {
-                'record': 'League Titles',
-                'name': None,
-                'id': 0,
-                'value': 0,
-            },
-            'regSeasonTitles': {
-                'record': 'Regular Season Titles',
-                'name': None,
-                'id': 0,
-                'value': 0,
-            }
-        },
-        'season': {
-            'yards': {
-                'record': 'Yards',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'tds': {
-                'record': 'TDs',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'pts': {
-                'record': 'Total Points',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'ints': {
-                'record': 'Most Interceptions',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'fumRec': {
-                'record': 'Most Fumble Recoveries',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            },
-            'elo': {
-                'record': 'Highest Rating',
-                'name': None,
-                'id': 0,
-                'value': 0,
-                'season': 0
-            }
-        }
-    }
-}
+# allTimeRecordsDict moved to RecordManager for better encapsulation
 
 
 dateNow = datetime.datetime.now()
@@ -541,349 +102,12 @@ elif dateNow.day > dateNowUtc.day:
     utcOffset = dateNowUtc.hour - (dateNow.hour + 24)
 
 
-def checkPlayerGameRecords():
-    for player in activePlayerList:
-        player: FloosPlayer.Player
-        if player.gameStatsDict['passing']['att'] > 0:
-            if player.gameStatsDict['passing']['comp'] > allTimeRecordsDict['players']['passing']['game']['comps']['value']:
-                allTimeRecordsDict['players']['passing']['game']['comps']['value'] = player.gameStatsDict['passing']['comp']
-                allTimeRecordsDict['players']['passing']['game']['comps']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['game']['comps']['id'] = player.id
-            if player.gameStatsDict['passing']['yards'] > allTimeRecordsDict['players']['passing']['game']['yards']['value']:
-                allTimeRecordsDict['players']['passing']['game']['yards']['value'] = player.gameStatsDict['passing']['yards']
-                allTimeRecordsDict['players']['passing']['game']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['game']['yards']['id'] = player.id
-            if player.gameStatsDict['passing']['tds'] > allTimeRecordsDict['players']['passing']['game']['tds']['value']:
-                allTimeRecordsDict['players']['passing']['game']['tds']['value'] = player.gameStatsDict['passing']['tds']
-                allTimeRecordsDict['players']['passing']['game']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['game']['tds']['id'] = player.id
-            if player.gameStatsDict['passing']['ints'] > allTimeRecordsDict['players']['passing']['game']['ints']['value']:
-                allTimeRecordsDict['players']['passing']['game']['ints']['value'] = player.gameStatsDict['passing']['ints']
-                allTimeRecordsDict['players']['passing']['game']['ints']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['game']['ints']['id'] = player.id
-            if player.gameStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['passing']['game']['points']['value']:
-                allTimeRecordsDict['players']['passing']['game']['points']['value'] = player.gameStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['passing']['game']['points']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['game']['points']['id'] = player.id
-
-        if player.gameStatsDict['rushing']['carries'] > 0:
-            if player.gameStatsDict['rushing']['yards'] > allTimeRecordsDict['players']['rushing']['game']['yards']['value']:
-                allTimeRecordsDict['players']['rushing']['game']['yards']['value'] = player.gameStatsDict['rushing']['yards']
-                allTimeRecordsDict['players']['rushing']['game']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['game']['yards']['id'] = player.id
-            if player.gameStatsDict['rushing']['tds'] > allTimeRecordsDict['players']['rushing']['game']['tds']['value']:
-                allTimeRecordsDict['players']['rushing']['game']['tds']['value'] = player.gameStatsDict['rushing']['tds']
-                allTimeRecordsDict['players']['rushing']['game']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['game']['tds']['id'] = player.id
-            if player.gameStatsDict['rushing']['fumblesLost'] > allTimeRecordsDict['players']['rushing']['game']['fumbles']['value']:
-                allTimeRecordsDict['players']['rushing']['game']['fumbles']['value'] = player.gameStatsDict['rushing']['fumblesLost']
-                allTimeRecordsDict['players']['rushing']['game']['fumbles']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['game']['fumbles']['id'] = player.id
-            if player.gameStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['rushing']['game']['points']['value']:
-                allTimeRecordsDict['players']['rushing']['game']['points']['value'] = player.gameStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['rushing']['game']['points']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['game']['points']['id'] = player.id
-        
-        if player.gameStatsDict['receiving']['receptions'] > 0:
-            if player.gameStatsDict['receiving']['yards'] > allTimeRecordsDict['players']['receiving']['game']['yards']['value']:
-                allTimeRecordsDict['players']['receiving']['game']['yards']['value'] = player.gameStatsDict['receiving']['yards']
-                allTimeRecordsDict['players']['receiving']['game']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['game']['yards']['id'] = player.id
-            if player.gameStatsDict['receiving']['tds'] > allTimeRecordsDict['players']['receiving']['game']['tds']['value']:
-                allTimeRecordsDict['players']['receiving']['game']['tds']['value'] = player.gameStatsDict['receiving']['tds']
-                allTimeRecordsDict['players']['receiving']['game']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['game']['tds']['id'] = player.id
-            if player.gameStatsDict['receiving']['receptions'] > allTimeRecordsDict['players']['receiving']['game']['receptions']['value']:
-                allTimeRecordsDict['players']['receiving']['game']['receptions']['value'] = player.gameStatsDict['receiving']['receptions']
-                allTimeRecordsDict['players']['receiving']['game']['receptions']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['game']['receptions']['id'] = player.id
-            
-            if player.position == FloosPlayer.Position.WR or player.position == FloosPlayer.Position.TE:
-                if player.gameStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['receiving']['game']['points']['value']:
-                    allTimeRecordsDict['players']['receiving']['game']['points']['value'] = player.gameStatsDict['fantasyPoints']
-                    allTimeRecordsDict['players']['receiving']['game']['points']['name'] = player.name
-                    allTimeRecordsDict['players']['receiving']['game']['points']['id'] = player.id
-        
-        if player.gameStatsDict['kicking']['fgs'] > 0:
-            if player.gameStatsDict['kicking']['fgs'] > allTimeRecordsDict['players']['kicking']['game']['fgs']['value']:
-                allTimeRecordsDict['players']['kicking']['game']['fgs']['value'] = player.gameStatsDict['kicking']['fgs']
-                allTimeRecordsDict['players']['kicking']['game']['fgs']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['game']['fgs']['id'] = player.id
-            if player.gameStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['kicking']['game']['points']['value']:
-                allTimeRecordsDict['players']['kicking']['game']['points']['value'] = player.gameStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['kicking']['game']['points']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['game']['points']['id'] = player.id
-        
-        if player.gameStatsDict['kicking']['fgYards'] > 0:
-            if player.gameStatsDict['kicking']['fgYards'] > allTimeRecordsDict['players']['kicking']['game']['fgYards']['value']:
-                allTimeRecordsDict['players']['kicking']['game']['fgYards']['value'] = player.gameStatsDict['kicking']['fgYards']
-                allTimeRecordsDict['players']['kicking']['game']['fgYards']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['game']['fgYards']['id'] = player.id
-
-def checkTeamGameRecords(game:FloosGame.Game):
-    if game.homeScore > allTimeRecordsDict['team']['game']['pts']['value']:
-        allTimeRecordsDict['team']['game']['pts']['value'] = game.homeScore
-        allTimeRecordsDict['team']['game']['pts']['name'] = '{} {}'.format(game.homeTeam.city, game.homeTeam.name)
-        allTimeRecordsDict['team']['game']['pts']['id'] = game.homeTeam.id
-    if (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']) > allTimeRecordsDict['team']['game']['tds']['value']:
-        allTimeRecordsDict['team']['game']['tds']['value'] = (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
-        allTimeRecordsDict['team']['game']['tds']['name'] = '{} {}'.format(game.homeTeam.city, game.homeTeam.name)
-        allTimeRecordsDict['team']['game']['tds']['id'] = game.homeTeam.id
-    if (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']) > allTimeRecordsDict['team']['game']['yards']['value']:
-        allTimeRecordsDict['team']['game']['yards']['value'] = (game.homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
-        allTimeRecordsDict['team']['game']['yards']['name'] = '{} {}'.format(game.homeTeam.city, game.homeTeam.name)
-        allTimeRecordsDict['team']['game']['yards']['id'] = game.homeTeam.id
-        
-    if game.awayScore > allTimeRecordsDict['team']['game']['pts']['value']:
-        allTimeRecordsDict['team']['game']['pts']['value'] = game.awayScore
-        allTimeRecordsDict['team']['game']['pts']['name'] = '{} {}'.format(game.awayTeam.city, game.awayTeam.name)
-        allTimeRecordsDict['team']['game']['pts']['id'] = game.awayTeam.id
-    if (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']) > allTimeRecordsDict['team']['game']['tds']['value']:
-        allTimeRecordsDict['team']['game']['tds']['value'] = (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
-        allTimeRecordsDict['team']['game']['tds']['name'] = '{} {}'.format(game.awayTeam.city, game.awayTeam.name)
-        allTimeRecordsDict['team']['game']['tds']['id'] = game.awayTeam.id
-    if (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']) > allTimeRecordsDict['team']['game']['yards']['value']:
-        allTimeRecordsDict['team']['game']['yards']['value'] = (game.awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + game.awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
-        allTimeRecordsDict['team']['game']['yards']['name'] = '{} {}'.format(game.awayTeam.city, game.awayTeam.name)
-        allTimeRecordsDict['team']['game']['yards']['id'] = game.awayTeam.id
 
 
 
-def checkCareerRecords():
-    for player in activePlayerList:
-        player: FloosPlayer.Player
-        if player.careerStatsDict['passing']['att'] > 0:
-            if player.careerStatsDict['passing']['comp'] > allTimeRecordsDict['players']['passing']['career']['comps']['value']:
-                allTimeRecordsDict['players']['passing']['career']['comps']['value'] = player.careerStatsDict['passing']['comp']
-                allTimeRecordsDict['players']['passing']['career']['comps']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['career']['comps']['id'] = player.id
-            if player.careerStatsDict['passing']['yards'] > allTimeRecordsDict['players']['passing']['career']['yards']['value']:
-                allTimeRecordsDict['players']['passing']['career']['yards']['value'] = player.careerStatsDict['passing']['yards']
-                allTimeRecordsDict['players']['passing']['career']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['career']['yards']['id'] = player.id
-            if player.careerStatsDict['passing']['tds'] > allTimeRecordsDict['players']['passing']['career']['tds']['value']:
-                allTimeRecordsDict['players']['passing']['career']['tds']['value'] = player.careerStatsDict['passing']['tds']
-                allTimeRecordsDict['players']['passing']['career']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['career']['tds']['id'] = player.id
-            if player.careerStatsDict['passing']['ints'] > allTimeRecordsDict['players']['passing']['career']['ints']['value']:
-                allTimeRecordsDict['players']['passing']['career']['ints']['value'] = player.careerStatsDict['passing']['ints']
-                allTimeRecordsDict['players']['passing']['career']['ints']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['career']['ints']['id'] = player.id
-            if player.careerStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['passing']['career']['points']['value']:
-                allTimeRecordsDict['players']['passing']['career']['points']['value'] = player.careerStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['passing']['career']['points']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['career']['points']['id'] = player.id
-
-        if player.careerStatsDict['rushing']['carries'] > 0:
-            if player.careerStatsDict['rushing']['yards'] > allTimeRecordsDict['players']['rushing']['career']['yards']['value']:
-                allTimeRecordsDict['players']['rushing']['career']['yards']['value'] = player.careerStatsDict['rushing']['yards']
-                allTimeRecordsDict['players']['rushing']['career']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['career']['yards']['id'] = player.id
-            if player.careerStatsDict['rushing']['tds'] > allTimeRecordsDict['players']['rushing']['career']['tds']['value']:
-                allTimeRecordsDict['players']['rushing']['career']['tds']['value'] = player.careerStatsDict['rushing']['tds']
-                allTimeRecordsDict['players']['rushing']['career']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['career']['tds']['id'] = player.id
-            if player.careerStatsDict['rushing']['fumblesLost'] > allTimeRecordsDict['players']['rushing']['career']['fumbles']['value']:
-                allTimeRecordsDict['players']['rushing']['career']['fumbles']['value'] = player.careerStatsDict['rushing']['fumblesLost']
-                allTimeRecordsDict['players']['rushing']['career']['fumbles']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['career']['fumbles']['id'] = player.id
-            if player.careerStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['rushing']['career']['points']['value']:
-                allTimeRecordsDict['players']['rushing']['career']['points']['value'] = player.careerStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['rushing']['career']['points']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['career']['points']['id'] = player.id
-        
-        if player.careerStatsDict['receiving']['receptions'] > 0:
-            if player.careerStatsDict['receiving']['yards'] > allTimeRecordsDict['players']['receiving']['career']['yards']['value']:
-                allTimeRecordsDict['players']['receiving']['career']['yards']['value'] = player.careerStatsDict['receiving']['yards']
-                allTimeRecordsDict['players']['receiving']['career']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['career']['yards']['id'] = player.id
-            if player.careerStatsDict['receiving']['tds'] > allTimeRecordsDict['players']['receiving']['career']['tds']['value']:
-                allTimeRecordsDict['players']['receiving']['career']['tds']['value'] = player.careerStatsDict['receiving']['tds']
-                allTimeRecordsDict['players']['receiving']['career']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['career']['tds']['id'] = player.id
-            if player.careerStatsDict['receiving']['receptions'] > allTimeRecordsDict['players']['receiving']['career']['receptions']['value']:
-                allTimeRecordsDict['players']['receiving']['career']['receptions']['value'] = player.careerStatsDict['receiving']['receptions']
-                allTimeRecordsDict['players']['receiving']['career']['receptions']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['career']['receptions']['id'] = player.id
-            if player.position == FloosPlayer.Position.WR or player.position == FloosPlayer.Position.TE:
-                if player.careerStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['receiving']['career']['points']['value']:
-                    allTimeRecordsDict['players']['receiving']['career']['points']['value'] = player.careerStatsDict['fantasyPoints']
-                    allTimeRecordsDict['players']['receiving']['career']['points']['name'] = player.name
-                    allTimeRecordsDict['players']['receiving']['career']['points']['id'] = player.id
-        
-        if player.careerStatsDict['kicking']['fgs'] > 0:
-            if player.careerStatsDict['kicking']['fgs'] > allTimeRecordsDict['players']['kicking']['career']['fgs']['value']:
-                allTimeRecordsDict['players']['kicking']['career']['fgs']['value'] = player.careerStatsDict['kicking']['fgs']
-                allTimeRecordsDict['players']['kicking']['career']['fgs']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['career']['fgs']['id'] = player.id
-            if player.careerStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['kicking']['career']['points']['value']:
-                allTimeRecordsDict['players']['kicking']['career']['points']['value'] = player.careerStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['kicking']['career']['points']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['career']['points']['id'] = player.id
-        
-        if player.careerStatsDict['kicking']['fgYards'] > 0:
-            if player.careerStatsDict['kicking']['fgYards'] > allTimeRecordsDict['players']['kicking']['career']['fgYards']['value']:
-                allTimeRecordsDict['players']['kicking']['career']['fgYards']['value'] = player.careerStatsDict['kicking']['fgYards']
-                allTimeRecordsDict['players']['kicking']['career']['fgYards']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['career']['fgYards']['id'] = player.id
-
-    for team in teamList:
-            team: FloosTeam.Team
-            if team.allTimeTeamStats['wins'] > allTimeRecordsDict['team']['allTime']['wins']['value']:
-                allTimeRecordsDict['team']['allTime']['wins']['value'] = team.allTimeTeamStats['wins']
-                allTimeRecordsDict['team']['allTime']['wins']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['allTime']['wins']['id'] = team.id
-
-            if team.allTimeTeamStats['losses'] > allTimeRecordsDict['team']['allTime']['losses']['value']:
-                allTimeRecordsDict['team']['allTime']['losses']['value'] = team.allTimeTeamStats['losses']
-                allTimeRecordsDict['team']['allTime']['losses']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['allTime']['losses']['id'] = team.id
-
-            if len(team.floosbowlChampionships) > allTimeRecordsDict['team']['allTime']['titles']['value']:
-                allTimeRecordsDict['team']['allTime']['titles']['value'] = len(team.floosbowlChampionships)
-                allTimeRecordsDict['team']['allTime']['titles']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['allTime']['titles']['id'] = team.id
-
-            if len(team.leagueChampionships) > allTimeRecordsDict['team']['allTime']['leagueTitles']['value']:
-                allTimeRecordsDict['team']['allTime']['leagueTitles']['value'] = len(team.leagueChampionships)
-                allTimeRecordsDict['team']['allTime']['leagueTitles']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['allTime']['leagueTitles']['id'] = team.id
-
-            if len(team.regularSeasonChampions) > allTimeRecordsDict['team']['allTime']['regSeasonTitles']['value']:
-                allTimeRecordsDict['team']['allTime']['regSeasonTitles']['value'] = len(team.regularSeasonChampions)
-                allTimeRecordsDict['team']['allTime']['regSeasonTitles']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['allTime']['regSeasonTitles']['id'] = team.id
 
 
-def checkSeasonRecords(season):
-    for player in activePlayerList:
-        player: FloosPlayer.Player
-        if player.seasonStatsDict['passing']['att'] > 0:
-            if player.seasonStatsDict['passing']['comp'] > allTimeRecordsDict['players']['passing']['season']['comps']['value']:
-                allTimeRecordsDict['players']['passing']['season']['comps']['value'] = player.seasonStatsDict['passing']['comp']
-                allTimeRecordsDict['players']['passing']['season']['comps']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['season']['comps']['id'] = player.id
-                allTimeRecordsDict['players']['passing']['season']['comps']['season'] = season
-            if player.seasonStatsDict['passing']['yards'] > allTimeRecordsDict['players']['passing']['season']['yards']['value']:
-                allTimeRecordsDict['players']['passing']['season']['yards']['value'] = player.seasonStatsDict['passing']['yards']
-                allTimeRecordsDict['players']['passing']['season']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['season']['yards']['id'] = player.id
-                allTimeRecordsDict['players']['passing']['season']['yards']['season'] = season
-            if player.seasonStatsDict['passing']['tds'] > allTimeRecordsDict['players']['passing']['season']['tds']['value']:
-                allTimeRecordsDict['players']['passing']['season']['tds']['value'] = player.seasonStatsDict['passing']['tds']
-                allTimeRecordsDict['players']['passing']['season']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['season']['tds']['id'] = player.id
-                allTimeRecordsDict['players']['passing']['season']['tds']['season'] = season
-            if player.seasonStatsDict['passing']['ints'] > allTimeRecordsDict['players']['passing']['season']['ints']['value']:
-                allTimeRecordsDict['players']['passing']['season']['ints']['value'] = player.seasonStatsDict['passing']['ints']
-                allTimeRecordsDict['players']['passing']['season']['ints']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['season']['ints']['id'] = player.id
-                allTimeRecordsDict['players']['passing']['season']['ints']['season'] = season
-            if player.seasonStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['passing']['season']['points']['value']:
-                allTimeRecordsDict['players']['passing']['season']['points']['value'] = player.seasonStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['passing']['season']['points']['name'] = player.name
-                allTimeRecordsDict['players']['passing']['season']['points']['id'] = player.id
-                allTimeRecordsDict['players']['passing']['season']['points']['season'] = season
 
-        if player.seasonStatsDict['rushing']['carries'] > 0:
-            if player.seasonStatsDict['rushing']['yards'] > allTimeRecordsDict['players']['rushing']['season']['yards']['value']:
-                allTimeRecordsDict['players']['rushing']['season']['yards']['value'] = player.seasonStatsDict['rushing']['yards']
-                allTimeRecordsDict['players']['rushing']['season']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['season']['yards']['id'] = player.id
-                allTimeRecordsDict['players']['rushing']['season']['yards']['season'] = season
-            if player.seasonStatsDict['rushing']['tds'] > allTimeRecordsDict['players']['rushing']['season']['tds']['value']:
-                allTimeRecordsDict['players']['rushing']['season']['tds']['value'] = player.seasonStatsDict['rushing']['tds']
-                allTimeRecordsDict['players']['rushing']['season']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['season']['tds']['id'] = player.id
-                allTimeRecordsDict['players']['rushing']['season']['tds']['season'] = season
-            if player.seasonStatsDict['rushing']['fumblesLost'] > allTimeRecordsDict['players']['rushing']['season']['fumbles']['value']:
-                allTimeRecordsDict['players']['rushing']['season']['fumbles']['value'] = player.seasonStatsDict['rushing']['fumblesLost']
-                allTimeRecordsDict['players']['rushing']['season']['fumbles']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['season']['fumbles']['id'] = player.id
-                allTimeRecordsDict['players']['rushing']['season']['fumbles']['season'] = season
-            if player.seasonStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['rushing']['season']['points']['value']:
-                allTimeRecordsDict['players']['rushing']['season']['points']['value'] = player.seasonStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['rushing']['season']['points']['name'] = player.name
-                allTimeRecordsDict['players']['rushing']['season']['points']['id'] = player.id
-                allTimeRecordsDict['players']['rushing']['season']['points']['season'] = season
-        
-        if player.seasonStatsDict['receiving']['receptions'] > 0:
-            if player.seasonStatsDict['receiving']['yards'] > allTimeRecordsDict['players']['receiving']['season']['yards']['value']:
-                allTimeRecordsDict['players']['receiving']['season']['yards']['value'] = player.seasonStatsDict['receiving']['yards']
-                allTimeRecordsDict['players']['receiving']['season']['yards']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['season']['yards']['id'] = player.id
-                allTimeRecordsDict['players']['receiving']['season']['yards']['season'] = season
-            if player.seasonStatsDict['receiving']['tds'] > allTimeRecordsDict['players']['receiving']['season']['tds']['value']:
-                allTimeRecordsDict['players']['receiving']['season']['tds']['value'] = player.seasonStatsDict['receiving']['tds']
-                allTimeRecordsDict['players']['receiving']['season']['tds']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['season']['tds']['id'] = player.id
-                allTimeRecordsDict['players']['receiving']['season']['tds']['season'] = season
-            if player.seasonStatsDict['receiving']['receptions'] > allTimeRecordsDict['players']['receiving']['season']['receptions']['value']:
-                allTimeRecordsDict['players']['receiving']['season']['receptions']['value'] = player.seasonStatsDict['receiving']['receptions']
-                allTimeRecordsDict['players']['receiving']['season']['receptions']['name'] = player.name
-                allTimeRecordsDict['players']['receiving']['season']['receptions']['id'] = player.id
-                allTimeRecordsDict['players']['receiving']['season']['receptions']['season'] = season
-            if player.position == FloosPlayer.Position.WR or player.position == FloosPlayer.Position.TE:
-                if player.seasonStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['receiving']['season']['points']['value']:
-                    allTimeRecordsDict['players']['receiving']['season']['points']['value'] = player.seasonStatsDict['fantasyPoints']
-                    allTimeRecordsDict['players']['receiving']['season']['points']['name'] = player.name
-                    allTimeRecordsDict['players']['receiving']['season']['points']['id'] = player.id
-                    allTimeRecordsDict['players']['receiving']['season']['points']['season'] = season
-        
-        if player.seasonStatsDict['kicking']['fgs'] > 0:
-            if player.seasonStatsDict['kicking']['fgs'] > allTimeRecordsDict['players']['kicking']['season']['fgs']['value']:
-                allTimeRecordsDict['players']['kicking']['season']['fgs']['value'] = player.seasonStatsDict['kicking']['fgs']
-                allTimeRecordsDict['players']['kicking']['season']['fgs']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['season']['fgs']['id'] = player.id
-                allTimeRecordsDict['players']['kicking']['season']['fgs']['season'] = season
-            if player.seasonStatsDict['kicking']['fgYards'] > allTimeRecordsDict['players']['kicking']['season']['fgYards']['value']:
-                allTimeRecordsDict['players']['kicking']['season']['fgYards']['value'] = player.seasonStatsDict['kicking']['fgYards']
-                allTimeRecordsDict['players']['kicking']['season']['fgYards']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['season']['fgYards']['id'] = player.id
-                allTimeRecordsDict['players']['kicking']['season']['fgYards']['season'] = season
-            if player.seasonStatsDict['fantasyPoints'] > allTimeRecordsDict['players']['kicking']['season']['points']['value']:
-                allTimeRecordsDict['players']['kicking']['season']['points']['value'] = player.seasonStatsDict['fantasyPoints']
-                allTimeRecordsDict['players']['kicking']['season']['points']['name'] = player.name
-                allTimeRecordsDict['players']['kicking']['season']['points']['id'] = player.id
-                allTimeRecordsDict['players']['kicking']['season']['points']['season'] = season
-
-        for team in teamList:
-            team: FloosTeam.Team
-            if team.seasonTeamStats['Offense']['totalYards'] > allTimeRecordsDict['team']['season']['yards']['value']:
-                allTimeRecordsDict['team']['season']['yards']['value'] = team.seasonTeamStats['Offense']['totalYards']
-                allTimeRecordsDict['team']['season']['yards']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['season']['yards']['id'] = team.id
-                allTimeRecordsDict['team']['season']['yards']['season'] = season
-    
-            if team.seasonTeamStats['Offense']['tds'] > allTimeRecordsDict['team']['season']['tds']['value']:
-                allTimeRecordsDict['team']['season']['tds']['value'] = team.seasonTeamStats['Offense']['tds']
-                allTimeRecordsDict['team']['season']['tds']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['season']['tds']['id'] = team.id
-                allTimeRecordsDict['team']['season']['tds']['season'] = season
-    
-            if team.seasonTeamStats['Offense']['pts'] > allTimeRecordsDict['team']['season']['pts']['value']:
-                allTimeRecordsDict['team']['season']['pts']['value'] = team.seasonTeamStats['Offense']['pts']
-                allTimeRecordsDict['team']['season']['pts']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['season']['pts']['id'] = team.id
-                allTimeRecordsDict['team']['season']['pts']['season'] = season
-    
-            if team.seasonTeamStats['Defense']['ints'] > allTimeRecordsDict['team']['season']['ints']['value']:
-                allTimeRecordsDict['team']['season']['ints']['value'] = team.seasonTeamStats['Defense']['ints']
-                allTimeRecordsDict['team']['season']['ints']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['season']['ints']['id'] = team.id
-                allTimeRecordsDict['team']['season']['ints']['season'] = season
-    
-            if team.seasonTeamStats['Defense']['fumRec'] > allTimeRecordsDict['team']['season']['fumRec']['value']:
-                allTimeRecordsDict['team']['season']['fumRec']['value'] = team.seasonTeamStats['Defense']['fumRec']
-                allTimeRecordsDict['team']['season']['fumRec']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['season']['fumRec']['id'] = team.id
-                allTimeRecordsDict['team']['season']['fumRec']['season'] = season
-    
-            if team.elo > allTimeRecordsDict['team']['season']['elo']['value']:
-                allTimeRecordsDict['team']['season']['elo']['value'] = team.elo
-                allTimeRecordsDict['team']['season']['elo']['name'] = '{} {}'.format(team.city, team.name)
-                allTimeRecordsDict['team']['season']['elo']['id'] = team.id
-                allTimeRecordsDict['team']['season']['elo']['season'] = season
 
     
 class League:
@@ -1455,7 +679,7 @@ class Season:
                 strGame = 'Game {}'.format(game + 1)
                 gameResults = self.activeGames[game].gameDict
                 gameDict[strGame] = gameResults
-                checkTeamGameRecords(self.activeGames[game])
+                recordManager.checkTeamGameRecords(self.activeGames[game])
             weekDict = ModernSerializer.serialize(gameDict)
             jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentWeekText)), "w+")
             jsonFile.write(json.dumps(weekDict, indent=4))
@@ -1466,12 +690,12 @@ class Season:
             list.sort(teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             getPerformanceRating(self.currentWeek)
             playerManager.sortPlayersByPosition()
-            sortDefenses()
+            teamManager.sortDefenses()
             self.updatePlayoffPicture()
             self.checkForClinches()
-            checkPlayerGameRecords()
-            checkCareerRecords()
-            checkSeasonRecords(self.currentSeason)
+            recordManager.checkPlayerGameRecords()
+            recordManager.checkCareerRecords()
+            recordManager.checkSeasonRecords(self.currentSeason)
             self.leagueHighlights.insert(0, {'event': {'text': '{} End'.format(self.currentWeekText)}})
             #await asyncio.sleep(120)
 
@@ -1747,7 +971,7 @@ class Season:
             jsonFile.close()
             if x < numOfRounds - 1:
                 playerManager.sortPlayersByPosition()
-                sortDefenses()
+                teamManager.sortDefenses()
                 #await asyncio.sleep(30)
 
         return champ
@@ -1784,207 +1008,7 @@ def getPlayerTerm(tier: FloosPlayer.PlayerTier):
 
 
 
-def getTeams(_config):
 
-    if os.path.exists("data/teamData"):
-        fileList = glob.glob("data/teamData/team*.json")
-        for file in fileList:
-            with open(file) as jsonFile:
-                team = json.load(jsonFile)
-                newTeam = FloosTeam.Team(team['name'])
-                newTeam.id = team['id']
-                newTeam.city = team['city']
-                newTeam.abbr = team['abbr']
-                newTeam.color = team['color']
-                newTeam.offenseRating = team['offenseRating']
-                newTeam.defenseRunCoverageRating = team['defenseRunCoverageRating']
-                newTeam.defensePassCoverageRating = team['defensePassCoverageRating']
-                newTeam.defensePassRushRating = team['defensePassRushRating']
-                newTeam.defenseRating = team['defenseRating']
-                newTeam.gmScore = team['gmScore']
-                newTeam.defenseOverallTier = team['defenseTier']
-                newTeam.defenseSeasonPerformanceRating = team['defenseSeasonPerformanceRating']
-                newTeam.overallRating = team['overallRating']
-                newTeam.allTimeTeamStats = team['allTimeTeamStats']
-                newTeam.leagueChampionships = team['leagueChampionships']
-                newTeam.floosbowlChampionships = team['floosbowlChampionships']
-                newTeam.regularSeasonChampions = team['regularSeasonChampions']
-                newTeam.playoffAppearances = team['playoffAppearances']
-                if 'rosterHistory' in team:
-                    newTeam.rosterHistory = team['rosterHistory']
-
-                teamRoster = team['roster']
-                for pos, player in teamRoster.items():
-                    for z in activePlayerList:
-                        z:FloosPlayer.Player
-                        if z.name == player['name']:
-                            newTeam.rosterDict[pos] = z
-                            newTeam.playerCap += z.capHit
-                            newTeam.playerNumbersList.append(player['currentNumber'])
-                            break
-
-                teamList.append(newTeam)
-
-    else:
-        id = 1
-        for x in _config['teams']:
-            team = FloosTeam.Team(x['name'])
-            team.city = x['city']
-            team.abbr = x['abbr']
-            team.color = x['color']
-            #team.color = colorList.pop(randint(0,len(colorList)-1))
-            team.id = id
-            teamList.append(team)
-            id += 1
-
-def getLeagues(_config):
-
-    if os.path.exists("data/leagueData.json"):
-        with open('data/leagueData.json') as jsonFile:
-            leagueData = json.load(jsonFile)
-            for x in leagueData:
-                league = League(x)
-                jteamList = leagueData[x]
-                for team in jteamList:
-                    for y in teamList:
-                        if y.name == team:
-                            league.teamList.append(y)
-                            break
-                leagueList.append(league)
-    else:
-        for x in _config['leagues']:
-            league = League(x)
-            leagueList.append(league)
-
-def initTeams():
-    if not os.path.exists('data/teamData'):
-        os.makedirs('data/teamData')
-    for team in teamList:
-        jsonFile = open("data/teamData/team{}.json".format(team.id), "w+")
-        team: FloosTeam.Team
-        team.setupTeam()
-        teamDict = {}
-        teamDict['name'] = team.name
-        teamDict['city'] = team.city
-        teamDict['abbr'] = team.abbr
-        teamDict['color'] = team.color
-        teamDict['id'] = team.id
-        teamDict['offenseRating'] = team.offenseRating
-        teamDict['defenseRunCoverageRating'] = team.defenseRunCoverageRating
-        teamDict['defensePassRating'] = team.defensePassRating
-        teamDict['defensePassCoverageRating'] = team.defensePassCoverageRating
-        teamDict['defensePassRushRating'] = team.defensePassRushRating
-        teamDict['defenseRating'] = team.defenseRating
-        #teamDict['defenseLuck'] = team.defenseLuck
-        #teamDict['defenseDiscipline'] = team.defenseDiscipline
-        teamDict['overallRating'] = team.overallRating
-        teamDict['allTimeTeamStats'] = team.allTimeTeamStats
-        teamDict['floosbowlChampionships'] = team.floosbowlChampionships
-        teamDict['regularSeasonChampions'] = team.regularSeasonChampions
-        teamDict['leagueChampionships'] = team.leagueChampionships
-        teamDict['playoffAppearances'] = team.playoffAppearances
-        teamDict['gmScore'] = team.gmScore
-        teamDict['defenseTier'] = team.defenseOverallTier
-        teamDict['defenseSeasonPerformanceRating'] = team.defenseSeasonPerformanceRating
-
-
-        rosterDict = {}
-        
-        for pos, player in team.rosterDict.items():
-            player:FloosPlayer.Player
-            playerDict = {}
-            playerDict['name'] = player.name
-            playerDict['id'] = player.id
-            playerDict['tier'] = player.playerTier.name
-            playerDict['overallRating'] = player.attributes.overallRating
-            playerDict['term'] = player.term
-            playerDict['termRemaining'] = player.termRemaining
-            playerDict['seasonsPlayed'] = player.seasonsPlayed
-            playerDict['careerStatsDict'] = player.careerStatsDict
-            if player.team is not team:
-                player.team = team
-            rosterDict[pos] = playerDict
-
-        teamDict['roster'] = rosterDict
-
-        jsonFile.write(json.dumps(teamDict, indent=4))
-        jsonFile.close()
-
-    sortDefenses()
-
-
-def initPlayers():
-    pass
-
-
-
-def sortDefenses():
-    teamDefenseOverallRatingList = []
-    teamDefensePassRatingList = []
-    teamDefenseRunRatingList = []
-
-    for team in teamList:
-        team: FloosTeam.Team
-        teamDefenseOverallRatingList.append(team.defenseOverallRating)
-        teamDefensePassRatingList.append(team.defensePassRating)
-        teamDefenseRunRatingList.append(team.defenseRunCoverageRating)
-    
-    tier5perc = np.percentile(teamDefenseOverallRatingList, 95)
-    tier4perc = np.percentile(teamDefenseOverallRatingList, 80)
-    tier3perc = np.percentile(teamDefenseOverallRatingList, 30)
-    tier2perc = np.percentile(teamDefenseOverallRatingList, 10)
-
-    for team in teamList:
-        team: FloosTeam.Team
-        if team.defenseOverallRating >= tier5perc:
-            team.defenseOverallTier = FloosPlayer.PlayerTier.TierS.value
-        elif team.defenseOverallRating >= tier4perc:
-            team.defenseOverallTier = FloosPlayer.PlayerTier.TierA.value
-        elif team.defenseOverallRating >= tier3perc:
-            team.defenseOverallTier = FloosPlayer.PlayerTier.TierB.value
-        elif team.defenseOverallRating >= tier2perc:
-            team.defenseOverallTier = FloosPlayer.PlayerTier.TierC.value
-        else:
-            team.defenseOverallTier = FloosPlayer.PlayerTier.TierD.value
-
-    tier5perc = np.percentile(teamDefensePassRatingList, 95)
-    tier4perc = np.percentile(teamDefensePassRatingList, 80)
-    tier3perc = np.percentile(teamDefensePassRatingList, 30)
-    tier2perc = np.percentile(teamDefensePassRatingList, 10)
-
-    for team in teamList:
-        team: FloosTeam.Team
-        if team.defensePassRating >= tier5perc:
-            team.defensePassTier = FloosPlayer.PlayerTier.TierS.value
-        elif team.defensePassRating >= tier4perc:
-            team.defensePassTier = FloosPlayer.PlayerTier.TierA.value
-        elif team.defensePassRating >= tier3perc:
-            team.defensePassTier = FloosPlayer.PlayerTier.TierB.value
-        elif team.defensePassRating >= tier2perc:
-            team.defensePassTier = FloosPlayer.PlayerTier.TierC.value
-        else:
-            team.defensePassTier = FloosPlayer.PlayerTier.TierD.value
-
-    tier5perc = np.percentile(teamDefenseRunRatingList, 95)
-    tier4perc = np.percentile(teamDefenseRunRatingList, 80)
-    tier3perc = np.percentile(teamDefenseRunRatingList, 30)
-    tier2perc = np.percentile(teamDefenseRunRatingList, 10)
-
-    for team in teamList:
-        team: FloosTeam.Team
-        if team.defenseRunCoverageRating >= tier5perc:
-            team.defenseRunTier = FloosPlayer.PlayerTier.TierS.value
-        elif team.defenseRunCoverageRating >= tier4perc:
-            team.defenseRunTier = FloosPlayer.PlayerTier.TierA.value
-        elif team.defenseRunCoverageRating >= tier3perc:
-            team.defenseRunTier = FloosPlayer.PlayerTier.TierB.value
-        elif team.defenseRunCoverageRating >= tier2perc:
-            team.defenseRunTier = FloosPlayer.PlayerTier.TierC.value
-        else:
-            team.defenseRunTier = FloosPlayer.PlayerTier.TierD.value
-
-
-        
 def initLeagues():
     tempTeamList = teamList.copy()
     numOfLeagues = len(leagueList)
@@ -2471,7 +1495,7 @@ async def offseason():
     for team in teamList:
         team.faComplete = False
         team.updateDefense()
-    sortDefenses()
+    teamManager.sortDefenses()
     inductHallOfFame()
     
 def getPerformanceRating(week):
@@ -2774,6 +1798,14 @@ async def startLeague():
     global playerManager
     playerManager = PlayerManager(getService('game_state'))
     
+    # Initialize TeamManager
+    global teamManager
+    teamManager = TeamManager(getService('game_state'))
+    
+    # Initialize RecordManager
+    global recordManager
+    recordManager = RecordManager(getService('game_state'))
+    
     # Set up backward compatibility - global variables now reference PlayerManager
     global activePlayerList, freeAgentList, retiredPlayersList, hallOfFame
     global activeQbList, activeRbList, activeWrList, activeTeList, activeKList
@@ -2787,6 +1819,11 @@ async def startLeague():
     newlyRetiredPlayersList = playerManager.newlyRetiredPlayers
     
     activeQbList = playerManager.activeQbs
+    
+    # Set up backward compatibility for team-related global variables
+    global teamList, leagueList
+    teamList = teamManager.teams
+    leagueList = teamManager.leagues
     activeRbList = playerManager.activeRbs
     activeWrList = playerManager.activeWrs
     activeTeList = playerManager.activeTes
@@ -2798,7 +1835,7 @@ async def startLeague():
     loadGameConfig(config)
     
     # Use service container for cleaner config access
-    from service_container import update_game_state, get_nested_game_config
+    from service_container import update_game_state, get_nested_game_config, registerService
     cap = get_nested_game_config('leagueConfig', 'cap')
     totalSeasons = get_nested_game_config('leagueConfig', 'totalSeasons')
     deleteDataOnStart = get_nested_game_config('leagueConfig', 'deleteDataOnRestart')
@@ -2835,11 +1872,16 @@ async def startLeague():
     playerManager.generatePlayers(config)
     #print('Player creation done')
     #print('Creating teams...')
-    getTeams(config)
+    teamManager.generateTeams(config)
     #print('Team creation done')
     
     # Store team list in service container for PlayerManager access
     setGameState('teamList', teamList)
+    
+    # Register managers in service container  
+    registerService('player_manager', playerManager)
+    registerService('team_manager', teamManager)
+    registerService('record_manager', recordManager)
 
     if not os.path.exists("data/teamData"):
         #print('Starting player draft...')
@@ -2849,13 +1891,13 @@ async def startLeague():
         main_logger.info('Skipping draft')
 
     #print('Initializing teams...')
-    initTeams()
+    teamManager.initializeTeams()
     #print('Cleaning up players...')
     #initPlayers()
     #print('Saving player data...')
     playerManager.savePlayerData()
     #print('Creating divisions...')
-    getLeagues(config)
+    teamManager.generateLeagues(config)
     if not os.path.exists("data/leagueData.json"):
         initLeagues()
 
@@ -2883,3 +1925,44 @@ async def startLeague():
         #await asyncio.sleep(120)
         activeSeason.clearPlayerSeasonStats()
         activeSeason.clearTeamSeasonStats()
+
+    main_logger.info('League simulation complete!')
+
+
+# New refactored entry point using FloosballApplication
+async def startLeagueRefactored():
+    """New refactored main entry point using the manager architecture"""
+    from service_container import initializeServices
+    from managers.floosballApplication import FloosballApplication
+    from config_manager import get_config
+    
+    main_logger.info(f'Floosball v{__version__} (Refactored)')
+    
+    # Initialize service container
+    from service_container import initializeServices, getService
+    initializeServices()
+    
+    # Get configuration
+    config = get_config()
+    
+    # Create application instance
+    app = FloosballApplication(getService('game_state'))
+    
+    # Initialize league system
+    await app.initializeLeague(config)
+    
+    # Run simulation
+    await app.runSimulation()
+    
+    main_logger.info('Refactored league simulation complete!')
+
+
+if __name__ == '__main__':
+    import sys
+    
+    # Check if user wants to use refactored version
+    if '--refactored' in sys.argv:
+        asyncio.run(startLeagueRefactored())
+    else:
+        # Use original implementation by default for backward compatibility
+        asyncio.run(startLeague())
