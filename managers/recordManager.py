@@ -492,21 +492,46 @@ class RecordManager:
         self._records = records
     
     def loadRecordsFromFile(self, filePath: str = "data/allTimeRecords.json") -> None:
-        """Load records from JSON file"""
+        """Load records from JSON file and ensure complete structure"""
         import json
         import os
         
         try:
             if os.path.exists(filePath):
                 with open(filePath, 'r') as f:
-                    self._records = json.load(f)
-                self.logger.info(f"Loaded records from {filePath}")
+                    loaded_records = json.load(f)
+                
+                # Get the complete structure template
+                complete_structure = self._initializeRecordStructure()
+                
+                # Merge loaded records with complete structure to fill any missing sections
+                self._records = self._mergeRecordStructures(complete_structure, loaded_records)
+                
+                self.logger.info(f"Loaded records from {filePath} and validated structure")
             else:
                 self._records = self._initializeRecordStructure()
                 self.logger.info("Initialized new record structure")
         except Exception as e:
             self.logger.error(f"Failed to load records from {filePath}: {e}")
             self._records = self._initializeRecordStructure()
+    
+    def _mergeRecordStructures(self, complete: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge loaded records with complete structure to fill missing sections"""
+        result = complete.copy()
+        
+        for key, value in loaded.items():
+            if key in result:
+                if isinstance(value, dict) and isinstance(result[key], dict):
+                    # Recursively merge nested dictionaries
+                    result[key] = self._mergeRecordStructures(result[key], value)
+                else:
+                    # Use the loaded value
+                    result[key] = value
+            else:
+                # Add new key from loaded data
+                result[key] = value
+        
+        return result
     
     def saveRecordsToFile(self, filePath: str = "data/allTimeRecords.json") -> None:
         """Save records to JSON file"""

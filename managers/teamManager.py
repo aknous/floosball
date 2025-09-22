@@ -416,9 +416,29 @@ class TeamManager:
     
     def clearTeamSeasonStats(self) -> None:
         """Clear season statistics for all teams"""
+        import floosball_team as FloosTeam
+        import copy
+        
         for team in self.teams:
             if hasattr(team, 'seasonTeamStats'):
-                team.seasonTeamStats.clear()
+                # Save current elo and rating before reset
+                current_elo = team.seasonTeamStats.get('elo', getattr(team, 'elo', 1500))
+                current_rating = team.seasonTeamStats.get('overallRating', getattr(team, 'overallRating', 80))
+                
+                # Archive current stats if they exist
+                if hasattr(team, 'statArchive') and team.seasonTeamStats:
+                    team.statArchive.insert(0, copy.deepcopy(team.seasonTeamStats))
+                
+                # Properly restore the full structure from teamStatsDict
+                team.seasonTeamStats = copy.deepcopy(FloosTeam.teamStatsDict)
+                
+                # Restore preserved values
+                team.seasonTeamStats['elo'] = current_elo
+                team.seasonTeamStats['overallRating'] = current_rating
+                team.seasonTeamStats['season'] = getattr(self.serviceContainer.getService('season_manager'), 'currentSeasonNumber', 1) if self.serviceContainer.getService('season_manager') else 1
+                
+                # Clear schedule for new season
+                team.schedule = []
         
         self.logger.info("Cleared season stats for all teams")
     
