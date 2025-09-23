@@ -1325,6 +1325,14 @@ class Game:
         self.winningTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
         self.losingTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
 
+        # Sync optimized stat_tracker data to legacy gameStatsDict for all players
+        for player in self.homeTeam.rosterDict.values():
+            if player:
+                player.sync_stats_dicts()
+        for player in self.awayTeam.rosterDict.values():
+            if player:
+                player.sync_stats_dicts()
+
         for player in self.homeTeam.rosterDict.values():
             player.postgameChanges()
 

@@ -218,26 +218,27 @@ class Team:
             elif game.status is GameStatus.Scheduled:
                 break
 
-        self.seasonTeamStats['Offense']['avgRunYards'] = round(statistics.mean(offenseRunYardsList),2)
-        self.seasonTeamStats['Offense']['avgPassYards'] = round(statistics.mean(offensePassYardsList),2)
-        self.seasonTeamStats['Offense']['avgYards'] = round(statistics.mean(offenseTotalYardsList),2)
-        self.seasonTeamStats['Offense']['avgRunTds'] = round(statistics.mean(offenseRunTdsList),2)
-        self.seasonTeamStats['Offense']['avgPassTds'] = round(statistics.mean(offensePassTdsList),2)
-        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2)
-        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2)
-        self.seasonTeamStats['Offense']['avgFgs'] = round(statistics.mean(offenseFgsList),2)
-        self.seasonTeamStats['Offense']['avgPts'] = round(statistics.mean(offensePtsList),2)
+        # Calculate averages, using 0 for empty lists to prevent "mean requires at least one data point" errors
+        self.seasonTeamStats['Offense']['avgRunYards'] = round(statistics.mean(offenseRunYardsList),2) if offenseRunYardsList else 0
+        self.seasonTeamStats['Offense']['avgPassYards'] = round(statistics.mean(offensePassYardsList),2) if offensePassYardsList else 0
+        self.seasonTeamStats['Offense']['avgYards'] = round(statistics.mean(offenseTotalYardsList),2) if offenseTotalYardsList else 0
+        self.seasonTeamStats['Offense']['avgRunTds'] = round(statistics.mean(offenseRunTdsList),2) if offenseRunTdsList else 0
+        self.seasonTeamStats['Offense']['avgPassTds'] = round(statistics.mean(offensePassTdsList),2) if offensePassTdsList else 0
+        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2) if offenseTdsList else 0
+        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2) if offenseTdsList else 0
+        self.seasonTeamStats['Offense']['avgFgs'] = round(statistics.mean(offenseFgsList),2) if offenseFgsList else 0
+        self.seasonTeamStats['Offense']['avgPts'] = round(statistics.mean(offensePtsList),2) if offensePtsList else 0
 
-        self.seasonTeamStats['Defense']['avgSacks'] = round(statistics.mean(defenseSacksList),2)
-        self.seasonTeamStats['Defense']['avgInts'] = round(statistics.mean(defenseIntsList),2)
-        self.seasonTeamStats['Defense']['avgFumRec'] = round(statistics.mean(defenseFumRecList),2)
-        self.seasonTeamStats['Defense']['avgPassYardsAlwd'] = round(statistics.mean(defensePassYardsAlwdList),2)
-        self.seasonTeamStats['Defense']['avgRunYardsAlwd'] = round(statistics.mean(defenseRunYardsAlwdList),2)
-        self.seasonTeamStats['Defense']['avgYardsAlwd'] = round(statistics.mean(defenseTotalYardsAlwdList),2)
-        self.seasonTeamStats['Defense']['avgPassTdsAlwd'] = round(statistics.mean(defensePassTdsAlwdList),2)
-        self.seasonTeamStats['Defense']['avgRunTdsAlwd'] = round(statistics.mean(defenseRunTdsAlwdList),2)
-        self.seasonTeamStats['Defense']['avgTdsAlwd'] = round(statistics.mean(defenseTotalTdsAlwdList),2)
-        self.seasonTeamStats['Defense']['avgPtsAlwd'] = round(statistics.mean(defensePtsAlwdList),2)
+        self.seasonTeamStats['Defense']['avgSacks'] = round(statistics.mean(defenseSacksList),2) if defenseSacksList else 0
+        self.seasonTeamStats['Defense']['avgInts'] = round(statistics.mean(defenseIntsList),2) if defenseIntsList else 0
+        self.seasonTeamStats['Defense']['avgFumRec'] = round(statistics.mean(defenseFumRecList),2) if defenseFumRecList else 0
+        self.seasonTeamStats['Defense']['avgPassYardsAlwd'] = round(statistics.mean(defensePassYardsAlwdList),2) if defensePassYardsAlwdList else 0
+        self.seasonTeamStats['Defense']['avgRunYardsAlwd'] = round(statistics.mean(defenseRunYardsAlwdList),2) if defenseRunYardsAlwdList else 0
+        self.seasonTeamStats['Defense']['avgYardsAlwd'] = round(statistics.mean(defenseTotalYardsAlwdList),2) if defenseTotalYardsAlwdList else 0
+        self.seasonTeamStats['Defense']['avgPassTdsAlwd'] = round(statistics.mean(defensePassTdsAlwdList),2) if defensePassTdsAlwdList else 0
+        self.seasonTeamStats['Defense']['avgRunTdsAlwd'] = round(statistics.mean(defenseRunTdsAlwdList),2) if defenseRunTdsAlwdList else 0
+        self.seasonTeamStats['Defense']['avgTdsAlwd'] = round(statistics.mean(defenseTotalTdsAlwdList),2) if defenseTotalTdsAlwdList else 0
+        self.seasonTeamStats['Defense']['avgPtsAlwd'] = round(statistics.mean(defensePtsAlwdList),2) if defensePtsAlwdList else 0
 
     def assignPlayerNumber(self, player):
         numberToAssign = player.preferredNumber
