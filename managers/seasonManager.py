@@ -96,10 +96,11 @@ class SeasonManager:
         
         # Clear previous season data
         self._clearSeasonData()
-        
-        # Handle offseason activities
-        await self._handleOffseason()
-        
+
+        if seasonNumber > 1:
+            # Handle offseason activities
+            await self._handleOffseason()
+
         # Create new season schedule
         self.createSchedule()
         
@@ -388,8 +389,8 @@ class SeasonManager:
         league2Group2Teams = []
         
         # Split leagues into groups
-        for x in range(len(league1)):
-            if x < (len(league1) / 2):
+        for x in range(len(self.leagueManager.leagues[0].teamList)):
+            if x < (len(self.leagueManager.leagues[0].teamList) / 2):
                 league1Group1Teams.append(league1.pop(random.randrange(len(league1))))
                 league2Group1Teams.append(league2.pop(random.randrange(len(league2))))
             else:
@@ -674,7 +675,7 @@ class SeasonManager:
             # Update service time
             if hasattr(player, 'serviceTime'):
                 if player.seasonsPlayed >= 3 and player.serviceTime == FloosPlayer.PlayerServiceTime.Rookie:
-                    player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran
+                    player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
             
             # Archive season stats
             if hasattr(player, 'seasonStatsDict') and hasattr(player, 'seasonStatsArchive'):
