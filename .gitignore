@@ -68,3 +68,4 @@ season*
 *.png
 data/unusedNames.json
 data/leagueData.json
+/logs
