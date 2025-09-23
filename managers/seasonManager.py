@@ -179,19 +179,32 @@ class SeasonManager:
             # Wait for all games in the week to complete concurrently
             await asyncio.gather(*gameTasks)
             
+            # Post-week processing (matches original floosball.py lines 688-699)
+            self._updateWeeklyStats()
+            self._updateStandings()
+            
+            # Update player performance ratings for the week
+            self._updatePlayerPerformanceRatings(week)
+            
+            # Sort players and defenses (matches original)
+            self.playerManager.sortPlayersByPosition()
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                teamManager.sortDefenses()
+            
+            # Update playoff picture and check for clinches (matches original)
+            self.updatePlayoffPicture()
+            self.checkForClinches()
+            
+            # Additional record checks (matches original)
+            self.recordsManager.checkCareerRecords()
+            self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber)
+            
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
                     'event': {'text': f'{self.currentSeason.currentWeekText} End'}
                 })
-            
-            # Update weekly stats and standings
-            self._updateWeeklyStats()
-            self._updateStandings()
-            
-            # Update playoff picture and check for clinches (matches original)
-            self.updatePlayoffPicture()
-            self.checkForClinches()
             
             # Wait after week completes
             await self.timingManager.waitAfterWeek()
@@ -780,10 +793,27 @@ class SeasonManager:
                 team.winningStreak = False
     
     def _updateWeeklyStats(self) -> None:
-        """Update weekly statistics"""
-        # This would update team and player weekly performance metrics
-        # Implementation depends on specific stat tracking requirements
-        pass
+        """Update weekly statistics and averages for teams and players"""
+        # Update team averages (matches original)
+        teamManager = self.serviceContainer.getService('team_manager')
+        if teamManager:
+            for team in teamManager.teams:
+                if hasattr(team, 'getAverages'):
+                    team.getAverages()
+        
+        # Update player game stats and development
+        for player in self.playerManager.activePlayers:
+            if hasattr(player, 'postgameChanges'):
+                player.postgameChanges()
+            if hasattr(player, 'sync_stats_dicts'):
+                player.sync_stats_dicts()
+        
+        logger.debug(f"Updated weekly stats for week {self.currentSeason.currentWeek}")
+        
+    def _updatePlayerPerformanceRatings(self, week: int) -> None:
+        """Update player performance ratings for the given week (matches original getPerformanceRating call)"""
+        self.playerManager.calculatePerformanceRatings(week)
+        logger.debug(f"Updated player performance ratings for week {week}")
     
     def _updateStandings(self) -> None:
         """Update league standings"""
