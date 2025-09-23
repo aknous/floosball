@@ -34,12 +34,19 @@ class PlayerManager:
         
         logger.info("PlayerManager initialized")
     
-    def generatePlayers(self, config: Dict[str, Any]) -> None:
-        """Generate initial player pool (replaces getPlayers function)"""
+    def generatePlayers(self, config: Dict[str, Any], force_fresh: bool = False) -> None:
+        """Generate or load initial player pool (replaces getPlayers function)"""
         logger.info("Generating initial player pool")
         
-        playerConfig = config.get('playerConfig', {})
-        totalPlayers = playerConfig.get('totalPlayers', 144)  # Match original default
+        # First try to load existing players (unless force fresh is requested)
+        if not force_fresh and self._loadExistingPlayers():
+            logger.info(f"Loaded {len(self.activePlayers)} existing players from data files")
+            return
+        
+        # If no existing players found, generate new ones
+        logger.info("No existing players found, generating new player pool")
+        leagueConfig = config.get('leagueConfig', {})
+        totalPlayers = leagueConfig.get('initialPlayerCount', 144)
         
         # Load name lists from main config
         self.loadNameLists(config)
@@ -51,6 +58,134 @@ class PlayerManager:
         self.saveUnusedNames()
         
         logger.info(f"Generated {len(self.activePlayers)} total players")
+    
+    def _loadExistingPlayers(self) -> bool:
+        """
+        Load existing players from data files if they exist
+        Returns True if players were loaded, False if no existing players found
+        """
+        import os
+        import glob
+        import json
+        
+        player_data_path = "data/playerData"
+        
+        # Check if player data directory exists and has files
+        if not os.path.exists(player_data_path):
+            logger.debug("Player data directory does not exist")
+            return False
+        
+        player_files = glob.glob(os.path.join(player_data_path, "player*.json"))
+        if not player_files:
+            logger.debug("No player data files found")
+            return False
+        
+        logger.info(f"Found {len(player_files)} existing player files, loading...")
+        
+        # Load players from JSON files
+        loaded_players = []
+        for file_path in sorted(player_files):
+            try:
+                with open(file_path, 'r') as f:
+                    player_data = json.load(f)
+                
+                # Create player object from data
+                player = self._createPlayerFromData(player_data)
+                if player:
+                    loaded_players.append(player)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to load player from {file_path}: {e}")
+                continue
+        
+        if not loaded_players:
+            logger.warning("No valid players could be loaded from data files")
+            return False
+        
+        # Set loaded players as active players
+        self.activePlayers = loaded_players
+        
+        # Organize players by position
+        self.sortPlayersByPosition()
+        
+        logger.info(f"Successfully loaded {len(loaded_players)} players from data files")
+        return True
+    
+    def _createPlayerFromData(self, player_data: Dict[str, Any]) -> FloosPlayer.Player:
+        """Create a Player object from saved JSON data"""
+        import floosball_player as FloosPlayer
+        
+        try:
+            # Create basic player with name
+            player = FloosPlayer.Player(player_data['name'])
+            
+            # Set basic properties
+            player.id = player_data.get('id', 1)
+            player.currentNumber = player_data.get('currentNumber', 0)
+            player.preferredNumber = player_data.get('preferredNumber', 0)
+            player.seasonsPlayed = player_data.get('seasonsPlayed', 0)
+            player.term = player_data.get('term', 2)
+            player.termRemaining = player_data.get('termRemaining', 2)
+            player.capHit = player_data.get('capHit', 2)
+            player.seasonPerformanceRating = player_data.get('seasonPerformanceRating', 0)
+            player.playerRating = player_data.get('playerRating', 74)
+            player.freeAgentYears = player_data.get('freeAgentYears', 0)
+            
+            # Set player tier
+            tier_name = player_data.get('tier', 'TierC')
+            try:
+                player.playerTier = getattr(FloosPlayer.PlayerTier, tier_name)
+            except AttributeError:
+                logger.warning(f"Unknown tier {tier_name} for player {player.name}, defaulting to TierC")
+                player.playerTier = FloosPlayer.PlayerTier.TierC
+            
+            # Set position
+            position_value = player_data.get('position', 1)
+            try:
+                player.position = FloosPlayer.PlayerPosition(position_value)
+            except ValueError:
+                logger.warning(f"Invalid position {position_value} for player {player.name}, defaulting to QB")
+                player.position = FloosPlayer.PlayerPosition.QB
+            
+            # Set service time
+            service_time_name = player_data.get('serviceTime', 'Rookie')
+            try:
+                player.serviceTime = getattr(FloosPlayer.PlayerServiceTime, service_time_name)
+            except AttributeError:
+                logger.warning(f"Unknown service time {service_time_name} for player {player.name}, defaulting to Rookie")
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
+            
+            # Set team (may be string or None)
+            team_name = player_data.get('team')
+            if team_name and team_name != 'Free Agent' and team_name != 'Retired':
+                player.team = team_name  # Will be resolved to team object later
+            else:
+                player.team = team_name  # Keep as string for Free Agent/Retired
+            
+            # Load attributes
+            if 'attributes' in player_data:
+                attr_data = player_data['attributes']
+                for attr_name, attr_value in attr_data.items():
+                    if hasattr(player.attributes, attr_name):
+                        setattr(player.attributes, attr_name, attr_value)
+            
+            # Load career stats
+            if 'careerStats' in player_data:
+                player.careerStatsDict = player_data['careerStats']
+            
+            # Load season stats archive
+            if 'seasonStatsArchive' in player_data:
+                player.seasonStatsArchive = player_data['seasonStatsArchive']
+            
+            # Set up season stats dict if not present
+            if not hasattr(player, 'seasonStatsDict') or player.seasonStatsDict is None:
+                player.seasonStatsDict = player.careerStatsDict.copy() if hasattr(player, 'careerStatsDict') else {}
+            
+            return player
+            
+        except Exception as e:
+            logger.error(f"Failed to create player from data: {e}")
+            return None
     
     def loadNameLists(self, config: Dict[str, Any]) -> None:
         """Load player name lists from unusedNames.json or config"""
@@ -884,3 +1019,693 @@ class PlayerManager:
         self.activeKs.sort(key=lambda player: getattr(player, 'seasonPerformanceRating', 0), reverse=True)
         
         logger.info(f"Performance ratings calculated for week {currentWeek}")
+    
+    def conductFreeAgencySimulation(self, freeAgencyOrder: List, currentSeason: int, leagueHighlights: List = None) -> Dict[str, Any]:
+        """
+        Complete Free Agency Simulation System - replaces original free agency logic from offseason() function
+        Multi-round system with GM skill-based evaluation, tier upgrades, and salary cap management
+        """
+        from random import randint, choice
+        import copy
+        
+        logger.info(f"Starting free agency simulation for season {currentSeason}")
+        
+        freeAgencyDict = {}
+        freeAgencyHistory = {}
+        teamsComplete = 0
+        
+        if leagueHighlights is None:
+            leagueHighlights = []
+        
+        # Process contract expirations - move players with 0 term remaining to free agency
+        self._processContractExpirations()
+        
+        # Process free agent retirements (players with 3+ years as free agents)
+        self._processFreeAgentRetirements(currentSeason, leagueHighlights)
+        
+        # Generate replacement players for retired players
+        self._generateReplacementPlayers(currentSeason)
+        
+        # Prepare free agent lists by position, sorted by skill rating
+        freeAgentQbList = [p for p in self.freeAgents if p.position.value == 1]
+        freeAgentRbList = [p for p in self.freeAgents if p.position.value == 2]
+        freeAgentWrList = [p for p in self.freeAgents if p.position.value == 3]
+        freeAgentTeList = [p for p in self.freeAgents if p.position.value == 4]
+        freeAgentKList = [p for p in self.freeAgents if p.position.value == 5]
+        
+        # Sort by skill rating (best first)
+        freeAgentQbList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentRbList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentWrList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentTeList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentKList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        
+        # Get teams from service container
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        
+        if not teams:
+            logger.error("No teams available for free agency!")
+            return freeAgencyDict
+        
+        # Initialize team completion status and cuts available
+        for team in teams:
+            team.freeAgencyComplete = False
+            team.cutsAvailable = 2  # Each team gets 2 cuts per season
+        
+        logger.info(f"Free agency starting with {len(self.freeAgents)} free agents and {len(teams)} teams")
+        
+        # MULTI-ROUND FREE AGENCY PROCESS
+        roundNum = 1
+        while teamsComplete < len(teams):
+            logger.debug(f"Free agency round {roundNum}: {teamsComplete}/{len(teams)} teams complete")
+            
+            for team in freeAgencyOrder:
+                if team.freeAgencyComplete:
+                    continue
+                
+                teamMadeMove = False
+                
+                # PHASE 1: Try to cut and upgrade players (if cuts available)
+                if team.cutsAvailable > 0:
+                    cutMade = self._attemptPlayerCutAndUpgrade(
+                        team, freeAgentQbList, freeAgentRbList, freeAgentWrList, 
+                        freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights
+                    )
+                    if cutMade:
+                        teamMadeMove = True
+                        team.cutsAvailable -= 1
+                
+                # PHASE 2: Fill any open roster spots
+                if not teamMadeMove:
+                    signedPlayer = self._attemptRosterFill(
+                        team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
+                        freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights
+                    )
+                    if signedPlayer:
+                        teamMadeMove = True
+                
+                # PHASE 3: Mark team as complete if no moves possible
+                if not teamMadeMove:
+                    team.freeAgencyComplete = True
+                    teamsComplete += 1
+            
+            roundNum += 1
+            if roundNum > 50:  # Safety valve to prevent infinite loops
+                logger.warning("Free agency exceeded 50 rounds, ending simulation")
+                break
+        
+        # Save free agency history
+        freeAgencyHistory[f'offseason {currentSeason}'] = freeAgencyDict
+        
+        logger.info(f"Free agency complete after {roundNum-1} rounds. {len(freeAgencyDict)} transactions made.")
+        return freeAgencyHistory
+    
+    def _processContractExpirations(self) -> None:
+        """Move players with expired contracts to free agency"""
+        expiredPlayers = []
+        
+        for player in self.activePlayers:
+            if hasattr(player, 'termRemaining') and player.termRemaining <= 0:
+                expiredPlayers.append(player)
+        
+        for player in expiredPlayers:
+            self.activePlayers.remove(player)
+            self.removeFromPositionList(player)
+            player.team = 'Free Agent'
+            player.freeAgentYears = getattr(player, 'freeAgentYears', 0) + 1
+            self.freeAgents.append(player)
+            
+        logger.info(f"Moved {len(expiredPlayers)} players with expired contracts to free agency")
+    
+    def _processFreeAgentRetirements(self, currentSeason: int, leagueHighlights: List) -> None:
+        """Process retirements of long-term free agents"""
+        retirements = []
+        
+        for player in self.freeAgents[:]:  # Use slice copy for safe iteration
+            if getattr(player, 'freeAgentYears', 0) >= 3:
+                retirementChance = 0
+                
+                # Retirement chances based on tier (original logic)
+                if player.playerTier.value == 1:  # TierD
+                    retirementChance = 0.65
+                elif player.playerTier.value == 2:  # TierC  
+                    retirementChance = 0.40
+                elif player.playerTier.value == 3:  # TierB
+                    retirementChance = 0.25
+                elif player.playerTier.value == 4:  # TierA
+                    retirementChance = 0.15
+                elif player.playerTier.value == 5:  # TierS
+                    retirementChance = 0.05
+                
+                from random import random
+                if random() < retirementChance:
+                    retirements.append(player)
+                    self.retirePlayer(player)
+                    leagueHighlights.insert(0, {
+                        'event': {'text': f'{player.name} has retired from football'}
+                    })
+        
+        logger.info(f"Free agent retirements: {len(retirements)} players retired")
+    
+    def _generateReplacementPlayers(self, currentSeason: int) -> None:
+        """Generate replacement players for those who retired"""
+        import numpy as np
+        from random import randint
+        
+        numRetired = len(self.newlyRetiredPlayers)
+        if numRetired == 0:
+            return
+        
+        # Generate replacement players with same distribution as original
+        meanPlayerSkill = 80
+        stdDevPlayerSkill = 7
+        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numRetired)
+        playerAverages = np.clip(playerAverages, 60, 100).tolist()
+        
+        for i in range(numRetired):
+            # Use same position distribution as original (y = x % 6)
+            y = i % 6
+            position = None
+            if y == 0:
+                position = FloosPlayer.Position.QB
+            elif y == 1:
+                position = FloosPlayer.Position.RB
+            elif y == 2 or y == 3:  # Two slots for WR
+                position = FloosPlayer.Position.WR
+            elif y == 4:
+                position = FloosPlayer.Position.TE
+            elif y == 5:
+                position = FloosPlayer.Position.K
+            
+            if position and playerAverages:
+                seed = int(playerAverages.pop(randint(0, len(playerAverages) - 1)))
+                newPlayer = self.createPlayer(position, seed)
+                if newPlayer:
+                    newPlayer.team = 'Free Agent'
+                    newPlayer.freeAgentYears = 0
+                    self.freeAgents.append(newPlayer)
+        
+        logger.info(f"Generated {numRetired} replacement players")
+    
+    def _attemptPlayerCutAndUpgrade(self, team, freeAgentQbList, freeAgentRbList, freeAgentWrList, 
+                                   freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights) -> bool:
+        """Attempt to cut current player and sign upgrade based on GM skill and tier comparison"""
+        from random import randint
+        
+        # Check each position for potential upgrades
+        positions = ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']
+        freeAgentLists = {
+            'qb': freeAgentQbList, 'rb': freeAgentRbList, 'wr1': freeAgentWrList,
+            'wr2': freeAgentWrList, 'te': freeAgentTeList, 'k': freeAgentKList
+        }
+        
+        for pos in positions:
+            currentPlayer = team.rosterDict.get(pos)
+            freeAgentList = freeAgentLists[pos]
+            
+            # Skip if no current player or no free agents available
+            if not currentPlayer or not freeAgentList:
+                continue
+            
+            # Only consider cuts for players in tiers 1-3 (lower tiers eligible for cuts)
+            if currentPlayer.playerTier.value > 3:
+                continue
+            
+            # GM skill determines evaluation range
+            gmScore = getattr(team, 'gmScore', 1)
+            if gmScore >= len(freeAgentList):
+                evalRange = len(freeAgentList) - 1
+            else:
+                evalRange = gmScore
+            
+            # GM evaluates a free agent based on their skill
+            compPlayer = freeAgentList[randint(0, evalRange)]
+            
+            # Multi-tier comparison logic: upgrade if free agent is significantly better
+            if (compPlayer.playerTier.value - 1) > currentPlayer.playerTier.value:
+                # Make the cut and signing
+                self._executeCutAndSigning(team, pos, currentPlayer, compPlayer, freeAgencyDict, leagueHighlights)
+                return True
+        
+        return False
+    
+    def _executeCutAndSigning(self, team, position, cutPlayer, newPlayer, freeAgencyDict, leagueHighlights):
+        """Execute the cutting of one player and signing of another"""
+        # Update salary cap
+        if hasattr(team, 'playerCap'):
+            team.playerCap -= getattr(cutPlayer, 'capHit', 0)
+            team.playerCap += getattr(newPlayer, 'capHit', newPlayer.playerTier.value)
+        
+        # Move cut player to free agents
+        cutPlayer.team = 'Free Agent'
+        cutPlayer.freeAgentYears = getattr(cutPlayer, 'freeAgentYears', 0) + 1
+        self.freeAgents.append(cutPlayer)
+        self.removeFromPositionList(cutPlayer)
+        if cutPlayer in self.activePlayers:
+            self.activePlayers.remove(cutPlayer)
+        
+        # Sign new player
+        self.freeAgents.remove(newPlayer)
+        self.activePlayers.append(newPlayer)
+        self.addToPositionList(newPlayer)
+        newPlayer.team = team
+        newPlayer.freeAgentYears = 0
+        
+        # Set contract terms based on tier
+        newPlayer.term = self._getPlayerTerm(newPlayer.playerTier)
+        newPlayer.termRemaining = newPlayer.term
+        
+        # Assign to roster
+        team.rosterDict[position] = newPlayer
+        team.assignPlayerNumber(newPlayer)
+        
+        # Record transaction
+        transactionId = f"{team.name}_{cutPlayer.name}_{newPlayer.name}"
+        freeAgencyDict[transactionId] = {
+            'team': team.name,
+            'cut': cutPlayer.name,
+            'signed': newPlayer.name,
+            'position': position,
+            'newTier': newPlayer.playerTier.name,
+            'term': newPlayer.term
+        }
+        
+        # Add highlights
+        leagueHighlights.insert(0, {
+            'event': {'text': f'{team.city} {team.name} has cut {cutPlayer.name}'}
+        })
+        leagueHighlights.insert(0, {
+            'event': {'text': f'{team.city} {team.name} signed {newPlayer.name} ({newPlayer.playerTier.name}) for {newPlayer.term} season(s)'}
+        })
+        
+        logger.debug(f"{team.name} cut {cutPlayer.name} and signed {newPlayer.name}")
+    
+    def _attemptRosterFill(self, team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
+                          freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights) -> bool:
+        """Attempt to fill any open roster positions"""
+        from random import randint
+        
+        positions = ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']
+        freeAgentLists = {
+            'qb': freeAgentQbList, 'rb': freeAgentRbList, 'wr1': freeAgentWrList,
+            'wr2': freeAgentWrList, 'te': freeAgentTeList, 'k': freeAgentKList
+        }
+        
+        for pos in positions:
+            if team.rosterDict.get(pos) is None:  # Position is open
+                freeAgentList = freeAgentLists[pos]
+                
+                if not freeAgentList:
+                    continue
+                
+                # GM skill determines evaluation range
+                gmScore = getattr(team, 'gmScore', 1)
+                if gmScore >= len(freeAgentList):
+                    evalRange = len(freeAgentList) - 1
+                else:
+                    evalRange = gmScore
+                
+                # GM picks from their evaluation range
+                newPlayer = freeAgentList[randint(0, evalRange)]
+                
+                # Sign the player
+                self._executeRosterSigning(team, pos, newPlayer, freeAgencyDict, leagueHighlights)
+                return True
+        
+        return False
+    
+    def _executeRosterSigning(self, team, position, newPlayer, freeAgencyDict, leagueHighlights):
+        """Execute signing a player to fill an open roster spot"""
+        # Update salary cap
+        if hasattr(team, 'playerCap'):
+            team.playerCap += getattr(newPlayer, 'capHit', newPlayer.playerTier.value)
+        
+        # Sign new player
+        self.freeAgents.remove(newPlayer)
+        self.activePlayers.append(newPlayer)
+        self.addToPositionList(newPlayer)
+        newPlayer.team = team
+        newPlayer.freeAgentYears = 0
+        
+        # Set contract terms
+        newPlayer.term = self._getPlayerTerm(newPlayer.playerTier)
+        newPlayer.termRemaining = newPlayer.term
+        
+        # Assign to roster
+        team.rosterDict[position] = newPlayer
+        team.assignPlayerNumber(newPlayer)
+        
+        # Record transaction
+        transactionId = f"{team.name}_signed_{newPlayer.name}"
+        freeAgencyDict[transactionId] = {
+            'team': team.name,
+            'signed': newPlayer.name,
+            'position': position,
+            'tier': newPlayer.playerTier.name,
+            'term': newPlayer.term
+        }
+        
+        # Add highlight
+        leagueHighlights.insert(0, {
+            'event': {'text': f'{team.city} {team.name} signed {newPlayer.name} ({newPlayer.playerTier.name}) for {newPlayer.term} season(s)'}
+        })
+        
+        logger.debug(f"{team.name} signed {newPlayer.name} to fill {position}")
+    
+    def getAdvancedPlayerTerm(self, tier) -> int:
+        """Get contract term with original random ranges - replaces simplified _getPlayerTerm"""
+        from random import randint
+        
+        if tier == FloosPlayer.PlayerTier.TierS:
+            return randint(4, 6)  # S-tier: 4-6 years
+        elif tier == FloosPlayer.PlayerTier.TierA:
+            return randint(3, 4)  # A-tier: 3-4 years  
+        elif tier == FloosPlayer.PlayerTier.TierD:
+            return 1  # D-tier: 1 year
+        else:
+            return randint(1, 3)  # B/C-tier: 1-3 years
+    
+    def processContractDecrements(self, currentSeason: int) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Process contract term decrements and salary cap management for all players.
+        This is the main salary cap management function called during offseason.
+        
+        Returns:
+            Dict containing expired players, retired players, and free agents by category
+        """
+        logger.info(f"Processing contract decrements for season {currentSeason}")
+        
+        expiredPlayers = []
+        newRetiredPlayers = []
+        contractStatus = {
+            'expired': [],
+            'retired': [],
+            'freeAgents': [],
+            'activeContracts': []
+        }
+        
+        # Get teams from service container
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        
+        # Process each team's roster
+        for team in teams:
+            if not hasattr(team, 'rosterDict'):
+                continue
+                
+            # Reset team salary cap for new season
+            team.playerCap = 0
+            
+            # Process each roster position
+            for position, player in list(team.rosterDict.items()):
+                if player is None:
+                    continue
+                
+                # Increment seasons played and update service time
+                player.seasonsPlayed += 1
+                self._updatePlayerServiceTime(player)
+                
+                # Decrement contract term
+                if hasattr(player, 'termRemaining'):
+                    player.termRemaining -= 1
+                else:
+                    # Initialize termRemaining if missing
+                    player.termRemaining = getattr(player, 'term', 1) - 1
+                
+                # Process retirement logic before checking contract expiration
+                retirePlayerBool = self._checkPlayerRetirement(player)
+                
+                if retirePlayerBool:
+                    # Player retires
+                    self._executePlayerRetirement(player, team, position, newRetiredPlayers, contractStatus)
+                elif player.termRemaining <= 0:
+                    # Contract expired - move to free agency
+                    self._executeContractExpiration(player, team, position, expiredPlayers, contractStatus)
+                else:
+                    # Player remains under contract - add to salary cap
+                    if hasattr(player, 'capHit'):
+                        team.playerCap += player.capHit
+                    contractStatus['activeContracts'].append({
+                        'player': player.name,
+                        'team': team.name,
+                        'position': position,
+                        'termRemaining': player.termRemaining,
+                        'capHit': getattr(player, 'capHit', 0)
+                    })
+        
+        # Add newly retired players to global retired list
+        if newRetiredPlayers:
+            if not hasattr(self, 'retiredPlayers'):
+                self.retiredPlayers = []
+            self.retiredPlayers.extend(newRetiredPlayers)
+        
+        logger.info(f"Contract processing complete: {len(contractStatus['expired'])} expired, "
+                   f"{len(contractStatus['retired'])} retired, {len(contractStatus['activeContracts'])} active")
+        
+        return contractStatus
+    
+    def _updatePlayerServiceTime(self, player) -> None:
+        """Update player service time based on seasons played"""
+        import floosball_player as FloosPlayer
+        
+        if player.seasonsPlayed >= 10:
+            player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran4
+        elif player.seasonsPlayed >= 7:
+            player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran3
+        elif player.seasonsPlayed >= 4:
+            player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran2
+        elif player.seasonsPlayed >= 2:
+            player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
+        else:
+            player.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
+    
+    def _checkPlayerRetirement(self, player) -> bool:
+        """
+        Check if player should retire based on age, longevity, and contract status.
+        Replaces original retirement logic from offseason processing.
+        """
+        from random import randint
+        
+        # Only check retirement if player is over their longevity threshold
+        if player.seasonsPlayed <= player.attributes.longevity:
+            return False
+        
+        # Only consider retirement at end of contract
+        if getattr(player, 'termRemaining', 1) > 0:
+            return False
+        
+        # Retirement probability based on seasons played
+        if player.seasonsPlayed > 15:
+            # Very old players: 90% chance to retire
+            retirementChance = randint(1, 100)
+            return retirementChance > 10
+        elif player.seasonsPlayed > 10:
+            # Old players: 65% chance to retire
+            retirementChance = randint(1, 100)
+            return retirementChance > 35
+        elif player.seasonsPlayed > 8:
+            # Aging players: 30% chance to retire
+            retirementChance = randint(1, 100)
+            return retirementChance > 70
+        
+        return False
+    
+    def _executePlayerRetirement(self, player, team, position, retiredList, contractStatus) -> None:
+        """Execute player retirement - remove from team and add to retired list"""
+        logger.debug(f"{player.name} retiring from {team.name}")
+        
+        # Update player status
+        player.previousTeam = team.name
+        player.seasonPerformanceRating = 0
+        player.team = 'Retired'
+        
+        # Remove from team salary cap and roster
+        if hasattr(team, 'playerCap') and hasattr(player, 'capHit'):
+            team.playerCap -= player.capHit
+        
+        if hasattr(team, 'playerNumbersList') and hasattr(player, 'currentNumber'):
+            if player.currentNumber in team.playerNumbersList:
+                team.playerNumbersList.remove(player.currentNumber)
+        
+        # Clear roster position
+        team.rosterDict[position] = None
+        
+        # Remove from active lists
+        if player in self.activePlayers:
+            self.activePlayers.remove(player)
+        self.removeFromPositionList(player)
+        
+        # Add to retired list
+        retiredList.append(player)
+        
+        # Update contract status tracking
+        contractStatus['retired'].append({
+            'player': player.name,
+            'previousTeam': team.name,
+            'position': position,
+            'seasonsPlayed': player.seasonsPlayed,
+            'finalRating': getattr(player.attributes, 'overallRating', 0)
+        })
+        
+        # Mark service time as retired
+        import floosball_player as FloosPlayer
+        player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
+    
+    def _executeContractExpiration(self, player, team, position, expiredList, contractStatus) -> None:
+        """Execute contract expiration - move player to free agency"""
+        logger.debug(f"{player.name} contract expired, moving to free agency")
+        
+        # Update player status
+        player.previousTeam = team.name
+        player.team = 'Free Agent'
+        
+        # Remove from team salary cap and roster
+        if hasattr(team, 'playerCap') and hasattr(player, 'capHit'):
+            team.playerCap -= player.capHit
+        
+        if hasattr(team, 'playerNumbersList') and hasattr(player, 'currentNumber'):
+            if player.currentNumber in team.playerNumbersList:
+                team.playerNumbersList.remove(player.currentNumber)
+        
+        # Clear roster position
+        team.rosterDict[position] = None
+        
+        # Move to free agency
+        if player in self.activePlayers:
+            self.activePlayers.remove(player)
+        self.removeFromPositionList(player)
+        
+        if player not in self.freeAgents:
+            self.freeAgents.append(player)
+        
+        # Add to expired list
+        expiredList.append(player)
+        
+        # Update contract status tracking
+        contractStatus['expired'].append({
+            'player': player.name,
+            'previousTeam': team.name,
+            'position': position,
+            'rating': getattr(player.attributes, 'overallRating', 0),
+            'seasonsPlayed': player.seasonsPlayed
+        })
+        
+        contractStatus['freeAgents'].append(player)
+    
+    def calculateSalaryCaps(self) -> Dict[str, Any]:
+        """
+        Calculate and return salary cap information for all teams
+        """
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        
+        salaryCapInfo = {
+            'teams': [],
+            'totalSalaryCap': 0,
+            'averageSalaryCap': 0,
+            'salaryCapRange': {'min': float('inf'), 'max': 0}
+        }
+        
+        for team in teams:
+            teamCap = getattr(team, 'playerCap', 0)
+            salaryCapInfo['teams'].append({
+                'teamName': team.name,
+                'salaryCap': teamCap,
+                'rosterCount': len([p for p in team.rosterDict.values() if p is not None])
+            })
+            
+            salaryCapInfo['totalSalaryCap'] += teamCap
+            salaryCapInfo['salaryCapRange']['min'] = min(salaryCapInfo['salaryCapRange']['min'], teamCap)
+            salaryCapInfo['salaryCapRange']['max'] = max(salaryCapInfo['salaryCapRange']['max'], teamCap)
+        
+        if teams:
+            salaryCapInfo['averageSalaryCap'] = round(salaryCapInfo['totalSalaryCap'] / len(teams), 2)
+        
+        # Handle case where no teams exist
+        if salaryCapInfo['salaryCapRange']['min'] == float('inf'):
+            salaryCapInfo['salaryCapRange']['min'] = 0
+        
+        return salaryCapInfo
+    
+    def assignPlayerCapHits(self) -> None:
+        """
+        Assign cap hit values to players based on their tier
+        Should be called during player initialization
+        """
+        logger.info("Assigning cap hit values to players")
+        
+        # Process active players
+        for player in self.activePlayers:
+            if not hasattr(player, 'capHit') or player.capHit == 0:
+                player.capHit = self._calculateCapHit(player)
+        
+        # Process free agents
+        for player in self.freeAgents:
+            if not hasattr(player, 'capHit') or player.capHit == 0:
+                player.capHit = self._calculateCapHit(player)
+        
+        logger.info("Cap hit assignment complete")
+    
+    def _calculateCapHit(self, player) -> int:
+        """Calculate cap hit based on player tier"""
+        import floosball_player as FloosPlayer
+        
+        tier_cap_hits = {
+            FloosPlayer.PlayerTier.TierS: 5,
+            FloosPlayer.PlayerTier.TierA: 4,
+            FloosPlayer.PlayerTier.TierB: 3,
+            FloosPlayer.PlayerTier.TierC: 2,
+            FloosPlayer.PlayerTier.TierD: 1
+        }
+        
+        return tier_cap_hits.get(player.playerTier, 2)
+    
+    def validateSalaryCaps(self) -> Dict[str, Any]:
+        """
+        Validate salary caps for all teams and identify any issues
+        """
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        
+        validation_results = {
+            'valid_teams': [],
+            'invalid_teams': [],
+            'warnings': [],
+            'total_issues': 0
+        }
+        
+        for team in teams:
+            calculated_cap = 0
+            roster_issues = []
+            
+            # Calculate expected cap from roster
+            for position, player in team.rosterDict.items():
+                if player is not None:
+                    player_cap = getattr(player, 'capHit', 0)
+                    calculated_cap += player_cap
+                    
+                    # Check for missing cap hit
+                    if player_cap == 0:
+                        roster_issues.append(f"{position}: {player.name} has no cap hit")
+            
+            stored_cap = getattr(team, 'playerCap', 0)
+            
+            team_result = {
+                'team': team.name,
+                'stored_cap': stored_cap,
+                'calculated_cap': calculated_cap,
+                'difference': stored_cap - calculated_cap,
+                'issues': roster_issues
+            }
+            
+            if abs(stored_cap - calculated_cap) > 0.01 or roster_issues:
+                validation_results['invalid_teams'].append(team_result)
+                validation_results['total_issues'] += 1
+            else:
+                validation_results['valid_teams'].append(team_result)
+        
+        logger.info(f"Salary cap validation: {len(validation_results['valid_teams'])} valid, "
+                   f"{len(validation_results['invalid_teams'])} invalid")
+        
+        return validation_results

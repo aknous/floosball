@@ -592,3 +592,192 @@ class TeamManager:
     def leagueList(self) -> List:
         """Backward compatibility property for global leagueList"""
         return self.leagues
+    
+    def setPressureModifiersForNewSeason(self, currentSeason: int) -> None:
+        """
+        Set pressure modifiers for teams based on previous season performance.
+        Called at the start of each new season.
+        """
+        self.logger.info(f"Setting pressure modifiers for season {currentSeason}")
+        
+        for team in self.teams:
+            # Initialize pressure modifier to default
+            team.pressureModifier = 1.0
+            
+            # Only apply historical pressure if this is not the first season
+            if currentSeason > 1 and hasattr(team, 'statArchive') and len(team.statArchive) > 0:
+                previousSeason = team.statArchive[0]  # Most recent season is at index 0
+                
+                # Teams that made playoffs get pressure based on how far they went
+                if previousSeason.get('madePlayoffs', False):
+                    if not previousSeason.get('floosbowlChamp', False):
+                        # Made playoffs but didn't win championship - pressure increases
+                        leagueChamp = previousSeason.get('leageChamp', False)  # Note: typo in original key
+                        topSeed = previousSeason.get('topSeed', False)
+                        
+                        if leagueChamp and topSeed:
+                            team.pressureModifier = 1.5  # High expectations
+                            self.logger.debug(f"{team.name}: Pressure 1.5 (League champ + top seed)")
+                        elif leagueChamp or topSeed:
+                            team.pressureModifier = 1.4  # Medium-high expectations
+                            self.logger.debug(f"{team.name}: Pressure 1.4 (League champ OR top seed)")
+                        else:
+                            team.pressureModifier = 1.2  # Made playoffs, some pressure
+                            self.logger.debug(f"{team.name}: Pressure 1.2 (Made playoffs)")
+                    # Note: Floos Bowl champions get default 1.0 (no extra pressure)
+                else:
+                    # Teams that missed playoffs get reduced pressure based on how bad they were
+                    winPerc = previousSeason.get('winPerc', 0)
+                    
+                    if winPerc < 0.25:
+                        team.pressureModifier = 0.7  # Very bad season, low pressure
+                        self.logger.debug(f"{team.name}: Pressure 0.7 (Win% < 25%)")
+                    elif winPerc < 0.4:
+                        team.pressureModifier = 0.8  # Bad season, reduced pressure
+                        self.logger.debug(f"{team.name}: Pressure 0.8 (Win% < 40%)")
+                    elif winPerc < 0.5:
+                        team.pressureModifier = 0.9  # Below average, slight reduction
+                        self.logger.debug(f"{team.name}: Pressure 0.9 (Win% < 50%)")
+                    else:
+                        team.pressureModifier = 1.0  # Decent season, normal pressure
+                        self.logger.debug(f"{team.name}: Pressure 1.0 (Win% >= 50%)")
+            else:
+                # New teams or first season get default pressure
+                self.logger.debug(f"{team.name}: Pressure 1.0 (New team/First season)")
+        
+        self.logger.info("Pressure modifiers set for all teams based on previous season")
+    
+    def updateInSeasonPressureModifiers(self, currentWeek: int, nonPlayoffTeamsList: List, lastTeamIn) -> List[Dict[str, str]]:
+        """
+        Update pressure modifiers during the season based on playoff implications.
+        
+        Args:
+            currentWeek: Current week number
+            nonPlayoffTeamsList: List of teams not currently in playoffs
+            lastTeamIn: Team object representing the last team to make playoffs
+            
+        Returns:
+            List of highlight events generated from pressure changes
+        """
+        leagueHighlights = []
+        
+        self.logger.info(f"Updating in-season pressure modifiers for week {currentWeek}")
+        
+        for standing in nonPlayoffTeamsList:
+            team = standing['team'] if isinstance(standing, dict) else standing
+            
+            # Set pressure modifiers for poor performing teams late in season
+            if team.seasonTeamStats.get('winPerc', 0) < 0.45 and currentWeek >= 14:
+                team.pressureModifier = 0.9
+                self.logger.debug(f"{team.name}: Reduced pressure (0.9) for poor performance late in season")
+            
+            # Check elimination status and set pressure accordingly
+            if not getattr(team, 'clinchedPlayoffs', False) and not getattr(team, 'eliminated', False):
+                import floosball_methods as FloosMethods
+                
+                # Check if team is mathematically eliminated
+                team.eliminated = FloosMethods.checkIfEliminated(
+                    team.seasonTeamStats.get('wins', 0),
+                    lastTeamIn.seasonTeamStats.get('wins', 0),
+                    28 - currentWeek
+                )
+                
+                if team.eliminated:
+                    leagueHighlights.insert(0, {
+                        'event': {'text': f'{team.city} {team.name} have faded from playoff contention'}
+                    })
+                    team.pressureModifier = 0.7  # Eliminated teams have very low pressure
+                    self.logger.debug(f"{team.name}: Eliminated - pressure set to 0.7")
+                else:
+                    # Check if team is on brink of elimination (must win out to match last team in)
+                    teamMaxWins = team.seasonTeamStats.get('wins', 0) + (28 - currentWeek)
+                    lastTeamWins = lastTeamIn.seasonTeamStats.get('wins', 0)
+                    
+                    if teamMaxWins == lastTeamWins:
+                        leagueHighlights.insert(0, {
+                            'event': {'text': f'{team.city} {team.name} are on the brink of elimination!'}
+                        })
+                        
+                        # High pressure if close to elimination late in season
+                        if (28 - currentWeek) <= 5:
+                            team.pressureModifier = 2.0  # Maximum pressure for must-win situations
+                            self.logger.debug(f"{team.name}: Brink of elimination - pressure set to 2.0")
+        
+        self.logger.info(f"In-season pressure update complete for week {currentWeek}")
+        return leagueHighlights
+    
+    def setPlayoffPressureModifiers(self, playoffTeams: Dict[str, List], currentRound: int) -> None:
+        """
+        Set pressure modifiers for playoff teams based on round.
+        
+        Args:
+            playoffTeams: Dictionary mapping league names to list of playoff teams
+            currentRound: Current playoff round number (1=first round, higher=later rounds)
+        """
+        self.logger.info(f"Setting playoff pressure modifiers for round {currentRound}")
+        
+        for leagueName, teamList in playoffTeams.items():
+            self.logger.debug(f"Setting pressure for {len(teamList)} teams in {leagueName}")
+            for team in teamList:
+                # Ensure team has pressure modifier attribute
+                if not hasattr(team, 'pressureModifier'):
+                    team.pressureModifier = 1.0
+                
+                if currentRound == 1:
+                    # First round of playoffs - set base playoff pressure
+                    team.pressureModifier = 1.5
+                    self.logger.debug(f"{team.name}: First round playoff pressure set to 1.5")
+                else:
+                    # Later rounds - increase pressure incrementally
+                    team.pressureModifier += 0.2
+                    self.logger.debug(f"{team.name}: Round {currentRound} pressure increased to {team.pressureModifier}")
+        
+        self.logger.info(f"Playoff pressure modifiers set for round {currentRound}")
+    
+    def setFloosBowlPressure(self, homeTeam, awayTeam) -> None:
+        """
+        Set maximum pressure for Floos Bowl (championship game).
+        
+        Args:
+            homeTeam: Home team in championship
+            awayTeam: Away team in championship
+        """
+        self.logger.info("Setting Floos Bowl pressure modifiers")
+        
+        homeTeam.pressureModifier = 2.5  # Maximum pressure for championship
+        awayTeam.pressureModifier = 2.5  # Maximum pressure for championship
+        
+        self.logger.debug(f"{homeTeam.name}: Floos Bowl pressure set to 2.5")
+        self.logger.debug(f"{awayTeam.name}: Floos Bowl pressure set to 2.5")
+        
+        self.logger.info("Floos Bowl pressure modifiers set")
+    
+    def resetPressureModifiers(self) -> None:
+        """Reset all team pressure modifiers to default (1.0)"""
+        self.logger.info("Resetting all pressure modifiers to default")
+        
+        for team in self.teams:
+            team.pressureModifier = 1.0
+        
+        self.logger.info("All pressure modifiers reset to 1.0")
+    
+    def getPressureStatistics(self) -> Dict[str, Any]:
+        """Get pressure modifier statistics for all teams"""
+        import statistics
+        
+        pressureValues = [getattr(team, 'pressureModifier', 1.0) for team in self.teams]
+        
+        if not pressureValues:
+            return {}
+        
+        return {
+            'mean': round(statistics.mean(pressureValues), 2),
+            'median': round(statistics.median(pressureValues), 2),
+            'min': min(pressureValues),
+            'max': max(pressureValues),
+            'range': round(max(pressureValues) - min(pressureValues), 2),
+            'teamPressures': [
+                {'team': team.name, 'pressure': getattr(team, 'pressureModifier', 1.0)} 
+                for team in self.teams
+            ]
+        }

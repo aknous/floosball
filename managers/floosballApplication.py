@@ -54,7 +54,7 @@ class FloosballApplication:
         
         logger.info("Registered all managers with service container")
     
-    async def initializeLeague(self, config: Dict[str, Any]) -> None:
+    async def initializeLeague(self, config: Dict[str, Any], force_fresh: bool = False) -> None:
         """Initialize the entire league system"""
         logger.info("Initializing league system")
         
@@ -66,7 +66,7 @@ class FloosballApplication:
         
         # Generate and setup players
         logger.info("Setting up players...")
-        self.playerManager.generatePlayers(config)
+        self.playerManager.generatePlayers(config, force_fresh=force_fresh)
         self.playerManager.sortPlayersByPosition()
         
         # Generate teams (but don't initialize yet - need players first)
@@ -96,9 +96,10 @@ class FloosballApplication:
         # Get game state manager from service container
         gameState = self.serviceContainer.getService('game_state')
         
-        # Store essential config in game state
-        gameState.setState('totalSeasons', config.get('totalSeasons', 10))
-        gameState.setState('seasonsPlayed', config.get('seasonsPlayed', 0))
+        # Store essential config in game state  
+        leagueConfig = config.get('leagueConfig', {})
+        gameState.setState('totalSeasons', leagueConfig.get('totalSeasons', 10))
+        gameState.setState('seasonsPlayed', leagueConfig.get('lastSeason', 0))
         
         # Set any other global configuration
         if 'salaryCap' in config:

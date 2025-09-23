@@ -197,10 +197,11 @@ class Player:
         )
     
     def sync_stats_dicts(self):
-        """Sync optimized stats back to legacy dictionaries for backwards compatibility"""
-        self.gameStatsDict = self.gameStats.to_legacy_dict()
-        self.seasonStatsDict = self.seasonStats.to_legacy_dict() 
-        self.careerStatsDict = self.careerStats.to_legacy_dict()
+        """Sync FROM updated legacy dictionaries TO optimized stats objects"""
+        # Update optimized stats from the legacy dicts that have been updated by stat_tracker
+        self.gameStats = OptimizedPlayerStats.from_legacy_dict(self.gameStatsDict)
+        self.seasonStats = OptimizedPlayerStats.from_legacy_dict(self.seasonStatsDict)
+        self.careerStats = OptimizedPlayerStats.from_legacy_dict(self.careerStatsDict)
     
     def reset_game_stats(self):
         """Reset game stats for a new game using optimized stats"""
