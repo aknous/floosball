@@ -4,7 +4,8 @@
         "totalSeasons": 20,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
-        "lastSeason": 0
+        "lastSeason": 0,
+        "initialPlayerCount": 144
     },
     "leagues": [
         {
