@@ -228,6 +228,19 @@ class SeasonManager:
             # Update team records
             self._updateTeamRecords(gameInstance)
             
+            # Update ELO ratings based on game result
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                teamManager.updateEloAfterGame(
+                    gameInstance.homeTeam, 
+                    gameInstance.awayTeam, 
+                    gameInstance.homeScore, 
+                    gameInstance.awayScore, 
+                    gameInstance.winningTeam,
+                    getattr(gameInstance, 'homeTeamWinProbability', None),
+                    getattr(gameInstance, 'awayTeamWinProbability', None)
+                )
+            
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
@@ -530,6 +543,19 @@ class SeasonManager:
             
             # Update team records
             self._updateTeamRecords(gameInstance)
+            
+            # Update ELO ratings based on playoff game result
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                teamManager.updateEloAfterGame(
+                    gameInstance.homeTeam, 
+                    gameInstance.awayTeam, 
+                    gameInstance.homeScore, 
+                    gameInstance.awayScore, 
+                    gameInstance.winningTeam,
+                    getattr(gameInstance, 'homeTeamWinProbability', None),
+                    getattr(gameInstance, 'awayTeamWinProbability', None)
+                )
             
             # Check for records
             self.recordsManager.checkPlayerGameRecords()

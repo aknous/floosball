@@ -86,6 +86,10 @@ class FloosballApplication:
         logger.info("Initializing teams with rosters...")
         self.teamManager.initializeTeams()
         
+        # Initialize ELO ratings for all teams
+        logger.info("Calculating initial ELO ratings...")
+        self.teamManager.setNewElo()
+        
         # Save initial state
         await self._saveInitialState()
         

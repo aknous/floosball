@@ -1515,20 +1515,6 @@ class Game:
         self.homeTeamWinProbability = FloosMethods.calculateProbability(self.awayTeam.elo, self.homeTeamElo)
         self.awayTeamWinProbability = FloosMethods.calculateProbability(self.homeTeam.elo, self.awayTeamElo)
 
-    def calculateEloChange(self):
-        k = 35
-
-        if self.winningTeam is self.homeTeam:
-            marginOfVictoryMultiplier = math.log((abs(self.homeScore - self.awayScore) + 1)) * (2.2/((self.homeTeamElo-self.awayTeamElo) * .001 + 2.2))
-            self.homeTeam.elo = round((self.homeTeamElo + (k * marginOfVictoryMultiplier) * (1 - self.homeTeamWinProbability)))
-            self.awayTeam.elo = round((self.awayTeamElo + (k * marginOfVictoryMultiplier) * (0 - self.awayTeamWinProbability)))
-            x = 0
-        else:
-            marginOfVictoryMultiplier = math.log((abs(self.awayScore - self.homeScore) + 1)) * (2.2/((self.awayTeamElo-self.homeTeamElo) * .001 + 2.2))
-            self.homeTeam.elo = round((self.homeTeamElo + (k * marginOfVictoryMultiplier) * (0 - self.homeTeamWinProbability)))
-            self.awayTeam.elo = round((self.awayTeamElo + (k * marginOfVictoryMultiplier) * (1 - self.awayTeamWinProbability)))
-            x = 0
-        
 
     async def playGame(self):
         self.totalPlays = 0
@@ -2129,7 +2115,7 @@ class Game:
         self.awayTeam.getAverages()
         self.winningTeam.updateRating()
         self.losingTeam.updateRating()
-        self.calculateEloChange()
+        self.calculateWinProbability()  # Calculate probabilities for external ELO update
         self.postgame()
 
     def calculateGamePressure(self):

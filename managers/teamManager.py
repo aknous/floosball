@@ -502,9 +502,13 @@ class TeamManager:
         
         return homeTeamWinProbability, awayTeamWinProbability
     
-    def updateEloAfterGame(self, homeTeam, awayTeam, homeScore: int, awayScore: int, winningTeam) -> None:
+    def updateEloAfterGame(self, homeTeam, awayTeam, homeScore: int, awayScore: int, winningTeam, homeWinProb: float = None, awayWinProb: float = None) -> None:
         """
         Update ELO ratings for both teams after a game based on the result and margin of victory
+        
+        Args:
+            homeWinProb: Pre-calculated home team win probability (optional)
+            awayWinProb: Pre-calculated away team win probability (optional)
         """
         import math
         
@@ -513,8 +517,12 @@ class TeamManager:
         homeTeamElo = getattr(homeTeam, 'elo', 1500)
         awayTeamElo = getattr(awayTeam, 'elo', 1500)
         
-        # Calculate pre-game win probabilities
-        homeTeamWinProbability, awayTeamWinProbability = self.calculateWinProbability(homeTeam, awayTeam)
+        # Use provided win probabilities or calculate them
+        if homeWinProb is not None and awayWinProb is not None:
+            homeTeamWinProbability, awayTeamWinProbability = homeWinProb, awayWinProb
+        else:
+            # Calculate pre-game win probabilities
+            homeTeamWinProbability, awayTeamWinProbability = self.calculateWinProbability(homeTeam, awayTeam)
         
         # Calculate margin of victory multiplier (accounts for score differential)
         scoreDiff = abs(homeScore - awayScore)
