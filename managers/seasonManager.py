@@ -170,12 +170,14 @@ class SeasonManager:
                     'event': {'text': f'{self.currentSeason.currentWeekText} Start'}
                 })
             
-            # Simulate games in the week
+            # Simulate games in the week concurrently (like original)
             weekGames = weekGroups[week]
-            for i, game in enumerate(weekGames):
-                if i > 0:  # Add delay between games
-                    await self.timingManager.waitBetweenGames()
-                await self._simulateGame(game)
+            
+            # Create tasks for all games in the week to run concurrently
+            gameTasks = [self._simulateGame(game) for game in weekGames]
+            
+            # Wait for all games in the week to complete concurrently
+            await asyncio.gather(*gameTasks)
             
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -480,10 +482,15 @@ class SeasonManager:
                 
             logger.info(f"Simulating {currentRound}")
             
-            # Simulate round games
+            # Simulate round games concurrently (like original)
+            gameResultTasks = [self._simulatePlayoffGame(game) for game in roundGames]
+            
+            # Wait for all games in the round to complete concurrently
+            roundResults = await asyncio.gather(*gameResultTasks)
+            
+            # Collect winners
             roundWinners = []
-            for game in roundGames:
-                winner = await self._simulatePlayoffGame(game)
+            for winner in roundResults:
                 if winner:
                     roundWinners.append(winner)
             
