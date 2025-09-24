@@ -20014,3 +20014,377 @@
 2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating playoff game: 'NoneType' object has no attribute 'attributes'
 2025-09-22 15:24:16 - floosball.seasonManager - ERROR - Error simulating playoff game: 'NoneType' object has no attribute 'attributes'
 2025-09-22 15:24:16 - floosball.seasonManager - INFO - Completing season simulation
+2025-09-23 17:57:33 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast
+2025-09-23 17:57:34 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-23 17:57:34 - floosball.services - INFO - Initializing service container...
+2025-09-23 17:57:34 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-23 17:57:34 - floosball.config - INFO - Cached configuration from config.json
+2025-09-23 17:57:34 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-23 17:57:34 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-23 17:57:34 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-23 17:57:34 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-23 17:57:34 - floosball.application - INFO - Registered all managers with service container
+2025-09-23 17:57:34 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-23 17:57:34 - floosball.application - INFO - Initializing league system
+2025-09-23 17:57:34 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-23 17:57:34 - floosball.application - INFO - Application timing mode set to fast
+2025-09-23 17:57:34 - floosball.record_manager - INFO - Initialized new record structure
+2025-09-23 17:57:34 - floosball.application - INFO - Setting up players...
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-23 17:57:34 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Generated 144 total players
+2025-09-23 17:57:34 - floosball.application - INFO - Setting up teams...
+2025-09-23 17:57:34 - floosball.team_manager - INFO - Created 24 new teams from config
+2025-09-23 17:57:34 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-23 17:57:34 - floosball.application - INFO - Setting up leagues...
+2025-09-23 17:57:34 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-23 17:57:34 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-23 17:57:34 - floosball.application - INFO - Conducting initial draft...
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Draft complete. 144 players drafted, 0 free agents
+2025-09-23 17:57:34 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-23 17:57:34 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-23 17:57:34 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-23 17:57:34 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Saving player data
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Saved data for 144 active players
+2025-09-23 17:57:34 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-23 17:57:34 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-23 17:57:34 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-23 17:57:34 - floosball.application - INFO - League initialization complete
+2025-09-23 17:57:34 - floosball.application - INFO - Starting league simulation
+2025-09-23 17:57:34 - floosball.application - INFO - Simulating 20 seasons
+2025-09-23 17:57:34 - floosball.application - INFO - === SEASON 1 ===
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Starting season 1
+2025-09-23 17:57:34 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-23 17:57:34 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Created 28-week schedule with 336 games
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Season 1 initialized with 336 games
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-23 17:57:34 - floosball.seasonManager - INFO - Simulating week 1 in fast mode
+2025-09-23 18:36:10 - floosball.main - INFO - Clearing existing data for fresh start...
+2025-09-23 18:36:10 - floosball.main - INFO - Cleared directory: data/playerData
+2025-09-23 18:36:10 - floosball.main - INFO - Cleared directory: data/teamData
+2025-09-23 18:36:10 - floosball.main - INFO - Cleared file: data/unusedNames.json
+2025-09-23 18:36:10 - floosball.main - INFO - Cleared file: data/leagueData.json
+2025-09-23 18:36:10 - floosball.main - INFO - Cleared file: data/allTimeRecords.json
+2025-09-23 18:36:10 - floosball.main - INFO - Data clearing complete - starting fresh!
+2025-09-23 18:36:10 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast (fresh start)
+2025-09-23 18:36:10 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-23 18:36:10 - floosball.services - INFO - Initializing service container...
+2025-09-23 18:36:10 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-23 18:36:10 - floosball.config - INFO - Cached configuration from config.json
+2025-09-23 18:36:10 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-23 18:36:10 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-23 18:36:10 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-23 18:36:10 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-23 18:36:10 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-23 18:36:10 - floosball.application - INFO - Registered all managers with service container
+2025-09-23 18:36:10 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-23 18:36:10 - floosball.application - INFO - Initializing league system
+2025-09-23 18:36:10 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-23 18:36:10 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-23 18:36:10 - floosball.application - INFO - Application timing mode set to fast
+2025-09-23 18:36:10 - floosball.record_manager - INFO - Initialized new record structure
+2025-09-23 18:36:10 - floosball.application - INFO - Setting up players...
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-23 18:36:10 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Generated 144 total players
+2025-09-23 18:36:10 - floosball.application - INFO - Setting up teams...
+2025-09-23 18:36:10 - floosball.team_manager - INFO - Created 24 new teams from config
+2025-09-23 18:36:10 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-23 18:36:10 - floosball.application - INFO - Setting up leagues...
+2025-09-23 18:36:10 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-23 18:36:10 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-23 18:36:10 - floosball.application - INFO - Conducting initial draft...
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-23 18:36:10 - floosball.playerManager - INFO - Draft complete. 144 players drafted, 0 free agents
+2025-09-23 18:36:10 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-23 18:36:11 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-23 18:36:11 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-23 18:36:11 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-23 18:36:11 - floosball.application - INFO - Calculating initial ELO ratings...
+2025-09-23 18:36:11 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2025-09-23 18:36:11 - floosball.team_manager - INFO - ELO ratings updated for 24 teams (mean rating: 78)
+2025-09-23 18:36:11 - floosball.playerManager - INFO - Saving player data
+2025-09-23 18:36:11 - floosball.playerManager - INFO - Saved data for 144 active players
+2025-09-23 18:36:11 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-23 18:36:11 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-23 18:36:11 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-23 18:36:11 - floosball.application - INFO - League initialization complete
+2025-09-23 18:36:11 - floosball.application - INFO - Starting league simulation
+2025-09-23 18:36:11 - floosball.application - INFO - Simulating 20 seasons
+2025-09-23 18:36:11 - floosball.application - INFO - === SEASON 1 ===
+2025-09-23 18:36:11 - floosball.seasonManager - INFO - Starting season 1
+2025-09-23 18:36:11 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-23 18:36:11 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-23 18:36:11 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-23 18:36:11 - floosball.seasonManager - INFO - Created 28-week schedule with 336 games
+2025-09-23 18:36:11 - floosball.seasonManager - INFO - Season 1 initialized with 336 games
+2025-09-23 18:36:11 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-23 18:36:11 - floosball.seasonManager - INFO - Simulating week 1 in fast mode
+2025-09-23 18:52:53 - floosball.main - INFO - Clearing existing data for fresh start...
+2025-09-23 18:52:53 - floosball.main - INFO - Cleared directory: data/playerData
+2025-09-23 18:52:53 - floosball.main - INFO - Cleared directory: data/teamData
+2025-09-23 18:52:53 - floosball.main - INFO - Cleared file: data/unusedNames.json
+2025-09-23 18:52:53 - floosball.main - INFO - Cleared file: data/leagueData.json
+2025-09-23 18:52:53 - floosball.main - INFO - Cleared file: data/allTimeRecords.json
+2025-09-23 18:52:53 - floosball.main - INFO - Data clearing complete - starting fresh!
+2025-09-23 18:52:53 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast (fresh start)
+2025-09-23 18:52:54 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-23 18:52:54 - floosball.services - INFO - Initializing service container...
+2025-09-23 18:52:54 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-23 18:52:54 - floosball.config - INFO - Cached configuration from config.json
+2025-09-23 18:52:54 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-23 18:52:54 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-23 18:52:54 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-23 18:52:54 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-23 18:52:54 - floosball.application - INFO - Registered all managers with service container
+2025-09-23 18:52:54 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-23 18:52:54 - floosball.application - INFO - Initializing league system
+2025-09-23 18:52:54 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-23 18:52:54 - floosball.application - INFO - Application timing mode set to fast
+2025-09-23 18:52:54 - floosball.record_manager - INFO - Initialized new record structure
+2025-09-23 18:52:54 - floosball.application - INFO - Setting up players...
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-23 18:52:54 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Generated 144 total players
+2025-09-23 18:52:54 - floosball.application - INFO - Setting up teams...
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Created 24 new teams from config
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-23 18:52:54 - floosball.application - INFO - Setting up leagues...
+2025-09-23 18:52:54 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-23 18:52:54 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-23 18:52:54 - floosball.application - INFO - Conducting initial draft...
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Draft complete. 144 players drafted, 0 free agents
+2025-09-23 18:52:54 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-23 18:52:54 - floosball.application - INFO - Calculating initial ELO ratings...
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2025-09-23 18:52:54 - floosball.team_manager - INFO - ELO ratings updated for 24 teams (mean rating: 80)
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Saving player data
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Saved data for 144 active players
+2025-09-23 18:52:54 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-23 18:52:54 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-23 18:52:54 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-23 18:52:54 - floosball.application - INFO - League initialization complete
+2025-09-23 18:52:54 - floosball.application - INFO - Starting league simulation
+2025-09-23 18:52:54 - floosball.application - INFO - Simulating 20 seasons
+2025-09-23 18:52:54 - floosball.application - INFO - === SEASON 1 ===
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Starting season 1
+2025-09-23 18:52:54 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-23 18:52:54 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Created 28-week schedule with 336 games
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Season 1 initialized with 336 games
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-23 18:52:54 - floosball.seasonManager - INFO - Simulating week 1 in fast mode
+2025-09-24 10:11:25 - floosball.main - INFO - Clearing existing data for fresh start...
+2025-09-24 10:11:25 - floosball.main - INFO - Cleared directory: data/playerData
+2025-09-24 10:11:25 - floosball.main - INFO - Cleared directory: data/teamData
+2025-09-24 10:11:25 - floosball.main - INFO - Cleared file: data/unusedNames.json
+2025-09-24 10:11:25 - floosball.main - INFO - Cleared file: data/leagueData.json
+2025-09-24 10:11:25 - floosball.main - INFO - Cleared file: data/allTimeRecords.json
+2025-09-24 10:11:25 - floosball.main - INFO - Data clearing complete - starting fresh!
+2025-09-24 10:11:25 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast (fresh start)
+2025-09-24 10:11:26 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-24 10:11:26 - floosball.services - INFO - Initializing service container...
+2025-09-24 10:11:26 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-24 10:11:26 - floosball.config - INFO - Cached configuration from config.json
+2025-09-24 10:11:26 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-24 10:11:26 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-24 10:11:26 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-24 10:11:26 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-24 10:11:26 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-24 10:11:26 - floosball.application - INFO - Registered all managers with service container
+2025-09-24 10:11:26 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-24 10:11:26 - floosball.application - INFO - Initializing league system
+2025-09-24 10:11:26 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-24 10:11:26 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-24 10:11:26 - floosball.application - INFO - Application timing mode set to fast
+2025-09-24 10:11:26 - floosball.record_manager - INFO - Initialized new record structure
+2025-09-24 10:11:26 - floosball.application - INFO - Setting up players...
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-24 10:11:26 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Generated 144 total players
+2025-09-24 10:11:26 - floosball.application - INFO - Setting up teams...
+2025-09-24 10:11:26 - floosball.team_manager - INFO - Created 24 new teams from config
+2025-09-24 10:11:26 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-24 10:11:26 - floosball.application - INFO - Setting up leagues...
+2025-09-24 10:11:26 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-24 10:11:26 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-24 10:11:26 - floosball.application - INFO - Conducting initial draft...
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Draft complete. 144 players drafted, 0 free agents
+2025-09-24 10:11:26 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-24 10:11:26 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-24 10:11:26 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-24 10:11:26 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-24 10:11:26 - floosball.application - INFO - Calculating initial ELO ratings...
+2025-09-24 10:11:26 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2025-09-24 10:11:26 - floosball.team_manager - INFO - ELO ratings updated for 24 teams (mean rating: 79)
+2025-09-24 10:11:26 - floosball.playerManager - INFO - Saving player data
+2025-09-24 10:11:27 - floosball.playerManager - INFO - Saved data for 144 active players
+2025-09-24 10:11:27 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-24 10:11:27 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-24 10:11:27 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-24 10:11:27 - floosball.application - INFO - League initialization complete
+2025-09-24 10:11:27 - floosball.application - INFO - Starting league simulation
+2025-09-24 10:11:27 - floosball.application - INFO - Simulating 20 seasons
+2025-09-24 10:11:27 - floosball.application - INFO - === SEASON 1 ===
+2025-09-24 10:11:27 - floosball.seasonManager - INFO - Starting season 1
+2025-09-24 10:11:27 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-24 10:11:27 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-24 10:11:27 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-24 10:11:27 - floosball.seasonManager - INFO - Created 28-week schedule with 28 games
+2025-09-24 10:11:27 - floosball.seasonManager - INFO - Season 1 initialized with 28 games
+2025-09-24 10:11:27 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-24 10:11:38 - floosball.seasonManager - INFO - Simulating week {'startTime': datetime.datetime(2025, 9, 27, 15, 0), 'games': [<floosball_game.Game object at 0x142506880>, <floosball_game.Game object at 0x142506580>, <floosball_game.Game object at 0x142506df0>, <floosball_game.Game object at 0x142506a30>, <floosball_game.Game object at 0x142506910>, <floosball_game.Game object at 0x142506820>, <floosball_game.Game object at 0x142506fa0>, <floosball_game.Game object at 0x142506ee0>, <floosball_game.Game object at 0x142506460>, <floosball_game.Game object at 0x142506c10>, <floosball_game.Game object at 0x142506cd0>, <floosball_game.Game object at 0x142506b80>]} in fast mode
+2025-09-24 10:12:12 - floosball.main - INFO - Clearing existing data for fresh start...
+2025-09-24 10:12:12 - floosball.main - INFO - Cleared directory: data/playerData
+2025-09-24 10:12:12 - floosball.main - INFO - Cleared directory: data/teamData
+2025-09-24 10:12:12 - floosball.main - INFO - Cleared file: data/unusedNames.json
+2025-09-24 10:12:12 - floosball.main - INFO - Cleared file: data/leagueData.json
+2025-09-24 10:12:12 - floosball.main - INFO - Cleared file: data/allTimeRecords.json
+2025-09-24 10:12:12 - floosball.main - INFO - Data clearing complete - starting fresh!
+2025-09-24 10:12:12 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast (fresh start)
+2025-09-24 10:12:13 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-24 10:12:13 - floosball.services - INFO - Initializing service container...
+2025-09-24 10:12:13 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-24 10:12:13 - floosball.config - INFO - Cached configuration from config.json
+2025-09-24 10:12:13 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-24 10:12:13 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-24 10:12:13 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-24 10:12:13 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-24 10:12:13 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-24 10:12:13 - floosball.application - INFO - Registered all managers with service container
+2025-09-24 10:12:13 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-24 10:12:13 - floosball.application - INFO - Initializing league system
+2025-09-24 10:12:13 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-24 10:12:13 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-24 10:12:13 - floosball.application - INFO - Application timing mode set to fast
+2025-09-24 10:12:13 - floosball.record_manager - INFO - Initialized new record structure
+2025-09-24 10:12:13 - floosball.application - INFO - Setting up players...
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-24 10:12:13 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Generated 144 total players
+2025-09-24 10:12:13 - floosball.application - INFO - Setting up teams...
+2025-09-24 10:12:13 - floosball.team_manager - INFO - Created 24 new teams from config
+2025-09-24 10:12:13 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-24 10:12:13 - floosball.application - INFO - Setting up leagues...
+2025-09-24 10:12:13 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-24 10:12:13 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-24 10:12:13 - floosball.application - INFO - Conducting initial draft...
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-24 10:12:13 - floosball.playerManager - INFO - Draft complete. 144 players drafted, 0 free agents
+2025-09-24 10:12:13 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-24 10:12:14 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-24 10:12:14 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-24 10:12:14 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-24 10:12:14 - floosball.application - INFO - Calculating initial ELO ratings...
+2025-09-24 10:12:14 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2025-09-24 10:12:14 - floosball.team_manager - INFO - ELO ratings updated for 24 teams (mean rating: 79)
+2025-09-24 10:12:14 - floosball.playerManager - INFO - Saving player data
+2025-09-24 10:12:14 - floosball.playerManager - INFO - Saved data for 144 active players
+2025-09-24 10:12:14 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-24 10:12:14 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-24 10:12:14 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-24 10:12:14 - floosball.application - INFO - League initialization complete
+2025-09-24 10:12:14 - floosball.application - INFO - Starting league simulation
+2025-09-24 10:12:14 - floosball.application - INFO - Simulating 20 seasons
+2025-09-24 10:12:14 - floosball.application - INFO - === SEASON 1 ===
+2025-09-24 10:12:14 - floosball.seasonManager - INFO - Starting season 1
+2025-09-24 10:12:14 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-24 10:12:14 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-24 10:12:14 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-24 10:12:14 - floosball.seasonManager - INFO - Created 28-week schedule with 28 games
+2025-09-24 10:12:14 - floosball.seasonManager - INFO - Season 1 initialized with 28 games
+2025-09-24 10:12:14 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-24 10:12:32 - floosball.seasonManager - INFO - Simulating week {'startTime': datetime.datetime(2025, 9, 27, 15, 0), 'games': [<floosball_game.Game object at 0x116e44c40>, <floosball_game.Game object at 0x116fd7880>, <floosball_game.Game object at 0x116fd79d0>, <floosball_game.Game object at 0x116fd7130>, <floosball_game.Game object at 0x116fd7670>, <floosball_game.Game object at 0x116fd7fa0>, <floosball_game.Game object at 0x116fd7ee0>, <floosball_game.Game object at 0x116fd7820>, <floosball_game.Game object at 0x116fd7460>, <floosball_game.Game object at 0x116fd7850>, <floosball_game.Game object at 0x116fd7790>, <floosball_game.Game object at 0x116fd7730>]} in fast mode
+2025-09-24 10:12:56 - floosball.main - INFO - Clearing existing data for fresh start...
+2025-09-24 10:12:56 - floosball.main - INFO - Cleared directory: data/playerData
+2025-09-24 10:12:56 - floosball.main - INFO - Cleared directory: data/teamData
+2025-09-24 10:12:56 - floosball.main - INFO - Cleared file: data/unusedNames.json
+2025-09-24 10:12:56 - floosball.main - INFO - Cleared file: data/leagueData.json
+2025-09-24 10:12:56 - floosball.main - INFO - Cleared file: data/allTimeRecords.json
+2025-09-24 10:12:56 - floosball.main - INFO - Data clearing complete - starting fresh!
+2025-09-24 10:12:56 - floosball.main - INFO - Starting refactored Floosball with timing mode: fast (fresh start)
+2025-09-24 10:12:57 - floosball.main - INFO - Floosball v0.9.0_alpha (Refactored)
+2025-09-24 10:12:57 - floosball.services - INFO - Initializing service container...
+2025-09-24 10:12:57 - floosball.services - INFO - Services initialized: ['config_manager', 'game_state', 'random_batch', 'rating_cache', 'stats_pool']
+2025-09-24 10:12:57 - floosball.config - INFO - Cached configuration from config.json
+2025-09-24 10:12:57 - floosball.application - INFO - Initializing FloosballApplication
+2025-09-24 10:12:57 - floosball.playerManager - INFO - PlayerManager initialized
+2025-09-24 10:12:57 - floosball.leagueManager - INFO - LeagueManager initialized
+2025-09-24 10:12:57 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2025-09-24 10:12:57 - floosball.seasonManager - INFO - SeasonManager initialized
+2025-09-24 10:12:57 - floosball.application - INFO - Registered all managers with service container
+2025-09-24 10:12:57 - floosball.application - INFO - FloosballApplication initialized successfully
+2025-09-24 10:12:57 - floosball.application - INFO - Initializing league system
+2025-09-24 10:12:57 - floosball.timingManager - INFO - Timing mode changed to fast
+2025-09-24 10:12:57 - floosball.seasonManager - INFO - Season timing mode set to fast
+2025-09-24 10:12:57 - floosball.application - INFO - Application timing mode set to fast
+2025-09-24 10:12:57 - floosball.record_manager - INFO - Initialized new record structure
+2025-09-24 10:12:57 - floosball.application - INFO - Setting up players...
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Generating initial player pool
+2025-09-24 10:12:57 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Loaded 771 names from config
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Saved 771 unused names to data/unusedNames.json
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Generated 144 total players
+2025-09-24 10:12:57 - floosball.application - INFO - Setting up teams...
+2025-09-24 10:12:57 - floosball.team_manager - INFO - Created 24 new teams from config
+2025-09-24 10:12:57 - floosball.team_manager - INFO - Generated 24 teams
+2025-09-24 10:12:57 - floosball.application - INFO - Setting up leagues...
+2025-09-24 10:12:57 - floosball.leagueManager - INFO - Creating league structure from config
+2025-09-24 10:12:57 - floosball.leagueManager - INFO - Created 2 leagues with 24 teams
+2025-09-24 10:12:57 - floosball.application - INFO - Conducting initial draft...
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Starting initial player draft
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Draft complete. 144 players drafted, 0 free agents
+2025-09-24 10:12:57 - floosball.application - INFO - Initializing teams with rosters...
+2025-09-24 10:12:57 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2025-09-24 10:12:57 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2025-09-24 10:12:57 - floosball.team_manager - INFO - Initialized 24 teams
+2025-09-24 10:12:57 - floosball.application - INFO - Calculating initial ELO ratings...
+2025-09-24 10:12:57 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2025-09-24 10:12:57 - floosball.team_manager - INFO - ELO ratings updated for 24 teams (mean rating: 80)
+2025-09-24 10:12:57 - floosball.playerManager - INFO - Saving player data
+2025-09-24 10:12:58 - floosball.playerManager - INFO - Saved data for 144 active players
+2025-09-24 10:12:58 - floosball.playerManager - INFO - Saved 627 unused names to data/unusedNames.json
+2025-09-24 10:12:58 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2025-09-24 10:12:58 - floosball.record_manager - INFO - Saved records to data/allTimeRecords.json
+2025-09-24 10:12:58 - floosball.application - INFO - League initialization complete
+2025-09-24 10:12:58 - floosball.application - INFO - Starting league simulation
+2025-09-24 10:12:58 - floosball.application - INFO - Simulating 20 seasons
+2025-09-24 10:12:58 - floosball.application - INFO - === SEASON 1 ===
+2025-09-24 10:12:58 - floosball.seasonManager - INFO - Starting season 1
+2025-09-24 10:12:58 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2025-09-24 10:12:58 - floosball.team_manager - INFO - Cleared season stats for all teams
+2025-09-24 10:12:58 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2025-09-24 10:12:58 - floosball.seasonManager - INFO - Created 28-week schedule with 28 games
+2025-09-24 10:12:58 - floosball.seasonManager - INFO - Season 1 initialized with 28 games
+2025-09-24 10:12:58 - floosball.seasonManager - INFO - Running simulation for season 1
+2025-09-24 10:13:02 - floosball.seasonManager - INFO - Simulating week 1 in fast mode

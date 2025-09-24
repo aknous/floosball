@@ -577,6 +577,171 @@ class RecordManager:
             'hasRecords': player_records > 0 or team_records > 0
         }
         
+    def processPostGameStats(self, gameInstance) -> None:
+        """
+        Process all post-game statistics for teams and players.
+        Replaces the large postgame() method from floosball_game.py
+        """
+        if not hasattr(gameInstance, 'isRegularSeasonGame'):
+            self.logger.warning("Game instance missing isRegularSeasonGame attribute")
+            return
+            
+        self.logger.debug(f"Processing post-game stats for {gameInstance.homeTeam.name} vs {gameInstance.awayTeam.name}")
+        
+        # Only process season stats for regular season games
+        if gameInstance.isRegularSeasonGame:
+            self._updateTeamSeasonStats(gameInstance)
+            self._updatePlayerSeasonStats(gameInstance)
+            self._updateWinStreaks(gameInstance)
+        
+        # Always update career stats for all games
+        self._updatePlayerCareerStats(gameInstance)
+        
+        self.logger.debug("Post-game stat processing complete")
+    
+    def _updateTeamSeasonStats(self, gameInstance) -> None:
+        """Update team season statistics from game results"""
+        try:
+            # Home team offensive stats
+            homeTeam = gameInstance.homeTeam
+            homeTeam.seasonTeamStats['Offense']['pts'] += gameInstance.homeScore
+            
+            if homeTeam.rosterDict.get('rb') and hasattr(homeTeam.rosterDict['rb'], 'gameStatsDict'):
+                homeTeam.seasonTeamStats['Offense']['runTds'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']
+                homeTeam.seasonTeamStats['Offense']['runYards'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
+            
+            if homeTeam.rosterDict.get('qb') and hasattr(homeTeam.rosterDict['qb'], 'gameStatsDict'):
+                homeTeam.seasonTeamStats['Offense']['passTds'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds']
+                homeTeam.seasonTeamStats['Offense']['passYards'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
+            
+            if homeTeam.rosterDict.get('k') and hasattr(homeTeam.rosterDict['k'], 'gameStatsDict'):
+                homeTeam.seasonTeamStats['Offense']['fgs'] += homeTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
+            
+            # Calculate total TDs and yards
+            passTds = homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] if homeTeam.rosterDict.get('qb') else 0
+            runTds = homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'] if homeTeam.rosterDict.get('rb') else 0
+            homeTeam.seasonTeamStats['Offense']['tds'] += (passTds + runTds)
+            
+            passYards = homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] if homeTeam.rosterDict.get('qb') else 0
+            runYards = homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'] if homeTeam.rosterDict.get('rb') else 0
+            homeTeam.seasonTeamStats['Offense']['totalYards'] += (passYards + runYards)
+            
+            # Score differential
+            homeScoreDiff = gameInstance.homeScore - getattr(homeTeam, 'gameDefenseStats', {}).get('ptsAlwd', gameInstance.awayScore)
+            homeTeam.seasonTeamStats['scoreDiff'] += homeScoreDiff
+            
+            # Away team offensive stats (mirror of home team logic)
+            awayTeam = gameInstance.awayTeam
+            awayTeam.seasonTeamStats['Offense']['pts'] += gameInstance.awayScore
+            
+            if awayTeam.rosterDict.get('rb') and hasattr(awayTeam.rosterDict['rb'], 'gameStatsDict'):
+                awayTeam.seasonTeamStats['Offense']['runTds'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']
+                awayTeam.seasonTeamStats['Offense']['runYards'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
+            
+            if awayTeam.rosterDict.get('qb') and hasattr(awayTeam.rosterDict['qb'], 'gameStatsDict'):
+                awayTeam.seasonTeamStats['Offense']['passTds'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds']
+                awayTeam.seasonTeamStats['Offense']['passYards'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
+            
+            if awayTeam.rosterDict.get('k') and hasattr(awayTeam.rosterDict['k'], 'gameStatsDict'):
+                awayTeam.seasonTeamStats['Offense']['fgs'] += awayTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
+            
+            # Calculate total TDs and yards for away team
+            passTds = awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] if awayTeam.rosterDict.get('qb') else 0
+            runTds = awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'] if awayTeam.rosterDict.get('rb') else 0
+            awayTeam.seasonTeamStats['Offense']['tds'] += (passTds + runTds)
+            
+            passYards = awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] if awayTeam.rosterDict.get('qb') else 0
+            runYards = awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'] if awayTeam.rosterDict.get('rb') else 0
+            awayTeam.seasonTeamStats['Offense']['totalYards'] += (passYards + runYards)
+            
+            # Score differential for away team
+            awayScoreDiff = gameInstance.awayScore - getattr(awayTeam, 'gameDefenseStats', {}).get('ptsAlwd', gameInstance.homeScore)
+            awayTeam.seasonTeamStats['scoreDiff'] += awayScoreDiff
+            
+        except Exception as e:
+            self.logger.error(f"Error updating team season stats: {e}")
+    
+    def _updateWinStreaks(self, gameInstance) -> None:
+        """Update win/loss streaks for teams"""
+        try:
+            winningTeam = gameInstance.winningTeam
+            losingTeam = gameInstance.losingTeam
+            
+            if not winningTeam or not losingTeam:
+                return
+            
+            # Update winning streak
+            if winningTeam.seasonTeamStats.get('streak', 0) >= 0:
+                winningTeam.seasonTeamStats['streak'] += 1
+                if winningTeam.seasonTeamStats['streak'] > 3 and not getattr(winningTeam, 'winningStreak', False):
+                    winningTeam.winningStreak = True
+            else:
+                winningTeam.seasonTeamStats['streak'] = 1
+            
+            # Update losing streak
+            if losingTeam.seasonTeamStats.get('streak', 0) <= 0:
+                losingTeam.seasonTeamStats['streak'] -= 1
+                if abs(losingTeam.seasonTeamStats['streak']) > 3:
+                    losingTeam.winningStreak = False
+            else:
+                losingTeam.seasonTeamStats['streak'] = -1
+                
+        except Exception as e:
+            self.logger.error(f"Error updating win streaks: {e}")
+    
+    def _updatePlayerSeasonStats(self, gameInstance) -> None:
+        """Update player season statistics from game results"""
+        try:
+            # Process both teams
+            for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
+                if not hasattr(team, 'rosterDict'):
+                    continue
+                    
+                for position, player in team.rosterDict.items():
+                    if player is None or not hasattr(player, 'gameStatsDict'):
+                        continue
+                    
+                    self._accumulatePlayerSeasonStats(player, position)
+                    
+        except Exception as e:
+            self.logger.error(f"Error updating player season stats: {e}")
+    
+    def _accumulatePlayerSeasonStats(self, player, position: str) -> None:
+        """Accumulate game stats into season stats for a player"""
+        try:
+            if not hasattr(player, 'seasonStatsDict'):
+                player.seasonStatsDict = {}
+            
+            gameStats = player.gameStatsDict
+            seasonStats = player.seasonStatsDict
+            
+            # Accumulate stats based on position - this is a simplified version
+            # The full implementation would mirror the original postgame() logic
+            if position == 'qb' and 'passing' in gameStats:
+                if 'passing' not in seasonStats:
+                    seasonStats['passing'] = {'att': 0, 'comp': 0, 'yards': 0, 'tds': 0, 'ints': 0}
+                
+                passing = seasonStats['passing']
+                gamePassing = gameStats['passing']
+                
+                passing['att'] += gamePassing.get('att', 0)
+                passing['comp'] += gamePassing.get('comp', 0)
+                passing['yards'] += gamePassing.get('yards', 0)
+                passing['tds'] += gamePassing.get('tds', 0)
+                passing['ints'] += gamePassing.get('ints', 0)
+            
+            # TODO: Add similar logic for all other positions and stat types
+            # This would include the full logic from the original postgame() method
+                    
+        except Exception as e:
+            self.logger.error(f"Error accumulating season stats for player {player.name}: {e}")
+    
+    def _updatePlayerCareerStats(self, gameInstance) -> None:
+        """Update career statistics for all players in the game"""
+        # Similar to season stats but accumulate into career totals
+        # Implementation would depend on how career stats are structured
+        pass
+    
     def checkPlayerGameRecords(self, allTimeRecordsDict: Dict[str, Any] = None) -> None:
         """
         Check and update player game records

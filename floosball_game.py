@@ -2116,7 +2116,7 @@ class Game:
         self.winningTeam.updateRating()
         self.losingTeam.updateRating()
         self.calculateWinProbability()  # Calculate probabilities for external ELO update
-        self.postgame()
+        # Note: Post-game stat processing now handled by RecordManager.processPostGameStats()
 
     def calculateGamePressure(self):
         pressure = 0

@@ -3,11 +3,13 @@ SeasonManager - Manages season simulation, scheduling, and progression
 Replaces the scattered season-related functions and global variables from floosball.py
 """
 
+import math
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 import datetime
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
+import floosball_game as FloosGame
 from logger_config import get_logger
 from .timingManager import TimingManager, TimingMode
 
@@ -22,7 +24,7 @@ class Season:
         self.currentWeek = 0
         self.currentWeekText = None
         self.activeGames = None
-        self.schedule: List[Dict[str, Any]] = []
+        self.schedule: List[Dict[str, FloosGame.Game]] = []
         self.playoffBracket: List[Dict[str, Any]] = []
         self.isComplete = False
         self.champion: Optional[FloosTeam.Team] = None
@@ -30,18 +32,6 @@ class Season:
         self.playoffTeams: Dict[str, List[FloosTeam.Team]] = {}
         self.nonPlayoffTeams: Dict[str, List[FloosTeam.Team]] = {}
         self.leagueHighlights: List[Dict[str, Any]] = []
-        
-    def addGame(self, homeTeam: FloosTeam.Team, awayTeam: FloosTeam.Team, week: int, gameType: str = 'regular') -> None:
-        """Add a game to the season schedule"""
-        game = {
-            'homeTeam': homeTeam,
-            'awayTeam': awayTeam,
-            'week': week,
-            'gameType': gameType,
-            'completed': False,
-            'result': None
-        }
-        self.schedule.append(game)
 
 class SeasonManager:
     """Manages season simulation, scheduling, and progression"""
@@ -54,8 +44,7 @@ class SeasonManager:
         
         self.currentSeason: Optional[Season] = None
         self.seasonHistory: List[Season] = []
-        self.schedule: List[Dict[str, Any]] = []
-        
+
         # Initialize timing manager with default fast mode
         self.timingManager = TimingManager(TimingMode.FAST)
         
@@ -130,82 +119,67 @@ class SeasonManager:
     
     async def _simulateRegularSeason(self) -> None:
         """Simulate all regular season games"""
-        regularSeasonGames = [game for game in self.currentSeason.schedule if game['gameType'] == 'regular']
-        
-        # Group games by week
-        weekGroups = {}
-        for game in regularSeasonGames:
-            week = game['week']
-            if week not in weekGroups:
-                weekGroups[week] = []
-            weekGroups[week].append(game)
-        
-        # Simulate each week with timing delays
-        for week in sorted(weekGroups.keys()):
-            logger.info(f"Simulating week {week} in {self.timingManager.getModeString()} mode")
-            
-            # Calculate week timing (for scheduled mode)
-            weekStartTime = datetime.datetime.utcnow() + datetime.timedelta(days=week * 7)
+        for week in self.currentSeason.schedule:
+            self.currentSeason.currentWeek = self.currentSeason.schedule.index(week)+1
+            self.currentSeason.currentWeekText = f'Week {self.currentSeason.currentWeek}'
+            logger.info(f"Simulating week {self.currentSeason.currentWeek} in {self.timingManager.getModeString()} mode")
+            weekStartTime = week['startTime']
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
-            
+
             # Wait for week setup time
             await self.timingManager.waitForWeekSetup(weekSetupTime)
-            
-            # Update season state
-            self.currentSeason.currentWeek = week
-            self.currentSeason.currentWeekText = f'Week {week}'
-            
+
             # Add league highlight for week starting
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
                     'event': {'text': f'{self.currentSeason.currentWeekText} Starting Soon...'}
                 })
-            
+
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
-            
+
             # Add game start highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
                     'event': {'text': f'{self.currentSeason.currentWeekText} Start'}
                 })
-            
+
             # Simulate games in the week concurrently (like original)
-            weekGames = weekGroups[week]
-            
+            weekGames = week['games']
+
             # Create tasks for all games in the week to run concurrently
             gameTasks = [self._simulateGame(game) for game in weekGames]
-            
+
             # Wait for all games in the week to complete concurrently
             await asyncio.gather(*gameTasks)
-            
+
             # Post-week processing (matches original floosball.py lines 688-699)
             self._updateWeeklyStats()
             self._updateStandings()
-            
+
             # Update player performance ratings for the week
             self._updatePlayerPerformanceRatings(week)
-            
+
             # Sort players and defenses (matches original)
             self.playerManager.sortPlayersByPosition()
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager:
                 teamManager.sortDefenses()
-            
+
             # Update playoff picture and check for clinches (matches original)
             self.updatePlayoffPicture()
             self.checkForClinches()
-            
+
             # Additional record checks (matches original)
             self.recordsManager.checkCareerRecords()
             self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber)
-            
+
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
                     'event': {'text': f'{self.currentSeason.currentWeekText} End'}
                 })
-            
+
             # Wait after week completes
             await self.timingManager.waitAfterWeek()
     
@@ -221,27 +195,22 @@ class SeasonManager:
         
         # Simulate playoff rounds
         await self._simulatePlayoffRounds()
-    
-    async def _simulateGame(self, game: Dict[str, Any]) -> None:
+
+    async def _simulateGame(self, game: FloosGame.Game) -> None:
         """Simulate a single game"""
-        import floosball_game as FloosGame
         
         try:
             # Create game instance with timing manager
-            gameInstance = FloosGame.Game(game['homeTeam'], game['awayTeam'], self.timingManager)
-            
-            # Set game type (regular season vs playoff)
-            gameInstance.isRegularSeasonGame = (game.get('gameType', 'regular') == 'regular')
+            gameInstance = game
             
             # Simulate the game
             await gameInstance.playGame()
             
-            # Update game result
-            game['completed'] = True
-            game['result'] = gameInstance
-            
             # Update team records
             self._updateTeamRecords(gameInstance)
+            
+            # Process post-game statistics (replaces original postgame() method)
+            self.recordsManager.processPostGameStats(gameInstance)
             
             # Update ELO ratings based on game result
             teamManager = self.serviceContainer.getService('team_manager')
@@ -262,7 +231,6 @@ class SeasonManager:
             
         except Exception as e:
             logger.error(f"Error simulating game: {e}")
-            game['completed'] = False
     
     def _updateTeamRecords(self, game) -> None:
         """Update team win/loss records"""
@@ -316,6 +284,7 @@ class SeasonManager:
     
     def createSchedule(self) -> None:
         """Generate season schedule (matches original floosball.py algorithm)"""
+        import floosball_team as FloosTeam
         if not self.currentSeason:
             return
             
@@ -328,20 +297,101 @@ class SeasonManager:
             
         # Generate full season schedule using original algorithm
         schedule = self._generateSchedule()
-        
+        self.currentSeason.schedule.clear()
+        dateTimeNow = datetime.datetime.utcnow()
+
         # Calculate number of weeks (original formula)
         numOfWeeks = int(((len(self.leagueManager.leagues[0].teamList) - 1) * 2) + (len(self.leagueManager.leagues[0].teamList) / 2))
         
         # Convert generated schedule to our current season format
         for week in range(numOfWeeks):
             if week < len(schedule):
+                gameList = []
                 weekGames = schedule[week]
-                for game in weekGames:
-                    homeTeam = game[0] 
-                    awayTeam = game[1]
-                    self.currentSeason.addGame(homeTeam, awayTeam, week + 1, 'regular')
-        
+                numOfGames = len(weekGames)
+                weekStartTime = self.getWeekStartTime(dateTimeNow, week)
+                for x in range(numOfGames):
+                    game = weekGames[x]
+                    homeTeam: FloosTeam.Team = game[0] 
+                    awayTeam: FloosTeam.Team = game[1]
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager)
+                    newGame.id = 's{0}w{1}g{2}'.format(self.currentSeason, week, newGame)
+                    newGame.status = FloosGame.GameStatus.Scheduled
+                    newGame.isRegularSeasonGame = True
+                    newGame.startTime = weekStartTime
+                    homeTeam.schedule.append(newGame)
+                    awayTeam.schedule.append(newGame)
+                    gameList.append(newGame)
+                self.currentSeason.schedule.append({'startTime': weekStartTime, 'games': gameList})
+                
+
         logger.info(f"Created {numOfWeeks}-week schedule with {len(self.currentSeason.schedule)} games")
+
+
+    def getWeekStartTime(self, now:datetime.datetime, week:int):
+        dateNow = datetime.datetime.now()
+        dateNowUtc = datetime.datetime.utcnow()
+        if dateNow.day == dateNowUtc.day:
+            utcOffset = dateNowUtc.hour - dateNow.hour
+        elif dateNowUtc.day > dateNow.day:
+            utcOffset = (dateNowUtc.hour + 24) - dateNow.hour
+        elif dateNow.day > dateNowUtc.day:
+            utcOffset = dateNowUtc.hour - (dateNow.hour + 24)
+
+        startDay = 4
+        monthDays = 0
+        startTimeHoursList = [11, 12, 13, 14, 15, 16, 17]
+
+        if now.month == 1 or now.month == 3 or now.month == 5 or now.month == 7 or now.month == 8 or now.month == 10 or now.month == 12:
+            monthDays = 31
+        elif now.month == 4 or now.month == 6 or now.month == 9 or now.month == 11:
+            monthDays = 30
+        elif now.month == 2:
+            if (now.year % 4) == 0:
+                monthDays = 29
+            else:
+                monthDays = 28
+
+        startTimeHour = startTimeHoursList[week%7]
+
+
+        todayWeekDay = dateNowUtc.isoweekday()
+
+        if week > 28:
+            if week == 32:
+                if todayWeekDay == startDay + 5:
+                    startDayOffset = 0
+                else:
+                    startDayOffset = (startDay + 5) - todayWeekDay
+            else:
+                if todayWeekDay == startDay + 5:
+                    startDayOffset = startDay + 4
+                elif todayWeekDay == startDay + 4:
+                    startDayOffset = 0
+                else:
+                    startDayOffset = (startDay + 4) - todayWeekDay
+            dayOffset = startDayOffset
+        else:
+            if todayWeekDay == startDay - 1:
+                startDayOffset = startDay - 1
+            elif todayWeekDay == startDay:
+                startDayOffset = 0
+            else:
+                startDayOffset = startDay + 7 - todayWeekDay
+
+            dayOffset = math.floor((week)/7) + startDayOffset
+
+
+        if (now.day + dayOffset) > monthDays:
+            if now.month + 1 > 12:
+                return datetime.datetime(now.year + 1, 1, dayOffset - (monthDays - now.day), startTimeHour)
+            else:
+                return datetime.datetime(now.year, now.month + 1, dayOffset - (monthDays - now.day), startTimeHour)
+        else:
+            if startTimeHour + utcOffset == 24:
+                return datetime.datetime(now.year, now.month, now.day + dayOffset, 0)
+            else:
+                return datetime.datetime(now.year, now.month, now.day + dayOffset, startTimeHour + utcOffset)
     
     def _generateSchedule(self) -> List[List[tuple]]:
         """Generate full season schedule using original algorithm"""
@@ -541,7 +591,6 @@ class SeasonManager:
     
     async def _simulatePlayoffGame(self, game: Dict[str, Any]) -> Optional[FloosTeam.Team]:
         """Simulate a single playoff game"""
-        import floosball_game as FloosGame
         
         try:
             # Create game instance with timing manager
@@ -563,6 +612,9 @@ class SeasonManager:
             
             # Update team records
             self._updateTeamRecords(gameInstance)
+            
+            # Process post-game statistics (replaces original postgame() method)
+            self.recordsManager.processPostGameStats(gameInstance)
             
             # Update ELO ratings based on playoff game result
             teamManager = self.serviceContainer.getService('team_manager')
