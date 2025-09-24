@@ -70,3 +70,4 @@ data/unusedNames.json
 data/leagueData.json
 /logs
 *.log
+logs/floosball.log

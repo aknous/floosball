@@ -875,34 +875,34 @@ class RecordManager:
                         gameKicking['fgPerc'] = round((gameKicking['fgs']/gameKicking['fgAtt'])*100)
                     else:
                         gameKicking['fgPerc'] = 0
-    
+
                     if gameKicking['longest'] > kicking['longest']:
                         kicking['longest'] = gameKicking['longest']
-    
+
                     if kicking['fgs'] > 0:
                         kicking['fgPerc'] = round((kicking['fgs']/kicking['fgAtt'])*100)
                         kicking['fgAvg'] = round(kicking['fgYards']/kicking['fgs'])
-    
+
                         if kicking['fgUnder20att'] > 0:
                             kicking['fgUnder20perc'] = round((kicking['fgUnder20']/kicking['fgUnder20att'])*100)
                         else:
                             kicking['fgUnder20perc'] = 'N/A'
-    
+
                         if kicking['fg20to40att'] > 0:
                             kicking['fg20to40perc'] = round((kicking['fg20to40']/kicking['fg20to40att'])*100)
                         else:
                             kicking['fg20to40perc'] = 'N/A'
-    
+
                         if kicking['fg40to50att'] > 0:
                             kicking['fg40to50perc'] = round((kicking['fg40to50']/kicking['fg40to50att'])*100)
                         else:
                             kicking['fg40to50perc'] = 'N/A'
-    
+
                         if kicking['fgOver50att'] > 0:
                             kicking['fgOver50perc'] = round((kicking['fgOver50']/kicking['fgOver50att'])*100)
                         else:
                             kicking['fgOver50perc'] = 'N/A'
-    
+
                     else:
                         kicking['fgPerc'] = 0
 
@@ -1486,10 +1486,10 @@ class RecordManager:
     def _checkCareerFantasyRecords(self, player: FloosPlayer.Player, records: Dict[str, Any]) -> None:
         """Check career fantasy records for a player"""
         career_fantasy = player.careerStatsDict['fantasyPoints']
-        career_records = records['players']['fantasy']['career']
+        career_records = records['players']['career']['points']
         
-        if career_fantasy > career_records['fantasyPoints']['value']:
-            career_records['fantasyPoints'].update({
+        if career_fantasy > career_records['value']:
+            career_records.update({
                 'value': career_fantasy,
                 'name': player.name,
                 'id': player.id
