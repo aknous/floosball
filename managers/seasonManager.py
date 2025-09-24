@@ -158,7 +158,7 @@ class SeasonManager:
             self._updateStandings()
 
             # Update player performance ratings for the week
-            self._updatePlayerPerformanceRatings(week)
+            self._updatePlayerPerformanceRatings(self.currentSeason.currentWeek)
 
             # Sort players and defenses (matches original)
             self.playerManager.sortPlayersByPosition()
@@ -254,16 +254,7 @@ class SeasonManager:
             homeTeam.seasonTeamStats.setdefault('losses', 0)
             awayTeam.seasonTeamStats.setdefault('wins', 0)
             awayTeam.seasonTeamStats.setdefault('losses', 0)
-            
-            # Update records based on game result
-            if game.homeScore > game.awayScore:
-                # Home team wins
-                homeTeam.seasonTeamStats['wins'] += 1
-                awayTeam.seasonTeamStats['losses'] += 1
-            else:
-                # Away team wins
-                awayTeam.seasonTeamStats['wins'] += 1
-                homeTeam.seasonTeamStats['losses'] += 1
+        
             
             # Update all-time records
             if not hasattr(homeTeam, 'allTimeTeamStats'):

@@ -8,6 +8,7 @@ functions from floosball.py
 
 from typing import Dict, Any
 import floosball_player as FloosPlayer
+import floosball_team as FloosTeam
 from logger_config import getLogger
 
 class RecordManager:
@@ -600,91 +601,131 @@ class RecordManager:
         self.logger.debug("Post-game stat processing complete")
     
     def _updateTeamSeasonStats(self, gameInstance) -> None:
-        """Update team season statistics from game results"""
+        """Update team season statistics from game results (matches original postgame exactly)"""
         try:
-            # Home team offensive stats
-            homeTeam = gameInstance.homeTeam
+            homeTeam: FloosTeam.Team = gameInstance.homeTeam
+            awayTeam: FloosTeam.Team = gameInstance.awayTeam
+
+            # Home team offensive stats (lines 1226-1236)
             homeTeam.seasonTeamStats['Offense']['pts'] += gameInstance.homeScore
-            
-            if homeTeam.rosterDict.get('rb') and hasattr(homeTeam.rosterDict['rb'], 'gameStatsDict'):
-                homeTeam.seasonTeamStats['Offense']['runTds'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']
-                homeTeam.seasonTeamStats['Offense']['runYards'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
-            
-            if homeTeam.rosterDict.get('qb') and hasattr(homeTeam.rosterDict['qb'], 'gameStatsDict'):
-                homeTeam.seasonTeamStats['Offense']['passTds'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds']
-                homeTeam.seasonTeamStats['Offense']['passYards'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
-            
-            if homeTeam.rosterDict.get('k') and hasattr(homeTeam.rosterDict['k'], 'gameStatsDict'):
-                homeTeam.seasonTeamStats['Offense']['fgs'] += homeTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
-            
-            # Calculate total TDs and yards
-            passTds = homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] if homeTeam.rosterDict.get('qb') else 0
-            runTds = homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'] if homeTeam.rosterDict.get('rb') else 0
-            homeTeam.seasonTeamStats['Offense']['tds'] += (passTds + runTds)
-            
-            passYards = homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] if homeTeam.rosterDict.get('qb') else 0
-            runYards = homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'] if homeTeam.rosterDict.get('rb') else 0
-            homeTeam.seasonTeamStats['Offense']['totalYards'] += (passYards + runYards)
-            
-            # Score differential
-            homeScoreDiff = gameInstance.homeScore - getattr(homeTeam, 'gameDefenseStats', {}).get('ptsAlwd', gameInstance.awayScore)
+            homeTeam.seasonTeamStats['Offense']['runTds'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']
+            homeTeam.seasonTeamStats['Offense']['passTds'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds']
+            homeTeam.seasonTeamStats['Offense']['tds'] += (homeTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + homeTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
+            homeTeam.seasonTeamStats['Offense']['fgs'] += homeTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
+            homeTeam.seasonTeamStats['Offense']['passYards'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
+            homeTeam.seasonTeamStats['Offense']['runYards'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
+            homeTeam.seasonTeamStats['Offense']['totalYards'] += (homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
+            homeScoreDiff = gameInstance.homeScore - homeTeam.gameDefenseStats['ptsAlwd']
             homeTeam.seasonTeamStats['scoreDiff'] += homeScoreDiff
-            
-            # Away team offensive stats (mirror of home team logic)
-            awayTeam = gameInstance.awayTeam
+
+            # Away team offensive stats (lines 1238-1248)
             awayTeam.seasonTeamStats['Offense']['pts'] += gameInstance.awayScore
-            
-            if awayTeam.rosterDict.get('rb') and hasattr(awayTeam.rosterDict['rb'], 'gameStatsDict'):
-                awayTeam.seasonTeamStats['Offense']['runTds'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']
-                awayTeam.seasonTeamStats['Offense']['runYards'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
-            
-            if awayTeam.rosterDict.get('qb') and hasattr(awayTeam.rosterDict['qb'], 'gameStatsDict'):
-                awayTeam.seasonTeamStats['Offense']['passTds'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds']
-                awayTeam.seasonTeamStats['Offense']['passYards'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
-            
-            if awayTeam.rosterDict.get('k') and hasattr(awayTeam.rosterDict['k'], 'gameStatsDict'):
-                awayTeam.seasonTeamStats['Offense']['fgs'] += awayTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
-            
-            # Calculate total TDs and yards for away team
-            passTds = awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] if awayTeam.rosterDict.get('qb') else 0
-            runTds = awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'] if awayTeam.rosterDict.get('rb') else 0
-            awayTeam.seasonTeamStats['Offense']['tds'] += (passTds + runTds)
-            
-            passYards = awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] if awayTeam.rosterDict.get('qb') else 0
-            runYards = awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'] if awayTeam.rosterDict.get('rb') else 0
-            awayTeam.seasonTeamStats['Offense']['totalYards'] += (passYards + runYards)
-            
-            # Score differential for away team
-            awayScoreDiff = gameInstance.awayScore - getattr(awayTeam, 'gameDefenseStats', {}).get('ptsAlwd', gameInstance.homeScore)
+            awayTeam.seasonTeamStats['Offense']['runTds'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']
+            awayTeam.seasonTeamStats['Offense']['passTds'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds']
+            awayTeam.seasonTeamStats['Offense']['tds'] += (awayTeam.rosterDict['qb'].gameStatsDict['passing']['tds'] + awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds'])
+            awayTeam.seasonTeamStats['Offense']['fgs'] += awayTeam.rosterDict['k'].gameStatsDict['kicking']['fgs']
+            awayTeam.seasonTeamStats['Offense']['passYards'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
+            awayTeam.seasonTeamStats['Offense']['runYards'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
+            awayTeam.seasonTeamStats['Offense']['totalYards'] += (awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
+            awayScoreDiff = gameInstance.awayScore - awayTeam.gameDefenseStats['ptsAlwd']
             awayTeam.seasonTeamStats['scoreDiff'] += awayScoreDiff
+
+            # Winning team defensive stats (lines 1258-1269)
+            winningTeam: FloosTeam.Team = gameInstance.winningTeam
+            winningTeam.seasonTeamStats['Defense']['ints'] += winningTeam.gameDefenseStats['ints']
+            winningTeam.seasonTeamStats['Defense']['fumRec'] += winningTeam.gameDefenseStats['fumRec']
+            winningTeam.seasonTeamStats['Defense']['sacks'] += winningTeam.gameDefenseStats['sacks']
+            winningTeam.seasonTeamStats['Defense']['safeties'] += winningTeam.gameDefenseStats['safeties']
+            winningTeam.seasonTeamStats['Defense']['runYardsAlwd'] += winningTeam.gameDefenseStats['runYardsAlwd']
+            winningTeam.seasonTeamStats['Defense']['passYardsAlwd'] += winningTeam.gameDefenseStats['passYardsAlwd']
+            winningTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += winningTeam.gameDefenseStats['totalYardsAlwd']
+            winningTeam.seasonTeamStats['Defense']['runTdsAlwd'] += winningTeam.gameDefenseStats['runTdsAlwd']
+            winningTeam.seasonTeamStats['Defense']['passTdsAlwd'] += winningTeam.gameDefenseStats['passTdsAlwd']
+            winningTeam.seasonTeamStats['Defense']['tdsAlwd'] += winningTeam.gameDefenseStats['tdsAlwd']
+            winningTeam.seasonTeamStats['Defense']['ptsAlwd'] += winningTeam.gameDefenseStats['ptsAlwd']
+            winningTeam.seasonTeamStats['winPerc'] = round(winningTeam.seasonTeamStats['wins']/(winningTeam.seasonTeamStats['wins']+winningTeam.seasonTeamStats['losses']),3)
+
+            # Losing team defensive stats (lines 1281-1292)
+            losingTeam: FloosTeam.Team = gameInstance.losingTeam
+            losingTeam.seasonTeamStats['Defense']['ints'] += losingTeam.gameDefenseStats['ints']
+            losingTeam.seasonTeamStats['Defense']['fumRec'] += losingTeam.gameDefenseStats['fumRec']
+            losingTeam.seasonTeamStats['Defense']['sacks'] += losingTeam.gameDefenseStats['sacks']
+            losingTeam.seasonTeamStats['Defense']['safeties'] += losingTeam.gameDefenseStats['safeties']
+            losingTeam.seasonTeamStats['Defense']['runYardsAlwd'] += losingTeam.gameDefenseStats['runYardsAlwd']
+            losingTeam.seasonTeamStats['Defense']['passYardsAlwd'] += losingTeam.gameDefenseStats['passYardsAlwd']
+            losingTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += losingTeam.gameDefenseStats['totalYardsAlwd']
+            losingTeam.seasonTeamStats['Defense']['runTdsAlwd'] += losingTeam.gameDefenseStats['runTdsAlwd']
+            losingTeam.seasonTeamStats['Defense']['passTdsAlwd'] += losingTeam.gameDefenseStats['passTdsAlwd']
+            losingTeam.seasonTeamStats['Defense']['tdsAlwd'] += losingTeam.gameDefenseStats['tdsAlwd']
+            losingTeam.seasonTeamStats['Defense']['ptsAlwd'] += losingTeam.gameDefenseStats['ptsAlwd']
+            losingTeam.seasonTeamStats['winPerc'] = round(losingTeam.seasonTeamStats['wins']/(losingTeam.seasonTeamStats['wins']+losingTeam.seasonTeamStats['losses']),3)
+            
+            # Defensive fantasy points calculation (lines 1295-1319)
+            # Home team defensive fantasy points
+            if homeTeam.gameDefenseStats['ptsAlwd'] >= 35:
+                homeTeam.gameDefenseStats['fantasyPoints'] += -4
+            elif homeTeam.gameDefenseStats['ptsAlwd'] >= 28 and homeTeam.gameDefenseStats['ptsAlwd'] < 35:
+                homeTeam.gameDefenseStats['fantasyPoints'] += -1
+            elif homeTeam.gameDefenseStats['ptsAlwd'] >= 14 and homeTeam.gameDefenseStats['ptsAlwd'] <= 21:
+                homeTeam.gameDefenseStats['fantasyPoints'] += 1
+            elif homeTeam.gameDefenseStats['ptsAlwd'] >= 7 and homeTeam.gameDefenseStats['ptsAlwd'] <= 13:
+                homeTeam.gameDefenseStats['fantasyPoints'] += 4
+            elif homeTeam.gameDefenseStats['ptsAlwd'] >= 1 and homeTeam.gameDefenseStats['ptsAlwd'] <= 6:
+                homeTeam.gameDefenseStats['fantasyPoints'] += 7
+            elif homeTeam.gameDefenseStats['ptsAlwd'] == 0:
+                homeTeam.gameDefenseStats['fantasyPoints'] += 10
+
+            # Away team defensive fantasy points
+            if awayTeam.gameDefenseStats['ptsAlwd'] >= 35:
+                awayTeam.gameDefenseStats['fantasyPoints'] += -4
+            elif awayTeam.gameDefenseStats['ptsAlwd'] >= 28 and awayTeam.gameDefenseStats['ptsAlwd'] < 35:
+                awayTeam.gameDefenseStats['fantasyPoints'] += -1
+            elif awayTeam.gameDefenseStats['ptsAlwd'] >= 14 and awayTeam.gameDefenseStats['ptsAlwd'] <= 21:
+                awayTeam.gameDefenseStats['fantasyPoints'] += 1
+            elif awayTeam.gameDefenseStats['ptsAlwd'] >= 7 and awayTeam.gameDefenseStats['ptsAlwd'] <= 13:
+                awayTeam.gameDefenseStats['fantasyPoints'] += 4
+            elif awayTeam.gameDefenseStats['ptsAlwd'] >= 1 and awayTeam.gameDefenseStats['ptsAlwd'] <= 6:
+                awayTeam.gameDefenseStats['fantasyPoints'] += 7
+            elif awayTeam.gameDefenseStats['ptsAlwd'] == 0:
+                awayTeam.gameDefenseStats['fantasyPoints'] += 10
             
         except Exception as e:
             self.logger.error(f"Error updating team season stats: {e}")
     
     def _updateWinStreaks(self, gameInstance) -> None:
-        """Update win/loss streaks for teams"""
+        """Update win/loss streaks for teams (matches original lines 1250-1279)"""
         try:
-            winningTeam = gameInstance.winningTeam
-            losingTeam = gameInstance.losingTeam
-            
+            winningTeam: FloosTeam.Team = gameInstance.winningTeam
+            losingTeam: FloosTeam.Team = gameInstance.losingTeam
+
             if not winningTeam or not losingTeam:
                 return
             
-            # Update winning streak
-            if winningTeam.seasonTeamStats.get('streak', 0) >= 0:
+            # Update winning streak (lines 1250-1256)
+            if winningTeam.seasonTeamStats['streak'] >= 0:
                 winningTeam.seasonTeamStats['streak'] += 1
-                if winningTeam.seasonTeamStats['streak'] > 3 and not getattr(winningTeam, 'winningStreak', False):
+                if winningTeam.seasonTeamStats['streak'] > 3 and not winningTeam.winningStreak:
                     winningTeam.winningStreak = True
+                    # Add league highlight for hot streak
+                    if hasattr(gameInstance, 'leagueHighlights'):
+                        gameInstance.leagueHighlights.insert(0, {
+                            'event': {'text': f'{winningTeam.city} {winningTeam.name} are on a hot streak!'}
+                        })
             else:
                 winningTeam.seasonTeamStats['streak'] = 1
-            
-            # Update losing streak
-            if losingTeam.seasonTeamStats.get('streak', 0) <= 0:
-                losingTeam.seasonTeamStats['streak'] -= 1
-                if abs(losingTeam.seasonTeamStats['streak']) > 3:
-                    losingTeam.winningStreak = False
-            else:
+
+            # Update losing streak (lines 1272-1279)
+            if losingTeam.seasonTeamStats['streak'] >= 0:
                 losingTeam.seasonTeamStats['streak'] = -1
+                if losingTeam.winningStreak:
+                    losingTeam.winningStreak = False
+                    # Add league highlight for ended streak
+                    if hasattr(gameInstance, 'leagueHighlights'):
+                        gameInstance.leagueHighlights.insert(0, {
+                            'event': {'text': f'{winningTeam.city} {winningTeam.name} ended the {losingTeam.city} {losingTeam.name} hot streak!'}
+                        })
+            else:
+                losingTeam.seasonTeamStats['streak'] -= 1
                 
         except Exception as e:
             self.logger.error(f"Error updating win streaks: {e}")
@@ -705,8 +746,8 @@ class RecordManager:
                     
         except Exception as e:
             self.logger.error(f"Error updating player season stats: {e}")
-    
-    def _accumulatePlayerSeasonStats(self, player, position: str) -> None:
+
+    def _accumulatePlayerSeasonStats(self, player: FloosPlayer.Player, position: str) -> None:
         """Accumulate game stats into season stats for a player"""
         try:
             if not hasattr(player, 'seasonStatsDict'):
@@ -714,25 +755,157 @@ class RecordManager:
             
             gameStats = player.gameStatsDict
             seasonStats = player.seasonStatsDict
-            
+            player.postgameChanges()
             # Accumulate stats based on position - this is a simplified version
             # The full implementation would mirror the original postgame() logic
+
+            player.seasonStatsDict['fantasyPoints'] += player.gameStatsDict['fantasyPoints']
             if position == 'qb' and 'passing' in gameStats:
                 if 'passing' not in seasonStats:
-                    seasonStats['passing'] = {'att': 0, 'comp': 0, 'yards': 0, 'tds': 0, 'ints': 0}
+                    seasonStats['passing'] = {
+                            'att': 0, 
+                            'comp': 0, 
+                            'compPerc': 0, 
+                            'missedPass': 0,
+                            'tds': 0, 
+                            'ints': 0, 
+                            'yards': 0, 
+                            'ypc': 0, 
+                            '20+': 0,
+                            'longest': 0
+                        }
                 
-                passing = seasonStats['passing']
-                gamePassing = gameStats['passing']
-                
-                passing['att'] += gamePassing.get('att', 0)
-                passing['comp'] += gamePassing.get('comp', 0)
-                passing['yards'] += gamePassing.get('yards', 0)
-                passing['tds'] += gamePassing.get('tds', 0)
-                passing['ints'] += gamePassing.get('ints', 0)
-            
-            # TODO: Add similar logic for all other positions and stat types
-            # This would include the full logic from the original postgame() method
-                    
+                if player.gameStatsDict['passing']['att'] > 0:
+                    passing = seasonStats['passing']
+                    gamePassing = gameStats['passing']
+                    if gamePassing['comp'] > 0:
+                        gamePassing['ypc'] = round(gamePassing['yards']/gamePassing['comp'], 2)
+                        gamePassing['compPerc'] = round((gamePassing['comp']/gamePassing['att'])*100)
+
+                    passing['20+'] += gamePassing['20+']
+
+                    if gamePassing['longest'] > passing['longest']:
+                        passing['longest'] = gamePassing['longest']
+
+                    if passing['comp'] > 0:
+                        passing['ypc'] = round(passing['yards']/passing['comp'], 2)
+                        passing['compPerc'] = round((passing['comp']/passing['att'])*100)
+
+            if position == 'wr' and 'receiving' in gameStats:
+                if 'receiving' not in seasonStats:
+                    seasonStats['receiving'] = {
+                            'receptions': 0, 
+                            'targets': 0, 
+                            'rcvPerc': 0, 
+                            'drops': 0,
+                            'yards': 0,
+                            'yac': 0, 
+                            'ypr': 0, 
+                            'tds': 0,
+                            '20+': 0,
+                            'longest': 0
+                        }
+                if player.gameStatsDict['receiving']['receptions'] > 0:
+                    receiving = seasonStats['receiving']
+                    gameReceiving = gameStats['receiving']
+                    if gameReceiving['yards'] > 0:
+                        gameReceiving['ypr'] = round(gameReceiving['yards']/gameReceiving['receptions'],2)
+                        gameReceiving['rcvPerc'] = round((gameReceiving['receptions']/gameReceiving['targets'])*100)
+
+                    receiving['20+'] += gameReceiving['20+']
+
+                    if gameReceiving['longest'] > receiving['longest']:
+                        receiving['longest'] = gameReceiving['longest']
+
+                    if receiving['yards'] > 0:
+                        receiving['ypr'] = round(receiving['yards']/receiving['receptions'],2)
+                        receiving['rcvPerc'] = round((receiving['receptions']/receiving['targets'])*100)
+
+            if position == 'rb' and 'rushing' in gameStats:
+                if 'rushing' not in seasonStats:
+                    seasonStats['rushing'] = {
+                            'carries': 0,
+                            'yards': 0, 
+                            'ypc': 0, 
+                            'tds': 0, 
+                            'fumblesLost': 0, 
+                            '20+': 0,
+                            'longest': 0
+                        }
+                if player.gameStatsDict['rushing']['carries'] > 0:
+                    rushing = seasonStats['rushing']
+                    gameRushing = gameStats['rushing']
+                    gameRushing['ypc'] = round(gameRushing['yards']/gameRushing['carries'],2)
+
+                    rushing['20+'] += gameRushing['20+']
+
+                    if gameRushing['longest'] > rushing['longest']:
+                        rushing['longest'] = gameRushing['longest']
+
+                    if rushing['carries'] > 0:
+                        rushing['ypc'] = round(rushing['yards']/rushing['carries'],2)
+
+            if position == 'k' and 'kicking' in gameStats:
+                if 'kicking' not in seasonStats:
+                    seasonStats['kicking'] = {
+                            'fgAtt': 0, 
+                            'fgs': 0, 
+                            'fgPerc': 0,
+                            'fgYards': 0,
+                            'fgAvg': 0,
+                            'fg45+': 0,
+                            'fgUnder20att': 0,
+                            'fgUnder20': 0,
+                            'fgUnder20perc': 0,
+                            'fg20to40att': 0,
+                            'fg20to40': 0,
+                            'fg20to40perc': 0,
+                            'fg40to50att': 0,
+                            'fg40to50': 0,
+                            'fg40to50perc': 0,
+                            'fgOver50att': 0,
+                            'fgOver50': 0,
+                            'fgOver50perc': 0,
+                            'longest': 0
+                        }
+                if player.gameStatsDict['kicking']['fgAtt'] > 0:
+                    kicking = seasonStats['kicking']
+                    gameKicking = gameStats['kicking']
+                    if gameKicking['fgs'] > 0:
+                        gameKicking['fgPerc'] = round((gameKicking['fgs']/gameKicking['fgAtt'])*100)
+                    else:
+                        gameKicking['fgPerc'] = 0
+    
+                    if gameKicking['longest'] > kicking['longest']:
+                        kicking['longest'] = gameKicking['longest']
+    
+                    if kicking['fgs'] > 0:
+                        kicking['fgPerc'] = round((kicking['fgs']/kicking['fgAtt'])*100)
+                        kicking['fgAvg'] = round(kicking['fgYards']/kicking['fgs'])
+    
+                        if kicking['fgUnder20att'] > 0:
+                            kicking['fgUnder20perc'] = round((kicking['fgUnder20']/kicking['fgUnder20att'])*100)
+                        else:
+                            kicking['fgUnder20perc'] = 'N/A'
+    
+                        if kicking['fg20to40att'] > 0:
+                            kicking['fg20to40perc'] = round((kicking['fg20to40']/kicking['fg20to40att'])*100)
+                        else:
+                            kicking['fg20to40perc'] = 'N/A'
+    
+                        if kicking['fg40to50att'] > 0:
+                            kicking['fg40to50perc'] = round((kicking['fg40to50']/kicking['fg40to50att'])*100)
+                        else:
+                            kicking['fg40to50perc'] = 'N/A'
+    
+                        if kicking['fgOver50att'] > 0:
+                            kicking['fgOver50perc'] = round((kicking['fgOver50']/kicking['fgOver50att'])*100)
+                        else:
+                            kicking['fgOver50perc'] = 'N/A'
+    
+                    else:
+                        kicking['fgPerc'] = 0
+
         except Exception as e:
             self.logger.error(f"Error accumulating season stats for player {player.name}: {e}")
     
