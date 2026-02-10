@@ -1725,30 +1725,7 @@ class Game:
                 if self.play.playType is PlayType.FieldGoal:
                     self.play.fieldGoalTry()
                     if self.play.isFgGood:
-                        if self.offensiveTeam == self.homeTeam:
-                            self.homeScore += 3
-                            if self.currentQuarter == 1:
-                                self.homeScoreQ1 += 3
-                            elif self.currentQuarter == 2:
-                                self.homeScoreQ2 += 3
-                            elif self.currentQuarter == 3:
-                                self.homeScoreQ3 += 3
-                            elif self.currentQuarter == 4:
-                                self.homeScoreQ4 += 3
-                            elif self.currentQuarter == 5:
-                                self.homeScoreOT += 3
-                        elif self.offensiveTeam == self.awayTeam:
-                            self.awayScore += 3
-                            if self.currentQuarter == 1:
-                                self.awayScoreQ1 += 3
-                            elif self.currentQuarter == 2:
-                                self.awayScoreQ2 += 3
-                            elif self.currentQuarter == 3:
-                                self.awayScoreQ3 += 3
-                            elif self.currentQuarter == 4:
-                                self.awayScoreQ4 += 3
-                            elif self.currentQuarter == 5:
-                                self.awayScoreOT += 3
+                        self._addScore(self.offensiveTeam, 3)
                         self.defensiveTeam.gameDefenseStats['ptsAlwd'] += 3
                         self.play.playResult = PlayResult.FieldGoalGood
                         self.play.scoreChange = True
@@ -1780,59 +1757,12 @@ class Game:
                     if self.play.yardage >= self.yardsToEndzone:
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
-                        if self.defensiveTeam == self.homeTeam:
-                            self.homeScore += 6
-                            if self.currentQuarter == 1:
-                                self.homeScoreQ1 += 6
-                            elif self.currentQuarter == 2:
-                                self.homeScoreQ2 += 6
-                            elif self.currentQuarter == 3:
-                                self.homeScoreQ3 += 6
-                            elif self.currentQuarter == 4:
-                                self.homeScoreQ4 += 6
-                            elif self.currentQuarter == 5:
-                                self.homeScoreOT += 6
-
-                        elif self.defensiveTeam == self.awayTeam:
-                            self.awayScore += 6
-                            if self.currentQuarter == 1:
-                                self.awayScoreQ1 += 6
-                            elif self.currentQuarter == 2:
-                                self.awayScoreQ2 += 6
-                            elif self.currentQuarter == 3:
-                                self.awayScoreQ3 += 6
-                            elif self.currentQuarter == 4:
-                                self.awayScoreQ4 += 6
-                            elif self.currentQuarter == 5:
-                                self.awayScoreOT += 6
+                        self._addScore(self.defensiveTeam, 6)
     
                         self.play.extraPointTry(self.defensiveTeam)
                         if self.play.isXpGood:
                             self.play.playResult = PlayResult.TouchdownXP
-                            if self.defensiveTeam == self.homeTeam:
-                                self.homeScore += 1
-                                if self.currentQuarter == 1:
-                                    self.homeScoreQ1 += 1
-                                elif self.currentQuarter == 2:
-                                    self.homeScoreQ2 += 1
-                                elif self.currentQuarter == 3:
-                                    self.homeScoreQ3 += 1
-                                elif self.currentQuarter == 4:
-                                    self.homeScoreQ4 += 1
-                                elif self.currentQuarter == 5:
-                                    self.homeScoreOT += 1
-                            elif self.defensiveTeam == self.awayTeam:
-                                self.awayScore += 1
-                                if self.currentQuarter == 1:
-                                    self.awayScoreQ1 += 1
-                                elif self.currentQuarter == 2:
-                                    self.awayScoreQ2 += 1
-                                elif self.currentQuarter == 3:
-                                    self.awayScoreQ3 += 1
-                                elif self.currentQuarter == 4:
-                                    self.awayScoreQ4 += 1
-                                elif self.currentQuarter == 5:
-                                    self.awayScoreOT += 1 
+                            self._addScore(self.defensiveTeam, 1) 
                         else:
                             self.play.playResult = PlayResult.TouchdownNoXP
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
@@ -1863,59 +1793,12 @@ class Game:
 
                         self.play.defense.gameDefenseStats['ptsAlwd'] += 6
 
-                        if self.offensiveTeam == self.homeTeam:
-                            self.homeScore += 6
-                            if self.currentQuarter == 1:
-                                self.homeScoreQ1 += 6
-                            elif self.currentQuarter == 2:
-                                self.homeScoreQ2 += 6
-                            elif self.currentQuarter == 3:
-                                self.homeScoreQ3 += 6
-                            elif self.currentQuarter == 4:
-                                self.homeScoreQ4 += 6
-                            elif self.currentQuarter == 5:
-                                self.homeScoreOT += 6
-
-                        elif self.offensiveTeam == self.awayTeam:
-                            self.awayScore += 6
-                            if self.currentQuarter == 1:
-                                self.awayScoreQ1 += 6
-                            elif self.currentQuarter == 2:
-                                self.awayScoreQ2 += 6
-                            elif self.currentQuarter == 3:
-                                self.awayScoreQ3 += 6
-                            elif self.currentQuarter == 4:
-                                self.awayScoreQ4 += 6
-                            elif self.currentQuarter == 5:
-                                self.awayScoreOT += 6
+                        self._addScore(self.offensiveTeam, 6)
 
                         self.play.extraPointTry(self.offensiveTeam)
                         if self.play.isXpGood:
                             self.play.playResult = PlayResult.TouchdownXP
-                            if self.offensiveTeam == self.homeTeam:
-                                self.homeScore += 1
-                                if self.currentQuarter == 1:
-                                    self.homeScoreQ1 += 1
-                                elif self.currentQuarter == 2:
-                                    self.homeScoreQ2 += 1
-                                elif self.currentQuarter == 3:
-                                    self.homeScoreQ3 += 1
-                                elif self.currentQuarter == 4:
-                                    self.homeScoreQ4 += 1
-                                elif self.currentQuarter == 5:
-                                    self.homeScoreOT += 1
-                            elif self.offensiveTeam == self.awayTeam:
-                                self.awayScore += 1
-                                if self.currentQuarter == 1:
-                                    self.awayScoreQ1 += 1
-                                elif self.currentQuarter == 2:
-                                    self.awayScoreQ2 += 1
-                                elif self.currentQuarter == 3:
-                                    self.awayScoreQ3 += 1
-                                elif self.currentQuarter == 4:
-                                    self.awayScoreQ4 += 1
-                                elif self.currentQuarter == 5:
-                                    self.awayScoreOT += 1 
+                            self._addScore(self.offensiveTeam, 1)
 
                             self.play.defense.gameDefenseStats['ptsAlwd'] += 1
 
@@ -1945,59 +1828,12 @@ class Game:
 
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         if self.play.isFumbleLost:
-                            if self.defensiveTeam == self.homeTeam:
-                                self.homeScore += 6
-                                if self.currentQuarter == 1:
-                                    self.homeScoreQ1 += 6
-                                elif self.currentQuarter == 2:
-                                    self.homeScoreQ2 += 6
-                                elif self.currentQuarter == 3:
-                                    self.homeScoreQ3 += 6
-                                elif self.currentQuarter == 4:
-                                    self.homeScoreQ4 += 6
-                                elif self.currentQuarter == 5:
-                                    self.homeScoreOT += 6
-    
-                            elif self.defensiveTeam == self.awayTeam:
-                                self.awayScore += 6
-                                if self.currentQuarter == 1:
-                                    self.awayScoreQ1 += 6
-                                elif self.currentQuarter == 2:
-                                    self.awayScoreQ2 += 6
-                                elif self.currentQuarter == 3:
-                                    self.awayScoreQ3 += 6
-                                elif self.currentQuarter == 4:
-                                    self.awayScoreQ4 += 6
-                                elif self.currentQuarter == 5:
-                                    self.awayScoreOT += 6
+                            self._addScore(self.defensiveTeam, 6)
     
                             self.play.extraPointTry(self.defensiveTeam)
                             if self.play.isXpGood:
                                 self.play.playResult = PlayResult.TouchdownXP
-                                if self.defensiveTeam == self.homeTeam:
-                                    self.homeScore += 1
-                                    if self.currentQuarter == 1:
-                                        self.homeScoreQ1 += 1
-                                    elif self.currentQuarter == 2:
-                                        self.homeScoreQ2 += 1
-                                    elif self.currentQuarter == 3:
-                                        self.homeScoreQ3 += 1
-                                    elif self.currentQuarter == 4:
-                                        self.homeScoreQ4 += 1
-                                    elif self.currentQuarter == 5:
-                                        self.homeScoreOT += 1
-                                elif self.defensiveTeam == self.awayTeam:
-                                    self.awayScore += 1
-                                    if self.currentQuarter == 1:
-                                        self.awayScoreQ1 += 1
-                                    elif self.currentQuarter == 2:
-                                        self.awayScoreQ2 += 1
-                                    elif self.currentQuarter == 3:
-                                        self.awayScoreQ3 += 1
-                                    elif self.currentQuarter == 4:
-                                        self.awayScoreQ4 += 1
-                                    elif self.currentQuarter == 5:
-                                        self.awayScoreOT += 1 
+                                self._addScore(self.defensiveTeam, 1) 
 
                             else:
                                 self.play.playResult = PlayResult.TouchdownNoXP
@@ -2009,31 +1845,7 @@ class Game:
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
                         else:
-                            if self.defensiveTeam == self.homeTeam:
-                                self.homeScore += 2
-                                if self.currentQuarter == 1:
-                                    self.homeScoreQ1 += 2
-                                elif self.currentQuarter == 2:
-                                    self.homeScoreQ2 += 2
-                                elif self.currentQuarter == 3:
-                                    self.homeScoreQ3 += 2
-                                elif self.currentQuarter == 4:
-                                    self.homeScoreQ4 += 2
-                                elif self.currentQuarter == 5:
-                                    self.homeScoreOT += 2
-
-                            elif self.defensiveTeam == self.awayTeam:
-                                self.awayScore += 2
-                                if self.currentQuarter == 1:
-                                    self.awayScoreQ1 += 2
-                                elif self.currentQuarter == 2:
-                                    self.awayScoreQ2 += 2
-                                elif self.currentQuarter == 3:
-                                    self.awayScoreQ3 += 2
-                                elif self.currentQuarter == 4:
-                                    self.awayScoreQ4 += 2
-                                elif self.currentQuarter == 5:
-                                    self.awayScoreOT += 2
+                            self._addScore(self.defensiveTeam, 2)
 
                             self.play.defense.gameDefenseStats['safeties'] += 1
 
@@ -2160,6 +1972,39 @@ class Game:
 
         return min(100, pressure)  # Cap at 100
 
+    def _addScore(self, team: FloosTeam.Team, points: int):
+        """
+        Add points to a team's score and update the appropriate quarter score.
+        Consolidates repeated scoring logic throughout the game.
+        
+        Args:
+            team: The team to award points to (homeTeam or awayTeam)
+            points: Number of points to add
+        """
+        if team == self.homeTeam:
+            self.homeScore += points
+            if self.currentQuarter == 1:
+                self.homeScoreQ1 += points
+            elif self.currentQuarter == 2:
+                self.homeScoreQ2 += points
+            elif self.currentQuarter == 3:
+                self.homeScoreQ3 += points
+            elif self.currentQuarter == 4:
+                self.homeScoreQ4 += points
+            elif self.currentQuarter == 5:
+                self.homeScoreOT += points
+        else:  # awayTeam
+            self.awayScore += points
+            if self.currentQuarter == 1:
+                self.awayScoreQ1 += points
+            elif self.currentQuarter == 2:
+                self.awayScoreQ2 += points
+            elif self.currentQuarter == 3:
+                self.awayScoreQ3 += points
+            elif self.currentQuarter == 4:
+                self.awayScoreQ4 += points
+            elif self.currentQuarter == 5:
+                self.awayScoreOT += points
 
 
 class Play():
@@ -2217,7 +2062,12 @@ class Play():
 
         baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 50))), 2)
         normalizedSkill = (self.kicker.gameAttributes.overallRating - 60) / 40
-        probability = round(baseProbability * (normalizedSkill * skillFactor), 2)
+        
+        # Apply pressure modifier to kicker's effective skill
+        pressureModifier = self.kicker.attributes.getPressureModifier(self.game.gamePressure)
+        adjustedSkill = normalizedSkill + (pressureModifier / 100)  # Normalize pressure modifier to skill scale
+        
+        probability = round(baseProbability * (adjustedSkill * skillFactor), 2)
         probability = round(max(0, min(1, probability)) * 100)
 
         x = batched_randint(1,100)
@@ -2276,7 +2126,12 @@ class Play():
     def extraPointTry(self, offense: FloosTeam.Team):
         self.kicker = offense.rosterDict['k']
         x = batched_randint(1,100)
-        if (self.kicker.gameAttributes.overallRating + 15) >= x:
+        
+        # Apply pressure modifier to kicker's rating for extra point attempts
+        pressureModifier = self.kicker.attributes.getPressureModifier(self.game.gamePressure)
+        adjustedRating = self.kicker.gameAttributes.overallRating + pressureModifier
+        
+        if (adjustedRating + 15) >= x:
             self.isXpGood = True
             self.kicker.addExtraPoint()
         else:
@@ -2284,128 +2139,503 @@ class Play():
 
         self.kicker.updateInGameRating()
     
+    def calculateGapQuality(self, gapType: str, rbPower: int, rbAgility: int, blockingRating: int, defenseRunCoverage: int) -> float:
+        """
+        STAGE 1: Calculate how good each gap is (similar to receiver openness).
+        Returns quality rating 0-100 where:
+        - 0-30: Gap is stuffed/well defended
+        - 30-60: Gap has moderate opening
+        - 60-100: Gap is wide open
+        
+        Gap types:
+        - 'A-gap': Inside power run (favors power, blocking critical)
+        - 'B-gap': Off-tackle (balanced power/agility)
+        - 'C-gap': Outside run (favors agility, speed)
+        - 'bounce': Improvised outside run (high risk/reward, agility-dependent)
+        """
+        # Different gaps favor different attributes
+        if gapType == 'A-gap':
+            # Power run - heavily depends on blocking and RB power
+            rbSkill = (rbPower * 1.5 + rbAgility * 0.5) / 2
+            blockingImpact = 0.7  # Blocking very important
+        elif gapType == 'B-gap':
+            # Off-tackle - balanced run
+            rbSkill = (rbPower * 1.0 + rbAgility * 1.0) / 2
+            blockingImpact = 0.5  # Blocking moderately important
+        elif gapType == 'C-gap':
+            # Outside run - agility matters more
+            rbSkill = (rbPower * 0.5 + rbAgility * 1.5) / 2
+            blockingImpact = 0.4  # Blocking less critical
+        else:  # bounce
+            # Improvised/broken play - pure agility, risky
+            rbSkill = rbAgility
+            blockingImpact = 0.2  # Minimal blocking help
+        
+        # Calculate gap effectiveness
+        offenseStrength = (rbSkill * (1 - blockingImpact)) + (blockingRating * blockingImpact)
+        skillDifferential = offenseStrength - defenseRunCoverage
+        
+        # Mean quality shifts based on matchup
+        meanQuality = 50 + (skillDifferential / 2.5)
+        meanQuality = max(10, min(90, meanQuality))
+        
+        # Standard deviation - more variance for risky gaps
+        if gapType == 'bounce':
+            stdDev = 30  # High variance - boom or bust
+        elif gapType == 'C-gap':
+            stdDev = 20  # Moderate variance
+        else:
+            stdDev = 15  # Lower variance for power runs
+        
+        # Sample from Gaussian and clamp to 0-100
+        quality = np.random.normal(meanQuality, stdDev)
+        return max(0, min(100, quality))
+    
+    def selectRunGap(self, gapList: list, rbVision: int, rbDiscipline: int):
+        """
+        STAGE 2: RB finds and selects a gap based on vision and discipline.
+        High vision = accurately perceives gap quality
+        Low vision = distorted perception (sees gaps as better/worse than they are)
+        High discipline = sticks to designed play
+        Low discipline = freelances more, takes risks
+        
+        Returns: selected gap dict with perceived and actual quality
+        """
+        # Calculate how accurately RB perceives gap quality
+        # High vision (85+): ±5 quality error, Medium (70-84): ±15 error, Low (<70): ±25 error
+        if rbVision >= 85:
+            visionErrorRange = 5
+        elif rbVision >= 70:
+            visionErrorRange = 15
+        else:
+            visionErrorRange = 25
+        
+        # Create perceived gaps with vision-adjusted quality
+        perceivedGaps = []
+        for gap in gapList:
+            actualQuality = gap['quality']
+            visionError = batched_randint(-visionErrorRange, visionErrorRange)
+            perceivedQuality = max(0, min(100, actualQuality + visionError))
+            
+            perceivedGaps.append({
+                'type': gap['type'],
+                'quality': perceivedQuality,  # What RB thinks
+                'actualQuality': actualQuality,  # What it really is
+                'isDesigned': gap['isDesigned']  # Was this the called play?
+            })
+        
+        # Sort by perceived quality
+        sortedGaps = sorted(perceivedGaps, key=lambda g: g['quality'], reverse=True)
+        
+        # Find the designed gap
+        designedGap = next((g for g in sortedGaps if g['isDesigned']), sortedGaps[0])
+        bestPerceivedGap = sortedGaps[0]
+        
+        # Discipline determines if RB hits designed gap or reads and freelances
+        if rbDiscipline >= 85:
+            # Elite discipline: always hits designed gap unless it looks terrible
+            if designedGap['quality'] >= 30 or batched_randint(1, 100) <= 90:
+                return designedGap
+            else:
+                # Designed gap looks stuffed, audible to best option
+                return bestPerceivedGap
+        elif rbDiscipline >= 70:
+            # Good discipline: usually hits designed gap, sometimes reads
+            if designedGap['quality'] >= 25 or batched_randint(1, 100) <= 70:
+                return designedGap
+            else:
+                return bestPerceivedGap
+        elif rbDiscipline >= 55:
+            # Average discipline: reads more often
+            if designedGap['quality'] >= 40 and batched_randint(1, 100) <= 60:
+                return designedGap
+            else:
+                return bestPerceivedGap
+        else:
+            # Low discipline: freelances often, goes for home runs
+            if batched_randint(1, 100) <= 40:
+                return designedGap
+            else:
+                # Tends to bounce outside looking for big play
+                bounceGap = next((g for g in sortedGaps if g['type'] == 'bounce'), bestPerceivedGap)
+                return bounceGap
+    
     def runPlay(self):
+        """
+        Improved running play using multi-stage system similar to passing:
+        1. Calculate quality of multiple gaps
+        2. RB vision determines accuracy of gap perception
+        3. RB discipline determines gap selection (designed vs audible)
+        4. Execute run through selected gap
+        5. Breakaway potential (second level yards)
+        """
         self.playType = PlayType.Run
         self.runner = self.offense.rosterDict['rb']
         blocker: FloosPlayer.PlayerTE = self.offense.rosterDict['te']
 
-        x = batched_randint(1,100)
-        fumbleRoll = batched_randint(1,100)
-        fumbleResist = round(((self.runner.gameAttributes.power*.8) + (self.runner.gameAttributes.discipline*1.2)/2) + self.runner.gameAttributes.luckModifier)
-        fumbleResistModifyer = 0
-        if fumbleResist >= 92:
-            fumbleResistModifyer = -2
-        elif fumbleResist >= 84 and fumbleResist <= 91:
-            fumbleResistModifyer = -1
-        elif fumbleResist >= 68 and fumbleResist <= 75:
-            fumbleResistModifyer = 1
-        elif fumbleResist >= 60 and fumbleResist <= 67:
-            fumbleResistModifyer = 2
-
-        """ playStrength = (((self.runner.gameAttributes.overallRating*1.2) + (blocker.gameAttributes.blocking*.8))/2) + batched_randint(-10,10)
-        defenseStrength = self.defense.defenseRunCoverageRating + batched_randint(-10,10)
-
-        if defenseStrength >= playStrength:
-            if x < 20:
-                self.yardage = randint(-2,0)
-                self.runner.updateInGameConfidence(-.005)
-            elif x >= 20 and x <= 70:
-                self.yardage = randint(0,3)
-            elif x > 70 and x <= 99:
-                self.yardage = randint(4,7)
-            else:
-                if self.yardsToEndzone < 7:
-                    self.yardage = randint(0, self.yardsToEndzone)
-                else:
-                    self.yardage = randint(7, self.yardsToEndzone)
-                self.runner.updateInGameConfidence(.01)
-                fumbleRoll = 0
-        else:
-            if x < 50:
-                self.yardage = randint(0,3)
-            elif x >= 50 and x < 85:
-                self.yardage = randint(4,7)
-            elif x >= 85 and x < 90:
-                self.yardage = randint(8,10)
-                self.runner.updateInGameConfidence(.005)
-            elif x >= 90 and x <= 95:
-                self.yardage = randint(11,20)
-            else:
-                if self.yardsToEndzone < 20:
-                    self.yardage = self.yardsToEndzone
-                else:
-                    self.yardage = randint(20, self.yardsToEndzone)
-                self.runner.updateInGameConfidence(.01)
-                fumbleRoll = 0 """
-        stage1Offense = (((((self.runner.attributes.power*1.5) + (self.runner.attributes.agility*1.2) + (self.runner.attributes.playMakingAbility*.8) + (self.runner.attributes.xFactor*.5))/4) * 0.8) + blocker.attributes.blocking * 0.2)
-        stage2Offense = ((self.runner.attributes.speed*1.5) + (self.runner.attributes.agility*1.2) + (self.runner.attributes.playMakingAbility*.8) + (self.runner.attributes.xFactor*.5))/4
-        offenseContribution2 = (1.2 * stage2Offense) / 100
-        defenseContribution = .4 * self.defense.defenseRunCoverageRating / 100
-
-        stage2DecayRate = round(0.1 + .1 * (np.exp(defenseContribution) - offenseContribution2),3)
-
+        # Apply pressure modifier to runner's performance
+        runnerPressureMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
+        
+        # STAGE 1: Calculate gap quality (like receiver openness)
+        # Randomly determine designed play (which gap is the call)
+        designedGapType = batched_choice(['A-gap', 'B-gap', 'C-gap'])
+        
+        gapList = []
+        for gapType in ['A-gap', 'B-gap', 'C-gap', 'bounce']:
+            quality = self.calculateGapQuality(
+                gapType,
+                self.runner.attributes.power,
+                self.runner.attributes.agility,
+                blocker.attributes.blocking,
+                self.defense.defenseRunCoverageRating
+            )
+            gapList.append({
+                'type': gapType,
+                'quality': quality,
+                'isDesigned': (gapType == designedGapType)
+            })
+        
+        # STAGE 2: RB selects gap based on vision and discipline
+        selectedGap = self.selectRunGap(
+            gapList,
+            self.runner.attributes.vision,
+            self.runner.attributes.discipline
+        )
+        
+        # STAGE 3: Execute run through selected gap
+        # Gap quality affects initial yards (like throw quality affects completion)
+        gapQuality = selectedGap['actualQuality']  # Use actual, not perceived
+        
+        # Calculate offensive strength with pressure modifier
+        rbPowerRating = (self.runner.attributes.power * 1.5 + 
+                        self.runner.attributes.agility * 1.2 + 
+                        self.runner.attributes.playMakingAbility * 0.8 +
+                        self.runner.attributes.xFactor * 0.5) / 4
+        
+        stage1Offense = ((rbPowerRating * 0.8) + (blocker.attributes.blocking * 0.2)) + runnerPressureMod
+        
+        # Adjust offense rating based on gap quality
+        # Good gap quality = better chance for yards
+        qualityBonus = (gapQuality - 50) / 10  # -5 to +5 bonus
+        adjustedOffense = stage1Offense + qualityBonus
+        
+        # Calculate initial burst yards using Gaussian distribution
         if self.yardsToEndzone >= 10:
             stage1MaxYards = 10
         else:
-            stage1MaxYards = self.yardsToEndzone+5
-
-        stage1Yardages = np.arange(0,stage1MaxYards+1)
-
-        mean_stage1 = (stage1Offense - self.defense.defenseRunCoverageRating) / 5
-        mean_stage1 = min(stage1MaxYards+1, max(0, mean_stage1))  # Clamp to range [0, 10]
-        relative_strength = ((stage1Offense*2) - self.defense.defenseRunCoverageRating) / 100
-        absolute_skill = (stage1Offense + self.defense.defenseRunCoverageRating) / 200
-        std_dev_stage1 = max(1, (stage1MaxYards+1 - 0) / 4 * (1 + relative_strength) * absolute_skill)
-
-        # Create a bell curve (Gaussian distribution)
+            stage1MaxYards = self.yardsToEndzone + 5
+        
+        stage1Yardages = np.arange(0, stage1MaxYards + 1)
+        
+        mean_stage1 = (adjustedOffense - self.defense.defenseRunCoverageRating) / 5
+        mean_stage1 = min(stage1MaxYards + 1, max(0, mean_stage1))
+        
+        relative_strength = ((adjustedOffense * 2) - self.defense.defenseRunCoverageRating) / 100
+        absolute_skill = (adjustedOffense + self.defense.defenseRunCoverageRating) / 200
+        std_dev_stage1 = max(1, (stage1MaxYards + 1 - 0) / 4 * (1 + relative_strength) * absolute_skill)
+        
+        # Create Gaussian curve for initial yards
         stage1Curve = np.exp(-((stage1Yardages - mean_stage1) ** 2) / (2 * std_dev_stage1 ** 2))
-        stage1Curve /= np.sum(stage1Curve)  # Normalize to ensure it sums to 1
-
+        stage1Curve /= np.sum(stage1Curve)
         
-        stage1YardsGained = np.random.choice(stage1Yardages, p=stage1Curve)
+        stage1YardsGained = int(np.random.choice(stage1Yardages, p=stage1Curve))
+        self.yardage = stage1YardsGained
         
-        self.yardage += int(stage1YardsGained)
-
-        if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * .5:
+        # STAGE 4: Breakaway potential (second level)
+        if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * 0.5:
             self.runner.updateInGameConfidence(.005)
+            
+            # Calculate breakaway potential (speed/agility focused)
+            stage2Offense = ((self.runner.attributes.speed * 1.5 + 
+                            self.runner.attributes.agility * 1.2 + 
+                            self.runner.attributes.playMakingAbility * 0.8 +
+                            self.runner.attributes.xFactor * 0.5) / 4) + runnerPressureMod
+            
+            offenseContribution2 = (1.2 * stage2Offense) / 100
+            defenseContribution = 0.4 * self.defense.defenseRunCoverageRating / 100
+            stage2DecayRate = round(0.1 + 0.1 * (np.exp(defenseContribution) - offenseContribution2), 3)
+            
             if self.yardsToEndzone >= 10:
                 stage2MaxYards = 10
             else:
-                stage2MaxYards = self.yardsToEndzone+5
-
-            stage2Yardages = np.arange(0,stage2MaxYards+1)
-
+                stage2MaxYards = self.yardsToEndzone + 5
+            
+            stage2Yardages = np.arange(0, stage2MaxYards + 1)
             stage2Curve = np.exp(-stage2DecayRate * stage2Yardages)
-            stage2Curve /= np.sum(stage2Curve)  # Normalize
-
-
-            stage2YardsGained = np.random.choice(stage2Yardages, p=stage2Curve)
-            self.yardage += int(stage2YardsGained)
-
-
-        if (fumbleRoll+fumbleResistModifyer) > 97:
-            #fumble
+            stage2Curve /= np.sum(stage2Curve)
+            
+            stage2YardsGained = int(np.random.choice(stage2Yardages, p=stage2Curve))
+            self.yardage += stage2YardsGained
+        
+        # Fumble check
+        fumbleRoll = batched_randint(1, 100)
+        fumbleResist = round(((self.runner.gameAttributes.power * 0.8) + 
+                             (self.runner.gameAttributes.discipline * 1.2)) / 2 + 
+                            self.runner.gameAttributes.luckModifier)
+        fumbleResistModifier = 0
+        if fumbleResist >= 92:
+            fumbleResistModifier = -2
+        elif fumbleResist >= 84:
+            fumbleResistModifier = -1
+        elif fumbleResist >= 68 and fumbleResist <= 75:
+            fumbleResistModifier = 1
+        elif fumbleResist <= 67:
+            fumbleResistModifier = 2
+        
+        if (fumbleRoll + fumbleResistModifier) > 97:
             self.isFumble = True
-            if (self.defense.defenseRunCoverageRating + batched_randint(-5,5)) >= (self.runner.gameAttributes.overallRating + batched_randint(-5,5)):
+            runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
+            if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
+               (self.runner.gameAttributes.overallRating + runnerRecoveryMod + batched_randint(-5, 5)):
                 self.runner.addFumble(self.game.isRegularSeasonGame)
                 self.runner.updateInGameConfidence(-.02)
                 self.defense.updateInGameConfidence(.02)
                 self.defense.gameDefenseStats['fumRec'] += 1
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
-
+        
+        # Clamp yardage to endzone
         if self.yardage > self.yardsToEndzone:
             self.yardage = self.yardsToEndzone
-
+        
+        # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
         self.runner.addCarry(self.game.isRegularSeasonGame)
         self.defense.gameDefenseStats['runYardsAlwd'] += self.yardage
         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
+        
         if self.yardage >= 20:
             self.runner.gameStatsDict['rushing']['20+'] += 1
         if self.yardage > self.runner.gameStatsDict['rushing']['longest']:
             self.runner.gameStatsDict['rushing']['longest'] = self.yardage
         
+
+    def calculateSackProbability(self, defensePassRush: int, qbMobility: int, blockingModifier: int, dropbackDepth: int) -> float:
+        """
+        Calculate sack probability using logistic curve based on pass rush vs protection.
+        Returns probability (0-100) that QB gets sacked.
+        """
+        # Calculate pass rush differential (defense rush vs offensive protection)
+        qbProtection = qbMobility + blockingModifier
+        rushDifferential = defensePassRush - qbProtection
+        
+        # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
+        rushDifferential += (dropbackDepth - 1) * 5
+        
+        # Base sack rate at even matchup (differential = 0) is ~8%
+        # Logistic function: probability increases smoothly with rush advantage
+        # Formula: baseSackRate / (1 + exp(-steepness * differential))
+        baseSackRate = 8.0
+        steepness = 0.15  # Controls how quickly probability changes
+        
+        # Shift the curve so 0 differential = baseSackRate
+        probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
+        
+        return max(1, min(35, probability))  # Clamp between 1% and 35%
+    
+    def calculatePressureImpact(self, defensePassRush: int, qbAccuracy: int, blockingModifier: int) -> float:
+        """
+        Calculate throw quality degradation from defensive pressure.
+        Returns degradation factor (0.6 to 1.0) where lower = more disruption.
+        """
+        # Calculate pressure differential
+        qbPressureResistance = (qbAccuracy * 0.7) + blockingModifier
+        pressureDifferential = defensePassRush - qbPressureResistance
+        
+        # Use exponential decay for degradation
+        # High pressure differential = more degradation
+        # Formula: 1.0 - (maxDegradation * (1 / (1 + exp(-steepness * differential))))
+        maxDegradation = 0.4  # Maximum 40% quality loss
+        steepness = 0.12
+        
+        degradationAmount = maxDegradation * (1 / (1 + np.exp(-steepness * pressureDifferential)))
+        degradationFactor = 1.0 - degradationAmount
+        
+        return max(0.6, min(1.0, degradationFactor))  # Between 60% and 100% quality
+    
+    def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
+        """
+        Stage 1: Calculate how open a receiver is on a scale of 0-100.
+        Returns openness rating where:
+        - 0-30: Well covered
+        - 30-60: Partially open
+        - 60-100: Wide open
+        """
+        receiverSkill = receiver.gameAttributes.routeRunning
+        
+        # Create Gaussian distribution for openness based on skill differential
+        skillDifferential = receiverSkill - defensePassCoverage
+        
+        # Mean openness shifts based on skill differential
+        meanOpenness = 50 + (skillDifferential / 2)  # Range roughly 30-70
+        meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
+        
+        # Standard deviation - better receivers have more consistent separation
+        stdDev = max(10, 25 - (receiverSkill / 10))
+        
+        # Sample from Gaussian and clamp to 0-100
+        openness = np.random.normal(meanOpenness, stdDev)
+        return max(0, min(100, openness))
+    
+    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int):
+        """
+        Stage 2: QB finds and selects a receiver based on vision and discipline.
+        High vision = accurately perceives receiver openness
+        Low vision = distorted perception (sees receivers as more/less open than they are)
+        High discipline = won't throw to covered receivers
+        Returns: (selectedTarget, willThrowAway)
+        """
+        # Calculate how accurately QB perceives openness
+        # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
+        if qbVision >= 90:
+            visionErrorRange = 5
+        elif qbVision >= 70:
+            visionErrorRange = 15
+        else:
+            visionErrorRange = 25
+        
+        # Create perceived targets with vision-adjusted openness
+        perceivedTargets = []
+        for target in targetList:
+            actualOpenness = target['openness']
+            visionError = batched_randint(-visionErrorRange, visionErrorRange)
+            perceivedOpenness = max(0, min(100, actualOpenness + visionError))
+            
+            perceivedTargets.append({
+                'receiver': target['receiver'],
+                'openness': perceivedOpenness,  # What QB thinks
+                'actualOpenness': actualOpenness,  # What it really is
+                'route': target['route']
+            })
+        
+        # Sort by perceived openness (what QB thinks they see)
+        sortedTargets = sorted(perceivedTargets, key=lambda t: t['openness'], reverse=True)
+        
+        # QB makes decision based on perceived openness
+        for target in sortedTargets:
+            perceivedOpenness = target['openness']
+            
+            # Discipline check using perceived openness
+            if qbDiscipline >= 90:
+                # Elite discipline: only throw to open receivers (60+) or throw away
+                if perceivedOpenness >= 60 or batched_randint(1, 100) <= 20:
+                    return (target, False)
+            elif qbDiscipline >= 75:
+                # Good discipline: prefer open, sometimes throw to partial (40+)
+                if perceivedOpenness >= 40 or batched_randint(1, 100) <= 30:
+                    return (target, False)
+            elif qbDiscipline >= 60:
+                # Average discipline: will throw to most receivers
+                if perceivedOpenness >= 25 or batched_randint(1, 100) <= 50:
+                    return (target, False)
+            else:
+                # Low discipline: throws to anyone, risky
+                if batched_randint(1, 100) <= 70:
+                    return (target, False)
+        
+        # No suitable receiver found - throw away or force it
+        if qbDiscipline >= 80:
+            return (None, True)  # Throw away
+        elif batched_randint(1, 100) <= qbDiscipline:
+            return (None, True)  # Throw away based on discipline
+        else:
+            # Force throw to what QB thinks is least covered
+            return (sortedTargets[0], False)
+    
+    def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, defensePassRush: int, blockingModifier: int, qbPressureMod: float) -> float:
+        """
+        Stage 3: Calculate throw quality (0-100) based on QB skill, pass type, and pressure.
+        Higher quality = easier to catch, less likely to be intercepted
+        Returns throw quality rating (0-100)
+        """
+        # Base accuracy from QB
+        baseAccuracy = (qbAccuracy + qbXFactor) / 2 + qbPressureMod
+        
+        # Pass type difficulty modifier
+        passTypeDifficulty = {
+            PassType.short: 1.0,     # Easiest
+            PassType.medium: 0.85,   # Moderate
+            PassType.long: 0.7,      # Hardest
+            PassType.hailMary: 0.5   # Extremely difficult
+        }
+        difficultyMod = passTypeDifficulty.get(passType, 0.85)
+        
+        # Calculate pressure impact using smooth degradation curve
+        pressureDegradation = self.calculatePressureImpact(
+            defensePassRush,
+            qbAccuracy,
+            blockingModifier
+        )
+        
+        # Apply all modifiers
+        throwQuality = baseAccuracy * difficultyMod * pressureDegradation
+        
+        # Add natural variance
+        throwQuality += batched_randint(-10, 10)
+        
+        return max(5, min(100, throwQuality))
+    
+    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float) -> dict:
+        """
+        Stage 4: Calculate catch probability and interception risk.
+        Returns: {'catchProb': float, 'intProb': float, 'dropProb': float}
+        """
+        adjustedHands = receiverHands + receiverPressureMod
+        
+        # Good throws are easier to catch
+        # Openness matters more for bad throws
+        if throwQuality >= 70:
+            # Good throw - mostly about hands
+            baseCatchProb = adjustedHands * 0.9
+        elif throwQuality >= 50:
+            # Decent throw - hands + openness both matter
+            baseCatchProb = (adjustedHands * 0.6) + (receiverOpenness * 0.3)
+        else:
+            # Bad throw - need to be open AND skilled
+            baseCatchProb = (adjustedHands * 0.4) + (receiverOpenness * 0.4)
+        
+        # Defense can contest catches on covered receivers
+        defenseFactor = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100)
+        
+        catchProb = baseCatchProb * (1 - defenseFactor * 0.5)
+        
+        # Interception probability (bad throws to covered receivers)
+        intProb = 0
+        if throwQuality < 50 and receiverOpenness < 50:
+            intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
+        
+        # Drop probability (good throw, but receiver bobbles it)
+        dropProb = max(0, (100 - baseCatchProb) * (defensePassCoverage / 200))
+        
+        return {
+            'catchProb': min(95, max(5, catchProb)),
+            'intProb': min(25, max(0, intProb)),
+            'dropProb': min(30, max(0, dropProb))
+        }
+    
+    def calculatePassYardage(self, passType, throwQuality: float) -> int:
+        """
+        Calculate air yards using Gaussian distribution based on pass type and throw quality.
+        Better throws travel farther and more accurately.
+        """
+        # Base mean and std dev for each pass type
+        passTypeParams = {
+            PassType.short: {'mean': 3, 'stdDev': 1.5},
+            PassType.medium: {'mean': 8, 'stdDev': 2.5},
+            PassType.long: {'mean': 15, 'stdDev': 4},
+            PassType.hailMary: {'mean': 50, 'stdDev': 10}  # Very long, high variance
+        }
+        
+        params = passTypeParams.get(passType, {'mean': 8, 'stdDev': 2.5})
+        
+        # Adjust mean based on throw quality (better throws travel intended distance)
+        qualityFactor = throwQuality / 80  # 80 is "good" throw quality
+        adjustedMean = params['mean'] * qualityFactor
+        
+        # Sample from Gaussian
+        airYards = int(np.random.normal(adjustedMean, params['stdDev']))
+        
+        return max(0, airYards)
 
     def passPlay(self, playKey):
         self.play = passPlayBook[playKey]
@@ -2421,11 +2651,25 @@ class Play():
         if passPlayBook[playKey]['targets']['rb'] is None:
             self.blockingModifier += self.offense.rosterDict['rb'].attributes.blockingModifier
 
-        sackRoll = batched_randint(1,100)
-        sackModifyer = round((self.defense.defensePassRushRating + batched_randint(-5,5))/(((self.passer.gameAttributes.agility + self.passer.gameAttributes.xFactor)/2) + self.blockingModifier + batched_randint(-5,5)))
-
-        if sackRoll < round((3 * (sackModifyer)) + passPlayBook[playKey]['dropback'].value):
-            self.yardage = round(-(randint(0,5) * sackModifyer))
+        # Calculate sack probability using probability curve
+        qbMobility = round((self.passer.gameAttributes.agility + self.passer.gameAttributes.xFactor) / 2)
+        sackProbability = self.calculateSackProbability(
+            self.defense.defensePassRushRating,
+            qbMobility,
+            self.blockingModifier,
+            passPlayBook[playKey]['dropback'].value
+        )
+        
+        sackRoll = batched_randint(1, 100)
+        if sackRoll <= sackProbability:
+            # Sack yardage using exponential distribution (most 3-7 yards, occasional 10+)
+            rushAdvantage = max(0, self.defense.defensePassRushRating - qbMobility) / 20
+            sackYardages = np.arange(0, 16)
+            sackDecayRate = max(0.3, 0.5 - rushAdvantage)  # Better rush = deeper sacks
+            sackCurve = np.exp(-sackDecayRate * sackYardages)
+            sackCurve /= np.sum(sackCurve)
+            
+            self.yardage = -int(np.random.choice(sackYardages, p=sackCurve))
             self.defense.gameDefenseStats['sacks'] += 1
             self.isSack = True
             fumbleRoll = batched_randint(1,100)
@@ -2453,358 +2697,153 @@ class Play():
             targets:dict = passPlayBook[playKey]['targets']
             targetList = []
             
+            # STAGE 1: Calculate receiver openness (0-100 scale)
             for key in targets.keys():
                 if targets[key] is not None:
                     receiver = self.offense.rosterDict[key]
-                    receiverStatusDict = {'receiver': receiver, 'isOpen': False, 'route': targets[key]}
-                    if receiver is FloosPlayer.PlayerTE:
-                        if (receiver.gameAttributes.routeRunning + randint(0,15)) > (self.defense.defensePassCoverageRating + randint(-15,0)):
-                            receiverStatusDict['isOpen'] = True
-                    else:
-                        if (receiver.gameAttributes.routeRunning + batched_randint(-10,10)) > (self.defense.defensePassCoverageRating + batched_randint(-10,10)):
-                            receiverStatusDict['isOpen'] = True
+                    openness = self.calculateReceiverOpenness(receiver, self.defense.defensePassCoverageRating)
+                    receiverStatusDict = {
+                        'receiver': receiver,
+                        'openness': openness,
+                        'route': targets[key]
+                    }
                     targetList.append(receiverStatusDict)
             
-            tempTargetList:list = copy.copy(targetList)
-            while len(tempTargetList) > 0:
-                target = choice(tempTargetList)
-
-                if target['isOpen'] and self.passer.attributes.vision > batched_randint(1,100):
-                    self.selectedTarget = target
-                    self.receiver = target['receiver']
-                    self.passType = target['route']
-                    break
-                elif self.passer.attributes.vision < 70:
-                    x = batched_randint(1,100)
-                    if x > 25:
-                        self.selectedTarget = target
-                        self.receiver = target['receiver']
-                        self.passType = target['route']
-                        break
-                elif self.passer.attributes.vision < 85:
-                    x = batched_randint(1,100)
-                    if x > 60:
-                        self.selectedTarget = target
-                        self.receiver = target['receiver']
-                        self.passType = target['route']
-                        break
-                elif self.passer.attributes.vision < 90:
-                    x = batched_randint(1,100)
-                    if x > 90:
-                        self.selectedTarget = target
-                        self.receiver = target['receiver']
-                        self.passType = target['route']
-                        break
-
-                tempTargetList.remove(target)
-
-            if self.receiver is None:
-                if self.passer.gameAttributes.discipline < 70:
-                    x = randint(0,len(targetList)-1)
-                    self.selectedTarget = targetList[x]
-                    self.receiver = targetList[x]['receiver']
-                    self.passType = targetList[x]['route']
-                elif self.passer.gameAttributes.discipline > 90:
-                    if batched_randint(1,10) < 10:
-                        self.passType = PassType.throwAway
-                    else:
-                        x = randint(0,len(targetList)-1)
-                        self.selectedTarget = targetList[x]
-                        self.receiver = targetList[x]['receiver']
-                        self.passType = targetList[x]['route']
-                else:
-                    if batched_randint(1,10) < 5:
-                        self.passType = PassType.throwAway
-                    else:
-                        x = randint(0,len(targetList)-1)
-                        self.selectedTarget = targetList[x]
-                        self.receiver = targetList[x]['receiver']
-                        self.passType = targetList[x]['route']
-
-            if self.receiver is not None:
-                accRoll = batched_randint(1,100)
-                receiverYACRating = round((self.receiver.gameAttributes.agility+self.receiver.gameAttributes.speed+self.receiver.gameAttributes.playMakingAbility)/3)
-
-            if self.passType.value == 1:
-                if (self.selectedTarget['isOpen'] and accRoll < ((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2)) or (accRoll < (((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2) - (self.defense.defensePassCoverageRating/12))):
-                    dropRoll = round(batched_randint(1,100) + (self.defense.defensePassCoverageRating/10))
-                    if (self.receiver.gameAttributes.hands) > dropRoll:
-                        passYards = randint(0,5)
-                        yac = 0
-                        x = batched_randint(1,10)
-                        if (receiverYACRating + batched_randint(-10,10)) > (self.defense.defensePassCoverageRating + batched_randint(-10,10)):
-                            if x < 2:
-                                yac = 0
-                            elif x >= 2 and x < 5:
-                                yac = randint(0,3)
-                            elif x >= 5 and x <= 9:
-                                yac = randint(4,7)
-                            else:
-                                if self.yardsToEndzone < passYards + 7:
-                                    yac = self.yardsToEndzone
-                                else:
-                                    yac = randint(7, self.yardsToEndzone)
-                        else:
-                            if x < 6:
-                                yac = 0
-                            elif x >= 6 and x <= 9:
-                                yac = randint(0,2)
-                            else:
-                                yac = randint(3,5)
-
-                        self.yardage = passYards + yac
-                        if self.yardage > self.yardsToEndzone and passYards < self.yardsToEndzone:
-                            self.yardage = self.yardsToEndzone
-                            yac = self.yardsToEndzone - passYards
-                        self.passer.addPassYards(self.yardage,self.game.isRegularSeasonGame)
-                        self.passer.addCompletion(self.game.isRegularSeasonGame)
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addReception(self.game.isRegularSeasonGame)
-                        self.receiver.addReceiveYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.receiver.addYAC(yac, self.game.isRegularSeasonGame)
-                        self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
-                        self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
-                        self.passer.updateInGameConfidence(0.005)
-                        self.receiver.updateInGameConfidence(0.005)
-                        self.defense.updateInGameConfidence(-.005)
-                        self.isPassCompletion = True
-                        if self.yardage >= 20:
-                            self.passer.gameStatsDict['passing']['20+'] += 1
-                            self.receiver.gameStatsDict['receiving']['20+'] += 1
-                        if self.yardage > self.passer.gameStatsDict['passing']['longest']:
-                            self.passer.gameStatsDict['passing']['longest'] = self.yardage
-                        if self.yardage > self.receiver.gameStatsDict['receiving']['longest']:
-                            self.receiver.gameStatsDict['receiving']['longest'] = self.yardage
-                    else:
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                        self.receiver.updateInGameConfidence(-.005)
-                        self.defense.updateInGameConfidence(.005)
-                        self.passIsDropped = True
-                else:
-                    interceptRoll = batched_randint(1,100)
-                    self.passer.addMissedPass(self.game.isRegularSeasonGame)
-                    if interceptRoll <= 5:
-                        self.yardage = randint(-2,5)
-                        self.passer.addInterception(self.game.isRegularSeasonGame)
-                        self.passer.updateInGameConfidence(-.02)
-                        self.defense.updateInGameConfidence(.02)
-                        self.defense.gameDefenseStats['ints'] += 1
-                        self.isInterception = True
-                        self.playResult = PlayResult.Interception
-                    else:
-                        self.defense.updateInGameConfidence(.005)
-                        self.passer.updateInGameConfidence(-.005)
-            elif self.passType.value == 2:
-                if (self.selectedTarget['isOpen'] and accRoll < ((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2)) or (accRoll < (((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2) - (self.defense.defensePassCoverageRating/8))):
-                    dropRoll = round(batched_randint(1,100) + (self.defense.defensePassCoverageRating/10))
-                    if (self.receiver.gameAttributes.hands) > dropRoll:
-                        passYards = randint(5,10)
-                        yac = 0
-                        x = batched_randint(1,10)
-                        if (receiverYACRating + batched_randint(-10,10)) > (self.defense.defensePassCoverageRating + batched_randint(-10,10)):
-                            if x < 2:
-                                yac = 0
-                            elif x >= 2 and x < 5:
-                                yac = randint(0,3)
-                            elif x >= 5 and x <= 9:
-                                yac = randint(4,7)
-                            else:
-                                if self.yardsToEndzone < passYards + 7:
-                                    yac = self.yardsToEndzone
-                                else:
-                                    yac = randint(7, self.yardsToEndzone)
-                        else:
-                            if x < 6:
-                                yac = 0
-                            elif x >= 6 and x <= 9:
-                                yac = randint(0,2)
-                            else:
-                                yac = randint(3,5)
-                        self.yardage = passYards + yac
-                        if self.yardage > self.yardsToEndzone and passYards < self.yardsToEndzone:
-                            self.yardage = self.yardsToEndzone
-                            yac = self.yardsToEndzone - passYards
-                        self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.passer.addCompletion(self.game.isRegularSeasonGame)
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addReception(self.game.isRegularSeasonGame)
-                        self.receiver.addReceiveYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.receiver.addYAC(yac, self.game.isRegularSeasonGame)
-                        self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
-                        self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
-                        self.passer.updateInGameConfidence(.005)
-                        self.receiver.updateInGameConfidence(.005)
-                        self.defense.updateInGameConfidence(-.005)
-                        self.isPassCompletion = True
-                        if self.yardage >= 20:
-                            self.passer.gameStatsDict['passing']['20+'] += 1
-                            self.receiver.gameStatsDict['receiving']['20+'] += 1
-                        if self.yardage > self.passer.gameStatsDict['passing']['longest']:
-                            self.passer.gameStatsDict['passing']['longest'] = self.yardage
-                        if self.yardage > self.receiver.gameStatsDict['receiving']['longest']:
-                            self.receiver.gameStatsDict['receiving']['longest'] = self.yardage
-                    else:
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                        self.defense.updateInGameConfidence(.005)
-                        self.receiver.updateInGameConfidence(-.005)
-                        self.passIsDropped = True
-                else:
-                    interceptRoll = batched_randint(1,100)
-                    self.passer.addMissedPass(self.game.isRegularSeasonGame)
-                    if interceptRoll <= 8:
-                        self.yardage = randint(0,10)
-                        self.passer.addInterception(self.game.isRegularSeasonGame)
-                        self.passer.updateInGameConfidence(-.02)
-                        self.defense.updateInGameConfidence(.02)
-                        self.defense.gameDefenseStats['ints'] += 1
-                        self.isInterception = True
-                        self.playResult = PlayResult.Interception
-                    else:  
-                        self.defense.updateInGameConfidence(.005)
-                        self.passer.updateInGameConfidence(-.005)
-            elif self.passType.value == 3:
-                if (self.selectedTarget['isOpen'] and accRoll < ((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2)) or (accRoll < (((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2) - (self.defense.defensePassCoverageRating/5))):
-                    dropRoll = round(batched_randint(1,100) + (self.defense.defensePassCoverageRating/10))
-                    if (self.receiver.gameAttributes.hands) > dropRoll:
-                        passYards = randint(11,20)
-                        yac = 0
-                        x = batched_randint(1,10)
-                        if (receiverYACRating + batched_randint(-10,10)) > (self.defense.defensePassCoverageRating + batched_randint(-10,10)):
-                            if x < 2:
-                                yac = 0
-                            elif x >= 2 and x < 5:
-                                yac = randint(0,3)
-                            elif x >= 5 and x <= 9:
-                                yac = randint(4,7)
-                            else:
-                                if self.yardsToEndzone < passYards + 7:
-                                    yac = self.yardsToEndzone
-                                else:
-                                    yac = randint(7, self.yardsToEndzone)
-                        else:
-                            if x < 6:
-                                yac = 0
-                            elif x >= 6 and x <= 9:
-                                yac = randint(0,2)
-                            else:
-                                yac = randint(3, 5)
-                        self.yardage = passYards + yac
-                        if self.yardage > self.yardsToEndzone and passYards < self.yardsToEndzone:
-                            self.yardage = self.yardsToEndzone
-                            yac = self.yardsToEndzone - passYards
-                        self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.passer.addCompletion(self.game.isRegularSeasonGame)
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addReception(self.game.isRegularSeasonGame)
-                        self.receiver.addReceiveYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.receiver.addYAC(yac, self.game.isRegularSeasonGame)
-                        self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
-                        self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
-                        self.passer.updateInGameConfidence(.01)
-                        self.receiver.updateInGameConfidence(.01)
-                        self.defense.updateInGameConfidence(-.01)
-                        self.isPassCompletion = True
-                        if self.yardage >= 20:
-                            self.passer.gameStatsDict['passing']['20+'] += 1
-                            self.receiver.gameStatsDict['receiving']['20+'] += 1
-                        if self.yardage > self.passer.gameStatsDict['passing']['longest']:
-                            self.passer.gameStatsDict['passing']['longest'] = self.yardage
-                        if self.yardage > self.receiver.gameStatsDict['receiving']['longest']:
-                            self.receiver.gameStatsDict['receiving']['longest'] = self.yardage
-                    else:
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                        self.receiver.updateInGameConfidence(-.005)
-                        self.defense.updateInGameConfidence(.005)
-                        self.passIsDropped = True
-                else:
-                    interceptRoll = batched_randint(1,100)
-                    self.passer.addMissedPass(self.game.isRegularSeasonGame) 
-                    if interceptRoll <= 10:
-                        self.yardage = randint(-5,20)
-                        self.passer.addInterception(self.game.isRegularSeasonGame)
-                        self.passer.updateInGameConfidence(-.02)
-                        self.defense.updateInGameConfidence(.02)
-                        self.defense.gameDefenseStats['ints'] += 1
-                        self.isInterception = True
-                        self.playResult = PlayResult.Interception
-                    else: 
-                        self.defense.updateInGameConfidence(.005)
-                        self.passer.updateInGameConfidence(-.005)
-            elif self.passType.value == 4:
-                if (self.selectedTarget['isOpen'] and accRoll < ((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2)) or (accRoll < (((self.passer.gameAttributes.accuracy + self.passer.gameAttributes.xFactor)/2) - (self.defense.defensePassCoverageRating/1.3))):
-                    dropRoll = round(batched_randint(1,100) + (self.defense.defensePassCoverageRating/3))
-                    if (self.receiver.gameAttributes.hands) > dropRoll:
-                        maxYards = round(70*(self.passer.attributes.armStrength/100))
-                        if self.yardsToEndzone+10 <= maxYards:
-                            maxYards = self.yardsToEndzone+10
-                        passYards = randint((maxYards-10),(maxYards))
-                        yac = 0
-                        x = batched_randint(1,10)
-                        if passYards < self.yardsToEndzone:
-                            if (receiverYACRating + batched_randint(-10,10)) > (self.defense.defensePassCoverageRating + batched_randint(-10,10)):
-                                if x < 2:
-                                    yac = 0
-                                elif x >= 2 and x < 5:
-                                    yac = randint(0,3)
-                                elif x >= 5 and x <= 9:
-                                    yac = randint(4,7)
-                                else:
-                                    if self.yardsToEndzone < passYards + 7:
-                                        yac = self.yardsToEndzone
-                                    else:
-                                        yac = randint(7, self.yardsToEndzone)
-                            else:
-                                if x < 6:
-                                    yac = 0
-                                elif x >= 6 and x <= 9:
-                                    yac = randint(0,2)
-                                else:
-                                    yac = randint(3, 5)
-                        self.yardage = passYards + yac
-                        if self.yardage > self.yardsToEndzone and passYards < self.yardsToEndzone:
-                            self.yardage = self.yardsToEndzone
-                            yac = self.yardsToEndzone - passYards
-                        self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.passer.addCompletion(self.game.isRegularSeasonGame)
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addReception(self.game.isRegularSeasonGame)
-                        self.receiver.addReceiveYards(self.yardage, self.game.isRegularSeasonGame)
-                        self.receiver.addYAC(yac, self.game.isRegularSeasonGame)
-                        self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
-                        self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
-                        self.passer.updateInGameConfidence(.01)
-                        self.receiver.updateInGameConfidence(.01)
-                        self.defense.updateInGameConfidence(-.01)
-                        self.isPassCompletion = True
-                        if self.yardage >= 20:
-                            self.passer.gameStatsDict['passing']['20+'] += 1
-                            self.receiver.gameStatsDict['receiving']['20+'] += 1
-                        if self.yardage > self.passer.gameStatsDict['passing']['longest']:
-                            self.passer.gameStatsDict['passing']['longest'] = self.yardage
-                        if self.yardage > self.receiver.gameStatsDict['receiving']['longest']:
-                            self.receiver.gameStatsDict['receiving']['longest'] = self.yardage
-                    else:
-                        self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                        self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                        self.receiver.updateInGameConfidence(-.005)
-                        self.defense.updateInGameConfidence(.005)
-                        self.passIsDropped = True
-                else:
-                    interceptRoll = batched_randint(1,100)
-                    self.passer.addMissedPass(self.game.isRegularSeasonGame) 
-                    if interceptRoll <= 15:
-                        self.yardage = randint(-5,20)
-                        self.passer.addInterception(self.game.isRegularSeasonGame)
-                        self.passer.updateInGameConfidence(-.02)
-                        self.defense.updateInGameConfidence(.02)
-                        self.defense.gameDefenseStats['ints'] += 1
-                        self.isInterception = True
-                        self.playResult = PlayResult.Interception
-                    else: 
-                        self.defense.updateInGameConfidence(.005)
-                        self.passer.updateInGameConfidence(-.005)
-            elif self.passType.value == 5:
+            # STAGE 2: QB selects target based on vision and discipline
+            selectedTarget, willThrowAway = self.selectPassTarget(
+                targetList,
+                self.passer.attributes.vision,
+                self.passer.gameAttributes.discipline
+            )
+            
+            if willThrowAway or selectedTarget is None:
+                self.passType = PassType.throwAway
+                self.receiver = None
+            else:
+                self.selectedTarget = selectedTarget
+                self.receiver = selectedTarget['receiver']
+                self.passType = selectedTarget['route']
+            
+            # Handle throw away
+            if self.passType == PassType.throwAway:
+                self.yardage = 0
                 self.passer.addMissedPass(self.game.isRegularSeasonGame)
+            else:
+                # Apply pressure modifiers
+                qbPressureMod = self.passer.attributes.getPressureModifier(self.game.gamePressure)
+                receiverPressureMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
+                
+                # STAGE 3: Calculate throw quality
+                throwQuality = self.calculateThrowQuality(
+                    self.passType,
+                    self.passer.gameAttributes.accuracy,
+                    self.passer.gameAttributes.xFactor,
+                    self.defense.defensePassRushRating,
+                    self.blockingModifier,
+                    qbPressureMod
+                )
+                
+                # STAGE 4: Calculate catch probability and outcome
+                catchProbs = self.calculateCatchProbability(
+                    throwQuality,
+                    self.receiver.gameAttributes.hands,
+                    self.selectedTarget['openness'],
+                    self.defense.defensePassCoverageRating,
+                    receiverPressureMod
+                )
+                
+                # Roll for outcome
+                outcomeRoll = batched_randint(1, 100)
+                
+                # Check for interception first (bad throw to covered receiver)
+                if outcomeRoll <= catchProbs['intProb']:
+                    self.yardage = randint(-5, 10)
+                    self.passer.addInterception(self.game.isRegularSeasonGame)
+                    self.passer.addMissedPass(self.game.isRegularSeasonGame)
+                    self.passer.updateInGameConfidence(-.02)
+                    self.defense.updateInGameConfidence(.02)
+                    self.defense.gameDefenseStats['ints'] += 1
+                    self.isInterception = True
+                    self.playResult = PlayResult.Interception
+                # Check for catch
+                elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
+                    # COMPLETION!
+                    self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
+                    
+                    # Calculate air yards based on throw quality
+                    passYards = self.calculatePassYardage(self.passType, throwQuality)
+                    passYards = min(passYards, self.yardsToEndzone)
+                    
+                    # STAGE 5: Calculate YAC (similar to running play breakaway)
+                    yac = 0
+                    if passYards < self.yardsToEndzone:
+                        receiverYACRating = (self.receiver.gameAttributes.agility + 
+                                           self.receiver.gameAttributes.speed + 
+                                           self.receiver.gameAttributes.playMakingAbility) / 3
+                        
+                        # YAC potential based on field position
+                        yacMaxYards = min(15, self.yardsToEndzone - passYards)
+                        
+                        if yacMaxYards > 0:
+                            yacYardages = np.arange(0, yacMaxYards + 1)
+                            
+                            # YAC decay rate based on receiver vs defense
+                            yacOffense = receiverYACRating + receiverPressureMod
+                            yacDefense = self.defense.defensePassCoverageRating
+                            offenseContribution = (1.2 * yacOffense) / 100
+                            defenseContribution = 0.4 * yacDefense / 100
+                            yacDecayRate = round(0.15 + 0.1 * (np.exp(defenseContribution) - offenseContribution), 3)
+                            
+                            # Exponential decay curve for YAC
+                            yacCurve = np.exp(-yacDecayRate * yacYardages)
+                            yacCurve /= np.sum(yacCurve)
+                            
+                            yac = int(np.random.choice(yacYardages, p=yacCurve))
+                    
+                    self.yardage = passYards + yac
+                    if self.yardage > self.yardsToEndzone:
+                        yac = self.yardsToEndzone - passYards
+                        self.yardage = self.yardsToEndzone
+                    
+                    # Update stats
+                    self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
+                    self.passer.addCompletion(self.game.isRegularSeasonGame)
+                    self.receiver.addReception(self.game.isRegularSeasonGame)
+                    self.receiver.addReceiveYards(self.yardage, self.game.isRegularSeasonGame)
+                    self.receiver.addYAC(yac, self.game.isRegularSeasonGame)
+                    self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
+                    self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
+                    
+                    # Confidence boosts based on play quality
+                    confBoost = 0.005 if throwQuality >= 70 else 0.003
+                    self.passer.updateInGameConfidence(confBoost)
+                    self.receiver.updateInGameConfidence(confBoost)
+                    self.defense.updateInGameConfidence(-confBoost)
+                    self.isPassCompletion = True
+                    
+                    # Track long completions
+                    if self.yardage >= 20:
+                        self.passer.gameStatsDict['passing']['20+'] += 1
+                        self.receiver.gameStatsDict['receiving']['20+'] += 1
+                    if self.yardage > self.passer.gameStatsDict['passing']['longest']:
+                        self.passer.gameStatsDict['passing']['longest'] = self.yardage
+                    if self.yardage > self.receiver.gameStatsDict['receiving']['longest']:
+                        self.receiver.gameStatsDict['receiving']['longest'] = self.yardage
+                
+                # Check for drop
+                elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb'] + catchProbs['dropProb']):
+                    # DROPPED PASS
+                    self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
+                    self.receiver.addPassDrop(self.game.isRegularSeasonGame)
+                    self.receiver.updateInGameConfidence(-.005)
+                    self.defense.updateInGameConfidence(.005)
+                    self.passIsDropped = True
+                    self.yardage = 0
+                
+                else:
+                    # INCOMPLETE (missed throw)
+                    self.passer.addMissedPass(self.game.isRegularSeasonGame)
+                    self.defense.updateInGameConfidence(.003)
+                    self.passer.updateInGameConfidence(-.003)
+                    self.yardage = 0
+

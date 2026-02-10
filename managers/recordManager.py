@@ -18,6 +18,7 @@ class RecordManager:
         self.serviceContainer = serviceContainer
         self.logger = getLogger("floosball.record_manager")
         self._records = None  # Lazy initialization
+        self._championshipRecords: list[Dict[str, Any]] = []  # Placeholder for championship records if needed
     
     def _initializeRecordStructure(self) -> Dict[str, Any]:
         """Initialize the complete record structure - moved from floosball.py"""
@@ -48,12 +49,6 @@ class RecordManager:
                             'name': None,
                             'id': 0,
                             'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
                         }
                     },
                     'career': {
@@ -77,12 +72,6 @@ class RecordManager:
                         },
                         'ints': {
                             'record': 'Most Interceptions',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0
@@ -112,13 +101,6 @@ class RecordManager:
                         },
                         'ints': {
                             'record': 'Most Interceptions',
-                            'name': None,
-                            'id': 0,
-                            'value': 0,
-                            'season': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0,
@@ -145,12 +127,6 @@ class RecordManager:
                             'name': None,
                             'id': 0,
                             'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
                         }
                     },
                     'career': {
@@ -168,12 +144,6 @@ class RecordManager:
                         },
                         'fumbles': {
                             'record': 'Most Fumbles',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0
@@ -196,13 +166,6 @@ class RecordManager:
                         },
                         'fumbles': {
                             'record': 'Most Fumbles',
-                            'name': None,
-                            'id': 0,
-                            'value': 0,
-                            'season': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0,
@@ -229,12 +192,6 @@ class RecordManager:
                             'name': None,
                             'id': 0,
                             'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
                         }
                     },
                     'career': {
@@ -252,12 +209,6 @@ class RecordManager:
                         },
                         'receptions': {
                             'record': 'Receptions',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0
@@ -280,13 +231,6 @@ class RecordManager:
                         },
                         'receptions': {
                             'record': 'Receptions',
-                            'name': None,
-                            'id': 0,
-                            'value': 0,
-                            'season': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0,
@@ -307,12 +251,6 @@ class RecordManager:
                             'name': None,
                             'id': 0,
                             'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
                         }
                     },
                     'career': {
@@ -324,12 +262,6 @@ class RecordManager:
                         },
                         'fgYards': {
                             'record': 'Total FG Yards',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
-                        },
-                        'points': {
-                            'record': 'Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0
@@ -349,16 +281,112 @@ class RecordManager:
                             'id': 0,
                             'value': 0,
                             'season': 0
+                        }
+                    }
+                },
+                'fantasy': {
+                    'game': {
+                        'qb': {
+                            'record': 'QB Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
                         },
-                        'points': {
-                            'record': 'Fantasy Points',
+                        'rb': {
+                            'record': 'RB Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'wr': {
+                            'record': 'WR Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'te': {
+                            'record': 'TE Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'k': {
+                            'record': 'K Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        }
+                    },
+                    'season': {
+                        'qb': {
+                            'record': 'QB Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0,
+                            'season': 0
+                        },
+                        'rb': {
+                            'record': 'RB Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0,
+                            'season': 0
+                        },
+                        'wr': {
+                            'record': 'WR Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0,
+                            'season': 0
+                        },
+                        'te': {
+                            'record': 'TE Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0,
+                            'season': 0
+                        },
+                        'k': {
+                            'record': 'K Fantasy Points',
                             'name': None,
                             'id': 0,
                             'value': 0,
                             'season': 0
                         }
+                    },
+                    'career': {
+                        'qb': {
+                            'record': 'QB Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'rb': {
+                            'record': 'RB Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'wr': {
+                            'record': 'WR Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'te': {
+                            'record': 'TE Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        },
+                        'k': {
+                            'record': 'K Fantasy Points',
+                            'name': None,
+                            'id': 0,
+                            'value': 0
+                        }
                     }
-                }
+                },
             },
             'team': {
                 'game': {
@@ -458,25 +486,6 @@ class RecordManager:
                         'id': 0,
                         'value': 0,
                         'season': 0
-                    }
-                },
-                'fantasy': {
-                    'career': {
-                        'fantasyPoints': {
-                            'record': 'Career Fantasy Points',
-                            'name': None,
-                            'id': 0,
-                            'value': 0
-                        }
-                    },
-                    'season': {
-                        'fantasyPoints': {
-                            'record': 'Season Fantasy Points',
-                            'name': None,
-                            'id': 0,
-                            'value': 0,
-                            'season': 0
-                        }
                     }
                 }
             }
@@ -755,7 +764,8 @@ class RecordManager:
             
             gameStats = player.gameStatsDict
             seasonStats = player.seasonStatsDict
-            player.postgameChanges()
+            
+            # Note: postgameChanges() is already called in floosball_game.py after each game
             # Accumulate stats based on position - this is a simplified version
             # The full implementation would mirror the original postgame() logic
 
@@ -782,9 +792,10 @@ class RecordManager:
                         gamePassing['ypc'] = round(gamePassing['yards']/gamePassing['comp'], 2)
                         gamePassing['compPerc'] = round((gamePassing['comp']/gamePassing['att'])*100)
 
-                    passing['20+'] += gamePassing['20+']
+                    # Use .get() for backwards compatibility with old player data
+                    passing['20+'] = passing.get('20+', 0) + gamePassing.get('20+', 0)
 
-                    if gamePassing['longest'] > passing['longest']:
+                    if gamePassing.get('longest', 0) > passing.get('longest', 0):
                         passing['longest'] = gamePassing['longest']
 
                     if passing['comp'] > 0:
@@ -812,9 +823,10 @@ class RecordManager:
                         gameReceiving['ypr'] = round(gameReceiving['yards']/gameReceiving['receptions'],2)
                         gameReceiving['rcvPerc'] = round((gameReceiving['receptions']/gameReceiving['targets'])*100)
 
-                    receiving['20+'] += gameReceiving['20+']
+                    # Use .get() for backwards compatibility with old player data
+                    receiving['20+'] = receiving.get('20+', 0) + gameReceiving.get('20+', 0)
 
-                    if gameReceiving['longest'] > receiving['longest']:
+                    if gameReceiving.get('longest', 0) > receiving.get('longest', 0):
                         receiving['longest'] = gameReceiving['longest']
 
                     if receiving['yards'] > 0:
@@ -837,9 +849,10 @@ class RecordManager:
                     gameRushing = gameStats['rushing']
                     gameRushing['ypc'] = round(gameRushing['yards']/gameRushing['carries'],2)
 
-                    rushing['20+'] += gameRushing['20+']
+                    # Use .get() for backwards compatibility with old player data
+                    rushing['20+'] = rushing.get('20+', 0) + gameRushing.get('20+', 0)
 
-                    if gameRushing['longest'] > rushing['longest']:
+                    if gameRushing.get('longest', 0) > rushing.get('longest', 0):
                         rushing['longest'] = gameRushing['longest']
 
                     if rushing['carries'] > 0:
@@ -876,7 +889,8 @@ class RecordManager:
                     else:
                         gameKicking['fgPerc'] = 0
 
-                    if gameKicking['longest'] > kicking['longest']:
+                    # Use .get() for backwards compatibility with old player data
+                    if gameKicking.get('longest', 0) > kicking.get('longest', 0):
                         kicking['longest'] = gameKicking['longest']
 
                     if kicking['fgs'] > 0:
@@ -1058,16 +1072,6 @@ class RecordManager:
                     'name': player.name,
                     'id': player.id
                 })
-            
-            # Extra points (XPs) - missing from original game records
-            if kicking_stats.get('xps', 0) > kicking_records.get('xps', {}).get('value', 0):
-                if 'xps' not in kicking_records:
-                    kicking_records['xps'] = {'value': 0, 'name': '', 'id': 0}
-                kicking_records['xps'].update({
-                    'value': kicking_stats.get('xps', 0),
-                    'name': player.name,
-                    'id': player.id
-                })
                 
     def _checkDefenseGameRecords(self, player: FloosPlayer.Player, records: Dict[str, Any]) -> None:
         """Check defensive game records for a player"""
@@ -1116,54 +1120,45 @@ class RecordManager:
                 
     def _checkFantasyGameRecords(self, player: FloosPlayer.Player, records: Dict[str, Any]) -> None:
         """Check fantasy game records for a player - matches original position-based logic"""
-        fantasy_points = player.gameStatsDict['fantasyPoints']
+        fantasyPoints = player.gameStatsDict['fantasyPoints']
         
-        # Original had separate fantasy records for each stat category based on eligibility
-        
-        # Fantasy points for passing (all players with att > 0)
-        if player.gameStatsDict['passing']['att'] > 0:
-            passing_records = records['players']['passing']['game']
-            if fantasy_points > passing_records.get('points', {}).get('value', 0):
-                if 'points' not in passing_records:
-                    passing_records['points'] = {'value': 0, 'name': '', 'id': 0}
-                passing_records['points'].update({
-                    'value': fantasy_points,
+        if player.position == FloosPlayer.Position.QB:
+            qbFantasyRecords = records['players']['fantasy']['game']['qb']
+            if fantasyPoints > qbFantasyRecords.get('value', 0):
+                qbFantasyRecords.update({
+                    'value': fantasyPoints,
                     'name': player.name,
                     'id': player.id
                 })
-        
-        # Fantasy points for rushing (all players with carries > 0)
-        if player.gameStatsDict['rushing'].get('carries', 0) > 0:
-            rushing_records = records['players']['rushing']['game']
-            if fantasy_points > rushing_records.get('points', {}).get('value', 0):
-                if 'points' not in rushing_records:
-                    rushing_records['points'] = {'value': 0, 'name': '', 'id': 0}
-                rushing_records['points'].update({
-                    'value': fantasy_points,
+        elif player.position == FloosPlayer.Position.RB:
+            rbFantasyRecords = records['players']['fantasy']['game']['rb']
+            if fantasyPoints > rbFantasyRecords.get('value', 0):
+                rbFantasyRecords.update({
+                    'value': fantasyPoints,
                     'name': player.name,
                     'id': player.id
                 })
-        
-        # Fantasy points for receiving (only WR/TE with receptions > 0)
-        if (player.position == FloosPlayer.Position.WR or player.position == FloosPlayer.Position.TE) and player.gameStatsDict['receiving'].get('receptions', 0) > 0:
-            receiving_records = records['players']['receiving']['game']
-            if fantasy_points > receiving_records.get('points', {}).get('value', 0):
-                if 'points' not in receiving_records:
-                    receiving_records['points'] = {'value': 0, 'name': '', 'id': 0}
-                receiving_records['points'].update({
-                    'value': fantasy_points,
+        elif player.position == FloosPlayer.Position.WR:
+            wrFantasyRecords = records['players']['fantasy']['game']['wr']
+            if fantasyPoints > wrFantasyRecords.get('value', 0):
+                wrFantasyRecords.update({
+                    'value': fantasyPoints,
                     'name': player.name,
                     'id': player.id
                 })
-        
-        # Fantasy points for kicking (all players with fgs > 0)
-        if player.gameStatsDict['kicking'].get('fgs', 0) > 0:
-            kicking_records = records['players']['kicking']['game']
-            if fantasy_points > kicking_records.get('points', {}).get('value', 0):
-                if 'points' not in kicking_records:
-                    kicking_records['points'] = {'value': 0, 'name': '', 'id': 0}
-                kicking_records['points'].update({
-                    'value': fantasy_points,
+        elif player.position == FloosPlayer.Position.TE:
+            teFantasyRecords = records['players']['fantasy']['game']['te']
+            if fantasyPoints > teFantasyRecords.get('value', 0):
+                teFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id
+                })
+        elif player.position == FloosPlayer.Position.K:
+            kFantasyRecords = records['players']['fantasy']['game']['k']
+            if fantasyPoints > kFantasyRecords.get('value', 0):
+                kFantasyRecords.update({
+                    'value': fantasyPoints,
                     'name': player.name,
                     'id': player.id
                 })
@@ -1359,14 +1354,6 @@ class RecordManager:
                 'id': player.id
             })
         
-        # Career extra points
-        if career_stats['xps'] > career_records['xps']['value']:
-            career_records['xps'].update({
-                'value': career_stats['xps'],
-                'name': player.name,
-                'id': player.id
-            })
-        
         # Career field goal yards (missing from original implementation)
         if career_stats.get('fgYards', 0) > career_records.get('fgYards', {}).get('value', 0):
             if 'fgYards' not in career_records:
@@ -1485,15 +1472,48 @@ class RecordManager:
             
     def _checkCareerFantasyRecords(self, player: FloosPlayer.Player, records: Dict[str, Any]) -> None:
         """Check career fantasy records for a player"""
-        career_fantasy = player.careerStatsDict['fantasyPoints']
-        career_records = records['players']['career']['points']
+        fantasyPoints = player.careerStatsDict['fantasyPoints']
         
-        if career_fantasy > career_records['value']:
-            career_records.update({
-                'value': career_fantasy,
-                'name': player.name,
-                'id': player.id
-            })
+        if player.position == FloosPlayer.Position.QB:
+            qbFantasyRecords = records['players']['fantasy']['career']['qb']
+            if fantasyPoints > qbFantasyRecords.get('value', 0):
+                qbFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id
+                })
+        elif player.position == FloosPlayer.Position.RB:
+            rbFantasyRecords = records['players']['fantasy']['career']['rb']
+            if fantasyPoints > rbFantasyRecords.get('value', 0):
+                rbFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id
+                })
+        elif player.position == FloosPlayer.Position.WR:
+            wrFantasyRecords = records['players']['fantasy']['career']['wr']
+            if fantasyPoints > wrFantasyRecords.get('value', 0):
+                wrFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id
+                })
+        elif player.position == FloosPlayer.Position.TE:
+            teFantasyRecords = records['players']['fantasy']['career']['te']
+            if fantasyPoints > teFantasyRecords.get('value', 0):
+                teFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id
+                })
+        elif player.position == FloosPlayer.Position.K:
+            kFantasyRecords = records['players']['fantasy']['career']['k']
+            if fantasyPoints > kFantasyRecords.get('value', 0):
+                kFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id
+                })
     
     def checkSeasonRecords(self, season, allTimeRecordsDict: Dict[str, Any] = None) -> None:
         """
@@ -1655,15 +1675,6 @@ class RecordManager:
                 'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
             })
         
-        # Season extra points
-        if season_stats['xps'] > season_records['xps']['value']:
-            season_records['xps'].update({
-                'value': season_stats['xps'],
-                'name': player.name,
-                'id': player.id,
-                'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
-            })
-        
         # Season field goal yards (missing from original implementation)
         if season_stats.get('fgYards', 0) > season_records.get('fgYards', {}).get('value', 0):
             if 'fgYards' not in season_records:
@@ -1677,62 +1688,53 @@ class RecordManager:
             
     def _checkSeasonFantasyRecords(self, player: FloosPlayer.Player, records: Dict[str, Any], season) -> None:
         """Check season fantasy records for a player - matches original position-based logic"""
-        season_fantasy = player.seasonStatsDict['fantasyPoints']
+        fantasyPoints = player.seasonStatsDict['fantasyPoints']
         
-        # Original had separate fantasy records for each stat category based on position eligibility
-        # Only WRs and TEs can have receiving fantasy points recorded
-        if hasattr(player, 'position'):
-            # Passing fantasy points for QBs only
-            if player.position == 'QB' and player.seasonStatsDict['passing'].get('att', 0) > 0:
-                passing_records = records['players']['passing']['season']
-                if season_fantasy > passing_records.get('points', {}).get('value', 0):
-                    if 'points' not in passing_records:
-                        passing_records['points'] = {'value': 0, 'name': '', 'id': 0, 'season': 0}
-                    passing_records['points'].update({
-                        'value': season_fantasy,
-                        'name': player.name,
-                        'id': player.id,
-                        'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
-                    })
-            
-            # Rushing fantasy points for RBs and QBs
-            if player.position in ['RB', 'QB'] and player.seasonStatsDict['rushing'].get('carries', 0) > 0:
-                rushing_records = records['players']['rushing']['season']
-                if season_fantasy > rushing_records.get('points', {}).get('value', 0):
-                    if 'points' not in rushing_records:
-                        rushing_records['points'] = {'value': 0, 'name': '', 'id': 0, 'season': 0}
-                    rushing_records['points'].update({
-                        'value': season_fantasy,
-                        'name': player.name,
-                        'id': player.id,
-                        'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
-                    })
-            
-            # Receiving fantasy points for WRs and TEs only (original position restriction)
-            if player.position in ['WR', 'TE'] and player.seasonStatsDict['receiving'].get('receptions', 0) > 0:
-                receiving_records = records['players']['receiving']['season']
-                if season_fantasy > receiving_records.get('points', {}).get('value', 0):
-                    if 'points' not in receiving_records:
-                        receiving_records['points'] = {'value': 0, 'name': '', 'id': 0, 'season': 0}
-                    receiving_records['points'].update({
-                        'value': season_fantasy,
-                        'name': player.name,
-                        'id': player.id,
-                        'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
-                    })
-            
-            # Kicking fantasy points for Ks only
-            if player.position == 'K' and player.seasonStatsDict['kicking'].get('fgs', 0) > 0:
-                kicking_records = records['players']['kicking']['season']
-                if season_fantasy > kicking_records.get('points', {}).get('value', 0):
-                    if 'points' not in kicking_records:
-                        kicking_records['points'] = {'value': 0, 'name': '', 'id': 0, 'season': 0}
-                    kicking_records['points'].update({
-                        'value': season_fantasy,
-                        'name': player.name,
-                        'id': player.id,
-                        'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
-                    })
+        if player.position == FloosPlayer.Position.QB:
+            qbFantasyRecords = records['players']['fantasy']['season']['qb']
+            if fantasyPoints > qbFantasyRecords.get('value', 0):
+                qbFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id,
+                    'season': season
+                })
+        elif player.position == FloosPlayer.Position.RB:
+            rbFantasyRecords = records['players']['fantasy']['season']['rb']
+            if fantasyPoints > rbFantasyRecords.get('value', 0):
+                rbFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id,
+                    'season': season
+                })
+        elif player.position == FloosPlayer.Position.WR:
+            wrFantasyRecords = records['players']['fantasy']['season']['wr']
+            if fantasyPoints > wrFantasyRecords.get('value', 0):
+                wrFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id,
+                    'season': season
+                })
+        elif player.position == FloosPlayer.Position.TE:
+            teFantasyRecords = records['players']['fantasy']['season']['te']
+            if fantasyPoints > teFantasyRecords.get('value', 0):
+                teFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id,
+                    'season': season
+                })
+        elif player.position == FloosPlayer.Position.K:
+            kFantasyRecords = records['players']['fantasy']['season']['k']
+            if fantasyPoints > kFantasyRecords.get('value', 0):
+                kFantasyRecords.update({
+                    'value': fantasyPoints,
+                    'name': player.name,
+                    'id': player.id,
+                    'season': season
+                })
     
     def _checkSeasonDefenseRecords(self, player: FloosPlayer.Player, records: Dict[str, Any], season) -> None:
         """Check season defensive records for a player"""
@@ -1897,3 +1899,18 @@ class RecordManager:
         if 'team' in records:
             return self._countRecords(records['team'])
         return 0
+    
+    def updateChampionshipHistory(self, season, winningTeam, losingTeam) -> None:
+        """Update championship history for teams"""
+        self._championshipRecords.insert(0, { 'season': season,
+                                                'champion': '{} {}'.format(winningTeam.city, winningTeam.name),
+                                                'championColor': winningTeam.color,
+                                                'championId': winningTeam.id,
+                                                'championRecord': '{}-{}'.format(winningTeam.seasonTeamStats['wins'],winningTeam.seasonTeamStats['losses']),
+                                                'championElo': winningTeam.elo,
+                                                'runnerUp': '{} {}'.format(losingTeam.city, losingTeam.name),
+                                                'runnerUpColor': losingTeam.color,
+                                                'runnerUpId': losingTeam.id,
+                                                'runnerUpRecord': '{}-{}'.format(losingTeam.seasonTeamStats['wins'],losingTeam.seasonTeamStats['losses']),
+                                                'runnerUpElo': losingTeam.elo
+                                                })

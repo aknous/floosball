@@ -53,7 +53,7 @@ class League:
         wins = team.seasonTeamStats.get('wins', 0)
         losses = team.seasonTeamStats.get('losses', 0)
         total_games = wins + losses
-        return wins / total_games if total_games > 0 else 0.0
+        return round(wins / total_games, 3) if total_games > 0 else 0.0
 
 class LeagueManager:
     """Manages league structure, teams, and overall organization"""
@@ -184,22 +184,7 @@ class LeagueManager:
             if team in league.teamList:
                 return league
         return None
-    
-    def getPlayoffTeams(self, leagueName: str = None, numTeams: int = 4) -> Dict[str, List[FloosTeam.Team]]:
-        """Get playoff-eligible teams from each league"""
-        playoffTeams = {}
-        
-        if leagueName:
-            league = self.getLeagueByName(leagueName)
-            if league:
-                standings = league.getStandings()
-                playoffTeams[leagueName] = [standing['team'] for standing in standings[:numTeams]]
-        else:
-            for league in self.leagues:
-                standings = league.getStandings()
-                playoffTeams[league.name] = [standing['team'] for standing in standings[:numTeams]]
-        
-        return playoffTeams
+
     
     def getLeagueChampions(self) -> Dict[str, FloosTeam.Team]:
         """Get the current champion of each league"""

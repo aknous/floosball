@@ -167,7 +167,7 @@ class Player:
         self.previousTeam = None
         self.attributes = PlayerAttributes()
         self.gameAttributes: PlayerAttributes = None
-        self.playerTier = PlayerTier
+        self.playerTier = PlayerTier.TierC  # Default tier, updated by sortPlayersByPosition
         self.seasonsPlayed = 0
         self.gamesPlayed = 0
         self.term = 0
@@ -321,23 +321,24 @@ class Player:
         if yards >= 45:
             self.gameStatsDict['kicking']['fg45+'] += 1
             if isRegularSeason:
-                self.seasonStatsDict['kicking']['fg45+'] += 1
-                self.careerStatsDict['kicking']['fg45+'] += 1
+                # Use .get() with default for safety when loading old player data
+                self.seasonStatsDict['kicking']['fg45+'] = self.seasonStatsDict['kicking'].get('fg45+', 0) + 1
+                self.careerStatsDict['kicking']['fg45+'] = self.careerStatsDict['kicking'].get('fg45+', 0) + 1
                 
         # Handle distance-specific attempt tracking (these are tracked separately from makes)
         if isRegularSeason:
             if yards < 50 and yards > 39:
-                self.seasonStatsDict['kicking']['fg40to50att'] += 1
-                self.careerStatsDict['kicking']['fg40to50att'] += 1
+                self.seasonStatsDict['kicking']['fg40to50att'] = self.seasonStatsDict['kicking'].get('fg40to50att', 0) + 1
+                self.careerStatsDict['kicking']['fg40to50att'] = self.careerStatsDict['kicking'].get('fg40to50att', 0) + 1
             elif yards < 40 and yards > 19:
-                self.seasonStatsDict['kicking']['fg20to40att'] += 1
-                self.careerStatsDict['kicking']['fg20to40att'] += 1
+                self.seasonStatsDict['kicking']['fg20to40att'] = self.seasonStatsDict['kicking'].get('fg20to40att', 0) + 1
+                self.careerStatsDict['kicking']['fg20to40att'] = self.careerStatsDict['kicking'].get('fg20to40att', 0) + 1
             elif yards < 20:
-                self.seasonStatsDict['kicking']['fgUnder20att'] += 1
-                self.careerStatsDict['kicking']['fgUnder20att'] += 1
+                self.seasonStatsDict['kicking']['fgUnder20att'] = self.seasonStatsDict['kicking'].get('fgUnder20att', 0) + 1
+                self.careerStatsDict['kicking']['fgUnder20att'] = self.careerStatsDict['kicking'].get('fgUnder20att', 0) + 1
             else:
-                self.seasonStatsDict['kicking']['fgOver50att'] += 1
-                self.careerStatsDict['kicking']['fgOver50att'] += 1
+                self.seasonStatsDict['kicking']['fgOver50att'] = self.seasonStatsDict['kicking'].get('fgOver50att', 0) + 1
+                self.careerStatsDict['kicking']['fgOver50att'] = self.careerStatsDict['kicking'].get('fgOver50att', 0) + 1
 
 
     def addMissedFg(self, yards, isRegularSeason):
@@ -348,17 +349,17 @@ class Player:
 
         if isRegularSeason:
             if yards < 50 and yards > 39:
-                self.seasonStatsDict['kicking']['fg40to50att'] += 1
-                self.careerStatsDict['kicking']['fg40to50att'] += 1
+                self.seasonStatsDict['kicking']['fg40to50att'] = self.seasonStatsDict['kicking'].get('fg40to50att', 0) + 1
+                self.careerStatsDict['kicking']['fg40to50att'] = self.careerStatsDict['kicking'].get('fg40to50att', 0) + 1
             elif yards < 40 and yards >= 20:
-                self.seasonStatsDict['kicking']['fg20to40att'] += 1
-                self.careerStatsDict['kicking']['fg20to40att'] += 1
+                self.seasonStatsDict['kicking']['fg20to40att'] = self.seasonStatsDict['kicking'].get('fg20to40att', 0) + 1
+                self.careerStatsDict['kicking']['fg20to40att'] = self.careerStatsDict['kicking'].get('fg20to40att', 0) + 1
             elif yards < 20:
-                self.seasonStatsDict['kicking']['fgUnder20att'] += 1
-                self.careerStatsDict['kicking']['fgUnder20att'] += 1
+                self.seasonStatsDict['kicking']['fgUnder20att'] = self.seasonStatsDict['kicking'].get('fgUnder20att', 0) + 1
+                self.careerStatsDict['kicking']['fgUnder20att'] = self.careerStatsDict['kicking'].get('fgUnder20att', 0) + 1
             else:
-                self.seasonStatsDict['kicking']['fgOver50att'] += 1
-                self.careerStatsDict['kicking']['fgOver50att'] += 1
+                self.seasonStatsDict['kicking']['fgOver50att'] = self.seasonStatsDict['kicking'].get('fgOver50att', 0) + 1
+                self.careerStatsDict['kicking']['fgOver50att'] = self.careerStatsDict['kicking'].get('fgOver50att', 0) + 1
 
 
     def addExtraPoint(self):
@@ -407,6 +408,7 @@ class PlayerAttributes:
         self.creativity = 0
         self.resilience = 0
         self.clutchFactor = 0
+        self.pressureHandling = randint(-10, 10)  # -10 (chokes) to +10 (thrives under pressure)
 
         self.longevity = randint(4,10)
         self.playMakingAbility = 0
@@ -429,6 +431,63 @@ class PlayerAttributes:
         self.vision = round((self.discipline + self.instinct + self.focus)/3)
         self.blocking = round(((self.power*1.2) + (self.xFactor*.8))/2)
         self.blockingModifier = math.floor((self.blocking - 60)/6)
+    
+    def getPressureModifier(self, gamePressure: int) -> float:
+        """Calculate performance modifier based on game pressure and player's pressure handling.
+        
+        Three possible outcomes: overperform, no effect, or underperform.
+        Higher pressureHandling = more likely to overperform AND more likely to have no effect than underperform.
+        Lower pressureHandling = more likely to underperform AND more likely to have no effect than overperform.
+        
+        Args:
+            gamePressure: Current game pressure (0-100)
+            
+        Returns:
+            Modifier that affects player performance (positive, zero, or negative)
+        """
+        # Normalize game pressure to 0-1 scale
+        normalizedPressure = min(100, max(0, gamePressure)) / 100.0
+        
+        # In low pressure situations, minimal impact
+        if normalizedPressure < 0.3:
+            return 0
+        
+        # Calculate the magnitude of potential variance based on pressure and pressureHandling
+        maxVariance = abs(self.pressureHandling) * normalizedPressure
+        
+        # Clutch factor increases the magnitude of potential swings
+        clutchMultiplier = 1 + (self.clutchFactor / 100.0)
+        maxVariance *= clutchMultiplier
+        
+        # Roll for outcome (1-100)
+        roll = batched_randint(1, 100)
+        
+        # Map pressureHandling to probability zones
+        # pressureHandling +10: overperform 60%, no effect 30%, underperform 10%
+        # pressureHandling 0: overperform 15%, no effect 70%, underperform 15%
+        # pressureHandling -10: overperform 10%, no effect 30%, underperform 60%
+        
+        # Calculate probability zones based on pressureHandling
+        if self.pressureHandling >= 0:
+            # Positive pressure handling: more overperform, less underperform
+            overPerformChance = 15 + (self.pressureHandling * 4.5)  # 15 to 60
+            noEffectChance = 70 - (self.pressureHandling * 4)       # 70 to 30
+            # underperform is the remainder (15 to 10)
+        else:
+            # Negative pressure handling: less overperform, more underperform
+            overPerformChance = 15 + (self.pressureHandling * 0.5)  # 15 to 10
+            noEffectChance = 70 + (self.pressureHandling * 4)       # 70 to 30
+            # underperform is the remainder (15 to 60)
+        
+        if roll <= overPerformChance:
+            # Overperform
+            return batched_random() * maxVariance
+        elif roll <= overPerformChance + noEffectChance:
+            # No effect
+            return 0
+        else:
+            # Underperform
+            return -(batched_random() * maxVariance)
 
 
     def getPlayerAttributes(self, position, seed = None):

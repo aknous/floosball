@@ -41,6 +41,8 @@ class PlayerManager:
         # First try to load existing players (unless force fresh is requested)
         if not force_fresh and self._loadExistingPlayers():
             logger.info(f"Loaded {len(self.activePlayers)} existing players from data files")
+            # Still need to load unused names for replacement player generation
+            self.loadNameLists(config)
             return
         
         # If no existing players found, generate new ones
@@ -105,19 +107,43 @@ class PlayerManager:
         # Set loaded players as active players
         self.activePlayers = loaded_players
         
-        # Organize players by position
+        # Rebuild position lists from loaded players
+        self.rebuildPositionLists()
+        
+        # Organize players by position and assign tiers
         self.sortPlayersByPosition()
         
         logger.info(f"Successfully loaded {len(loaded_players)} players from data files")
         return True
     
     def _createPlayerFromData(self, player_data: Dict[str, Any]) -> FloosPlayer.Player:
-        """Create a Player object from saved JSON data"""
+        """Create a Player object from saved JSON data using position-specific classes"""
         import floosball_player as FloosPlayer
         
         try:
-            # Create basic player with name
-            player = FloosPlayer.Player(player_data['name'])
+            # Get position value to determine which class to instantiate
+            position_value = player_data.get('position', 1)
+            player_rating = player_data.get('playerRating', 74)
+            player_name = player_data['name']
+            
+            # Create position-specific player instance with rating as seed
+            player = None
+            if position_value == 1:  # QB
+                player = FloosPlayer.PlayerQB(player_rating)
+            elif position_value == 2:  # RB
+                player = FloosPlayer.PlayerRB(player_rating)
+            elif position_value == 3:  # WR
+                player = FloosPlayer.PlayerWR(player_rating)
+            elif position_value == 4:  # TE
+                player = FloosPlayer.PlayerTE(player_rating)
+            elif position_value == 5:  # K
+                player = FloosPlayer.PlayerK(player_rating)
+            else:
+                logger.warning(f"Invalid position {position_value} for player {player_name}, defaulting to QB")
+                player = FloosPlayer.PlayerQB(player_rating)
+            
+            # Set name
+            player.name = player_name
             
             # Set basic properties
             player.id = player_data.get('id', 1)
@@ -128,7 +154,7 @@ class PlayerManager:
             player.termRemaining = player_data.get('termRemaining', 2)
             player.capHit = player_data.get('capHit', 2)
             player.seasonPerformanceRating = player_data.get('seasonPerformanceRating', 0)
-            player.playerRating = player_data.get('playerRating', 74)
+            player.playerRating = player_rating
             player.freeAgentYears = player_data.get('freeAgentYears', 0)
             
             # Set player tier
@@ -138,14 +164,6 @@ class PlayerManager:
             except AttributeError:
                 logger.warning(f"Unknown tier {tier_name} for player {player.name}, defaulting to TierC")
                 player.playerTier = FloosPlayer.PlayerTier.TierC
-            
-            # Set position
-            position_value = player_data.get('position', 1)
-            try:
-                player.position = FloosPlayer.PlayerPosition(position_value)
-            except ValueError:
-                logger.warning(f"Invalid position {position_value} for player {player.name}, defaulting to QB")
-                player.position = FloosPlayer.PlayerPosition.QB
             
             # Set service time
             service_time_name = player_data.get('serviceTime', 'Rookie')
@@ -162,7 +180,7 @@ class PlayerManager:
             else:
                 player.team = team_name  # Keep as string for Free Agent/Retired
             
-            # Load attributes
+            # Load attributes - overwrite the auto-generated attributes with saved values
             if 'attributes' in player_data:
                 attr_data = player_data['attributes']
                 for attr_name, attr_value in attr_data.items():
@@ -175,7 +193,12 @@ class PlayerManager:
             
             # Load season stats archive
             if 'seasonStatsArchive' in player_data:
-                player.seasonStatsArchive = player_data['seasonStatsArchive']
+                archive_data = player_data['seasonStatsArchive']
+                # Convert from dict with numeric keys back to list
+                if isinstance(archive_data, dict):
+                    player.seasonStatsArchive = [archive_data[str(i)] for i in sorted([int(k) for k in archive_data.keys()])]
+                else:
+                    player.seasonStatsArchive = archive_data
             
             # Set up season stats dict if not present
             if not hasattr(player, 'seasonStatsDict') or player.seasonStatsDict is None:
@@ -318,15 +341,17 @@ class PlayerManager:
             logger.warning(f"Player {player.name} not found in position list")
     
     def _getPlayerTerm(self, tier: FloosPlayer.PlayerTier) -> int:
-        """Get contract term for player tier (avoiding circular import)"""
-        tier_terms = {
-            FloosPlayer.PlayerTier.TierD: 1,
-            FloosPlayer.PlayerTier.TierC: 2,
-            FloosPlayer.PlayerTier.TierB: 3,
-            FloosPlayer.PlayerTier.TierA: 3,
-            FloosPlayer.PlayerTier.TierS: 4
-        }
-        return tier_terms.get(tier, 2)
+        """Get contract term based on tier with random ranges like original getPlayerTerm function"""
+        from random import randint
+        
+        if tier == FloosPlayer.PlayerTier.TierS:
+            return randint(4, 6)  # S-tier: 4-6 years
+        elif tier == FloosPlayer.PlayerTier.TierA:
+            return randint(3, 4)  # A-tier: 3-4 years  
+        elif tier == FloosPlayer.PlayerTier.TierD:
+            return 1  # D-tier: 1 year
+        else:
+            return randint(1, 3)  # B/C-tier: 1-3 years
     
     def conductInitialDraft(self) -> None:
         """Conduct the initial draft (replaces playerDraft function)"""
@@ -1075,16 +1100,30 @@ class PlayerManager:
         
         logger.info(f"Free agency starting with {len(self.freeAgents)} free agents and {len(teams)} teams")
         
-        # MULTI-ROUND FREE AGENCY PROCESS
-        roundNum = 1
+        # MULTI-ROUND FREE AGENCY PROCESS - matches original exactly
+        teamsComplete = 0
+        roundNum = 0
+        maxRounds = 100  # Safety valve to prevent infinite loops
+        
         while teamsComplete < len(teams):
-            logger.debug(f"Free agency round {roundNum}: {teamsComplete}/{len(teams)} teams complete")
+            teamsComplete = 0  # Reset counter each round - original recounts each iteration!
+            roundNum += 1
+            
+            if roundNum > maxRounds:
+                logger.warning(f"Free agency exceeded {maxRounds} rounds, ending simulation")
+                # Mark all remaining teams as complete
+                for team in teams:
+                    if not team.freeAgencyComplete:
+                        openPos = [k for k, v in team.rosterDict.items() if v is None]
+                        logger.warning(f"{team.name} forced complete with open positions: {openPos}")
+                        team.freeAgencyComplete = True
+                break
             
             for team in freeAgencyOrder:
+                # Count teams that are already complete
                 if team.freeAgencyComplete:
+                    teamsComplete += 1
                     continue
-                
-                teamMadeMove = False
                 
                 # PHASE 1: Try to cut and upgrade players (if cuts available)
                 if team.cutsAvailable > 0:
@@ -1092,33 +1131,34 @@ class PlayerManager:
                         team, freeAgentQbList, freeAgentRbList, freeAgentWrList, 
                         freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights
                     )
+                    team.cutsAvailable -= 1  # Decrement cuts regardless of success
                     if cutMade:
-                        teamMadeMove = True
-                        team.cutsAvailable -= 1
+                        continue  # If cut was made, skip roster fill this round
                 
-                # PHASE 2: Fill any open roster spots
-                if not teamMadeMove:
-                    signedPlayer = self._attemptRosterFill(
-                        team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
-                        freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights
-                    )
-                    if signedPlayer:
-                        teamMadeMove = True
+                # PHASE 2: Attempt to fill ONE open roster spot
+                # Returns True if roster complete, False if not complete (has open positions)
+                rosterComplete = self._attemptRosterFill(
+                    team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
+                    freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights
+                )
                 
-                # PHASE 3: Mark team as complete if no moves possible
-                if not teamMadeMove:
-                    team.freeAgencyComplete = True
+                if rosterComplete:
+                    # No open positions - team is complete
                     teamsComplete += 1
-            
-            roundNum += 1
-            if roundNum > 50:  # Safety valve to prevent infinite loops
-                logger.warning("Free agency exceeded 50 rounds, ending simulation")
-                break
+                    team.freeAgencyComplete = True
+        
+        # Reset all teams' free agency complete status for next season
+        for team in teams:
+            team.freeAgencyComplete = False
+        
+        # Ensure all remaining free agents have team set to 'Free Agent'
+        for player in self.freeAgents:
+            player.team = 'Free Agent'
         
         # Save free agency history
         freeAgencyHistory[f'offseason {currentSeason}'] = freeAgencyDict
         
-        logger.info(f"Free agency complete after {roundNum-1} rounds. {len(freeAgencyDict)} transactions made.")
+        logger.info(f"Free agency complete. {len(freeAgencyDict)} transactions made.")
         return freeAgencyHistory
     
     def _processContractExpirations(self) -> None:
@@ -1130,11 +1170,11 @@ class PlayerManager:
                 expiredPlayers.append(player)
         
         for player in expiredPlayers:
-            self.activePlayers.remove(player)
-            self.removeFromPositionList(player)
+            # Free agents stay in activePlayers and position lists
             player.team = 'Free Agent'
-            player.freeAgentYears = getattr(player, 'freeAgentYears', 0) + 1
-            self.freeAgents.append(player)
+            player.freeAgentYears = 0  # Start at 0 when first becoming a free agent
+            if player not in self.freeAgents:
+                self.freeAgents.append(player)
             
         logger.info(f"Moved {len(expiredPlayers)} players with expired contracts to free agency")
     
@@ -1169,182 +1209,384 @@ class PlayerManager:
         logger.info(f"Free agent retirements: {len(retirements)} players retired")
     
     def _generateReplacementPlayers(self, currentSeason: int) -> None:
-        """Generate replacement players for those who retired"""
+        """Generate replacement players for those who retired
+        
+        Ensures minimum of 12 new players per offseason, with balanced position distribution
+        to ensure enough players at each position for all teams
+        """
         import numpy as np
         from random import randint
         
+        # Get number of teams to calculate minimum players needed
+        teamManager = self.serviceContainer.getService('team_manager')
+        numTeams = len(teamManager.teams) if teamManager else 8
+        
         numRetired = len(self.newlyRetiredPlayers)
-        if numRetired == 0:
-            return
+        minNewPlayers = 12  # Minimum number of new players to create (matches original)
+        
+        # Determine how many players to generate
+        numOfPlayers = max(numRetired, minNewPlayers)
         
         # Generate replacement players with same distribution as original
         meanPlayerSkill = 80
         stdDevPlayerSkill = 7
-        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numRetired)
+        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
         playerAverages = np.clip(playerAverages, 60, 100).tolist()
         
-        for i in range(numRetired):
-            # Use same position distribution as original (y = x % 6)
-            y = i % 6
-            position = None
-            if y == 0:
-                position = FloosPlayer.Position.QB
-            elif y == 1:
-                position = FloosPlayer.Position.RB
-            elif y == 2 or y == 3:  # Two slots for WR
-                position = FloosPlayer.Position.WR
-            elif y == 4:
-                position = FloosPlayer.Position.TE
-            elif y == 5:
-                position = FloosPlayer.Position.K
-            
-            if position and playerAverages:
+        # Find the next available player ID
+        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
+        
+        # First: Create replacement players for retired players (matching positions)
+        positionCounts = {'QB': 0, 'RB': 0, 'WR': 0, 'TE': 0, 'K': 0}
+        for i, retiredPlayer in enumerate(self.newlyRetiredPlayers):
+            if playerAverages:
                 seed = int(playerAverages.pop(randint(0, len(playerAverages) - 1)))
-                newPlayer = self.createPlayer(position, seed)
+                newPlayer = self.createPlayer(retiredPlayer.position, seed)
                 if newPlayer:
+                    newPlayer.id = nextPlayerId
+                    nextPlayerId += 1
                     newPlayer.team = 'Free Agent'
                     newPlayer.freeAgentYears = 0
+                    # Add to free agents list
                     self.freeAgents.append(newPlayer)
+                    # Add to active players and position lists (free agents are active)
+                    if newPlayer not in self.activePlayers:
+                        self.activePlayers.append(newPlayer)
+                    self.addToPositionList(newPlayer)
+                    # Track position counts
+                    if retiredPlayer.position.value == 1:
+                        positionCounts['QB'] += 1
+                    elif retiredPlayer.position.value == 2:
+                        positionCounts['RB'] += 1
+                    elif retiredPlayer.position.value == 3:
+                        positionCounts['WR'] += 1
+                    elif retiredPlayer.position.value == 4:
+                        positionCounts['TE'] += 1
+                    elif retiredPlayer.position.value == 5:
+                        positionCounts['K'] += 1
         
-        logger.info(f"Generated {numRetired} replacement players")
+        # Second: Create additional players if needed to meet minimum
+        # Use balanced distribution to ensure enough at each position
+        if minNewPlayers > numRetired:
+            additionalPlayers = minNewPlayers - numRetired
+            
+            # Calculate how many we need at each position to maintain balance
+            # Each team needs: 1 QB, 1 RB, 2 WR, 1 TE, 1 K
+            # We use a weighted distribution: QB=1, RB=1, WR=2, TE=1, K=1 (total weight=6)
+            positionWeights = {
+                FloosPlayer.Position.QB: 1,
+                FloosPlayer.Position.RB: 1, 
+                FloosPlayer.Position.WR: 2,  # WR has 2x weight since teams need 2
+                FloosPlayer.Position.TE: 1,
+                FloosPlayer.Position.K: 1
+            }
+            
+            # Create weighted position list for selection
+            weightedPosList = []
+            for pos, weight in positionWeights.items():
+                weightedPosList.extend([pos] * weight)
+            
+            for x in range(additionalPlayers):
+                if playerAverages:
+                    seed = int(playerAverages.pop(randint(0, len(playerAverages) - 1)))
+                    randomPos = weightedPosList[randint(0, len(weightedPosList) - 1)]
+                    newPlayer = self.createPlayer(randomPos, seed)
+                    if newPlayer:
+                        newPlayer.id = nextPlayerId
+                        nextPlayerId += 1
+                        newPlayer.team = 'Free Agent'
+                        newPlayer.freeAgentYears = 0
+                        # Add to free agents list
+                        self.freeAgents.append(newPlayer)
+                        # Add to active players and position lists
+                        if newPlayer not in self.activePlayers:
+                            self.activePlayers.append(newPlayer)
+                        self.addToPositionList(newPlayer)
+        
+        logger.info(f"Generated {numOfPlayers} replacement players ({numRetired} retired, {minNewPlayers - numRetired} additional)")
     
     def _attemptPlayerCutAndUpgrade(self, team, freeAgentQbList, freeAgentRbList, freeAgentWrList, 
                                    freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights) -> bool:
-        """Attempt to cut current player and sign upgrade based on GM skill and tier comparison"""
-        from random import randint
+        """Attempt to cut current player and sign upgrade - matches original logic exactly"""
+        from random import randint, choice
         
-        # Check each position for potential upgrades
-        positions = ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']
-        freeAgentLists = {
-            'qb': freeAgentQbList, 'rb': freeAgentRbList, 'wr1': freeAgentWrList,
-            'wr2': freeAgentWrList, 'te': freeAgentTeList, 'k': freeAgentKList
-        }
+        # Build list of positions eligible for cuts (tier <= 3 players only, and NO free agents at that position)
+        eligiblePlayersToCutList = []
+        for k, v in team.rosterDict.items():
+            if v is not None and v.playerTier.value <= 3:
+                if v.position.value == 1 and len(freeAgentQbList) == 0:  # QB
+                    eligiblePlayersToCutList.append(k)
+                elif v.position.value == 2 and len(freeAgentRbList) == 0:  # RB
+                    eligiblePlayersToCutList.append(k)
+                elif v.position.value == 3 and len(freeAgentWrList) == 0:  # WR
+                    eligiblePlayersToCutList.append(k)
+                elif v.position.value == 4 and len(freeAgentTeList) == 0:  # TE
+                    eligiblePlayersToCutList.append(k)
+                elif v.position.value == 5 and len(freeAgentKList) == 0:  # K
+                    eligiblePlayersToCutList.append(k)
         
-        for pos in positions:
-            currentPlayer = team.rosterDict.get(pos)
-            freeAgentList = freeAgentLists[pos]
+        # While loop to try cutting - matches original pattern
+        while len(eligiblePlayersToCutList) > 0:
+            pos = choice(eligiblePlayersToCutList)
+            currentPlayer = team.rosterDict[pos]
+            compPlayer = None
             
-            # Skip if no current player or no free agents available
-            if not currentPlayer or not freeAgentList:
-                continue
+            # Check if free agents exist at this position, if not remove from eligible list
+            if pos == 'qb' and len(freeAgentQbList) == 0:
+                eligiblePlayersToCutList.remove(pos)
+                pos = None
+            if pos == 'rb' and len(freeAgentRbList) == 0:
+                eligiblePlayersToCutList.remove(pos)
+                pos = None
+            if pos == 'wr1' and len(freeAgentWrList) == 0:
+                eligiblePlayersToCutList.remove(pos)
+                pos = None
+            if pos == 'wr2' and len(freeAgentWrList) == 0:
+                eligiblePlayersToCutList.remove(pos)
+                pos = None
+            if pos == 'te' and len(freeAgentTeList) == 0:
+                eligiblePlayersToCutList.remove(pos)
+                pos = None
+            if pos == 'k' and len(freeAgentKList) == 0:
+                eligiblePlayersToCutList.remove(pos)
+                pos = None
             
-            # Only consider cuts for players in tiers 1-3 (lower tiers eligible for cuts)
-            if currentPlayer.playerTier.value > 3:
+            # If position was cleared and there are more eligible, pick another
+            if pos is None and len(eligiblePlayersToCutList) > 0:
+                pos = choice(eligiblePlayersToCutList)
+            elif pos is None:
                 continue
             
             # GM skill determines evaluation range
             gmScore = getattr(team, 'gmScore', 1)
-            if gmScore >= len(freeAgentList):
-                evalRange = len(freeAgentList) - 1
-            else:
-                evalRange = gmScore
             
-            # GM evaluates a free agent based on their skill
-            compPlayer = freeAgentList[randint(0, evalRange)]
+            # Get comparison player based on position
+            if pos == 'qb':
+                if gmScore >= len(freeAgentQbList):
+                    i = len(freeAgentQbList) - 1
+                else:
+                    i = gmScore
+                compPlayer = freeAgentQbList[randint(0, i)]
+            elif pos == 'rb':
+                if gmScore >= len(freeAgentRbList):
+                    i = len(freeAgentRbList) - 1
+                else:
+                    i = gmScore
+                compPlayer = freeAgentRbList[randint(0, i)]
+            elif pos == 'wr1' or pos == 'wr2':
+                if gmScore >= len(freeAgentWrList):
+                    i = len(freeAgentWrList) - 1
+                else:
+                    i = gmScore
+                compPlayer = freeAgentWrList[randint(0, i)]
+            elif pos == 'te':
+                if gmScore >= len(freeAgentTeList):
+                    i = len(freeAgentTeList) - 1
+                else:
+                    i = gmScore
+                compPlayer = freeAgentTeList[randint(0, i)]
+            elif pos == 'k':
+                if gmScore >= len(freeAgentKList):
+                    i = len(freeAgentKList) - 1
+                else:
+                    i = gmScore
+                compPlayer = freeAgentKList[randint(0, i)]
             
-            # Multi-tier comparison logic: upgrade if free agent is significantly better
-            if (compPlayer.playerTier.value - 1) > currentPlayer.playerTier.value:
-                # Make the cut and signing
-                self._executeCutAndSigning(team, pos, currentPlayer, compPlayer, freeAgencyDict, leagueHighlights)
+            # Check if upgrade is significant enough: (compPlayer tier - 1) > currentPlayer tier
+            if compPlayer and (compPlayer.playerTier.value - 1) > currentPlayer.playerTier.value:
+                # Execute the cut and signing
+                self._executeCutAndSigning(
+                    team, pos, currentPlayer, compPlayer, 
+                    freeAgentQbList, freeAgentRbList, freeAgentWrList, 
+                    freeAgentTeList, freeAgentKList, 
+                    freeAgencyDict, leagueHighlights
+                )
                 return True
+            else:
+                # Not a good upgrade, remove from eligible list and try another
+                if pos in eligiblePlayersToCutList:
+                    eligiblePlayersToCutList.remove(pos)
         
         return False
     
-    def _executeCutAndSigning(self, team, position, cutPlayer, newPlayer, freeAgencyDict, leagueHighlights):
-        """Execute the cutting of one player and signing of another"""
-        # Update salary cap
-        if hasattr(team, 'playerCap'):
-            team.playerCap -= getattr(cutPlayer, 'capHit', 0)
-            team.playerCap += getattr(newPlayer, 'capHit', newPlayer.playerTier.value)
+    def _executeCutAndSigning(self, team, position, cutPlayer, newPlayer, 
+                             freeAgentQbList, freeAgentRbList, freeAgentWrList, 
+                             freeAgentTeList, freeAgentKList, 
+                             freeAgencyDict, leagueHighlights):
+        """Execute the cutting of one player and signing of another - matches original exactly"""
         
-        # Move cut player to free agents
-        cutPlayer.team = 'Free Agent'
-        cutPlayer.freeAgentYears = getattr(cutPlayer, 'freeAgentYears', 0) + 1
-        self.freeAgents.append(cutPlayer)
-        self.removeFromPositionList(cutPlayer)
-        if cutPlayer in self.activePlayers:
-            self.activePlayers.remove(cutPlayer)
-        
-        # Sign new player
-        self.freeAgents.remove(newPlayer)
-        self.activePlayers.append(newPlayer)
-        self.addToPositionList(newPlayer)
+        # Assign new player to roster first
+        team.rosterDict[position] = newPlayer
+        newPlayer.term = self._getPlayerTerm(newPlayer.playerTier)
+        newPlayer.termRemaining = newPlayer.term
         newPlayer.team = team
         newPlayer.freeAgentYears = 0
         
-        # Set contract terms based on tier
-        newPlayer.term = self._getPlayerTerm(newPlayer.playerTier)
-        newPlayer.termRemaining = newPlayer.term
+        # Cut player - set contract to 0, move to free agency
+        cutPlayer.termRemaining = 0
+        cutPlayer.team = 'Free Agent'
+        cutPlayer.previousTeam = team.name
         
-        # Assign to roster
-        team.rosterDict[position] = newPlayer
+        # Handle player numbers
+        if cutPlayer.currentNumber in team.playerNumbersList:
+            team.playerNumbersList.remove(cutPlayer.currentNumber)
         team.assignPlayerNumber(newPlayer)
         
-        # Record transaction
-        transactionId = f"{team.name}_{cutPlayer.name}_{newPlayer.name}"
-        freeAgencyDict[transactionId] = {
-            'team': team.name,
-            'cut': cutPlayer.name,
-            'signed': newPlayer.name,
-            'position': position,
-            'newTier': newPlayer.playerTier.name,
-            'term': newPlayer.term
-        }
+        # TODO: capHit feature not fully developed - disabled for now
+        # team.playerCap -= cutPlayer.capHit
+        # team.playerCap += newPlayer.capHit
         
-        # Add highlights
+        # Add cut player to main free agent list
+        if cutPlayer not in self.freeAgents:
+            self.freeAgents.append(cutPlayer)
+        
+        # Remove new player from main free agent list
+        if newPlayer in self.freeAgents:
+            self.freeAgents.remove(newPlayer)
+        
+        # Add league highlights
         leagueHighlights.insert(0, {
-            'event': {'text': f'{team.city} {team.name} has cut {cutPlayer.name}'}
+            'event': {'text': f'{team.name} has cut {cutPlayer.name}'}
         })
         leagueHighlights.insert(0, {
-            'event': {'text': f'{team.city} {team.name} signed {newPlayer.name} ({newPlayer.playerTier.name}) for {newPlayer.term} season(s)'}
+            'event': {'text': f'{team.name} signed {newPlayer.name} ({newPlayer.position.name}) for {newPlayer.term} season(s)'}
         })
+        
+        # Remove new player from position-specific free agent list
+        if newPlayer.position.value == 1:  # QB
+            if newPlayer in freeAgentQbList:
+                freeAgentQbList.remove(newPlayer)
+        elif newPlayer.position.value == 2:  # RB
+            if newPlayer in freeAgentRbList:
+                freeAgentRbList.remove(newPlayer)
+        elif newPlayer.position.value == 3:  # WR
+            if newPlayer in freeAgentWrList:
+                freeAgentWrList.remove(newPlayer)
+        elif newPlayer.position.value == 4:  # TE
+            if newPlayer in freeAgentTeList:
+                freeAgentTeList.remove(newPlayer)
+        elif newPlayer.position.value == 5:  # K
+            if newPlayer in freeAgentKList:
+                freeAgentKList.remove(newPlayer)
+        
+        # Add cut player to position-specific free agent list and re-sort
+        if cutPlayer.position.value == 1:  # QB
+            freeAgentQbList.append(cutPlayer)
+            freeAgentQbList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        elif cutPlayer.position.value == 2:  # RB
+            freeAgentRbList.append(cutPlayer)
+            freeAgentRbList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        elif cutPlayer.position.value == 3:  # WR
+            freeAgentWrList.append(cutPlayer)
+            freeAgentWrList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        elif cutPlayer.position.value == 4:  # TE
+            freeAgentTeList.append(cutPlayer)
+            freeAgentTeList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        elif cutPlayer.position.value == 5:  # K
+            freeAgentKList.append(cutPlayer)
+            freeAgentKList.sort(key=lambda p: p.attributes.skillRating, reverse=True)
         
         logger.debug(f"{team.name} cut {cutPlayer.name} and signed {newPlayer.name}")
     
     def _attemptRosterFill(self, team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights) -> bool:
-        """Attempt to fill any open roster positions"""
-        from random import randint
+        """Attempt to fill ONE random open roster position (matching original logic)
         
-        positions = ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']
+        Returns True if roster is complete (no open positions), False otherwise
+        """
+        from random import randint, choice
+        
+        # Build list of all open positions
+        openRosterPosList = []
+        for pos in ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']:
+            if team.rosterDict.get(pos) is None:
+                openRosterPosList.append(pos)
+        
+        # If no open positions, roster is complete
+        if len(openRosterPosList) == 0:
+            return True
+        
+        # Randomly choose ONE open position to fill
+        pos = choice(openRosterPosList)
+        
+        # Map position to free agent list
         freeAgentLists = {
-            'qb': freeAgentQbList, 'rb': freeAgentRbList, 'wr1': freeAgentWrList,
-            'wr2': freeAgentWrList, 'te': freeAgentTeList, 'k': freeAgentKList
+            'qb': freeAgentQbList, 'rb': freeAgentRbList, 
+            'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
+            'te': freeAgentTeList, 'k': freeAgentKList
         }
         
-        for pos in positions:
-            if team.rosterDict.get(pos) is None:  # Position is open
-                freeAgentList = freeAgentLists[pos]
-                
-                if not freeAgentList:
-                    continue
-                
-                # GM skill determines evaluation range
-                gmScore = getattr(team, 'gmScore', 1)
-                if gmScore >= len(freeAgentList):
-                    evalRange = len(freeAgentList) - 1
-                else:
-                    evalRange = gmScore
-                
-                # GM picks from their evaluation range
-                newPlayer = freeAgentList[randint(0, evalRange)]
-                
-                # Sign the player
-                self._executeRosterSigning(team, pos, newPlayer, freeAgencyDict, leagueHighlights)
-                return True
+        freeAgentList = freeAgentLists[pos]
         
-        return False
+        # If no free agents available at this position, return False (not complete, try again next round)
+        if not freeAgentList or len(freeAgentList) == 0:
+            return False
+        
+        # GM skill determines evaluation range
+        gmScore = getattr(team, 'gmScore', 1)
+        if gmScore >= len(freeAgentList):
+            evalRange = len(freeAgentList) - 1
+        else:
+            evalRange = gmScore
+        
+        # Safety check
+        if evalRange < 0:
+            evalRange = 0
+        
+        # GM picks from their evaluation range using pop (like original)
+        selectedIndex = randint(0, evalRange)
+        selectedPlayer = freeAgentList.pop(selectedIndex)
+        
+        # Remove from main free agents list
+        if selectedPlayer in self.freeAgents:
+            self.freeAgents.remove(selectedPlayer)
+        
+        # Assign to team
+        selectedPlayer.team = team
+        selectedPlayer.freeAgentYears = 0
+        team.rosterDict[pos] = selectedPlayer
+        team.assignPlayerNumber(selectedPlayer)
+        
+        # Set contract terms
+        selectedPlayer.term = self._getPlayerTerm(selectedPlayer.playerTier)
+        selectedPlayer.termRemaining = selectedPlayer.term
+        
+        # Record transaction
+        transactionId = f"{team.name}_{selectedPlayer.name}"
+        freeAgencyDict[transactionId] = {
+            'name': selectedPlayer.name,
+            'pos': selectedPlayer.position.name,
+            'rating': selectedPlayer.attributes.skillRating,
+            'tier': selectedPlayer.playerTier.value,
+            'term': selectedPlayer.term,
+            'previousTeam': getattr(selectedPlayer, 'previousTeam', 'Rookie'),
+            'roster': 'Starting'
+        }
+        
+        # Add highlight
+        leagueHighlights.insert(0, {
+            'event': {'text': f'{team.name} signed {selectedPlayer.name} ({selectedPlayer.position.name}) for {selectedPlayer.term} season(s)'}
+        })
+        
+        logger.debug(f"{team.name} filled {pos} with {selectedPlayer.name}")
+        return False  # Roster not complete yet, has more open positions
     
-    def _executeRosterSigning(self, team, position, newPlayer, freeAgencyDict, leagueHighlights):
+    def _executeRosterSigning(self, team, position, newPlayer, freeAgencyDict, leagueHighlights, freeAgentLists=None):
         """Execute signing a player to fill an open roster spot"""
-        # Update salary cap
-        if hasattr(team, 'playerCap'):
-            team.playerCap += getattr(newPlayer, 'capHit', newPlayer.playerTier.value)
+        # TODO: capHit feature not fully developed - disabled for now
+        # if hasattr(team, 'playerCap'):
+        #     team.playerCap += getattr(newPlayer, 'capHit', newPlayer.playerTier.value)
         
-        # Sign new player
-        self.freeAgents.remove(newPlayer)
-        self.activePlayers.append(newPlayer)
-        self.addToPositionList(newPlayer)
+        # Sign new player (remove from free agents, already in activePlayers and position lists)
+        if newPlayer in self.freeAgents:
+            self.freeAgents.remove(newPlayer)
+        
+        # Also remove from position-specific free agent lists to prevent double-signing
+        if freeAgentLists:
+            for fa_list in freeAgentLists.values():
+                if newPlayer in fa_list:
+                    fa_list.remove(newPlayer)
+        
         newPlayer.team = team
         newPlayer.freeAgentYears = 0
         
@@ -1520,9 +1762,9 @@ class PlayerManager:
         player.seasonPerformanceRating = 0
         player.team = 'Retired'
         
-        # Remove from team salary cap and roster
-        if hasattr(team, 'playerCap') and hasattr(player, 'capHit'):
-            team.playerCap -= player.capHit
+        # TODO: capHit feature not fully developed - disabled for now
+        # if hasattr(team, 'playerCap') and hasattr(player, 'capHit'):
+        #     team.playerCap -= player.capHit
         
         if hasattr(team, 'playerNumbersList') and hasattr(player, 'currentNumber'):
             if player.currentNumber in team.playerNumbersList:
@@ -1560,9 +1802,9 @@ class PlayerManager:
         player.previousTeam = team.name
         player.team = 'Free Agent'
         
-        # Remove from team salary cap and roster
-        if hasattr(team, 'playerCap') and hasattr(player, 'capHit'):
-            team.playerCap -= player.capHit
+        # TODO: capHit feature not fully developed - disabled for now
+        # if hasattr(team, 'playerCap') and hasattr(player, 'capHit'):
+        #     team.playerCap -= player.capHit
         
         if hasattr(team, 'playerNumbersList') and hasattr(player, 'currentNumber'):
             if player.currentNumber in team.playerNumbersList:
@@ -1571,11 +1813,7 @@ class PlayerManager:
         # Clear roster position
         team.rosterDict[position] = None
         
-        # Move to free agency
-        if player in self.activePlayers:
-            self.activePlayers.remove(player)
-        self.removeFromPositionList(player)
-        
+        # Move to free agency (player stays in activePlayers and position lists)
         if player not in self.freeAgents:
             self.freeAgents.append(player)
         

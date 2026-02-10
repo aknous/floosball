@@ -4,33 +4,27 @@
             "game": {
                 "yards": {
                     "record": "Pass Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Nyle Posette",
+                    "id": 79,
+                    "value": 7547
                 },
                 "tds": {
                     "record": "Pass TDs",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Olive Churro",
+                    "id": 19,
+                    "value": 54
                 },
                 "comps": {
                     "record": "Completions",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Lollie Norman",
+                    "id": 37,
+                    "value": 659
                 },
                 "ints": {
                     "record": "Most Interceptions",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Lohnny Roosevelt",
+                    "id": 139,
+                    "value": 39
                 }
             },
             "career": {
@@ -57,48 +51,35 @@
                     "name": null,
                     "id": 0,
                     "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
                 }
             },
             "season": {
                 "yards": {
                     "record": "Pass Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Nyle Posette",
+                    "id": 79,
+                    "value": 7165,
                     "season": 0
                 },
                 "tds": {
                     "record": "Pass TDs",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Olive Churro",
+                    "id": 19,
+                    "value": 54,
                     "season": 0
                 },
                 "comps": {
                     "record": "Completions",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Lollie Norman",
+                    "id": 37,
+                    "value": 659,
                     "season": 0
                 },
                 "ints": {
                     "record": "Most Interceptions",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
-                    "season": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Lohnny Roosevelt",
+                    "id": 139,
+                    "value": 39,
                     "season": 0
                 }
             }
@@ -107,27 +88,21 @@
             "game": {
                 "yards": {
                     "record": "Rush Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Jabby Nichols",
+                    "id": 92,
+                    "value": 3900
                 },
                 "tds": {
                     "record": "Rush TDs",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Ronna McDonna",
+                    "id": 62,
+                    "value": 47
                 },
                 "fumbles": {
                     "record": "Most Fumbles",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Mario Trolleyproblem",
+                    "id": 2,
+                    "value": 16
                 }
             },
             "career": {
@@ -148,41 +123,28 @@
                     "name": null,
                     "id": 0,
                     "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
                 }
             },
             "season": {
                 "yards": {
                     "record": "Rush Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Kimora Barry",
+                    "id": 8,
+                    "value": 3557,
                     "season": 0
                 },
                 "tds": {
                     "record": "Rush TDs",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Ronna McDonna",
+                    "id": 62,
+                    "value": 45,
                     "season": 0
                 },
                 "fumbles": {
                     "record": "Most Fumbles",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
-                    "season": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Spacepope Burbank",
+                    "id": 122,
+                    "value": 12,
                     "season": 0
                 }
             }
@@ -191,27 +153,21 @@
             "game": {
                 "yards": {
                     "record": "Receiving Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Panflute Goblin",
+                    "id": 57,
+                    "value": 3902
                 },
                 "tds": {
                     "record": "Receiving TDs",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Jasper Gurnybone",
+                    "id": 33,
+                    "value": 30
                 },
                 "receptions": {
                     "record": "Receptions",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Benanaiah Haskamp",
+                    "id": 113,
+                    "value": 367
                 }
             },
             "career": {
@@ -232,41 +188,28 @@
                     "name": null,
                     "id": 0,
                     "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
                 }
             },
             "season": {
                 "yards": {
                     "record": "Receiving Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Panflute Goblin",
+                    "id": 57,
+                    "value": 3796,
                     "season": 0
                 },
                 "tds": {
                     "record": "Receiving TDs",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Jasper Gurnybone",
+                    "id": 33,
+                    "value": 30,
                     "season": 0
                 },
                 "receptions": {
                     "record": "Receptions",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
-                    "season": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Benanaiah Haskamp",
+                    "id": 113,
+                    "value": 367,
                     "season": 0
                 }
             }
@@ -275,21 +218,15 @@
             "game": {
                 "fgs": {
                     "record": "Field Goals",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Reverend Memes",
+                    "id": 144,
+                    "value": 95
                 },
                 "fgYards": {
                     "record": "Total FG Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
+                    "name": "Reverend Memes",
+                    "id": 144,
+                    "value": 3552
                 }
             },
             "career": {
@@ -304,35 +241,125 @@
                     "name": null,
                     "id": 0,
                     "value": 0
-                },
-                "points": {
-                    "record": "Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
                 }
             },
             "season": {
                 "fgs": {
                     "record": "Field Goals",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Reverend Memes",
+                    "id": 144,
+                    "value": 83,
                     "season": 0
                 },
                 "fgYards": {
                     "record": "Total FG Yards",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
+                    "name": "Reverend Memes",
+                    "id": 144,
+                    "value": 3132,
                     "season": 0
+                }
+            }
+        },
+        "fantasy": {
+            "game": {
+                "qb": {
+                    "record": "QB Fantasy Points",
+                    "name": "Nyle Posette",
+                    "id": 79,
+                    "value": 495
                 },
-                "points": {
-                    "record": "Fantasy Points",
+                "rb": {
+                    "record": "RB Fantasy Points",
+                    "name": "Ronna McDonna",
+                    "id": 62,
+                    "value": 706
+                },
+                "wr": {
+                    "record": "WR Fantasy Points",
+                    "name": "Panflute Goblin",
+                    "id": 57,
+                    "value": 572
+                },
+                "te": {
+                    "record": "TE Fantasy Points",
+                    "name": "Benanaiah Haskamp",
+                    "id": 113,
+                    "value": 499
+                },
+                "k": {
+                    "record": "K Fantasy Points",
+                    "name": "Reverend Memes",
+                    "id": 144,
+                    "value": 389
+                }
+            },
+            "season": {
+                "qb": {
+                    "record": "QB Fantasy Points",
+                    "name": "Nyle Posette",
+                    "id": 79,
+                    "value": 6750,
+                    "season": 1
+                },
+                "rb": {
+                    "record": "RB Fantasy Points",
+                    "name": "Jabby Nichols",
+                    "id": 92,
+                    "value": 9251,
+                    "season": 1
+                },
+                "wr": {
+                    "record": "WR Fantasy Points",
+                    "name": "Panflute Goblin",
+                    "id": 57,
+                    "value": 8235,
+                    "season": 1
+                },
+                "te": {
+                    "record": "TE Fantasy Points",
+                    "name": "Benanaiah Haskamp",
+                    "id": 113,
+                    "value": 7629,
+                    "season": 1
+                },
+                "k": {
+                    "record": "K Fantasy Points",
+                    "name": "Reverend Memes",
+                    "id": 144,
+                    "value": 5891,
+                    "season": 1
+                }
+            },
+            "career": {
+                "qb": {
+                    "record": "QB Fantasy Points",
                     "name": null,
                     "id": 0,
-                    "value": 0,
-                    "season": 0
+                    "value": 0
+                },
+                "rb": {
+                    "record": "RB Fantasy Points",
+                    "name": null,
+                    "id": 0,
+                    "value": 0
+                },
+                "wr": {
+                    "record": "WR Fantasy Points",
+                    "name": null,
+                    "id": 0,
+                    "value": 0
+                },
+                "te": {
+                    "record": "TE Fantasy Points",
+                    "name": null,
+                    "id": 0,
+                    "value": 0
+                },
+                "k": {
+                    "record": "K Fantasy Points",
+                    "name": null,
+                    "id": 0,
+                    "value": 0
                 }
             }
         }
@@ -341,38 +368,38 @@
         "game": {
             "yards": {
                 "record": "Yards",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Colorado Leg Warmers",
+                "id": 12,
+                "value": 10559,
                 "season": 0
             },
             "tds": {
                 "record": "TDs",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Austin Moonlight",
+                "id": 13,
+                "value": 83,
                 "season": 0
             },
             "pts": {
                 "record": "Total Points",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Vancouver Pinecones",
+                "id": 11,
+                "value": 82,
                 "season": 0
             }
         },
         "allTime": {
             "wins": {
                 "record": "Most Wins",
-                "name": null,
-                "id": 0,
-                "value": 0
+                "name": "Austin Moonlight",
+                "id": 13,
+                "value": 28
             },
             "losses": {
                 "record": "Most Losses",
-                "name": null,
-                "id": 0,
-                "value": 0
+                "name": "Seattle Cranes",
+                "id": 10,
+                "value": 27
             },
             "titles": {
                 "record": "FloosBowl Titles",
@@ -382,9 +409,9 @@
             },
             "leagueTitles": {
                 "record": "League Titles",
-                "name": null,
-                "id": 0,
-                "value": 0
+                "name": "Austin Moonlight",
+                "id": 13,
+                "value": 1
             },
             "regSeasonTitles": {
                 "record": "Regular Season Titles",
@@ -396,64 +423,45 @@
         "season": {
             "yards": {
                 "record": "Yards",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "San Diego Sand Dollars",
+                "id": 15,
+                "value": 143784,
                 "season": 0
             },
             "tds": {
                 "record": "TDs",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Austin Moonlight",
+                "id": 13,
+                "value": 1135,
                 "season": 0
             },
             "pts": {
                 "record": "Total Points",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Austin Moonlight",
+                "id": 13,
+                "value": 679,
                 "season": 0
             },
             "ints": {
                 "record": "Most Interceptions",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Georgia Classics",
+                "id": 24,
+                "value": 546,
                 "season": 0
             },
             "fumRec": {
                 "record": "Most Fumble Recoveries",
-                "name": null,
-                "id": 0,
-                "value": 0,
+                "name": "Anaheim Rhyme",
+                "id": 18,
+                "value": 298,
                 "season": 0
             },
             "elo": {
                 "record": "Highest Rating",
-                "name": null,
-                "id": 0,
-                "value": 0,
-                "season": 0
-            }
-        },
-        "fantasy": {
-            "career": {
-                "fantasyPoints": {
-                    "record": "Career Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0
-                }
-            },
-            "season": {
-                "fantasyPoints": {
-                    "record": "Season Fantasy Points",
-                    "name": null,
-                    "id": 0,
-                    "value": 0,
-                    "season": 0
-                }
+                "name": "Austin Moonlight",
+                "id": 13,
+                "value": 1885,
+                "season": 1
             }
         }
     }

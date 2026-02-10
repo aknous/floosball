@@ -4,6 +4,8 @@ Replaces the scattered season-related functions and global variables from floosb
 """
 
 import math
+import os
+import json
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 import datetime
@@ -32,6 +34,7 @@ class Season:
         self.playoffTeams: Dict[str, List[FloosTeam.Team]] = {}
         self.nonPlayoffTeams: Dict[str, List[FloosTeam.Team]] = {}
         self.leagueHighlights: List[Dict[str, Any]] = []
+        self.freeAgencyOrder: List[FloosTeam.Team] = []
 
 class SeasonManager:
     """Manages season simulation, scheduling, and progression"""
@@ -86,10 +89,6 @@ class SeasonManager:
         # Clear previous season data
         self._clearSeasonData()
 
-        if seasonNumber > 1:
-            # Handle offseason activities
-            await self._handleOffseason()
-
         # Create new season schedule
         self.createSchedule()
         
@@ -119,15 +118,29 @@ class SeasonManager:
     
     async def _simulateRegularSeason(self) -> None:
         """Simulate all regular season games"""
+        strCurrentSeason = 'season{}'.format(self.currentSeason.seasonNumber)
+        weekFilePath = '{}/games'.format(strCurrentSeason)
+        
+        # Create games directory if it doesn't exist
+        if not os.path.isdir(strCurrentSeason):
+            os.mkdir(strCurrentSeason)
+        if not os.path.isdir(weekFilePath):
+            os.mkdir(weekFilePath)
+        
         for week in self.currentSeason.schedule:
             self.currentSeason.currentWeek = self.currentSeason.schedule.index(week)+1
             self.currentSeason.currentWeekText = f'Week {self.currentSeason.currentWeek}'
             logger.info(f"Simulating week {self.currentSeason.currentWeek} in {self.timingManager.getModeString()} mode")
             weekStartTime = week['startTime']
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
+            self.currentSeason.activeGames = week['games']
 
             # Wait for week setup time
             await self.timingManager.waitForWeekSetup(weekSetupTime)
+
+            for game in range(0,len(self.currentSeason.activeGames)):
+                self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
+                self.currentSeason.activeGames[game].calculateWinProbability()
 
             # Add league highlight for week starting
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -153,6 +166,19 @@ class SeasonManager:
             # Wait for all games in the week to complete concurrently
             await asyncio.gather(*gameTasks)
 
+            # Save week's game data to file (matches original startSeason)
+            gameDict = {}
+            for game_idx, game in enumerate(weekGames):
+                strGame = f'Game {game_idx + 1}'
+                gameResults = game.gameDict
+                gameDict[strGame] = gameResults
+            
+            from serializers import serialize_object
+            weekDict = serialize_object(gameDict)
+            jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentSeason.currentWeekText)), "w+")
+            jsonFile.write(json.dumps(weekDict, indent=4))
+            jsonFile.close()
+
             # Post-week processing (matches original floosball.py lines 688-699)
             self._updateWeeklyStats()
             self._updateStandings()
@@ -169,6 +195,7 @@ class SeasonManager:
             # Update playoff picture and check for clinches (matches original)
             self.updatePlayoffPicture()
             self.checkForClinches()
+            self._checkRecords()
 
             # Additional record checks (matches original)
             self.recordsManager.checkCareerRecords()
@@ -187,11 +214,6 @@ class SeasonManager:
         """Simulate playoff games"""
         logger.info("Starting playoff simulation")
         
-        # Determine playoff teams
-        playoffTeams = self.leagueManager.getPlayoffTeams()
-        
-        # Create playoff bracket
-        self._createPlayoffBracket(playoffTeams)
         
         # Simulate playoff rounds
         await self._simulatePlayoffRounds()
@@ -499,93 +521,208 @@ class SeasonManager:
         
         return weeks
     
-    def _createPlayoffBracket(self, playoffTeams: Dict[str, List[FloosTeam.Team]]) -> None:
-        """Create playoff bracket from qualified teams"""
-        bracket = []
-        
-        # Simple single-elimination bracket
-        for leagueName, teams in playoffTeams.items():
-            if len(teams) >= 2:
-                # Create semi-final matchups
-                for i in range(0, len(teams), 2):
-                    if i + 1 < len(teams):
-                        matchup = {
-                            'homeTeam': teams[i],
-                            'awayTeam': teams[i + 1],
-                            'round': 'semifinals',
-                            'league': leagueName,
-                            'completed': False,
-                            'winner': None
-                        }
-                        bracket.append(matchup)
-        
-        self.currentSeason.playoffBracket = bracket
-        logger.info(f"Created playoff bracket with {len(bracket)} matchups")
-    
     async def _simulatePlayoffRounds(self) -> None:
         """Simulate all playoff rounds"""
-        currentRound = 'semifinals'
         
-        while True:
-            # Get games for current round
-            roundGames = [game for game in self.currentSeason.playoffBracket 
-                         if game['round'] == currentRound and not game['completed']]
-            
-            if not roundGames:
-                break
-                
-            logger.info(f"Simulating {currentRound}")
-            
-            # Simulate round games concurrently (like original)
-            gameResultTasks = [self._simulatePlayoffGame(game) for game in roundGames]
-            
-            # Wait for all games in the round to complete concurrently
-            roundResults = await asyncio.gather(*gameResultTasks)
-            
-            # Collect winners
-            roundWinners = []
-            for winner in roundResults:
-                if winner:
-                    roundWinners.append(winner)
-            
-            # Create next round if needed
-            if len(roundWinners) > 1:
-                nextRound = 'finals' if currentRound == 'semifinals' else 'championship'
-                
-                # Wait between playoff rounds
-                await self.timingManager.waitForPlayoffRound()
-                
-                # Pair winners for next round
-                for i in range(0, len(roundWinners), 2):
-                    if i + 1 < len(roundWinners):
-                        nextGame = {
-                            'homeTeam': roundWinners[i],
-                            'awayTeam': roundWinners[i + 1],
-                            'round': nextRound,
-                            'league': 'championship',
-                            'completed': False,
-                            'winner': None
-                        }
-                        self.currentSeason.playoffBracket.append(nextGame)
-                
-                currentRound = nextRound
-                
-                # Extra delay for championship game
-                if nextRound == 'championship':
-                    await self.timingManager.waitForChampionship()
-            elif len(roundWinners) == 1:
-                # Single champion
-                self.currentSeason.champion = roundWinners[0]
-                break
+        playoffDict = {}
+        playoffTeams = {}
+        playoffsByeTeams = {}
+        playoffsNonByeTeams = {}
+        nonPlayoffTeamList = []
+        strCurrentSeason = 'season{}'.format(self.currentSeason.seasonNumber)
+        x = 0
+        for league in self.leagueManager.leagues:
+            playoffTeamsList = []
+            playoffsByeTeamList = []
+            playoffsNonByeTeamList = []
+            list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+            playoffTeamsList.extend(league.teamList[:int(len(league.teamList)/2)])
+            nonPlayoffTeamList.extend(league.teamList[int(len(league.teamList)/2):])
+            playoffsByeTeamList.extend(playoffTeamsList[:2])
+            playoffsNonByeTeamList.extend(playoffTeamsList[2:])
+            list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+            playoffsByeTeamList[0].clinchedTopSeed = True
+            playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
+
+            playoffTeams[league.name] = playoffTeamsList.copy()
+            playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
+            playoffsNonByeTeams[league.name] = playoffsNonByeTeamList.copy()
+
+            for team in playoffsByeTeamList:
+                team: FloosTeam.Team
+                team.playoffAppearances += 1
+                team.seasonTeamStats['madePlayoffs'] = True
+                team.clinchedPlayoffs = True
+                team.winningStreak = False
+            for team in playoffsNonByeTeamList:
+                team: FloosTeam.Team
+                team.playoffAppearances += 1
+                team.seasonTeamStats['madePlayoffs'] = True
+                team.winningStreak = False
+                if not team.clinchedPlayoffs:
+                    team.clinchedPlayoffs = True
+                    team.eliminated = False
+                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+
+        for team in nonPlayoffTeamList:
+            team: FloosTeam.Team
+            team.winningStreak = False
+            if not team.eliminated:
+                team.eliminated = True
+                team.clinchedPlayoffs = False
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+        
+
+        self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
+        list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
+        import floosball_methods as FloosMethods
+        numOfRounds = FloosMethods.getPower(2, len(self.leagueManager.teams)/2)
+
+        for x in range(numOfRounds):
+
+            playoffGamesDict = {}
+            playoffGamesList = []
+            playoffGamesTasks = []
+            self.currentSeason.leagueHighlights = []
+            currentRound = x + 1
+            gameNumber = 1
+            roundStartTime = self.getWeekStartTime(datetime.datetime.utcnow(), 28 + currentRound)
+
+
+            if x < numOfRounds - 1:
+                for league in self.leagueManager.leagues:
+                    teamsInRound = []
+                    gamesList = []
+
+                    if currentRound == 1:
+                        teamsInRound.extend(playoffsNonByeTeams[league.name])
+                        for team in playoffTeams[league.name]:
+                            team: FloosTeam.Team
+                            team.pressureModifier = 1.5
+
+                    else:
+                        teamsInRound.extend(playoffTeams[league.name])
+                        for team in playoffTeams[league.name]:
+                            team: FloosTeam.Team
+                            team.pressureModifier += .2
+
+                    list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+
+                    hiSeed = 0
+                    lowSeed = len(teamsInRound) - 1
+
+                    while lowSeed > hiSeed:
+                        newGame = FloosGame.Game(teamsInRound[hiSeed], teamsInRound[lowSeed])
+                        newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
+                        newGame.status = FloosGame.GameStatus.Scheduled
+                        newGame.startTime = roundStartTime
+                        newGame.isRegularSeasonGame = False
+                        newGame.calculateWinProbability()
+                        gamesList.append(newGame)
+                        playoffGamesTasks.append(self._simulatePlayoffGame(newGame))
+                        newGame.leagueHighlights = self.currentSeason.leagueHighlights
+                        hiSeed += 1
+                        lowSeed -= 1
+                        gameNumber += 1
+                    
+                    playoffGamesDict[league.name] = gamesList.copy()
+                    playoffGamesList.extend(gamesList)
+
+                self.currentWeek = 'Playoffs Round {}'.format(x+1)
+                self.currentWeekText = 'Playoffs Round {}'.format(x+1)
+                if currentRound != 1:
+                    await self.timingManager.waitForPlayoffRound()
             else:
-                break
+                floosbowlTeams = []
+                for league in self.leagueManager.leagues:
+                    floosbowlTeams.extend(playoffTeams[league.name])
+                for team in floosbowlTeams:
+                    team.leagueChampion = True
+                list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+                newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1])
+                newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
+                newGame.status = FloosGame.GameStatus.Scheduled
+                newGame.startTime = roundStartTime
+                newGame.isRegularSeasonGame = False
+                newGame.calculateWinProbability()
+                playoffGamesList.append(newGame)
+                playoffGamesTasks.append(self._simulatePlayoffGame(newGame))
+                newGame.leagueHighlights = self.currentSeason.leagueHighlights
+                self.currentWeek = 'Floos Bowl'
+                self.currentWeekText = 'Floos Bowl'
+                newGame.homeTeam.pressureModifier = 2.5
+                newGame.awayTeam.pressureModifier = 2.5
+                await self.timingManager.waitForChampionship()
+
+            self.activeGames = playoffGamesList
+            self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
+
+            self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
+
+            #await asyncio.sleep(30)
+            # while datetime.datetime.utcnow() < roundStartTime:
+            #     await asyncio.sleep(30)
+                
+            self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeekText)}})
+            await asyncio.gather(*playoffGamesTasks)
+
+            if len(playoffGamesList) == 1:
+                game: FloosGame.Game = playoffGamesList[0]
+                playoffTeamsList.clear()
+                game.winningTeam.leagueChampionships.append('Season {}'.format(self.currentSeason.seasonNumber))
+                game.winningTeam.floosbowlChampion = True
+                self.currentSeason.champion = game.winningTeam
+                runnerUp: FloosTeam.Team = game.losingTeam
+                runnerUp.eliminated = True
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} are Floos Bowl champions!'.format(self.currentSeason.champion.city, self.currentSeason.champion.name)}})
+                playoffDict['Floos Bowl'] = gameResults
+                self.currentSeason.freeAgencyOrder.append(runnerUp)
+                self.currentSeason.freeAgencyOrder.append(self.currentSeason.champion)
+                for player in self.currentSeason.champion.rosterDict.values():
+                    player:FloosPlayer.Player
+                    player.leagueChampionships.append({'Season': self.currentSeason.seasonNumber, 'team': player.team.abbr, 'teamColor': player.team.color})
+
+                self.recordsManager.updateChampionshipHistory(self.currentSeason.seasonNumber, self.currentSeason.champion, runnerUp)
+            else:
+                for league in self.leagueManager.leagues:
+                    for game in playoffGamesDict[league.name]:
+                        game: FloosGame.Game
+                        gameResults = game.gameDict
+                        playoffDict[game.id] = gameResults
+                        for team in playoffTeams[league.name]:
+                            if team.name == gameResults['losingTeam']:
+                                team.eliminated = True
+                                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+                                self.currentSeason.freeAgencyOrder.append(team)
+                                playoffTeams[league.name].remove(team)
+                                break
+
+                
+
+            # Create directory if it doesn't exist
+            games_dir = os.path.join('{}/games'.format(strCurrentSeason))
+            os.makedirs(games_dir, exist_ok=True)
+            
+            jsonFile = open(os.path.join(games_dir, 'postseason.json'), "w+")
+            jsonFile.write(json.dumps(playoffDict, indent=4))
+            jsonFile.close()
+            if x < numOfRounds - 1:
+                self.playerManager.sortPlayersByPosition()
+                teamManager = self.serviceContainer.getService('team_manager')
+                if teamManager:
+                    teamManager.sortDefenses()
+                #await asyncio.sleep(30)
+            
     
-    async def _simulatePlayoffGame(self, game: Dict[str, Any]) -> Optional[FloosTeam.Team]:
+    async def _simulatePlayoffGame(self, game: FloosGame.Game) -> None:
         """Simulate a single playoff game"""
         
         try:
             # Create game instance with timing manager
-            gameInstance = FloosGame.Game(game['homeTeam'], game['awayTeam'], self.timingManager)
+            gameInstance = game
             
             # Set game type (playoff games)
             gameInstance.isRegularSeasonGame = False
@@ -594,12 +731,7 @@ class SeasonManager:
             await gameInstance.playGame()
             
             # Determine winner
-            winner = game['homeTeam'] if gameInstance.homeScore > gameInstance.awayScore else game['awayTeam']
-            
-            # Update game result
-            game['completed'] = True
-            game['winner'] = winner
-            game['result'] = gameInstance
+            winner = game.homeTeam if gameInstance.homeScore > gameInstance.awayScore else game.awayTeam
             
             # Update team records
             self._updateTeamRecords(gameInstance)
@@ -623,9 +755,6 @@ class SeasonManager:
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
-            
-            logger.info(f"Playoff game complete: {winner.name} advances")
-            return winner
             
         except Exception as e:
             logger.error(f"Error simulating playoff game: {e}")
@@ -681,71 +810,337 @@ class SeasonManager:
         # Wait for offseason timing
         await self.timingManager.waitForOffseason()
         
-        # Handle player offseason activities
-        self.playerManager.handleOffseasonActivities()
+        # STEP 1: Player offseason training
+        logger.info("Step 1: Player offseason training")
+        for player in self.playerManager.activePlayers:
+            if hasattr(player, 'offseasonTraining'):
+                player.offseasonTraining()
+            # Reset season performance rating
+            if hasattr(player, 'seasonPerformanceRating'):
+                player.seasonPerformanceRating = 0
         
-        # Handle free agency and contracts
+        # STEP 1.5: Increment free agent years for existing free agents
+        logger.info("Step 1.5: Increment free agent years")
+        for player in self.playerManager.freeAgents:
+            if hasattr(player, 'freeAgentYears'):
+                player.freeAgentYears += 1
+        
+        # STEP 2: Process contract decrements and retirements for rostered players
+        logger.info("Step 2: Contract decrements and team retirements")
+        await self._processRosteredPlayerContracts()
+        
+        # STEP 3: Generate replacement players for retirees (from rostered player retirements)
+        # Note: Free agent retirements are handled within conductFreeAgencySimulation in Step 4
+        logger.info("Step 3: Generate replacement players for retired rostered players")
+        self._generateReplacementPlayers()
+        
+        # STEP 4: Run comprehensive free agency simulation (includes free agent retirements)
+        logger.info("Step 4: Free agency simulation")
         await self._processFreeAgency()
         
-        # Handle rookie draft if applicable
-        await self._processRookieDraft()
-        
-        # Update team ratings based on roster changes
+        # STEP 6: Update team ratings and defenses after roster changes
+        logger.info("Step 6: Update team ratings")
         await self._updateTeamRatings()
+        
+        # STEP 7: Induct Hall of Fame players
+        logger.info("Step 7: Hall of Fame inductions")
+        self.playerManager.inductHallOfFame()
+        
+        # STEP 8: Save unused names
+        self.playerManager.saveUnusedNames()
         
         logger.info("Offseason activities complete")
     
     async def _processFreeAgency(self) -> None:
-        """Process free agency period"""
+        """Process free agency period using comprehensive simulation"""
         logger.info("Processing free agency")
         
-        # Get contract manager if available
-        try:
-            contractManager = self.serviceContainer.getService('contract_manager')
-            await contractManager.handleFreeAgency()
-        except ValueError:
-            # Basic free agency handling without contract manager
-            await self._basicFreeAgencyHandling()
-    
-    async def _basicFreeAgencyHandling(self) -> None:
-        """Basic free agency handling without contract manager"""
-        # Move expired contract players to free agency
-        for player in self.playerManager.activePlayers:
-            if hasattr(player, 'termRemaining') and player.termRemaining <= 0:
-                if player not in self.playerManager.freeAgents:
-                    player.team = 'Free Agent'
-                    self.playerManager.freeAgents.append(player)
-    
-    async def _processRookieDraft(self) -> None:
-        """Process rookie draft if new players are needed"""
-        # Simple logic: generate rookies if roster sizes are low
-        totalRosterSpots = len(self.leagueManager.teams) * 6  # 6 players per team
-        currentPlayers = len(self.playerManager.activePlayers)
+        # Use the free agency order built during playoffs
+        # Order: Non-playoff teams (worst to best) → Playoff losers by round → Runner-up → Champion
+        if not self.currentSeason or not hasattr(self.currentSeason, 'freeAgencyOrder'):
+            logger.error("No free agency order available (playoffs must be completed first)")
+            return
         
-        if currentPlayers < totalRosterSpots * 0.8:  # If rosters are less than 80% full
-            logger.info("Generating rookie class")
+        freeAgencyOrder = self.currentSeason.freeAgencyOrder
+        
+        # Get league highlights list
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+        
+        # Run the comprehensive free agency simulation
+        currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
+        freeAgencyHistory = self.playerManager.conductFreeAgencySimulation(
+            freeAgencyOrder=freeAgencyOrder,
+            currentSeason=currentSeasonNum,
+            leagueHighlights=leagueHighlights
+        )
+        
+        logger.info(f"Free agency complete: {len(freeAgencyHistory)} transactions")
+    
+    async def _processRosteredPlayerContracts(self) -> None:
+        """Process contract decrements and retirements for players on team rosters"""
+        from random import randint
+        
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+        
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+        
+        for team in teamManager.teams:
+            # Initialize cuts available for free agency
+            team.cutsAvailable = 2
             
-            # Generate new rookies
-            rookiesNeeded = max(5, (totalRosterSpots - currentPlayers) // 2)
-            
-            for _ in range(rookiesNeeded):
-                # Create rookie player (position random)
-                import random
-                positions = [FloosPlayer.Position.QB, FloosPlayer.Position.RB, 
-                           FloosPlayer.Position.WR, FloosPlayer.Position.TE, FloosPlayer.Position.K]
-                position = random.choice(positions)
+            for position, player in list(team.rosterDict.items()):
+                if player is None:
+                    continue
                 
-                rookie = self.playerManager.createPlayer(position, random.randint(60, 90))
-                if rookie:
-                    rookie.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
-                    self.playerManager.rookieDraftList.append(rookie)
+                # Note: service time is updated in _handlePlayerSeasonProgression based on seasonsPlayed
+                # Don't update it here to avoid overwriting the correct logic
+                
+                # Decrement contract term
+                player.termRemaining -= 1
+                
+                # Check for retirement
+                shouldRetire = False
+                
+                if player.seasonsPlayed > player.attributes.longevity:
+                    # Player is past their longevity
+                    if player.termRemaining == 0:
+                        # Contract expired - higher retirement chance
+                        if player.seasonsPlayed > 15:
+                            shouldRetire = randint(1, 100) > 10  # 90% retire
+                        elif player.seasonsPlayed > 10:
+                            shouldRetire = randint(1, 100) > 35  # 65% retire
+                        elif player.seasonsPlayed >= 7:
+                            shouldRetire = randint(1, 100) > 95  # 5% retire
+                    else:
+                        # Still under contract - lower retirement chance
+                        if player.seasonsPlayed > 15:
+                            shouldRetire = randint(1, 100) > 30  # 70% retire
+                        elif player.seasonsPlayed > 10:
+                            shouldRetire = randint(1, 100) > 75  # 25% retire
+                        elif player.seasonsPlayed >= 7:
+                            shouldRetire = randint(1, 100) > 90  # 10% retire
+                
+                if shouldRetire:
+                    # Player retires
+                    self._executePlayerRetirement(player, team, position, leagueHighlights)
+                elif player.termRemaining == 0:
+                    # Contract expired - move to free agency
+                    player.previousTeam = team.name
+                    # TODO: capHit feature not fully developed - disabled for now
+                    # team.playerCap -= getattr(player, 'capHit', 0)
+                    if player.currentNumber in team.playerNumbersList:
+                        team.playerNumbersList.remove(player.currentNumber)
+                    player.team = 'Free Agent'
+                    player.freeAgentYears = 0
+                    self.playerManager.freeAgents.append(player)
+                    team.rosterDict[position] = None
+                    
+                    leagueHighlights.insert(0, {
+                        'event': {'text': f'{player.name} has become a Free Agent'}
+                    })
+    
+    def _executePlayerRetirement(self, player, team, position, leagueHighlights):
+        """Execute the retirement of a player from a team roster"""
+        player.previousTeam = team.name
+        player.seasonPerformanceRating = 0
+        # TODO: capHit feature not fully developed - disabled for now
+        # team.playerCap -= getattr(player, 'capHit', 0)
+        if player.currentNumber in team.playerNumbersList:
+            team.playerNumbersList.remove(player.currentNumber)
+        player.team = 'Retired'
+        player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
+        
+        self.playerManager.retiredPlayers.append(player)
+        self.playerManager.newlyRetiredPlayers.append(player)
+        self.playerManager.activePlayers.remove(player)
+        self.playerManager.removeFromPositionList(player)
+        
+        team.rosterDict[position] = None
+        
+        leagueHighlights.insert(0, {
+            'event': {'text': f'{player.name} has retired after {player.seasonsPlayed} seasons'}
+        })
+        
+        # Add name variant back to unused names for legacy naming
+        self._recyclePlayerName(player.name)
+    
+    def _recyclePlayerName(self, name: str) -> None:
+        """Convert retired player name to legacy variant and add to unused names"""
+        # Name progression: Base -> Jr. -> III -> IV -> V -> VI -> VII -> VIII -> IX -> X -> XI
+        if name.endswith('Jr.'):
+            name = name.replace('Jr.', 'III')
+        elif name.endswith('IV'):
+            name = name.replace('IV', 'V')
+        elif name.endswith('VIII'):
+            name = name.replace('VIII', 'IX')
+        elif name.endswith('IX'):
+            name = name.replace('IX', 'X')
+        elif name.endswith('III'):
+            name = name.replace('III', 'IV')
+        elif name.endswith('V') or name.endswith('X'):
+            name += 'I'
+        else:
+            name += ' Jr.'
+        
+        self.playerManager.unusedNames.append(name)
+    
+    # NOTE: This method is no longer used - free agent retirements are handled
+    # by playerManager._processFreeAgentRetirements() within conductFreeAgencySimulation()
+    # Kept for reference only
+    def _processFreeAgentRetirements_UNUSED(self) -> None:
+        """Process retirements of players who've been free agents for 3+ years"""
+        from random import randint
+        
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+        
+        # Process free agent aging and retirement
+        # Note: freeAgentYears is already incremented in _processContractExpirations
+        for player in list(self.playerManager.freeAgents):
+            if player.freeAgentYears > 3:
+                shouldRetire = False
+                x = randint(1, 10)
+                
+                # Retirement probability based on tier
+                if player.playerTier.value == 1 and x > 3:  # TierD: 70% retire
+                    shouldRetire = True
+                elif player.playerTier.value == 2 and x > 5:  # TierC: 50% retire
+                    shouldRetire = True
+                elif x > 8:  # TierB/A/S: 20% retire
+                    shouldRetire = True
+                
+                if shouldRetire:
+                    player.team = 'Retired'
+                    player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
+                    self.playerManager.retiredPlayers.append(player)
+                    self.playerManager.newlyRetiredPlayers.append(player)
+                    if player in self.playerManager.freeAgents:
+                        self.playerManager.freeAgents.remove(player)
+                    self.playerManager.safeRemove(self.playerManager.activePlayers, player)
+                    self.playerManager.removeFromPositionList(player)
+                    
+                    leagueHighlights.insert(0, {
+                        'event': {'text': f'{player.name} has retired after {player.seasonsPlayed} seasons'}
+                    })
+                    
+                    # Recycle name
+                    self._recyclePlayerName(player.name)
+    
+    def _generateReplacementPlayers(self) -> None:
+        """Generate new players to replace retirees"""
+        import numpy as np
+        from random import randint
+        
+        newPlayerCount = 12  # Base number of new players per offseason
+        numRetired = len(self.playerManager.newlyRetiredPlayers)
+        numOfPlayers = max(newPlayerCount, numRetired)
+        
+        # Generate player skill seeds
+        meanPlayerSkill = 80
+        stdDevPlayerSkill = 7
+        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
+        playerAverages = np.clip(playerAverages, 60, 100).tolist()
+        
+        # Generate replacement for each retired player (position-matched)
+        for player in self.playerManager.newlyRetiredPlayers:
+            if not playerAverages:
+                break
             
-            logger.info(f"Generated {len(self.playerManager.rookieDraftList)} rookies")
+            seed = int(playerAverages.pop(randint(0, len(playerAverages) - 1)))
+            newPlayer = None
+            
+            if player.position == FloosPlayer.Position.QB:
+                newPlayer = FloosPlayer.PlayerQB(seed)
+                self.playerManager.activeQbs.append(newPlayer)
+            elif player.position == FloosPlayer.Position.RB:
+                newPlayer = FloosPlayer.PlayerRB(seed)
+                self.playerManager.activeRbs.append(newPlayer)
+            elif player.position == FloosPlayer.Position.WR:
+                newPlayer = FloosPlayer.PlayerWR(seed)
+                self.playerManager.activeWrs.append(newPlayer)
+            elif player.position == FloosPlayer.Position.TE:
+                newPlayer = FloosPlayer.PlayerTE(seed)
+                self.playerManager.activeTes.append(newPlayer)
+            elif player.position == FloosPlayer.Position.K:
+                newPlayer = FloosPlayer.PlayerK(seed)
+                self.playerManager.activeKs.append(newPlayer)
+            
+            if newPlayer:
+                newPlayer.name = self._getUnusedName()
+                newPlayer.team = 'Free Agent'
+                newPlayer.id = len(self.playerManager.activePlayers) + len(self.playerManager.retiredPlayers) + 1
+                newPlayer.freeAgentYears = 0
+                self.playerManager.activePlayers.append(newPlayer)
+                self.playerManager.freeAgents.append(newPlayer)
+        
+        # Generate additional random rookies if we need more than just replacements
+        if newPlayerCount > numRetired:
+            posList = [FloosPlayer.Position.QB, FloosPlayer.Position.RB, 
+                      FloosPlayer.Position.WR, FloosPlayer.Position.TE, FloosPlayer.Position.K]
+            
+            for _ in range(newPlayerCount - numRetired):
+                if not playerAverages:
+                    break
+                
+                seed = int(playerAverages.pop(randint(0, len(playerAverages) - 1)))
+                pos = posList[randint(0, len(posList) - 1)]
+                newPlayer = None
+                
+                if pos == FloosPlayer.Position.QB:
+                    newPlayer = FloosPlayer.PlayerQB(seed)
+                    self.playerManager.activeQbs.append(newPlayer)
+                elif pos == FloosPlayer.Position.RB:
+                    newPlayer = FloosPlayer.PlayerRB(seed)
+                    self.playerManager.activeRbs.append(newPlayer)
+                elif pos == FloosPlayer.Position.WR:
+                    newPlayer = FloosPlayer.PlayerWR(seed)
+                    self.playerManager.activeWrs.append(newPlayer)
+                elif pos == FloosPlayer.Position.TE:
+                    newPlayer = FloosPlayer.PlayerTE(seed)
+                    self.playerManager.activeTes.append(newPlayer)
+                elif pos == FloosPlayer.Position.K:
+                    newPlayer = FloosPlayer.PlayerK(seed)
+                    self.playerManager.activeKs.append(newPlayer)
+                
+                if newPlayer:
+                    newPlayer.name = self._getUnusedName()
+                    newPlayer.team = 'Free Agent'
+                    newPlayer.id = len(self.playerManager.activePlayers) + len(self.playerManager.retiredPlayers) + 1
+                    newPlayer.freeAgentYears = 0
+                    self.playerManager.activePlayers.append(newPlayer)
+                    self.playerManager.freeAgents.append(newPlayer)
+        
+        logger.info(f"Generated {numOfPlayers} new players to replace retirees")
+    
+    def _getUnusedName(self) -> str:
+        """Get an unused name from the pool"""
+        from random import randint
+        
+        if not self.playerManager.unusedNames:
+            logger.error("No unused names available!")
+            return f"Player {randint(1000, 9999)}"
+        
+        return self.playerManager.unusedNames.pop(randint(0, len(self.playerManager.unusedNames) - 1))
     
     async def _updateTeamRatings(self) -> None:
-        """Update team ratings based on current rosters"""
+        """Update team ratings and defenses based on current rosters"""
         teamManager = self.serviceContainer.getService('team_manager')
         if teamManager:
+            # Update each team's defensive ratings based on their roster
+            for team in teamManager.teams:
+                team.updateDefense()
+            
+            # Sort and tier defenses across the league
+            teamManager.sortDefenses()
+            
+            # Update overall team ratings
             teamManager.updateTeamRatings()
     
     async def _handlePlayerSeasonProgression(self) -> None:
@@ -844,14 +1239,18 @@ class SeasonManager:
                 if hasattr(team, 'getAverages'):
                     team.getAverages()
         
-        # Update player game stats and development
+        # Sync stats dicts for all active players (postgameChanges is called per-game in floosball_game.py)
         for player in self.playerManager.activePlayers:
-            if hasattr(player, 'postgameChanges'):
-                player.postgameChanges()
             if hasattr(player, 'sync_stats_dicts'):
                 player.sync_stats_dicts()
         
         logger.debug(f"Updated weekly stats for week {self.currentSeason.currentWeek}")
+
+    def _checkRecords(self) -> None:
+        """Check for records after weekly games (matches original record checks)"""
+        self.recordsManager.checkPlayerGameRecords()
+        self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber if self.currentSeason else 0)
+        self.recordsManager.checkCareerRecords()
         
     def _updatePlayerPerformanceRatings(self, week: int) -> None:
         """Update player performance ratings for the given week (matches original getPerformanceRating call)"""
@@ -982,8 +1381,10 @@ class SeasonManager:
         if hasattr(self.currentSeason, 'leagueHighlights') and self.currentSeason.leagueHighlights:
             highlightsFile = os.path.join(seasonDir, 'highlights.json')
             try:
+                from serializers import serialize_object
+                serializedHighlights = serialize_object(self.currentSeason.leagueHighlights)
                 with open(highlightsFile, 'w') as f:
-                    json.dump(self.currentSeason.leagueHighlights, f, indent=4)
+                    json.dump(serializedHighlights, f, indent=4)
                 logger.info(f"Saved season {self.currentSeason.seasonNumber} highlights")
             except Exception as e:
                 logger.error(f"Failed to save highlights: {e}")

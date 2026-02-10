@@ -19,11 +19,20 @@ class SerializationMixin:
         """Convert object to JSON string"""
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
-def serialize_object(obj: Any) -> Any:
+def serialize_object(obj: Any, _visited: Optional[set] = None, _depth: int = 0) -> Any:
     """
     Recursively serialize an object to a JSON-compatible format
     Handles: dataclasses, enums, lists, dicts, and custom objects
+    Prevents circular references by tracking visited objects
     """
+    # Initialize visited set on first call
+    if _visited is None:
+        _visited = set()
+    
+    # Prevent infinite recursion with depth limit
+    if _depth > 10:
+        return f"<max depth reached: {type(obj).__name__}>"
+    
     try:
         # Handle None
         if obj is None:
@@ -37,28 +46,41 @@ def serialize_object(obj: Any) -> Any:
         if isinstance(obj, Enum):
             return obj.name
         
+        # Check for circular references (for objects with identity)
+        obj_id = id(obj)
+        if obj_id in _visited and not isinstance(obj, (dict, list, tuple, str)):
+            # Return a simple reference for circular dependencies
+            if hasattr(obj, 'name'):
+                return f"<ref: {obj.name}>"
+            elif hasattr(obj, 'id'):
+                return f"<ref: {type(obj).__name__}#{obj.id}>"
+            return f"<ref: {type(obj).__name__}>"
+        
+        # Mark as visited
+        _visited.add(obj_id)
+        
         # Handle dataclass
         if is_dataclass(obj):
             result = {}
             for field in fields(obj):
                 value = getattr(obj, field.name)
-                result[field.name] = serialize_object(value)
+                result[field.name] = serialize_object(value, _visited, _depth + 1)
             return result
         
         # Handle dictionary
         if isinstance(obj, dict):
-            return {key: serialize_object(value) for key, value in obj.items() if value is not None}
+            return {key: serialize_object(value, _visited, _depth + 1) for key, value in obj.items() if value is not None}
         
         # Handle list/tuple
         if isinstance(obj, (list, tuple)):
-            return [serialize_object(item) for item in obj]
+            return [serialize_object(item, _visited, _depth + 1) for item in obj]
         
         # Handle custom objects with __dict__
         if hasattr(obj, '__dict__'):
             result = {}
             for key, value in obj.__dict__.items():
                 if not key.startswith('_'):  # Skip private attributes
-                    serialized_value = serialize_object(value)
+                    serialized_value = serialize_object(value, _visited, _depth + 1)
                     if serialized_value is not None:  # Skip None values
                         result[key] = serialized_value
             return result
@@ -71,6 +93,9 @@ def serialize_object(obj: Any) -> Any:
         logger.warning(f"Could not serialize object of type {type(obj)}, converting to string")
         return str(obj)
         
+    except RecursionError as e:
+        logger.error(f"Recursion error serializing {type(obj)}: {e}")
+        return f"<recursion: {type(obj).__name__}>"
     except Exception as e:
         logger.error(f"Error serializing object {type(obj)}: {e}")
         return str(obj)
