@@ -38,6 +38,8 @@ class PlayType(enum.Enum):
     FieldGoal = 'Field Goal Try'
     Punt = 'Punt'
     ExtraPoint = 'Extra Point'
+    Spike = 'Spike'
+    Kneel = 'Kneel'
     
 class PassType(enum.Enum):
     short = 1
@@ -292,6 +294,14 @@ class Game:
         self.awayScoreQ4 = 0
         self.awayScoreOT = 0
         self.currentQuarter = 0
+        
+        # Game clock system
+        self.gameClockSeconds = 900  # 15 minutes per quarter
+        self.clockRunning = False
+        self.homeTimeoutsRemaining = 3
+        self.awayTimeoutsRemaining = 3
+        self.twoMinuteWarningShown = False
+        
         self.homePlaysTotal = 0
         self.awayPlaysTotal = 0
         self.home1stDownsTotal = 0
@@ -322,6 +332,7 @@ class Game:
         self.leagueHighlights = []
         self.otHomeHadPos = False
         self.otAwayHadPos = False
+        self.firstOtPossessionComplete = False  # Track if both teams have had initial OT possession
         self.startTime: datetime.datetime = None
         self.isTwoPtConv = False
         self.isOnsideKick = False
@@ -742,113 +753,79 @@ class Game:
             scoreDiff = self.awayScore - self.homeScore
         else: scoreDiff = self.homeScore - self.awayScore
 
+        # OVERTIME: Be aggressive on 4th down
         if self.currentQuarter == 5:
-            if self.homeScore == self.awayScore:
-                if self.otHomeHadPos and self.otAwayHadPos:
-                    if self.down == 4:
-                        if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                    else:
-                        if self.yardsToEndzone <= 20:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                elif self.homeTeam == self.play.offense and self.otAwayHadPos:
-                    if self.down == 4:
-                        if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                    else:
-                        if self.yardsToEndzone <= 20:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                elif self.awayTeam == self.play.offense and self.otHomeHadPos:
-                    if self.down == 4:
-                        if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                    else:
-                        if self.yardsToEndzone <= 20:
-                            self.play.playType = PlayType.FieldGoal
-                            return
             if self.down == 4:
-                if scoreDiff > 0:
-                    if scoreDiff <= 3:
-                        if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        elif self.yardsToFirstDown <= 2:
-                            self.play.passPlay(returnShortPassPlay())
-                            return
-                        elif self.yardsToFirstDown <= 8:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-                    else:
-                        if self.yardsToFirstDown <= 2:
-                            self.play.passPlay(returnShortPassPlay())
-                            return
-                        elif self.yardsToFirstDown <= 8:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-        if self.totalPlays == 65:
-            if self.yardsToEndzone <= 10:
-                x = batched_randint(1,10)
-                if x > 4:
+                # Always try FG if in range
+                if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
                     self.play.playType = PlayType.FieldGoal
                     return
-                else:
-                    if self.yardsToEndzone <= 3:
-                        x = batched_randint(1,10)
-                        if x > 4:
+                
+                # If game is tied, be VERY aggressive - almost never punt
+                if self.homeScore == self.awayScore:
+                    if self.yardsToFirstDown <= 3:
+                        # Short yardage - go for it with run or short pass
+                        x = batched_randint(1, 2)
+                        if x == 1:
                             self.play.runPlay()
-                            return
                         else:
                             self.play.passPlay(returnShortPassPlay())
-                            return
-                    else:
+                        return
+                    elif self.yardsToFirstDown <= 7:
+                        # Medium yardage - go for it with pass
                         self.play.passPlay(returnMediumPassPlay())
                         return
-            elif self.yardsToEndzone > 15 and self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                x = batched_randint(1,10)
-                if x > 1:
-                    self.play.playType = PlayType.FieldGoal
-                    return
+                    elif self.yardsToFirstDown <= 15:
+                        # Long yardage - aggressive pass
+                        self.play.passPlay(returnLongPassPlay())
+                        return
+                    else:
+                        # 4th & 16+ from bad field position - only time to punt in tied OT
+                        if self.yardsToSafety < 15:
+                            # Too dangerous to go for it from own end zone
+                            self.play.playType = PlayType.Punt
+                            return
+                        else:
+                            # Still go for it - desperation pass
+                            self.play.passPlay(returnLongPassPlay())
+                            return
+                
+                # If leading in OT, be aggressive to put game away
+                elif scoreDiff > 0:
+                    if self.yardsToFirstDown <= 2:
+                        self.play.passPlay(returnShortPassPlay())
+                        return
+                    elif self.yardsToFirstDown <= 8:
+                        self.play.passPlay(returnMediumPassPlay())
+                        return
+                    else:
+                        self.play.passPlay(returnLongPassPlay())
+                        return
+                
+                # If trailing in OT, ultra aggressive
                 else:
-                    self.play.passPlay(returnLongPassPlay())
-                    return
-            else:
-                if self.yardsToEndzone > (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    self.play.passPlay('Play9')
-                elif self.yardsToEndzone > 15:
-                    self.play.passPlay(returnLongPassPlay())
-                else:
-                    self.play.passPlay(returnMediumPassPlay())
+                    if self.yardsToFirstDown <= 10:
+                        self.play.passPlay(returnMediumPassPlay())
+                        return
+                    else:
+                        self.play.passPlay(returnLongPassPlay())
+                        return
+        
+        # END OF HALF: Be aggressive if in FG range with little time left
+        if self.currentQuarter == 2 and self.gameClockSeconds < 120 and self.down == 4:
+            if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
+                self.play.playType = PlayType.FieldGoal
                 return
-        if self.totalPlays == 131:
+        
+        # END OF GAME: Aggressive FG attempts when time is running out
+        if self.currentQuarter == 4 and self.gameClockSeconds < 120 and self.down == 4:
             if scoreDiff >= 0:
                 if scoreDiff <= 3 and self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
                     self.play.playType = PlayType.FieldGoal
                     return
-                elif self.yardsToEndzone >= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    self.play.passPlay('Play9')
-                    return
-                else:
-                    #self.homeTeam.inGamePush()
-                    if self.yardsToEndzone > 15:
-                        self.play.passPlay(returnLongPassPlay())
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                    return
-            else:
-                self.play.runPlay()
-                return
-        elif self.down <= 2:
+        
+        # NORMAL DOWN LOGIC
+        if self.down <= 2:
             if self.currentQuarter == 4:
                 if scoreDiff > 0:
                     scoreDiff = self.awayScore - self.homeScore
@@ -929,7 +906,8 @@ class Game:
             if self.currentQuarter == 4:
                 if scoreDiff > 0:
                     x = batched_randint(1,10)
-                    if self.totalPlays <=15 and scoreDiff <=7:
+                    # Early in Q4 with small lead, be more conservative
+                    if self.gameClockSeconds > 600 and scoreDiff <= 7:
                         if x < 7:
                             self.play.passPlay(returnMediumPassPlay())
                             return
@@ -973,14 +951,15 @@ class Game:
                     return
         elif self.down == 4:
             if scoreDiff > 0:
-                if self.totalPlays > 120 and self.yardsToEndzone < 20:
+                # Late in game with lead, be conservative with FGs
+                if self.currentQuarter == 4 and self.gameClockSeconds < 300 and self.yardsToEndzone < 20:
                     if scoreDiff <= 3:
                         self.play.playType = PlayType.FieldGoal
                         return
                     else:
                         self.play.passPlay(returnMediumPassPlay())
                         return
-                elif self.totalPlays > 120 and self.yardsToEndzone > 20:
+                elif self.currentQuarter == 4 and self.gameClockSeconds < 300 and self.yardsToEndzone > 20:
                     if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17) and scoreDiff <= 3:
                         x = batched_randint(1,10)
                         if x > 3:
@@ -1152,10 +1131,17 @@ class Game:
             elif offense is self.awayTeam:
                 if self.otAwayHadPos == False:
                     self.otAwayHadPos = True
+        
+        # Update OT possession tracking
+        if self.currentQuarter == 5:
+            if self.otHomeHadPos and self.otAwayHadPos:
+                self.firstOtPossessionComplete = True
+        
         self.offensiveTeam = defense
         self.defensiveTeam = offense
         self.yardsToEndzone = yards
         self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+        self.down = 1
         self.yardsToFirstDown = 10
 
 
@@ -1521,7 +1507,11 @@ class Game:
         possReset = 80
         coinFlipWinner = None
         coinFlipLoser = None
-        otContinue = False
+
+        # Initialize clock for Q1
+        self.currentQuarter = 1
+        self.gameClockSeconds = 900
+        self.clockRunning = False
 
         for player in self.homeTeam.rosterDict.values():
             player: FloosPlayer.Player
@@ -1546,28 +1536,21 @@ class Game:
             coinFlipLoser = self.homeTeam
             
         self.status = GameStatus.Active
-        # self.leagueHighlights.insert(0, {'event':  {
-        #                                         'text': 'Game Start: {} vs. {}'.format(self.awayTeam.name, self.homeTeam.name)
-        #                                     }
-        #                                 })
         self.gameFeed.insert(0, {'event':  {
                                                 'text': '{} wins the coin toss'.format(coinFlipWinner.name),
                                                 'quarter': 1,
-                                                'playsRemaining': 132 - self.totalPlays
+                                                'timeRemaining': self.formatTime(self.gameClockSeconds)
                                             }
                                         })
         
-        while self.totalPlays < GAME_MAX_PLAYS or self.homeScore == self.awayScore or otContinue:
-
-            if self.totalPlays < 1:
-                self.yardsToFirstDown = 10
-                self.yardsToEndzone = 80
-                self.yardsToSafety = 20
-
-            self.down = 1
-
-            while self.down <= 4:
-                if self.totalPlays > 0:
+        # Main game loop - run until game is over
+        while not self.isGameOver():
+            # Format and add previous play to feed BEFORE quarter transitions
+            # This ensures Q4 plays appear before OT events
+            lastPlayFormatted = False
+            if self.totalPlays > 0 and self.gameClockSeconds <= 0:
+                # Only format if the play was actually executed (has playText)
+                if hasattr(self.play, 'playText') and self.play.playText:
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
@@ -1575,155 +1558,170 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
-
-                if self.totalPlays == GAME_MAX_PLAYS and self.homeScore != self.awayScore:
-                    break
-
-                if self.totalPlays < 33:
-                    if self.currentQuarter != 1:
-                        self.currentQuarter = 1
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Start 1st Quarter',
-                                                'quarter': self.currentQuarter,
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                        # x = batched_randint(1,100)
-                        # y = batched_randint(1,100)
-                        # if x >= 95:
-                        #     self.homeTeam.teamOverPerform()
-                        # elif x <= 5:
-                        #     self.homeTeam.teamUnderPerform()
-                        # if y >= 95:
-                        #     self.awayTeam.teamOverPerform()
-                        # elif y <= 5:
-                        #     self.awayTeam.teamUnderPerform()
-                elif self.totalPlays >= 33 and self.totalPlays < 66:
-                    if self.currentQuarter != 2:
-                        # Quarter break timing
-                        if self.timingManager:
-                            await self.timingManager.waitForQuarterBreak()
-                        self.currentQuarter = 2
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Start 2nd Quarter',
-                                                'quarter': self.currentQuarter,
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                elif self.totalPlays >= 66 and self.totalPlays < 100:
-                    if self.totalPlays == 66:
-                        self.isHalftime = True
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Halftime',
-                                                'quarter': self.currentQuarter,
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                        # Halftime timing
-                        if self.timingManager:
-                            await self.timingManager.waitForHalftime()
-                        self.isHalftime = False
-                    if self.currentQuarter != 3:
-                        self.currentQuarter = 3
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Start 3rd Quarter',
-                                                'quarter': self.currentQuarter,
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                        self.turnover(coinFlipWinner, coinFlipLoser, possReset)
-                        self.down = 1
-                        #x = batched_randint(1,100)
-                        #y = batched_randint(1,100)
-                        # if x >= 95:
-                        #     self.homeTeam.teamOverPerform()
-                        # elif x <= 5:
-                        #     self.homeTeam.teamUnderPerform()
-                        # elif x > 80 and x <= 90:
-                        #     self.homeTeam.resetDetermination()
-                        # if y >= 95:
-                        #     self.awayTeam.teamOverPerform()
-                        # elif y <= 5:
-                        #     self.awayTeam.teamUnderPerform()
-                        # elif y > 80 and y <= 90:
-                        #     self.awayTeam.resetDetermination()
-                elif self.totalPlays >= PLAYS_TO_FOURTH_QUARTER and self.totalPlays < GAME_MAX_PLAYS:
-                    if self.currentQuarter != 4:
-                        # Quarter break timing
-                        if self.timingManager:
-                            await self.timingManager.waitForQuarterBreak()
-                        self.currentQuarter = 4
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Start 4th Quarter',
-                                                'quarter': self.currentQuarter,
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                    # if self.homeScore > self.awayScore and (self.homeScore - self.awayScore) <= 14:
-                    #     x = batched_randint(1,10)
-                    #     if x > 6:
-                    #         self.awayTeam.resetDetermination()
-                    #         #self.awayTeam.inGamePush()
-                    # elif self.awayScore > self.homeScore and (self.awayScore - self.homeScore) <= 14:
-                    #     x = batched_randint(1,10)
-                    #     if x > 6:
-                    #         self.homeTeam.resetDetermination()
-                    #         #self.homeTeam.inGamePush()
-                elif self.totalPlays >= GAME_MAX_PLAYS:
-                    if self.homeScore != self.awayScore:
-                        if self.otHomeHadPos and self.otAwayHadPos:
-                            otContinue = False
-                            break
-                    if self.currentQuarter != 5:
-                        # Quarter break timing for overtime
-                        if self.timingManager:
-                            await self.timingManager.waitForQuarterBreak()
-                        self.currentQuarter = 5
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Start Overtime',
-                                                'quarter': 'OT',
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                        self.isOvertime = True
-                        otContinue = True
-                        x = batched_randint(0,1)
-                        if x == 0:
-                            self.turnover(self.homeTeam, self.awayTeam, possReset)
-                        else:
-                            self.turnover(self.awayTeam, self.homeTeam, possReset)
-                        
-                        self.gameFeed.insert(0, {'event':  {
-                                                'text': '{} wins the OT coin toss'.format(self.offensiveTeam.name),
-                                                'quarter': '0T',
-                                                'playsRemaining': 132 - self.totalPlays
-                                            }
-                                        })
-                        self.down = 1
+                    lastPlayFormatted = True
+            
+            # Check for quarter transitions
+            if self.gameClockSeconds <= 0:
+                oldQuarter = self.currentQuarter
+                self.advanceQuarter()
                 
+                if oldQuarter == 2:
+                    # Halftime
+                    self.isHalftime = True
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': 'Halftime',
+                                                    'quarter': 2,
+                                                    'timeRemaining': '0:00'
+                                                }
+                                            })
+                    if self.timingManager:
+                        await self.timingManager.waitForHalftime()
+                    self.isHalftime = False
+                    
+                    # Switch possession for second half
+                    self.turnover(coinFlipWinner, coinFlipLoser, possReset)
+                    self.down = 1
+                
+                elif oldQuarter == 4 and self.currentQuarter == 5:
+                    # First Overtime period
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': 'Start Overtime',
+                                                    'quarter': 'OT',
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
+                    self.isOvertime = True
+                    x = batched_randint(0,1)
+                    if x == 0:
+                        coinFlipWinner = self.homeTeam
+                        coinFlipLoser = self.awayTeam
+                    else:
+                        coinFlipWinner = self.awayTeam
+                        coinFlipLoser = self.homeTeam
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': '{} wins the OT coin toss'.format(coinFlipWinner.name),
+                                                    'quarter': 'OT',
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
+                    self.turnover(coinFlipLoser, coinFlipWinner, possReset)
+                    self.down = 1
+                
+                elif oldQuarter == 5 and self.currentQuarter == 5:
+                    # Additional OT period (still tied)
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': 'Start Additional Overtime Period',
+                                                    'quarter': 'OT',
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
+                    # Do coin flip for new OT period
+                    x = batched_randint(0,1)
+                    if x == 0:
+                        coinFlipWinner = self.homeTeam
+                        coinFlipLoser = self.awayTeam
+                    else:
+                        coinFlipWinner = self.awayTeam
+                        coinFlipLoser = self.homeTeam
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': '{} wins the OT coin toss'.format(coinFlipWinner.name),
+                                                    'quarter': 'OT',
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
+                    self.turnover(coinFlipLoser, coinFlipWinner, possReset)
+                    self.down = 1
+                
+                # Quarter start messages
+                if self.currentQuarter == 2:
+                    if self.timingManager:
+                        await self.timingManager.waitForQuarterBreak()
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': 'Start 2nd Quarter',
+                                                    'quarter': 2,
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
+                elif self.currentQuarter == 3:
+                    if self.timingManager:
+                        await self.timingManager.waitForQuarterBreak()
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': 'Start 3rd Quarter',
+                                                    'quarter': 3,
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
+                elif self.currentQuarter == 4:
+                    if self.timingManager:
+                        await self.timingManager.waitForQuarterBreak()
+                    self.gameFeed.insert(0, {'event':  {
+                                                    'text': 'Start 4th Quarter',
+                                                    'quarter': 4,
+                                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                                }
+                                            })
 
+            # Start new possession if needed
+            if self.down == 0 or self.down > 4:
+                self.down = 1
+                self.yardsToFirstDown = 10
+                self.yardsToEndzone = 80
+                self.yardsToSafety = 20
+
+            # Possession loop - while offense has downs
+            while self.down <= 4 and self.gameClockSeconds > 0:
+                # Show previous play if exists (unless already formatted at quarter transition)
+                if self.totalPlays > 0 and not lastPlayFormatted:
+                    self.formatPlayText()
+                    if self.play.isSack:
+                        self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                    self.gameFeed.insert(0, {'play': self.play})
+                
+                # Reset flag after first iteration
+                lastPlayFormatted = False
+
+                # Update yardline display
                 if self.yardsToEndzone > 50:
                     self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100-self.yardsToEndzone))
                 else:
                     self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
 
+                # Create new play
                 self.play = Play(self)
                 
-                # Between-plays timing (replaces original random 5-15s delay)
+                # Between-plays timing
                 if self.timingManager:
                     await self.timingManager.waitBetweenPlays()
 
+                # PRE-SNAP: Consume huddle/snap time
+                if self.clockRunning:
+                    preSnapTime = self.calculatePreSnapTime()
+                    self.consumeGameTime(preSnapTime)
+                    self.checkTwoMinuteWarning()
+                    
+                    # Check if clock expired during pre-snap
+                    if self.gameClockSeconds <= 0:
+                        break
+
+                # Call and execute play
                 self.playCaller()
                 self.totalPlays += 1
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
                 if self.offensiveTeam is self.awayTeam:
                     self.awayPlaysTotal += 1
-                #self.defensiveTeam.updateGameEnergy(-.75)
 
-
+                # PLAY EXECUTION: Handle different play types
                 if self.play.playType is PlayType.FieldGoal:
                     self.play.fieldGoalTry()
+                    # Consume time for field goal (always stops clock)
+                    playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
+                    self.consumeGameTime(playDuration)
+                    self.checkTwoMinuteWarning()
+                    
                     if self.play.isFgGood:
                         self._addScore(self.offensiveTeam, 3)
                         self.defensiveTeam.gameDefenseStats['ptsAlwd'] += 3
@@ -1731,12 +1729,20 @@ class Game:
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
+                        self.clockRunning = False  # Clock stops after score
+                        
+                        # Check if OT should end after score
+                        if self.checkOvertimeEnd():
+                            break
+                        
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                         break
                     else:
                         self.play.playResult = PlayResult.FieldGoalNoGood
+                        self.clockRunning = False  # Clock stops after turnover
                         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                         break
+                        
                 if self.play.playType is PlayType.Punt:
                     self.play.playResult = PlayResult.Punt
                     maxPuntYards = round(70*(self.offensiveTeam.rosterDict['k'].attributes.legStrength/100))
@@ -1746,9 +1752,28 @@ class Game:
                     if puntDistance >= self.yardsToEndzone:
                         puntDistance = self.yardsToEndzone - 20
                     newYards = 100 - (self.yardsToEndzone - puntDistance)
+                    
+                    # Consume time for punt (always stops clock)
+                    playDuration = self.calculatePlayDuration(PlayType.Punt, False)
+                    self.consumeGameTime(playDuration)
+                    self.checkTwoMinuteWarning()
+                    self.clockRunning = False  # Clock stops after punt
+                    
                     self.turnover(self.offensiveTeam, self.defensiveTeam, newYards)
                     break
-                elif self.play.isFumbleLost or self.play.isInterception:
+                    
+                # POST-PLAY: Consume play duration time (for run/pass plays)
+                playDuration = self.calculatePlayDuration(self.play.playType, self.play.isInBounds)
+                self.consumeGameTime(playDuration)
+                
+                # Determine if clock should run after play
+                self.clockRunning = self.shouldClockRun()
+                
+                # Check for two-minute warning
+                self.checkTwoMinuteWarning()
+                
+                # Handle turnovers
+                if self.play.isFumbleLost or self.play.isInterception:
                     self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
                     if self.offensiveTeam is self.homeTeam:
                         self.homeTurnoversTotal += 1
@@ -1770,11 +1795,18 @@ class Game:
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
+                        
+                        # Check if OT should end after score
+                        if self.checkOvertimeEnd():
+                            break
+                        
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                         break
                     else:
                         self.turnover(self.offensiveTeam, self.defensiveTeam, (self.yardsToSafety + self.play.yardage))
                     break
+                    
+                # Handle normal play outcomes
                 else:
                     if self.play.yardage >= self.yardsToEndzone:
                         self.play.isTd = True
@@ -1808,6 +1840,11 @@ class Game:
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
+                        
+                        # Check if OT should end after score
+                        if self.checkOvertimeEnd():
+                            return
+                        
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                         break
 
@@ -1842,6 +1879,11 @@ class Game:
                             self.play.scoreChange = True
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
+                            
+                            # Check if OT should end after score
+                            if self.checkOvertimeEnd():
+                                return
+                            
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
                         else:
@@ -1855,6 +1897,11 @@ class Game:
                             self.play.scoreChange = True
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
+                            
+                            # Check if OT should end after score
+                            if self.checkOvertimeEnd():
+                                return
+                            
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                             break
 
@@ -1875,8 +1922,9 @@ class Game:
                             self.play.playResult = PlayResult.TurnoverOnDowns
                             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                             break
-            
-        else:
+        
+        # Game over - show final play if it was a score or big play
+        if self.totalPlays > 0 and self.play:
             if self.play.scoreChange and not self.isOvertime:
                 self.formatPlayText()
                 if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
@@ -1884,6 +1932,7 @@ class Game:
                     self.leagueHighlights.insert(0, {'play': self.play})
                 self.gameFeed.insert(0, {'play': self.play})
 
+        # Determine winner
         if self.awayScore > self.homeScore:
             self.winningTeam = self.awayTeam
             self.losingTeam = self.homeTeam
@@ -1891,7 +1940,7 @@ class Game:
             self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Final: {} - {} | {} - {}'.format(self.awayTeam.abbr, self.awayScore, self.homeTeam.abbr, self.homeScore),
                                                 'quarter': 'Final',
-                                                'playsRemaining': 132 - self.totalPlays
+                                                'timeRemaining': '0:00'
                                             }
                                         })
             self.leagueHighlights.insert(0, {'event':  {
@@ -1906,17 +1955,36 @@ class Game:
             self.gameFeed.insert(0, {'event':  {
                                                 'text': 'Final: {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
                                                 'quarter': 'Final',
-                                                'playsRemaining': 132 - self.totalPlays
+                                                'timeRemaining': '0:00'
                                             }
                                         })
             self.leagueHighlights.insert(0, {'event':  {
                                                 'text': 'Game Final: {} - {} | {} - {}'.format(self.homeTeam.name, self.homeScore, self.awayTeam.name, self.awayScore)
                                             }
                                         })
+        else:
+            # Tie game (should only happen in OT time expiration)
+            self.winningTeam = self.homeTeam  # Arbitrary - treat as home team win
+            self.losingTeam = self.awayTeam
+            self.gameDict['score'] = '{0} - {1} (TIE)'.format(self.homeScore, self.awayScore)
+            self.gameFeed.insert(0, {'event':  {
+                                                'text': 'Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
+                                                'quarter': 'Final',
+                                                'timeRemaining': '0:00'
+                                            }
+                                        })
+            self.leagueHighlights.insert(0, {'event':  {
+                                                'text': 'Game Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.name, self.homeScore, self.awayTeam.name, self.awayScore)
+                                            }
+                                        })
 
         if self.isRegularSeasonGame:
-            self.winningTeam.seasonTeamStats['wins'] += 1
-            self.losingTeam.seasonTeamStats['losses'] += 1
+            if self.homeScore != self.awayScore:  # No ties in season standings
+                self.winningTeam.seasonTeamStats['wins'] += 1
+                self.losingTeam.seasonTeamStats['losses'] += 1
+            else:  # Tie game - both teams get a tie
+                self.homeTeam.seasonTeamStats['ties'] = self.homeTeam.seasonTeamStats.get('ties', 0) + 1
+                self.awayTeam.seasonTeamStats['ties'] = self.awayTeam.seasonTeamStats.get('ties', 0) + 1
 
         
         self.status = GameStatus.Final
@@ -1972,6 +2040,195 @@ class Game:
 
         return min(100, pressure)  # Cap at 100
 
+    def formatTime(self, seconds: int) -> str:
+        """Format seconds into MM:SS display format"""
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}:{secs:02d}"
+    
+    def calculatePreSnapTime(self) -> int:
+        """
+        Calculate time consumed before snap (huddle, line up, snap count).
+        Adjusts based on game situation.
+        """
+        baseTime = 35  # Default time between plays
+        
+        # Get score differential
+        if self.offensiveTeam == self.homeTeam:
+            scoreDiff = self.homeScore - self.awayScore
+        else:
+            scoreDiff = self.awayScore - self.homeScore
+        
+        # Situational adjustments
+        if self.gameClockSeconds < 300 and scoreDiff < 0:  # Trailing with <5 min
+            if scoreDiff <= -8:  # Down by 2+ scores
+                baseTime = 15  # Hurry-up offense
+            else:
+                baseTime = 25  # Faster pace
+        elif self.gameClockSeconds < 300 and scoreDiff > 8:  # Winning by 2+ scores
+            baseTime = 40  # Burn clock
+        elif self.gameClockSeconds < 120:  # Under 2 minutes
+            if scoreDiff < 0:  # Trailing
+                baseTime = 12  # Fast tempo
+            elif scoreDiff > 0:  # Leading
+                baseTime = 38  # Milk clock
+        
+        # Add variance
+        return baseTime + batched_randint(-3, 3)
+    
+    def calculatePlayDuration(self, playType: PlayType, isInBounds: bool = True) -> int:
+        """
+        Calculate time consumed during play execution (snap to whistle).
+        For clock-stopping plays, includes time for officials to spot ball and restart.
+        """
+        if playType == PlayType.Run:
+            if isInBounds:
+                return batched_randint(4, 6)  # Clock runs
+            else:
+                return batched_randint(3, 5) + 10  # Out of bounds + spot time
+        
+        elif playType == PlayType.Pass:
+            if self.play.isPassCompletion and isInBounds:
+                return batched_randint(3, 6)  # Completion in bounds, clock runs
+            elif self.play.isPassCompletion and not isInBounds:
+                return batched_randint(3, 5) + 10  # Out of bounds + spot time
+            elif self.play.isSack:
+                return batched_randint(3, 5)  # Sack, clock runs
+            else:  # Incomplete
+                return batched_randint(2, 3) + 10  # Incomplete + spot time
+        
+        elif playType == PlayType.FieldGoal or playType == PlayType.Punt:
+            return 5 + 15  # Kick + reset time
+        
+        elif playType == PlayType.Spike:
+            return 3  # Quick spike
+        
+        elif playType == PlayType.Kneel:
+            return 40  # Maximum time runoff
+        
+        return 5  # Default
+    
+    def shouldClockRun(self) -> bool:
+        """
+        Determine if clock should be running after a play.
+        Returns True if clock runs, False if it stops.
+        """
+        # Clock always stops after these events
+        if self.play.playType == PlayType.FieldGoal:
+            return False
+        if self.play.playType == PlayType.Punt:
+            return False
+        if self.play.playType == PlayType.Spike:
+            return False
+        if self.play.isFumbleLost or self.play.isInterception:
+            return False  # Turnover stops clock
+        if self.play.scoreChange:
+            return False  # Score stops clock
+        
+        # Pass plays
+        if self.play.playType == PlayType.Pass:
+            if self.play.isPassCompletion:
+                # Completed pass - check if in bounds
+                return self.play.isInBounds
+            else:
+                return False  # Incomplete stops clock
+        
+        # Run plays - clock runs unless out of bounds
+        if self.play.playType == PlayType.Run:
+            if self.play.isInBounds:
+                return True  # Run in bounds, clock runs
+            else:
+                return False  # Out of bounds stops clock
+        
+        # Kneel - clock always runs
+        if self.play.playType == PlayType.Kneel:
+            return True
+    
+    def consumeGameTime(self, seconds: int):
+        """Consume time from game clock"""
+        if seconds > 0:
+            self.gameClockSeconds -= seconds
+            if self.gameClockSeconds < 0:
+                self.gameClockSeconds = 0
+
+    def checkTwoMinuteWarning(self):
+        """Check and trigger two-minute warning"""
+        if not self.twoMinuteWarningShown and self.gameClockSeconds <= 120:
+            if self.currentQuarter == 2 or self.currentQuarter == 4:
+                self.twoMinuteWarningShown = True
+                self.clockRunning = False
+                # Two-minute warning is like a free timeout
+                self.gameFeed.insert(0, {'event': {
+                    'text': 'Two-Minute Warning',
+                    'quarter': self.currentQuarter,
+                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                }})
+    
+    def advanceQuarter(self):
+        """Transition to next quarter"""
+        if self.currentQuarter == 1:
+            self.currentQuarter = 2
+            self.gameClockSeconds = 900
+            self.twoMinuteWarningShown = False
+        elif self.currentQuarter == 2:
+            # Halftime
+            self.currentQuarter = 3
+            self.gameClockSeconds = 900
+            self.isHalftime = False
+            # Reset timeouts for second half
+            self.homeTimeoutsRemaining = 3
+            self.awayTimeoutsRemaining = 3
+            self.twoMinuteWarningShown = False
+        elif self.currentQuarter == 3:
+            self.currentQuarter = 4
+            self.gameClockSeconds = 900
+            self.twoMinuteWarningShown = False
+        elif self.currentQuarter == 4:
+            # Check for overtime
+            if self.homeScore == self.awayScore:
+                self.currentQuarter = 5
+                self.gameClockSeconds = 600  # 10 minute OT
+                self.isOvertime = True
+                self.twoMinuteWarningShown = False
+            # else game is over
+        elif self.currentQuarter >= 5:
+            # Additional OT periods - reset clock if game is still tied
+            if self.homeScore == self.awayScore:
+                self.gameClockSeconds = 600  # Another 10 minute OT period
+                self.twoMinuteWarningShown = False
+                # Keep currentQuarter at 5 for tracking (all OT periods shown as "OT")
+            # else game is over with a winner
+    
+    def isGameOver(self) -> bool:
+        """Check if game should end"""
+        # Game over if clock expired in regulation and not tied
+        if self.currentQuarter == 4 and self.gameClockSeconds <= 0:
+            return self.homeScore != self.awayScore
+        
+        # In OT (Q5+), only end if someone is ahead after both teams have had possession
+        if self.currentQuarter >= 5:
+            # If score is not tied and both teams have had possession, game over (sudden death)
+            if self.homeScore != self.awayScore and self.firstOtPossessionComplete:
+                return True
+            # If clock expires but game is tied, continue with another OT period (handled in game loop)
+        
+        return False
+    
+    def checkOvertimeEnd(self) -> bool:
+        """Check if scoring in OT should end the game (hybrid sudden death)"""
+        if self.currentQuarter != 5:
+            return False
+        
+        # Mark if both teams have now had possession
+        if self.otHomeHadPos and self.otAwayHadPos:
+            self.firstOtPossessionComplete = True
+        
+        # If both teams have had possession and someone is ahead, game over (sudden death)
+        if self.firstOtPossessionComplete and self.homeScore != self.awayScore:
+            return True
+        
+        return False
+
     def _addScore(self, team: FloosTeam.Team, points: int):
         """
         Add points to a team's score and update the appropriate quarter score.
@@ -2019,7 +2276,7 @@ class Play():
         self.awayAbbr = game.awayTeam.abbr
         self.quarter = game.currentQuarter
         self.down = game.down
-        self.playsLeft = GAME_MAX_PLAYS - game.totalPlays
+        self.timeRemaining = game.formatTime(game.gameClockSeconds)
         self.yardLine = game.yardLine
         self.yardsToEndzone = game.yardsToEndzone
         self.yardsToSafety = game.yardsToSafety
@@ -2049,6 +2306,7 @@ class Play():
         self.isSafety = False
         self.scoreChange = False
         self.passIsDropped = False
+        self.isInBounds = True  # Default to in bounds
         self.playText = ''
 
     def fieldGoalTry(self):
@@ -2397,6 +2655,16 @@ class Play():
         # Clamp yardage to endzone
         if self.yardage > self.yardsToEndzone:
             self.yardage = self.yardsToEndzone
+        
+        # Determine if run went out of bounds (for clock management)
+        if selectedGap['type'] == 'C-gap' or selectedGap['type'] == 'bounce':
+            # Outside runs more likely to go out of bounds
+            oobChance = 25 if selectedGap['type'] == 'bounce' else 15
+        else:
+            # Inside runs rarely go out
+            oobChance = 5
+        
+        self.isInBounds = batched_randint(1, 100) > oobChance
         
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
@@ -2804,6 +3072,19 @@ class Play():
                     if self.yardage > self.yardsToEndzone:
                         yac = self.yardsToEndzone - passYards
                         self.yardage = self.yardsToEndzone
+                    
+                    # Determine if receiver went out of bounds (for clock management)
+                    # Longer passes and sideline routes more likely to go OOB
+                    if self.passType == PassType.short:
+                        oobChance = 10
+                    elif self.passType == PassType.medium:
+                        oobChance = 20
+                    elif self.passType == PassType.long:
+                        oobChance = 30  # Deep sideline shots
+                    else:
+                        oobChance = 15
+                    
+                    self.isInBounds = batched_randint(1, 100) > oobChance
                     
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
