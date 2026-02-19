@@ -1495,7 +1495,12 @@ class Game:
             
 
 
-    def calculateWinProbability(self):
+    def calculateSimpleEloWinProbability(self):
+        """
+        Legacy simple ELO-only win probability (pre-game).
+        Replaced by comprehensive calculateWinProbability() method.
+        Kept for reference/compatibility.
+        """
         self.homeTeamElo = self.homeTeam.elo
         self.awayTeamElo = self.awayTeam.elo
         self.homeTeamWinProbability = FloosMethods.calculateProbability(self.awayTeam.elo, self.homeTeamElo)
@@ -1512,6 +1517,15 @@ class Game:
         self.currentQuarter = 1
         self.gameClockSeconds = 900
         self.clockRunning = False
+        
+        # Store ELO ratings for use in win probability calculations
+        self.homeTeamElo = self.homeTeam.elo
+        self.awayTeamElo = self.awayTeam.elo
+        
+        # Calculate initial win probability using ELO (will be updated throughout game)
+        initial_wp = self.calculateWinProbability()
+        self.homeTeamWinProbability = initial_wp['home']
+        self.awayTeamWinProbability = initial_wp['away']
 
         for player in self.homeTeam.rosterDict.values():
             player: FloosPlayer.Player
@@ -1693,6 +1707,11 @@ class Game:
                 else:
                     self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
 
+                # Calculate and update win probability before play
+                win_prob = self.calculateWinProbability()
+                self.homeTeamWinProbability = win_prob['home']
+                self.awayTeamWinProbability = win_prob['away']
+
                 # Create new play
                 self.play = Play(self)
                 
@@ -1717,6 +1736,7 @@ class Game:
                 if self.verbose_logging:
                     self.logPlay(f"\n--- PLAY #{self.totalPlays + 1} ---")
                     self.logPlay(f"Quarter {self.currentQuarter}, {self.formatTime(self.gameClockSeconds)} - Score: {self.awayTeam.abbr} {self.awayScore}, {self.homeTeam.abbr} {self.homeScore}")
+                    self.logPlay(f"Win Probability: {self.homeTeam.abbr} {self.homeTeamWinProbability}%, {self.awayTeam.abbr} {self.awayTeamWinProbability}%")
                     self.logPlay(f"{self.down}{self.getOrdinal(self.down)} & {self.yardsToFirstDown if self.yardsToFirstDown != 'Goal' else 'Goal'} at {self.yardLine}")
                     self.logPlay(f"Offense: {self.offensiveTeam.abbr} (Rating: {self.offensiveTeam.offenseRating})")
                     self.logPlay(f"Defense: {self.defensiveTeam.abbr} (Pass Cov: {self.defensiveTeam.defensePassCoverageRating}, Run: {self.defensiveTeam.defenseRunCoverageRating}, Rush: {self.defensiveTeam.defensePassRushRating})")
@@ -2314,6 +2334,176 @@ class Game:
                 return False
         
         return False
+    
+    def calculateWinProbability(self) -> dict:
+        """
+        Calculate win probability for both teams using formula-based approach.
+        Based on: ELO ratings, score differential, time remaining, possession, field position, down/distance
+        Returns: {'home': float, 'away': float} percentages (0-100)
+        """
+        # Get total seconds remaining in game
+        if self.currentQuarter == 1:
+            total_seconds = self.gameClockSeconds + (3 * 900)  # Q1 + 3 more quarters
+        elif self.currentQuarter == 2:
+            total_seconds = self.gameClockSeconds + (2 * 900)  # Q2 + 2 more quarters
+        elif self.currentQuarter == 3:
+            total_seconds = self.gameClockSeconds + 900  # Q3 + Q4
+        elif self.currentQuarter == 4:
+            total_seconds = self.gameClockSeconds  # Q4 only
+        else:  # Overtime
+            total_seconds = self.gameClockSeconds  # OT period
+        
+        # ELO-based pre-game expectation
+        # Calculate ELO advantage (positive = home favored)
+        elo_diff = 0
+        if self.homeTeamElo is not None and self.awayTeamElo is not None:
+            elo_diff = self.homeTeamElo - self.awayTeamElo
+        
+        # Convert ELO difference to point advantage
+        # Rule of thumb: ~25 ELO points ≈ 1 point advantage
+        # Example: 100 ELO difference ≈ 4 point favorite
+        elo_point_advantage = elo_diff / 25.0
+        
+        # ELO influence decreases as game progresses (actual results matter more)
+        total_game_time = 3600  # 60 minutes
+        time_elapsed = total_game_time - total_seconds
+        elo_influence = max(0.2, 1.0 - (time_elapsed / total_game_time) * 0.8)
+        # ^^ Early game: 100% influence, End of regulation: 20% influence
+        
+        # Apply ELO influence to create an adjusted baseline
+        elo_adjusted_advantage = elo_point_advantage * elo_influence
+        
+        # Score differential from home team's perspective
+        score_diff = self.homeScore - self.awayScore
+        
+        # Expected points from current field position
+        # Uses expected points model based on field position
+        expected_points = self.calculateExpectedPoints()
+        
+        # Adjust expected points based on who has possession
+        if self.offensiveTeam == self.homeTeam:
+            home_expected = expected_points
+            away_expected = 0
+        else:
+            home_expected = 0
+            away_expected = expected_points
+        
+        # Calculate adjusted score differential including expected points AND ELO
+        adjusted_score_diff = score_diff + home_expected - away_expected + elo_adjusted_advantage
+        
+        # Time scaling factor: importance of score diff increases as time decreases
+        # Early game: score matters less, Late game: score matters more
+        if total_seconds > 1800:  # More than 1 half remaining
+            time_factor = 0.6
+        elif total_seconds > 900:  # More than 1 quarter remaining
+            time_factor = 1.0
+        elif total_seconds > 300:  # 5+ minutes remaining
+            time_factor = 1.5
+        elif total_seconds > 120:  # 2-5 minutes
+            time_factor = 2.5
+        else:  # Final 2 minutes
+            time_factor = 4.0
+        
+        # Logistic function to convert adjusted score diff to win probability
+        # Formula: P(win) = 1 / (1 + e^(-k * score_diff))
+        # k controls sensitivity - higher k = steeper curve
+        k = 0.15 * time_factor  # Scale sensitivity by time remaining
+        
+        # Calculate home team win probability using logistic function
+        home_win_prob = 100 / (1 + np.exp(-k * adjusted_score_diff))
+        
+        # Away team win probability is complement
+        away_win_prob = 100 - home_win_prob
+        
+        # Special cases
+        if self.currentQuarter >= 5:  # Overtime
+            # In OT, if tied with possession, slight advantage
+            if score_diff == 0:
+                if self.offensiveTeam == self.homeTeam:
+                    home_win_prob = 52 + (expected_points * 2)
+                else:
+                    away_win_prob = 52 + (expected_points * 2)
+                home_win_prob = min(100, max(0, home_win_prob))
+                away_win_prob = 100 - home_win_prob
+        
+        # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over)
+        if not self.isGameOver():
+            home_win_prob = max(0.1, min(99.9, home_win_prob))
+            away_win_prob = max(0.1, min(99.9, away_win_prob))
+        else:
+            # Game is over, set to 100/0
+            if self.homeScore > self.awayScore:
+                home_win_prob = 100
+                away_win_prob = 0
+            else:
+                home_win_prob = 0
+                away_win_prob = 100
+        
+        return {
+            'home': round(home_win_prob, 1),
+            'away': round(away_win_prob, 1)
+        }
+    
+    def calculateExpectedPoints(self) -> float:
+        """
+        Calculate expected points from current field position and down/distance.
+        Based on NFL expected points model - varies by field position and situation.
+        Returns: Expected points for offensive team (can be negative near own endzone)
+        """
+        # Field position value (0 = own goal line, 100 = opponent goal line)
+        field_position = 100 - self.yardsToEndzone
+        
+        # Base expected points by field position (approximation of NFL model)
+        # Near own endzone: negative (risk of safety)
+        # Midfield: ~2 points (likely FG)
+        # Red zone: ~4-6 points (likely TD)
+        
+        if field_position < 5:  # Own 5 or worse
+            base_ep = -1.0
+        elif field_position < 20:  # Own 20
+            base_ep = 0.0
+        elif field_position < 40:  # Own 40
+            base_ep = 1.0
+        elif field_position < 50:  # Midfield
+            base_ep = 2.0
+        elif field_position < 60:  # Opponent 40
+            base_ep = 2.5
+        elif field_position < 70:  # Opponent 30
+            base_ep = 3.0
+        elif field_position < 80:  # Opponent 20 (FG range)
+            base_ep = 3.5
+        elif field_position < 90:  # Red zone
+            base_ep = 4.5
+        else:  # Inside 10
+            base_ep = 5.5
+        
+        # Adjust by down and distance
+        if self.down == 1:
+            down_factor = 1.0  # Best situation
+        elif self.down == 2:
+            if self.yardsToFirstDown <= 3:
+                down_factor = 0.95  # 2nd and short
+            elif self.yardsToFirstDown <= 7:
+                down_factor = 0.85  # 2nd and medium
+            else:
+                down_factor = 0.7  # 2nd and long
+        elif self.down == 3:
+            if self.yardsToFirstDown <= 3:
+                down_factor = 0.8  # 3rd and short
+            elif self.yardsToFirstDown <= 7:
+                down_factor = 0.5  # 3rd and medium
+            else:
+                down_factor = 0.2  # 3rd and long
+        else:  # 4th down
+            # 4th down significantly reduces expected points (likely punt)
+            if field_position >= 60:  # In FG range
+                down_factor = 0.7  # Can kick FG
+            else:
+                down_factor = 0.1  # Likely punt
+        
+        expected_points = base_ep * down_factor
+        
+        return expected_points
     
     def checkOvertimeEnd(self) -> bool:
         """Check if scoring in OT should end the game (hybrid sudden death)"""
