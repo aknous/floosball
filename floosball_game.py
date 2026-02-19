@@ -275,6 +275,10 @@ class Game:
         self.awayScore = 0
         self.homeScore = 0
         
+        # Play-by-play logging
+        self.play_log_file = None
+        self.verbose_logging = False
+        
         # Set up timing manager for game-level delays
         if timingManager is not None:
             self.timingManager = timingManager
@@ -950,76 +954,75 @@ class Game:
                     self.play.passPlay(returnLongPassPlay())
                     return
         elif self.down == 4:
+            # FIRST: Always punt when deep in own territory (safety concern)
+            if self.yardsToSafety <= 35:
+                self.play.playType = PlayType.Punt
+                return
+            
+            # Check if in field goal range
+            kickerMaxDistance = self.offensiveTeam.rosterDict['k'].maxFgDistance - 17
+            inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance
+            
             if scoreDiff > 0:
-                # Late in game with lead, be conservative with FGs
-                if self.currentQuarter == 4 and self.gameClockSeconds < 300 and self.yardsToEndzone < 20:
-                    if scoreDiff <= 3:
+                # When LEADING, be conservative on 4th down
+                # Late in game with lead, prioritize FGs to extend lead
+                if self.currentQuarter == 4 and self.gameClockSeconds < 300:
+                    if inFieldGoalRange and self.yardsToEndzone <= 40:
+                        # In range late - kick FG to extend lead
                         self.play.playType = PlayType.FieldGoal
                         return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-                elif self.currentQuarter == 4 and self.gameClockSeconds < 300 and self.yardsToEndzone > 20:
-                    if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17) and scoreDiff <= 3:
+                    # Not in FG range - consider going for 4th & 1 to run clock
+                    if self.yardsToFirstDown <= 1 and self.yardsToSafety > 50:
+                        # Very short yardage past midfield - 40% go for it to run clock
                         x = batched_randint(1,10)
-                        if x > 3:
-                            self.play.playType = PlayType.FieldGoal
+                        if x <= 4:
+                            self.play.runPlay()
                             return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
-                    else:
-                        self.play.passPlay(returnLongPassPlay())
-                        return
-                elif self.yardsToFirstDown <= 2:
-                    if self.yardsToSafety > 20:
-                        if self.yardsToEndzone <= 30:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        else:
-                            x = randint(1,3)
-                            if x <= 2:
-                                self.play.passPlay(returnShortPassPlay())
-                                return
-                            else:
-                                self.play.passPlay(returnMediumPassPlay())
-                                return
-                    else:
-                        x = batched_randint(1,10)
-                        if x > 8:
-                            self.play.playType = PlayType.Punt
-                            return
-                        else:
-                            x = randint(1,3)
-                            if x == 1:
-                                self.play.runPlay()
-                                return
-                            elif x == 2:
-                                self.play.passPlay(returnShortPassPlay())
-                                return
-                            else:
-                                self.play.passPlay(returnMediumPassPlay())  
-                                return       
-                else:
-                    if self.yardsToEndzone > 30 and self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17) and self.yardsToFirstDown > 6:
-                        x = batched_randint(1,10)
-                        if x > 3:
-                            self.play.playType = PlayType.FieldGoal
-                            return
-                        else:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-            elif self.currentQuarter == 4 and scoreDiff > 0:
-                if self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    self.play.playType = PlayType.FieldGoal
-                    return
-                else:
+                    # Otherwise punt to protect lead
                     self.play.playType = PlayType.Punt
                     return
-            elif self.yardsToEndzone <= 5:
+                
+                # Earlier in game with lead - kick FGs, otherwise punt
+                if inFieldGoalRange and self.yardsToEndzone <= 35:
+                    # Easy/medium FG range - take the points
+                    self.play.playType = PlayType.FieldGoal
+                    return
+                # Not in FG range - consider 4th & 1 conversion
+                if self.yardsToFirstDown == 1 and self.yardsToSafety > 45:
+                    # 4th & 1 in opponent territory - 30% go for it
+                    x = batched_randint(1,10)
+                    if x <= 3:
+                        self.play.runPlay()
+                        return
+                # Default when leading: PUNT
+                self.play.playType = PlayType.Punt
+                return
+            
+            # When trailing, prioritize field goals to get on the board
+            elif scoreDiff < 0 and inFieldGoalRange:
+                if self.yardsToEndzone <= 25:
+                    # Close to endzone - almost always kick FG when losing
+                    self.play.playType = PlayType.FieldGoal
+                    return
+                elif self.currentQuarter >= 3:
+                    # Late in game, need points - kick FG 90% of the time
+                    x = batched_randint(1,10)
+                    if x <= 9:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    # 10% chance go for TD
+                    self.play.passPlay(returnMediumPassPlay())
+                    return
+                else:
+                    # Early in game - 70% kick FG, 30% go for TD
+                    x = batched_randint(1,10)
+                    if x <= 7:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    self.play.passPlay(returnMediumPassPlay())
+                    return
+            
+            elif self.yardsToEndzone <= 5 and inFieldGoalRange:
                     x = batched_randint(1,10)
                     if x < 7:
                         self.play.playType = PlayType.FieldGoal
@@ -1036,92 +1039,89 @@ class Game:
                             self.play.passPlay(returnMediumPassPlay())
                             return
 
-            elif self.yardsToEndzone <= 20:
-                if self.yardsToFirstDown <= 2:
+            elif self.yardsToEndzone <= 20 and inFieldGoalRange:
+                # Red zone - almost always kick FG
+                if self.yardsToFirstDown <= 1:
+                    # Very short yardage - 30% go for it
                     x = batched_randint(1,10)
-                    if x >= 3:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    else:
+                    if x >= 7:
                         y = randint(1,3)
                         if y == 1:
                             self.play.runPlay()
                             return
-                        elif y == 2:
+                        else:
                             self.play.passPlay(returnShortPassPlay())
                             return
-                        else:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                else:
-                    x = batched_randint(1,10)
-                    if x < 9:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-            elif self.yardsToEndzone <= 35:
-                if self.yardsToFirstDown <= 2:
-                    x = batched_randint(1,10)
-                    if x >= 2:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    else:
-                        y = randint(1,3)
-                        if y == 1:
-                            self.play.runPlay()
-                            return
-                        elif y == 2:
-                            self.play.passPlay(returnShortPassPlay())
-                            return
-                        else:
-                            self.play.passPlay(returnMediumPassPlay())
-                            return
-                else:
-                    x = batched_randint(1,10)
-                    if x < 9:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    else:
-                        self.play.passPlay(returnMediumPassPlay())
-                        return
-            elif self.yardsToEndzone <= (self.offensiveTeam.rosterDict['k'].maxFgDistance - 17):
-                    x = batched_randint(1,10)
-                    if x < 5:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    else:
-                        self.play.playType = PlayType.Punt
-                        return
-            elif self.yardsToSafety <= 40:
-                self.play.playType = PlayType.Punt
+                self.play.playType = PlayType.FieldGoal
                 return
-            else:
+            elif self.yardsToEndzone <= 35 and inFieldGoalRange:
+                # Medium range FG - usually kick
                 if self.yardsToFirstDown <= 2:
+                    # Short yardage - 70% kick FG, 30% go for it
                     x = batched_randint(1,10)
-                    if x < 8:
-                        self.play.playType = PlayType.Punt
+                    if x <= 7:
+                        self.play.playType = PlayType.FieldGoal
                         return
-                    elif x >= 7 and x < 9:
-                        self.play.passPlay(returnShortPassPlay())
+                    else:
+                        y = randint(1,3)
+                        if y == 1:
+                            self.play.runPlay()
+                            return
+                        else:
+                            self.play.passPlay(returnShortPassPlay())
+                            return
+                else:
+                    # Long yardage - 85% kick FG
+                    x = batched_randint(1,100)
+                    if x <= 85:
+                        self.play.playType = PlayType.FieldGoal
                         return
                     else:
                         self.play.passPlay(returnMediumPassPlay())
                         return
+            elif inFieldGoalRange:
+                # Long FG attempt - 70% kick, 30% punt
+                x = batched_randint(1,10)
+                if x <= 7:
+                    self.play.playType = PlayType.FieldGoal
+                    return
                 else:
-                    x = batched_randint(1,100)
-                    if x < 95:
-                        self.play.playType = PlayType.Punt
-                        return
-                    else:
-                        y = batched_randint(0,1)
-                        if y == 0:
+                    self.play.playType = PlayType.Punt
+                    return
+            # Not in FG range and not deep in own territory - punt
+            else:
+                # Very short yardage - consider going for it
+                if self.yardsToFirstDown == 1:
+                    # 4th & 1 - be aggressive only if past midfield or desperate
+                    if self.yardsToSafety > 50 or (scoreDiff < -14 and self.currentQuarter >= 3):
+                        x = batched_randint(1,10)
+                        if x <= 3:  # 30% go for it
+                            self.play.runPlay()
+                            return
+                    # Otherwise punt
+                    self.play.playType = PlayType.Punt
+                    return
+                elif self.yardsToFirstDown == 2:
+                    # 4th & 2 - rarely go for it, only when desperate
+                    if scoreDiff < -21 and self.currentQuarter == 4 and self.gameClockSeconds < 600:
+                        x = batched_randint(1,10)
+                        if x <= 2:  # 20% go for it when down 3+ scores late
+                            self.play.passPlay(returnShortPassPlay())
+                            return
+                    # Otherwise punt
+                    self.play.playType = PlayType.Punt
+                    return
+                else:
+                    # 4th & 3+ - almost always punt
+                    # Only exception: down multiple scores in Q4
+                    if scoreDiff < -17 and self.currentQuarter == 4 and self.gameClockSeconds < 300:
+                        x = batched_randint(1,100)
+                        if x <= 10:  # 10% go for it when desperate
                             self.play.passPlay(returnMediumPassPlay())
                             return
-                        else:
-                            self.play.passPlay(returnLongPassPlay())
-                            return
+                    # Default: PUNT
+                    self.play.playType = PlayType.Punt
+                    return
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
         if self.totalPlays > GAME_MAX_PLAYS:
@@ -1565,6 +1565,10 @@ class Game:
                 oldQuarter = self.currentQuarter
                 self.advanceQuarter()
                 
+                # Defensive check: If still in OT and clock is still 0 after advanceQuarter, force reset
+                if self.currentQuarter >= 5 and self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
+                    self.gameClockSeconds = 600  # Force clock reset to prevent infinite loop
+                
                 if oldQuarter == 2:
                     # Halftime
                     self.isHalftime = True
@@ -1708,6 +1712,17 @@ class Game:
 
                 # Call and execute play
                 self.playCaller()
+                
+                # Log pre-play situation
+                if self.verbose_logging:
+                    self.logPlay(f"\n--- PLAY #{self.totalPlays + 1} ---")
+                    self.logPlay(f"Quarter {self.currentQuarter}, {self.formatTime(self.gameClockSeconds)} - Score: {self.awayTeam.abbr} {self.awayScore}, {self.homeTeam.abbr} {self.homeScore}")
+                    self.logPlay(f"{self.down}{self.getOrdinal(self.down)} & {self.yardsToFirstDown if self.yardsToFirstDown != 'Goal' else 'Goal'} at {self.yardLine}")
+                    self.logPlay(f"Offense: {self.offensiveTeam.abbr} (Rating: {self.offensiveTeam.offenseRating})")
+                    self.logPlay(f"Defense: {self.defensiveTeam.abbr} (Pass Cov: {self.defensiveTeam.defensePassCoverageRating}, Run: {self.defensiveTeam.defenseRunCoverageRating}, Rush: {self.defensiveTeam.defensePassRushRating})")
+                    pressure = self.calculateGamePressure()
+                    self.logPlay(f"Game Pressure: {pressure:.1f}")
+                
                 self.totalPlays += 1
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
@@ -1716,7 +1731,16 @@ class Game:
 
                 # PLAY EXECUTION: Handle different play types
                 if self.play.playType is PlayType.FieldGoal:
+                    if self.verbose_logging:
+                        self.logPlay(f"Play Type: FIELD GOAL ATTEMPT from {self.yardsToEndzone + 17} yards")
+                    
                     self.play.fieldGoalTry()
+                    
+                    if self.verbose_logging:
+                        kicker = self.offensiveTeam.rosterDict['k']
+                        self.logPlay(f"  Kicker: {kicker.name} (Leg: {kicker.attributes.legStrength}, Acc: {kicker.attributes.accuracy})")
+                        self.logPlay(f"  Result: {'GOOD' if self.play.isFgGood else 'NO GOOD'}")
+                    
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
                     self.consumeGameTime(playDuration)
@@ -1730,6 +1754,9 @@ class Game:
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
                         self.clockRunning = False  # Clock stops after score
+                        
+                        if self.verbose_logging:
+                            self.logPlay(f"  >>> SCORE! {self.offensiveTeam.abbr} now leads/trails {self.homeScore}-{self.awayScore}")
                         
                         # Check if OT should end after score
                         if self.checkOvertimeEnd():
@@ -1745,7 +1772,9 @@ class Game:
                         
                 if self.play.playType is PlayType.Punt:
                     self.play.playResult = PlayResult.Punt
-                    maxPuntYards = round(70*(self.offensiveTeam.rosterDict['k'].attributes.legStrength/100))
+                    kicker = self.offensiveTeam.rosterDict['k']
+                    assert kicker is not None, f"Team {self.offensiveTeam.teamName} has no kicker in roster!"
+                    maxPuntYards = round(70*(kicker.attributes.legStrength/100))
                     if maxPuntYards > self.yardsToEndzone:
                         maxPuntYards = self.yardsToEndzone + 10
                     puntDistance = randint((maxPuntYards-20), maxPuntYards)
@@ -1765,6 +1794,26 @@ class Game:
                 # POST-PLAY: Consume play duration time (for run/pass plays)
                 playDuration = self.calculatePlayDuration(self.play.playType, self.play.isInBounds)
                 self.consumeGameTime(playDuration)
+                
+                # Log play result for run/pass plays
+                if self.verbose_logging and self.play.playType in [PlayType.Run, PlayType.Pass]:
+                    self.logPlay(f"Play Type: {self.play.playType.value}")
+                    if self.play.playType == PlayType.Run:
+                        runner = self.offensiveTeam.rosterDict['rb']
+                        self.logPlay(f"  Runner: {runner.name} (Pwr: {runner.attributes.power}, Spd: {runner.attributes.speed}, Agl: {runner.attributes.agility})")
+                    elif self.play.playType == PlayType.Pass:
+                        qb = self.offensiveTeam.rosterDict['qb']
+                        if hasattr(self.play, 'receiver') and self.play.receiver:
+                            self.logPlay(f"  Passer: {qb.name} (Arm: {qb.attributes.armStrength}, Acc: {qb.attributes.accuracy})")
+                            self.logPlay(f"  Target: {self.play.receiver.name} (Spd: {self.play.receiver.attributes.speed}, Hands: {self.play.receiver.attributes.hands})")
+                    
+                    self.logPlay(f"  Gain: {self.play.yardage} yards")
+                    if self.play.isFumbleLost:
+                        self.logPlay(f"  >>> FUMBLE LOST!")
+                    if self.play.isInterception:
+                        self.logPlay(f"  >>> INTERCEPTION!")
+                    if self.play.isSack:
+                        self.logPlay(f"  >>> SACK!")
                 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
@@ -1837,18 +1886,25 @@ class Game:
                         else:
                             self.play.playResult = PlayResult.TouchdownNoXP
                         
+                        if self.verbose_logging:
+                            self.logPlay(f"  >>> TOUCHDOWN! {self.offensiveTeam.abbr} scores! XP: {'GOOD' if self.play.isXpGood else 'NO GOOD'}")
+                            self.logPlay(f"  >>> New Score: {self.awayTeam.abbr} {self.awayScore}, {self.homeTeam.abbr} {self.homeScore}")
+                        
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
                         
                         # Check if OT should end after score
                         if self.checkOvertimeEnd():
-                            return
+                            break
                         
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                         break
 
                     elif self.play.yardage >= self.yardsToFirstDown:
+                        if self.verbose_logging:
+                            self.logPlay(f"  >>> FIRST DOWN!")
+                        
                         self.down = 1
                         if self.offensiveTeam is self.homeTeam:
                             self.home1stDownsTotal += 1
@@ -1882,7 +1938,7 @@ class Game:
                             
                             # Check if OT should end after score
                             if self.checkOvertimeEnd():
-                                return
+                                break
                             
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
@@ -1900,7 +1956,7 @@ class Game:
                             
                             # Check if OT should end after score
                             if self.checkOvertimeEnd():
-                                return
+                                break
                             
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                             break
@@ -1997,6 +2053,47 @@ class Game:
         self.losingTeam.updateRating()
         self.calculateWinProbability()  # Calculate probabilities for external ELO update
         # Note: Post-game stat processing now handled by RecordManager.processPostGameStats()
+        
+        # Close play log file if open
+        if self.play_log_file:
+            self.play_log_file.write(f"\n{'='*100}\n")
+            self.play_log_file.write(f"GAME COMPLETE: {self.awayTeam.abbr} {self.awayScore} - {self.homeTeam.abbr} {self.homeScore}\n")
+            self.play_log_file.write(f"{'='*100}\n")
+            self.play_log_file.close()
+            self.play_log_file = None
+    
+    def enableVerboseLogging(self, log_file_path):
+        """Enable verbose play-by-play logging to a file"""
+        try:
+            import os
+            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+            self.play_log_file = open(log_file_path, 'w', encoding='utf-8')
+            self.verbose_logging = True
+            
+            # Write header
+            self.play_log_file.write(f"{'='*100}\n")
+            self.play_log_file.write(f"PLAY-BY-PLAY LOG: {self.awayTeam.abbr} @ {self.homeTeam.abbr}\n")
+            self.play_log_file.write(f"{'='*100}\n\n")
+        except Exception as e:
+            print(f"Failed to enable verbose logging: {e}")
+            self.verbose_logging = False
+    
+    def logPlay(self, message):
+        """Log a play-by-play message"""
+        if self.verbose_logging and self.play_log_file:
+            self.play_log_file.write(message + "\n")
+            self.play_log_file.flush()
+    
+    def getOrdinal(self, n):
+        """Get ordinal suffix for a number (1st, 2nd, 3rd, 4th)"""
+        if n == 1:
+            return "st"
+        elif n == 2:
+            return "nd"
+        elif n == 3:
+            return "rd"
+        else:
+            return "th"
 
     def calculateGamePressure(self):
         pressure = 0
@@ -2205,12 +2302,16 @@ class Game:
         if self.currentQuarter == 4 and self.gameClockSeconds <= 0:
             return self.homeScore != self.awayScore
         
-        # In OT (Q5+), only end if someone is ahead after both teams have had possession
+        # In OT (Q5+), check if game should end
         if self.currentQuarter >= 5:
             # If score is not tied and both teams have had possession, game over (sudden death)
             if self.homeScore != self.awayScore and self.firstOtPossessionComplete:
                 return True
-            # If clock expires but game is tied, continue with another OT period (handled in game loop)
+            # If clock expires and game is still tied, reset for another OT period
+            if self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
+                # This shouldn't normally happen here (advanceQuarter should handle it)
+                # but adding as defensive check to prevent infinite loops
+                return False
         
         return False
     
@@ -2312,21 +2413,29 @@ class Play():
     def fieldGoalTry(self):
         self.game.gamePressure = self.game.calculateGamePressure()
         self.kicker = self.offense.rosterDict['k']
+        assert self.kicker is not None, f"Team {self.offense.teamName} has no kicker in roster!"
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
         self.fgDistance = yardsToFG
-        distanceFactor = 0.15   # Influences how sharply success drops with distance
-        skillFactor = 2      # Scales how impactful kicker skill is
+        distanceFactor = 0.12   # Gentler drop-off with distance (was 0.15)
+        skillFactor = 1.5       # Adjusted kicker skill impact (was 2)
 
-        baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 50))), 2)
-        normalizedSkill = (self.kicker.gameAttributes.overallRating - 60) / 40
+        # Base probability uses sigmoid centered at 52 yards (was 50)
+        baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 52))), 2)
+        normalizedSkill = (self.kicker.gameAttributes.overallRating - 50) / 50  # Wider range (was 60-100)
         
         # Apply pressure modifier to kicker's effective skill
         pressureModifier = self.kicker.attributes.getPressureModifier(self.game.gamePressure)
         adjustedSkill = normalizedSkill + (pressureModifier / 100)  # Normalize pressure modifier to skill scale
         
-        probability = round(baseProbability * (adjustedSkill * skillFactor), 2)
-        probability = round(max(0, min(1, probability)) * 100)
+        # Final probability: base * skill, then add bonus for short kicks
+        probability = baseProbability * (0.4 + adjustedSkill * skillFactor)  # Minimum 40% of base
+        
+        # Bonus for chip shots (under 30 yards)
+        if self.fgDistance < 30:
+            probability = min(1.0, probability + 0.15)
+        
+        probability = round(max(0.05, min(1, probability)) * 100)  # 5-100% range
 
         x = batched_randint(1,100)
 
@@ -2383,6 +2492,7 @@ class Play():
 
     def extraPointTry(self, offense: FloosTeam.Team):
         self.kicker = offense.rosterDict['k']
+        assert self.kicker is not None, f"Team {offense.teamName} has no kicker in roster!"
         x = batched_randint(1,100)
         
         # Apply pressure modifier to kicker's rating for extra point attempts
@@ -2529,7 +2639,9 @@ class Play():
         """
         self.playType = PlayType.Run
         self.runner = self.offense.rosterDict['rb']
+        assert self.runner is not None, f"Team {self.offense.teamName} has no RB in roster!"
         blocker: FloosPlayer.PlayerTE = self.offense.rosterDict['te']
+        assert blocker is not None, f"Team {self.offense.teamName} has no TE in roster!"
 
         # Apply pressure modifier to runner's performance
         runnerPressureMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
@@ -2585,7 +2697,8 @@ class Play():
         
         stage1Yardages = np.arange(0, stage1MaxYards + 1)
         
-        mean_stage1 = (adjustedOffense - self.defense.defenseRunCoverageRating) / 5
+        # Boost offensive production - division by 2.5 instead of 3.5, plus more base yards
+        mean_stage1 = ((adjustedOffense - self.defense.defenseRunCoverageRating) / 2.5) + 2.5
         mean_stage1 = min(stage1MaxYards + 1, max(0, mean_stage1))
         
         relative_strength = ((adjustedOffense * 2) - self.defense.defenseRunCoverageRating) / 100
@@ -2603,15 +2716,15 @@ class Play():
         if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * 0.5:
             self.runner.updateInGameConfidence(.005)
             
-            # Calculate breakaway potential (speed/agility focused)
+            # Calculate breakaway potential (speed/agility focused) - BOOSTED
             stage2Offense = ((self.runner.attributes.speed * 1.5 + 
                             self.runner.attributes.agility * 1.2 + 
                             self.runner.attributes.playMakingAbility * 0.8 +
                             self.runner.attributes.xFactor * 0.5) / 4) + runnerPressureMod
             
-            offenseContribution2 = (1.2 * stage2Offense) / 100
-            defenseContribution = 0.4 * self.defense.defenseRunCoverageRating / 100
-            stage2DecayRate = round(0.1 + 0.1 * (np.exp(defenseContribution) - offenseContribution2), 3)
+            offenseContribution2 = (2.0 * stage2Offense) / 100  # was 1.5
+            defenseContribution = 0.2 * self.defense.defenseRunCoverageRating / 100  # was 0.3
+            stage2DecayRate = round(0.06 + 0.1 * (np.exp(defenseContribution) - offenseContribution2), 3)  # was 0.08
             
             if self.yardsToEndzone >= 10:
                 stage2MaxYards = 10
@@ -2684,22 +2797,22 @@ class Play():
         Returns probability (0-100) that QB gets sacked.
         """
         # Calculate pass rush differential (defense rush vs offensive protection)
-        qbProtection = qbMobility + blockingModifier
+        # Boost blocking modifier impact significantly (multiply by 12)
+        qbProtection = qbMobility + (blockingModifier * 12)
         rushDifferential = defensePassRush - qbProtection
         
         # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
-        rushDifferential += (dropbackDepth - 1) * 5
+        rushDifferential += (dropbackDepth - 1) * 2  # Reduced from 3 to 2
         
-        # Base sack rate at even matchup (differential = 0) is ~8%
+        # Base sack rate at even matchup (differential = 0) is ~2% (was 5%)
         # Logistic function: probability increases smoothly with rush advantage
-        # Formula: baseSackRate / (1 + exp(-steepness * differential))
-        baseSackRate = 8.0
-        steepness = 0.15  # Controls how quickly probability changes
+        baseSackRate = 2.0
+        steepness = 0.06  # Reduced from 0.10 for even gentler curve
         
         # Shift the curve so 0 differential = baseSackRate
         probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
         
-        return max(1, min(35, probability))  # Clamp between 1% and 35%
+        return max(0.5, min(15, probability))  # Reduced max from 25% to 15%, min from 1% to 0.5%
     
     def calculatePressureImpact(self, defensePassRush: int, qbAccuracy: int, blockingModifier: int) -> float:
         """
@@ -2886,18 +2999,18 @@ class Play():
         Calculate air yards using Gaussian distribution based on pass type and throw quality.
         Better throws travel farther and more accurately.
         """
-        # Base mean and std dev for each pass type
+        # Base mean and std dev for each pass type - BOOSTED for better offense
         passTypeParams = {
-            PassType.short: {'mean': 3, 'stdDev': 1.5},
-            PassType.medium: {'mean': 8, 'stdDev': 2.5},
-            PassType.long: {'mean': 15, 'stdDev': 4},
-            PassType.hailMary: {'mean': 50, 'stdDev': 10}  # Very long, high variance
+            PassType.short: {'mean': 6.0, 'stdDev': 2.5},    # was 4.5, 2.0
+            PassType.medium: {'mean': 14, 'stdDev': 4.0},    # was 11, 3.5
+            PassType.long: {'mean': 25, 'stdDev': 6},        # was 20, 5
+            PassType.hailMary: {'mean': 50, 'stdDev': 10}
         }
         
-        params = passTypeParams.get(passType, {'mean': 8, 'stdDev': 2.5})
+        params = passTypeParams.get(passType, {'mean': 11, 'stdDev': 3.5})
         
         # Adjust mean based on throw quality (better throws travel intended distance)
-        qualityFactor = throwQuality / 80  # 80 is "good" throw quality
+        qualityFactor = max(0.7, throwQuality / 70)  # was 75, now easier threshold
         adjustedMean = params['mean'] * qualityFactor
         
         # Sample from Gaussian
@@ -2909,15 +3022,20 @@ class Play():
         self.play = passPlayBook[playKey]
         self.playType = PlayType.Pass
         self.passer: FloosPlayer.PlayerQB = self.offense.rosterDict['qb']
+        assert self.passer is not None, f"Team {self.offense.teamName} has no QB in roster!"
         self.receiver: FloosPlayer.PlayerWR = None
         self.selectedTarget = None
         self.blockingModifier = 0
         self.passType = None
 
         if passPlayBook[playKey]['targets']['te'] is None:
-            self.blockingModifier += self.offense.rosterDict['te'].attributes.blockingModifier
+            te = self.offense.rosterDict['te']
+            assert te is not None, f"Team {self.offense.teamName} has no TE in roster!"
+            self.blockingModifier += te.attributes.blockingModifier
         if passPlayBook[playKey]['targets']['rb'] is None:
-            self.blockingModifier += self.offense.rosterDict['rb'].attributes.blockingModifier
+            rb = self.offense.rosterDict['rb']
+            assert rb is not None, f"Team {self.offense.teamName} has no RB in roster!"
+            self.blockingModifier += rb.attributes.blockingModifier
 
         # Calculate sack probability using probability curve
         qbMobility = round((self.passer.gameAttributes.agility + self.passer.gameAttributes.xFactor) / 2)
@@ -3055,12 +3173,12 @@ class Play():
                         if yacMaxYards > 0:
                             yacYardages = np.arange(0, yacMaxYards + 1)
                             
-                            # YAC decay rate based on receiver vs defense
+                            # YAC decay rate based on receiver vs defense - BOOSTED
                             yacOffense = receiverYACRating + receiverPressureMod
                             yacDefense = self.defense.defensePassCoverageRating
-                            offenseContribution = (1.2 * yacOffense) / 100
-                            defenseContribution = 0.4 * yacDefense / 100
-                            yacDecayRate = round(0.15 + 0.1 * (np.exp(defenseContribution) - offenseContribution), 3)
+                            offenseContribution = (2.0 * yacOffense) / 100  # was 1.5
+                            defenseContribution = 0.2 * yacDefense / 100    # was 0.3
+                            yacDecayRate = round(0.08 + 0.1 * (np.exp(defenseContribution) - offenseContribution), 3)  # was 0.12
                             
                             # Exponential decay curve for YAC
                             yacCurve = np.exp(-yacDecayRate * yacYardages)
