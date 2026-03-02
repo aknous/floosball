@@ -6,7 +6,7 @@ Floosball is a football simulation game with detailed play-by-play mechanics, pl
 **Version**: 0.9.0_alpha  
 **Language**: Python 3.9+  
 **Database**: SQLite (via SQLAlchemy)  
-**Entry Point**: `floosball.py --refactored --timing=fast`
+**Entry Point**: `run_api.py --timing=fast`
 
 ## Architecture
 
@@ -163,10 +163,10 @@ All business logic separated by domain responsibility.
 ### Running Simulations
 ```bash
 # Fresh simulation (clears database)
-python floosball.py --refactored --fresh --timing=fast
+python run_api.py --fresh --timing=fast
 
 # Continue existing season
-python floosball.py --refactored --timing=fast
+python run_api.py --timing=fast
 ```
 
 ### Timing Modes
@@ -218,10 +218,14 @@ python3 analyze_team_ratings.py  # Rating distribution
 - Use absolute file paths
 
 ### Python Style
+- **ALWAYS use camelCase for methods, functions, variables, and parameters** (never snake_case)
 - Class names: PascalCase (`PlayerManager`, `GameStats`)
-- Methods/functions: camelCase (`calculateWinProbability`, `runPlay`)
+- Methods/functions: camelCase (`calculateWinProbability`, `runPlay`, `gameStart`)
+- Variables/parameters: camelCase (`gameId`, `homeTeam`, `playData`, `homeScore`)
 - Constants: UPPER_SNAKE_CASE (`GAME_MAX_PLAYS`, `FIELD_LENGTH`)
 - Private methods: leading underscore (`_simulateGame`)
+- Dictionary keys (especially for WebSocket events): camelCase (`gameId`, `playNumber`, `isTouchdown`)
+- **Exception**: Only use snake_case for SQLAlchemy column names and database-specific code
 
 ### Testing
 - Manual validation preferred over unit tests currently

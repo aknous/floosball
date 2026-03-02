@@ -66,14 +66,9 @@ async def startLeagueRefactored():
     """New refactored main entry point using the manager architecture"""
     from service_container import initializeServices, getService
     from managers.floosballApplication import FloosballApplication
+    from database.connection import init_db, clear_db
     
     main_logger.info(f'Floosball v{__version__} (Refactored)')
-    
-    # Initialize service container
-    initializeServices()
-    
-    # Get configuration
-    config = get_config()
     
     # Add timing mode from command line if available
     import sys
@@ -85,6 +80,19 @@ async def startLeagueRefactored():
             timing_mode = arg.split('=')[1].lower()
         elif arg in ['--timing-scheduled', '--timing-sequential', '--timing-fast']:
             timing_mode = arg.replace('--timing-', '')
+    
+    # Initialize or clear database based on fresh flag
+    if force_fresh:
+        main_logger.info("Fresh start requested - clearing database")
+        clear_db()
+    else:
+        init_db()
+    
+    # Initialize service container
+    initializeServices()
+    
+    # Get configuration
+    config = get_config()
     
     # Add timing configuration to config
     config['timingMode'] = timing_mode

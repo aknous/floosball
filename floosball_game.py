@@ -1,4 +1,5 @@
 import enum
+import logging
 from gettext import find
 from random import randint
 from random_batch import batched_randint, batched_random, batched_choice
@@ -12,6 +13,17 @@ from time import sleep
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
+
+# WebSocket broadcasting support (optional)
+try:
+    from api.game_broadcaster import broadcaster
+    from api.event_models import GameEvent, PlayerEvent
+    BROADCASTING_AVAILABLE = True
+except ImportError:
+    BROADCASTING_AVAILABLE = False
+    broadcaster = None
+    GameEvent = None
+    PlayerEvent = None
 import datetime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -73,6 +85,8 @@ class PlayResult(enum.Enum):
     Touchdown = 'Touchdown'
     TouchdownXP = 'Touchdown, XP is Good'
     TouchdownNoXP = 'Touchdown, XP No Good'
+    Touchdown2PtGood = 'Touchdown, 2-Pt Good'
+    Touchdown2PtNoGood = 'Touchdown, 2-Pt No Good'
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
@@ -268,16 +282,17 @@ def returnLongPassPlay():
     
 class Game:
     def __init__(self, homeTeam, awayTeam, timingManager=None):
-        self.id = None
+        self.id = None  # Integer ID assigned by SeasonManager
+        self.seasonNumber = None  # Which season this game belongs to
+        self.week = None  # Week number for regular season
+        self.playoffRound = None  # Round number for playoffs (1=wildcard, 2=divisional, etc.)
+        self.gameType = 'regular'  # 'regular' or 'playoff'
+        self.gameNumber = None  # Game number within the week/round
         self.status = None
         self.homeTeam : FloosTeam.Team = homeTeam
         self.awayTeam : FloosTeam.Team = awayTeam
         self.awayScore = 0
         self.homeScore = 0
-        
-        # Play-by-play logging
-        self.play_log_file = None
-        self.verbose_logging = False
         
         # Set up timing manager for game-level delays
         if timingManager is not None:
@@ -310,6 +325,14 @@ class Game:
         self.awayPlaysTotal = 0
         self.home1stDownsTotal = 0
         self.away1stDownsTotal = 0
+        self.home3rdDownAtt = 0
+        self.home3rdDownConv = 0
+        self.away3rdDownAtt = 0
+        self.away3rdDownConv = 0
+        self.home4thDownAtt = 0
+        self.home4thDownConv = 0
+        self.away4thDownAtt = 0
+        self.away4thDownConv = 0
         self.homeTurnoversTotal = 0
         self.awayTurnoversTotal = 0
         self.isHalftime = False
@@ -322,10 +345,17 @@ class Game:
         self.yardsToSafety = 0
         self.offensiveTeam: FloosTeam.Team = None
         self.defensiveTeam: FloosTeam.Team = None
-        self.homeTeamElo = None
-        self.awayTeamElo = None
-        self.homeTeamWinProbability = None
-        self.awayTeamWinProbability = None
+        self.homeTeamElo = getattr(homeTeam, 'elo', 1500) if homeTeam else 1500
+        self.awayTeamElo = getattr(awayTeam, 'elo', 1500) if awayTeam else 1500
+        
+        # Calculate initial win probabilities based on ELO
+        if self.homeTeamElo is not None and self.awayTeamElo is not None:
+            self.homeTeamWinProbability = FloosMethods.calculateProbability(self.awayTeamElo, self.homeTeamElo) * 100
+            self.awayTeamWinProbability = FloosMethods.calculateProbability(self.homeTeamElo, self.awayTeamElo) * 100
+        else:
+            self.homeTeamWinProbability = None
+            self.awayTeamWinProbability = None
+        
         self.totalPlays = 0
         self.winningTeam: FloosTeam.Team = None
         self.losingTeam: FloosTeam.Team = None
@@ -337,10 +367,104 @@ class Game:
         self.otHomeHadPos = False
         self.otAwayHadPos = False
         self.firstOtPossessionComplete = False  # Track if both teams have had initial OT possession
+        self.otFirstPossTeam = None             # Team that received ball from OT coin flip
+        self.otFirstPossComplete = False        # True once first team's OT possession ends
+        self.otSecondPossComplete = False       # True once second team's OT possession ends
         self.startTime: datetime.datetime = None
         self.isTwoPtConv = False
         self.isOnsideKick = False
         self.gamePressure = 0
+    
+    def getDisplayId(self) -> str:
+        """
+        Generate a human-readable display ID for logs/UI
+        Format: s1w5g3 (season 1, week 5, game 3) or s1r2g1 (season 1, playoff round 2, game 1)
+        """
+        if self.gameType == 'playoff':
+            return f"s{self.seasonNumber}r{self.playoffRound}g{self.gameNumber}"
+        else:
+            return f"s{self.seasonNumber}w{self.week}g{self.gameNumber}"
+
+    def _collect_player_stats_for_broadcast(self, team):
+        """Collect player stats from a team in format ready for WebSocket broadcast"""
+        player_stats = []
+        
+        for pos, player in team.rosterDict.items():
+            player: FloosPlayer.Player
+            
+            stats = {
+                'playerId': str(player.id),
+                'playerName': player.name,
+                'position': player.position.name,
+                'team': team.name,
+            }
+            
+            # Add passing stats if applicable
+            if player.gameStatsDict['passing']['att'] > 0:
+                stats['passingAttempts'] = player.gameStatsDict['passing']['att']
+                stats['passingCompletions'] = player.gameStatsDict['passing']['comp']
+                stats['passingYards'] = player.gameStatsDict['passing']['yards']
+                stats['passingTouchdowns'] = player.gameStatsDict['passing']['tds']
+                stats['interceptions'] = player.gameStatsDict['passing']['ints']
+            
+            # Add rushing stats if applicable
+            if player.gameStatsDict['rushing']['carries'] > 0:
+                stats['rushingAttempts'] = player.gameStatsDict['rushing']['carries']
+                stats['rushingYards'] = player.gameStatsDict['rushing']['yards']
+                stats['rushingTouchdowns'] = player.gameStatsDict['rushing']['tds']
+            
+            # Add receiving stats if applicable
+            if player.gameStatsDict['receiving']['targets'] > 0:
+                stats['targets'] = player.gameStatsDict['receiving']['targets']
+                stats['receptions'] = player.gameStatsDict['receiving']['receptions']
+                stats['receivingYards'] = player.gameStatsDict['receiving']['yards']
+                stats['receivingTouchdowns'] = player.gameStatsDict['receiving']['tds']
+            
+            # Add kicking stats if applicable
+            if player.position == FloosPlayer.Position.K:
+                stats['fieldGoalsAttempted'] = player.gameStatsDict['kicking']['fgAtt']
+                stats['fieldGoalsMade'] = player.gameStatsDict['kicking']['fgs']
+                stats['extraPointsAttempted'] = player.gameStatsDict['kicking']['xpAtt']
+                stats['extraPointsMade'] = player.gameStatsDict['kicking']['xps']
+            
+            # Only include players who have stats
+            if len(stats) > 4:  # More than just base fields (playerId, playerName, position, team)
+                player_stats.append(stats)
+        
+        return player_stats
+    
+    def _collect_team_stats_for_broadcast(self, team, is_home=True):
+        """Collect team-level stats for WebSocket broadcast"""
+        # Calculate total yards
+        pass_yards = 0
+        rush_yards = 0
+        
+        for player in team.rosterDict.values():
+            pass_yards += player.gameStatsDict['passing']['yards']
+            rush_yards += player.gameStatsDict['rushing']['yards']
+        
+        total_yards = pass_yards + rush_yards
+        turnovers = self.homeTurnoversTotal if is_home else self.awayTurnoversTotal
+        total_plays = self.homePlaysTotal if is_home else self.awayPlaysTotal
+        first_downs = self.home1stDownsTotal if is_home else self.away1stDownsTotal
+        sacks = team.gameDefenseStats.get('sacks', 0)
+        
+        return {
+            'teamId': str(team.id),
+            'teamName': team.name,
+            'totalYards': total_yards,
+            'passingYards': pass_yards,
+            'rushingYards': rush_yards,
+            'turnovers': turnovers,
+            'timeOfPossession': '0:00',  # TODO: Track actual time of possession
+            'thirdDownConversions': '0/0',  # TODO: Track third down conversions
+            'fourthDownConversions': '0/0',  # TODO: Track fourth down conversions
+            'penalties': 0,  # TODO: Track penalties
+            'penaltyYards': 0,  # TODO: Track penalty yards
+            'totalPlays': total_plays,
+            'firstDowns': first_downs,
+            'sacks': sacks
+        }
 
     def getGameData(self):
         homeTeamOffenseStatsDict = {}
@@ -388,7 +512,7 @@ class Game:
             playerDict['name'] = player.name
             playerDict['id'] = player.id
             playerDict['number'] = player.currentNumber
-            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = player.gameStats.to_legacy_dict()
 
@@ -425,7 +549,7 @@ class Game:
             playerDict['name'] = player.name
             playerDict['id'] = player.id
             playerDict['number'] = player.currentNumber
-            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = player.gameStats.to_legacy_dict()
 
@@ -582,7 +706,7 @@ class Game:
 
             playerDict['name'] = player.name
             playerDict['id'] = player.id
-            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = player.gameStats.to_legacy_dict()
 
@@ -618,7 +742,7 @@ class Game:
 
             playerDict['name'] = player.name
             playerDict['id'] = player.id
-            playerDict['ratingStars'] = round((((player.attributes.skillRating - 60)/40)*4)+1)
+            playerDict['ratingStars'] = round((((player.playerRating - 60)/40)*4)+1)
             playerDict['playerTier'] = player.playerTier.value
             playerDict['gameStats'] = player.gameStats.to_legacy_dict()
 
@@ -847,6 +971,41 @@ class Game:
                     else:
                         self.play.passPlay(returnMediumPassPlay())
                         return
+                elif scoreDiff < 0:
+                    # Trailing in Q4 — pass-heavy, more urgent as clock winds down
+                    deficit = abs(scoreDiff)
+                    if self.gameClockSeconds < 120:
+                        # Final two minutes — almost exclusively pass
+                        if self.yardsToEndzone <= 10:
+                            self.play.passPlay(returnShortPassPlay())
+                        elif self.yardsToEndzone <= 30:
+                            self.play.passPlay(returnMediumPassPlay())
+                        else:
+                            self.play.passPlay(returnLongPassPlay())
+                        return
+                    elif self.gameClockSeconds < 300 and deficit <= 8:
+                        # Last 5 min, one score down — 80% pass
+                        x = batched_randint(1, 10)
+                        if x <= 8:
+                            if self.yardsToEndzone <= 20:
+                                self.play.passPlay(returnMediumPassPlay())
+                            else:
+                                self.play.passPlay(returnLongPassPlay())
+                        else:
+                            self.play.runPlay()
+                        return
+                    else:
+                        # Earlier in Q4 trailing — pass-leaning (60%)
+                        x = batched_randint(1, 10)
+                        if x <= 4:
+                            self.play.runPlay()
+                        elif self.yardsToEndzone <= 20:
+                            self.play.passPlay(returnMediumPassPlay())
+                        elif x <= 7:
+                            self.play.passPlay(returnMediumPassPlay())
+                        else:
+                            self.play.passPlay(returnLongPassPlay())
+                        return
             elif self.yardsToEndzone <= 10:
                 x = batched_randint(1,10)
                 if x <= 5:
@@ -1021,7 +1180,49 @@ class Game:
                         return
                     self.play.passPlay(returnMediumPassPlay())
                     return
-            
+
+            elif scoreDiff < 0:
+                # TRAILING and NOT in field goal range — go for it based on urgency
+                deficit = abs(scoreDiff)
+                if self.currentQuarter == 4:
+                    if deficit <= 8:
+                        # One score down in Q4 — almost never punt
+                        if self.yardsToFirstDown <= 3:
+                            self.play.passPlay(returnShortPassPlay())
+                            return
+                        elif self.yardsToFirstDown <= 8:
+                            self.play.passPlay(returnMediumPassPlay())
+                            return
+                        else:
+                            self.play.passPlay(returnLongPassPlay())
+                            return
+                    elif deficit <= 16 and self.gameClockSeconds < 480:
+                        # Two scores down in Q4 with time running out
+                        if self.yardsToFirstDown <= 3:
+                            self.play.passPlay(returnShortPassPlay())
+                            return
+                        elif self.yardsToFirstDown <= 8:
+                            x = batched_randint(1, 10)
+                            if x <= 8:
+                                self.play.passPlay(returnMediumPassPlay())
+                                return
+                        else:
+                            x = batched_randint(1, 10)
+                            if x <= 6:
+                                self.play.passPlay(returnLongPassPlay())
+                                return
+                    elif deficit > 16 and self.gameClockSeconds < 300:
+                        # Down multiple scores in Q4, clock running out — desperation
+                        self.play.passPlay(returnLongPassPlay())
+                        return
+                elif self.currentQuarter == 3 and deficit <= 8 and self.yardsToFirstDown <= 2:
+                    # Q3, one score down, short yardage — go for it
+                    self.play.passPlay(returnShortPassPlay())
+                    return
+                # Default: punt
+                self.play.playType = PlayType.Punt
+                return
+
             elif self.yardsToEndzone <= 5 and inFieldGoalRange:
                     x = batched_randint(1,10)
                     if x < 7:
@@ -1124,17 +1325,16 @@ class Game:
                     return
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
-        if self.totalPlays > GAME_MAX_PLAYS:
-            if offense is self.homeTeam:
-                if self.otHomeHadPos == False:
-                    self.otHomeHadPos = True
-            elif offense is self.awayTeam:
-                if self.otAwayHadPos == False:
-                    self.otAwayHadPos = True
-        
-        # Update OT possession tracking
-        if self.currentQuarter == 5:
-            if self.otHomeHadPos and self.otAwayHadPos:
+        # OT possession tracking: detect when each team's possession ends
+        # offense = team giving up ball, defense = team receiving ball
+        if self.currentQuarter >= 5 and self.otFirstPossTeam is not None:
+            if offense is self.otFirstPossTeam and not self.otFirstPossComplete:
+                # First team's possession just ended
+                self.otFirstPossComplete = True
+                self.firstOtPossessionComplete = False  # not complete until second team also done
+            elif self.otFirstPossComplete and offense is not self.otFirstPossTeam:
+                # Second team's possession just ended — both teams have had their turn
+                self.otSecondPossComplete = True
                 self.firstOtPossessionComplete = True
         
         self.offensiveTeam = defense
@@ -1523,9 +1723,28 @@ class Game:
         self.awayTeamElo = self.awayTeam.elo
         
         # Calculate initial win probability using ELO (will be updated throughout game)
-        initial_wp = self.calculateWinProbability()
-        self.homeTeamWinProbability = initial_wp['home']
-        self.awayTeamWinProbability = initial_wp['away']
+        initialWp = self.calculateWinProbability()
+        self.homeTeamWinProbability = initialWp['home']
+        self.awayTeamWinProbability = initialWp['away']
+
+        # Store pre-game WP (0-1 decimal) for ELO update after game — must use the same
+        # value that was displayed at kickoff, not the end-of-game running probability
+        self.preGameHomeWinProbability = self.homeTeamWinProbability / 100.0
+        self.preGameAwayWinProbability = self.awayTeamWinProbability / 100.0
+
+        # Track previous win probability for WPA (Win Probability Added) calculations
+        self.previousHomeWinProbability = self.homeTeamWinProbability
+        self.previousAwayWinProbability = self.awayTeamWinProbability
+        
+        # Broadcast game start event
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            event = GameEvent.gameStart(
+                gameId=self.id,
+                homeTeam={'name': self.homeTeam.name, 'city': self.homeTeam.city, 'abbr': self.homeTeam.abbr},
+                awayTeam={'name': self.awayTeam.name, 'city': self.awayTeam.city, 'abbr': self.awayTeam.abbr},
+                startTime=self.startTime
+            )
+            broadcaster.broadcast_sync(self.id, event)
 
         for player in self.homeTeam.rosterDict.values():
             player: FloosPlayer.Player
@@ -1556,15 +1775,23 @@ class Game:
                                                 'timeRemaining': self.formatTime(self.gameClockSeconds)
                                             }
                                         })
+        self.broadcastGameState(includeLastPlay=False, eventMessage={
+            'text': '{} wins the coin toss'.format(coinFlipWinner.name),
+            'quarter': 1,
+            'timeRemaining': self.formatTime(self.gameClockSeconds)
+        })
         
         # Main game loop - run until game is over
         while not self.isGameOver():
             # Format and add previous play to feed BEFORE quarter transitions
             # This ensures Q4 plays appear before OT events
-            lastPlayFormatted = False
+            lastPlayFormatted = getattr(self, '_pendingPossessionChange', False)
             if self.totalPlays > 0 and self.gameClockSeconds <= 0:
-                # Only format if the play was actually executed (has playText)
-                if hasattr(self.play, 'playText') and self.play.playText:
+                # Broadcast the last play with the CURRENT quarter before advanceQuarter() changes it.
+                # Use playResult (not playText) to check if the play actually ran.
+                quarterEndPlayRan = getattr(self.play, 'playResult', None) is not None
+                if quarterEndPlayRan and not getattr(self.play, 'playText', None):
+                    # Play ran but hasn't been formatted yet — format and broadcast now
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
@@ -1572,8 +1799,12 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+                    self.broadcastGameState(includeLastPlay=True)
                     lastPlayFormatted = True
-            
+                elif getattr(self.play, 'playText', None):
+                    # Already formatted (e.g. TD broadcast) — just mark as done
+                    lastPlayFormatted = True
+
             # Check for quarter transitions
             if self.gameClockSeconds <= 0:
                 oldQuarter = self.currentQuarter
@@ -1592,6 +1823,11 @@ class Game:
                                                     'timeRemaining': '0:00'
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': 'Halftime',
+                        'quarter': 2,
+                        'timeRemaining': '0:00'
+                    })
                     if self.timingManager:
                         await self.timingManager.waitForHalftime()
                     self.isHalftime = False
@@ -1608,6 +1844,11 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': 'Start Overtime',
+                        'quarter': 'OT',
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
                     self.isOvertime = True
                     x = batched_randint(0,1)
                     if x == 0:
@@ -1622,9 +1863,15 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': '{} wins the OT coin toss'.format(coinFlipWinner.name),
+                        'quarter': 'OT',
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
+                    self.otFirstPossTeam = coinFlipWinner
                     self.turnover(coinFlipLoser, coinFlipWinner, possReset)
                     self.down = 1
-                
+
                 elif oldQuarter == 5 and self.currentQuarter == 5:
                     # Additional OT period (still tied)
                     self.gameFeed.insert(0, {'event':  {
@@ -1633,6 +1880,11 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': 'Start Additional Overtime Period',
+                        'quarter': 'OT',
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
                     # Do coin flip for new OT period
                     x = batched_randint(0,1)
                     if x == 0:
@@ -1647,6 +1899,11 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': '{} wins the OT coin toss'.format(coinFlipWinner.name),
+                        'quarter': 'OT',
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
                     self.turnover(coinFlipLoser, coinFlipWinner, possReset)
                     self.down = 1
                 
@@ -1660,6 +1917,25 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': 'Start 2nd Quarter',
+                        'quarter': 2,
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
+                    # Broadcast end of Q1 stats
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                        homeStats = self._collect_player_stats_for_broadcast(self.homeTeam)
+                        awayStats = self._collect_player_stats_for_broadcast(self.awayTeam)
+                        homeTeamStats = self._collect_team_stats_for_broadcast(self.homeTeam, is_home=True)
+                        awayTeamStats = self._collect_team_stats_for_broadcast(self.awayTeam, is_home=False)
+                        event = PlayerEvent.gameStatsUpdate(
+                            gameId=self.id,
+                            homePlayerStats=homeStats,
+                            awayPlayerStats=awayStats,
+                            homeTeamStats=homeTeamStats,
+                            awayTeamStats=awayTeamStats
+                        )
+                        broadcaster.broadcast_sync(self.id, event)
                 elif self.currentQuarter == 3:
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
@@ -1669,6 +1945,25 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': 'Start 3rd Quarter',
+                        'quarter': 3,
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
+                    # Broadcast halftime stats
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                        homeStats = self._collect_player_stats_for_broadcast(self.homeTeam)
+                        awayStats = self._collect_player_stats_for_broadcast(self.awayTeam)
+                        homeTeamStats = self._collect_team_stats_for_broadcast(self.homeTeam, is_home=True)
+                        awayTeamStats = self._collect_team_stats_for_broadcast(self.awayTeam, is_home=False)
+                        event = PlayerEvent.gameStatsUpdate(
+                            gameId=self.id,
+                            homePlayerStats=homeStats,
+                            awayPlayerStats=awayStats,
+                            homeTeamStats=homeTeamStats,
+                            awayTeamStats=awayTeamStats
+                        )
+                        broadcaster.broadcast_sync(self.id, event)
                 elif self.currentQuarter == 4:
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
@@ -1678,6 +1973,25 @@ class Game:
                                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                                 }
                                             })
+                    self.broadcastGameState(includeLastPlay=False, eventMessage={
+                        'text': 'Start 4th Quarter',
+                        'quarter': 4,
+                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                    })
+                    # Broadcast end of Q3 stats
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                        homeStats = self._collect_player_stats_for_broadcast(self.homeTeam)
+                        awayStats = self._collect_player_stats_for_broadcast(self.awayTeam)
+                        homeTeamStats = self._collect_team_stats_for_broadcast(self.homeTeam, is_home=True)
+                        awayTeamStats = self._collect_team_stats_for_broadcast(self.awayTeam, is_home=False)
+                        event = PlayerEvent.gameStatsUpdate(
+                            gameId=self.id,
+                            homePlayerStats=homeStats,
+                            awayPlayerStats=awayStats,
+                            homeTeamStats=homeTeamStats,
+                            awayTeamStats=awayTeamStats
+                        )
+                        broadcaster.broadcast_sync(self.id, event)
 
             # Start new possession if needed
             if self.down == 0 or self.down > 4:
@@ -1689,7 +2003,14 @@ class Game:
             # Possession loop - while offense has downs
             while self.down <= 4 and self.gameClockSeconds > 0:
                 # Show previous play if exists (unless already formatted at quarter transition)
-                if self.totalPlays > 0 and not lastPlayFormatted:
+                # Update yardline display to current ball position (do this before broadcast and play creation)
+                if self.yardsToEndzone > 50:
+                    self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100-self.yardsToEndzone))
+                else:
+                    self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                playActuallyRan = getattr(self.play, 'playResult', None) is not None
+                if self.totalPlays > 0 and not lastPlayFormatted and playActuallyRan:
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
@@ -1697,20 +2018,12 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
-                
+
+                    # Broadcast comprehensive game state (replaces playComplete, scoreUpdate, gameStateUpdate)
+                    self.broadcastGameState(includeLastPlay=True)
+
                 # Reset flag after first iteration
                 lastPlayFormatted = False
-
-                # Update yardline display
-                if self.yardsToEndzone > 50:
-                    self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100-self.yardsToEndzone))
-                else:
-                    self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
-
-                # Calculate and update win probability before play
-                win_prob = self.calculateWinProbability()
-                self.homeTeamWinProbability = win_prob['home']
-                self.awayTeamWinProbability = win_prob['away']
 
                 # Create new play
                 self.play = Play(self)
@@ -1718,6 +2031,74 @@ class Game:
                 # Between-plays timing
                 if self.timingManager:
                     await self.timingManager.waitBetweenPlays()
+
+                # After the delay: broadcast possession change with new ball position
+                if getattr(self, '_pendingPossessionChange', False):
+                    if getattr(self, '_pendingKickoff', False):
+                        kickingTeam = self.defensiveTeam
+                        receivingTeam = self.offensiveTeam
+
+                        if self._shouldOnsideKick():
+                            # Announce attempt
+                            self.broadcastGameState(
+                                includeLastPlay=False,
+                                isPossessionChange=True,
+                                eventMessage={
+                                    'text': f'{kickingTeam.abbr} attempts an onside kick!',
+                                    'quarter': self.currentQuarter,
+                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                }
+                            )
+                            if self.timingManager:
+                                await self.timingManager.waitBeforeOnsideResult()
+
+                            # Resolve recovery (~5-10% kicking team success)
+                            import random
+                            kickingTeamRecovers = random.random() < random.uniform(0.05, 0.10)
+
+                            if kickingTeamRecovers:
+                                self.turnover(self.offensiveTeam, self.defensiveTeam, 50)
+                                self.broadcastGameState(
+                                    includeLastPlay=False,
+                                    isPossessionChange=True,
+                                    eventMessage={
+                                        'text': f'{kickingTeam.abbr} recovers the onside kick! Ball at midfield!',
+                                        'quarter': self.currentQuarter,
+                                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                    }
+                                )
+                            else:
+                                # Receiving team keeps ball — move to their 40 instead of their 20
+                                self.yardsToEndzone = 60
+                                self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+                                self.broadcastGameState(
+                                    includeLastPlay=False,
+                                    isPossessionChange=True,
+                                    eventMessage={
+                                        'text': f'{receivingTeam.abbr} recovers at their own 40!',
+                                        'quarter': self.currentQuarter,
+                                        'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                    }
+                                )
+                        else:
+                            # Normal kickoff
+                            self.broadcastGameState(
+                                includeLastPlay=False,
+                                isPossessionChange=True,
+                                eventMessage={
+                                    'text': f'{kickingTeam.abbr} kicks off',
+                                    'quarter': self.currentQuarter,
+                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                }
+                            )
+
+                        self._pendingKickoff = False
+                        if self.timingManager:
+                            await self.timingManager.waitAfterKickoff()
+                    else:
+                        # Punt/turnover: immediate possession-change broadcast
+                        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+                    self._pendingPossessionChange = False
 
                 # PRE-SNAP: Consume huddle/snap time
                 if self.clockRunning:
@@ -1731,35 +2112,23 @@ class Game:
 
                 # Call and execute play
                 self.playCaller()
-                
-                # Log pre-play situation
-                if self.verbose_logging:
-                    self.logPlay(f"\n--- PLAY #{self.totalPlays + 1} ---")
-                    self.logPlay(f"Quarter {self.currentQuarter}, {self.formatTime(self.gameClockSeconds)} - Score: {self.awayTeam.abbr} {self.awayScore}, {self.homeTeam.abbr} {self.homeScore}")
-                    self.logPlay(f"Win Probability: {self.homeTeam.abbr} {self.homeTeamWinProbability}%, {self.awayTeam.abbr} {self.awayTeamWinProbability}%")
-                    self.logPlay(f"{self.down}{self.getOrdinal(self.down)} & {self.yardsToFirstDown if self.yardsToFirstDown != 'Goal' else 'Goal'} at {self.yardLine}")
-                    self.logPlay(f"Offense: {self.offensiveTeam.abbr} (Rating: {self.offensiveTeam.offenseRating})")
-                    self.logPlay(f"Defense: {self.defensiveTeam.abbr} (Pass Cov: {self.defensiveTeam.defensePassCoverageRating}, Run: {self.defensiveTeam.defenseRunCoverageRating}, Rush: {self.defensiveTeam.defensePassRushRating})")
-                    pressure = self.calculateGamePressure()
-                    self.logPlay(f"Game Pressure: {pressure:.1f}")
-                
                 self.totalPlays += 1
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
+                    if self.down == 3:
+                        self.home3rdDownAtt += 1
+                    elif self.down == 4 and self.play.playType not in (PlayType.Punt, PlayType.FieldGoal):
+                        self.home4thDownAtt += 1
                 if self.offensiveTeam is self.awayTeam:
                     self.awayPlaysTotal += 1
+                    if self.down == 3:
+                        self.away3rdDownAtt += 1
+                    elif self.down == 4 and self.play.playType not in (PlayType.Punt, PlayType.FieldGoal):
+                        self.away4thDownAtt += 1
 
                 # PLAY EXECUTION: Handle different play types
                 if self.play.playType is PlayType.FieldGoal:
-                    if self.verbose_logging:
-                        self.logPlay(f"Play Type: FIELD GOAL ATTEMPT from {self.yardsToEndzone + 17} yards")
-                    
                     self.play.fieldGoalTry()
-                    
-                    if self.verbose_logging:
-                        kicker = self.offensiveTeam.rosterDict['k']
-                        self.logPlay(f"  Kicker: {kicker.name} (Leg: {kicker.attributes.legStrength}, Acc: {kicker.attributes.accuracy})")
-                        self.logPlay(f"  Result: {'GOOD' if self.play.isFgGood else 'NO GOOD'}")
                     
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
@@ -1775,31 +2144,48 @@ class Game:
                         self.play.awayTeamScore = self.awayScore
                         self.clockRunning = False  # Clock stops after score
                         
-                        if self.verbose_logging:
-                            self.logPlay(f"  >>> SCORE! {self.offensiveTeam.abbr} now leads/trails {self.homeScore}-{self.awayScore}")
+                        # Format and broadcast field goal BEFORE checking if game ends
+                        self.formatPlayText()
+                        if self.play.scoreChange or self.play.yardage >= 30:
+                            self.highlights.insert(0, {'play': self.play})
+                            self.leagueHighlights.insert(0, {'play': self.play})
+                        self.gameFeed.insert(0, {'play': self.play})
+                        
+                        # Broadcast comprehensive game state
+                        self.broadcastGameState(includeLastPlay=True)
                         
                         # Check if OT should end after score
                         if self.checkOvertimeEnd():
                             break
                         
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
+                        self._pendingPossessionChange = True
+                        self._pendingKickoff = True
+                        lastPlayFormatted = True
                         break
                     else:
                         self.play.playResult = PlayResult.FieldGoalNoGood
                         self.clockRunning = False  # Clock stops after turnover
+                        self.formatPlayText()
+                        self.gameFeed.insert(0, {'play': self.play})
+                        self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
                         break
-                        
+
                 if self.play.playType is PlayType.Punt:
                     self.play.playResult = PlayResult.Punt
                     kicker = self.offensiveTeam.rosterDict['k']
-                    assert kicker is not None, f"Team {self.offensiveTeam.teamName} has no kicker in roster!"
-                    maxPuntYards = round(70*(kicker.attributes.legStrength/100))
+                    if kicker is None:
+                        logging.error(f"Team {self.offensiveTeam.teamName} has no kicker - using default punt distance")
+                    maxPuntYards = round(70*(kicker.attributes.legStrength/100)) if kicker else 45
                     if maxPuntYards > self.yardsToEndzone:
                         maxPuntYards = self.yardsToEndzone + 10
                     puntDistance = randint((maxPuntYards-20), maxPuntYards)
                     if puntDistance >= self.yardsToEndzone:
                         puntDistance = self.yardsToEndzone - 20
+                    self.play.yardage = puntDistance
                     newYards = 100 - (self.yardsToEndzone - puntDistance)
                     
                     # Consume time for punt (always stops clock)
@@ -1808,32 +2194,20 @@ class Game:
                     self.checkTwoMinuteWarning()
                     self.clockRunning = False  # Clock stops after punt
                     
+                    self.formatPlayText()
+                    if self.play.scoreChange or self.play.yardage >= 30:
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                    self.gameFeed.insert(0, {'play': self.play})
+                    self.broadcastGameState(includeLastPlay=True)
                     self.turnover(self.offensiveTeam, self.defensiveTeam, newYards)
+                    self._pendingPossessionChange = True
+                    lastPlayFormatted = True
                     break
-                    
+
                 # POST-PLAY: Consume play duration time (for run/pass plays)
                 playDuration = self.calculatePlayDuration(self.play.playType, self.play.isInBounds)
                 self.consumeGameTime(playDuration)
-                
-                # Log play result for run/pass plays
-                if self.verbose_logging and self.play.playType in [PlayType.Run, PlayType.Pass]:
-                    self.logPlay(f"Play Type: {self.play.playType.value}")
-                    if self.play.playType == PlayType.Run:
-                        runner = self.offensiveTeam.rosterDict['rb']
-                        self.logPlay(f"  Runner: {runner.name} (Pwr: {runner.attributes.power}, Spd: {runner.attributes.speed}, Agl: {runner.attributes.agility})")
-                    elif self.play.playType == PlayType.Pass:
-                        qb = self.offensiveTeam.rosterDict['qb']
-                        if hasattr(self.play, 'receiver') and self.play.receiver:
-                            self.logPlay(f"  Passer: {qb.name} (Arm: {qb.attributes.armStrength}, Acc: {qb.attributes.accuracy})")
-                            self.logPlay(f"  Target: {self.play.receiver.name} (Spd: {self.play.receiver.attributes.speed}, Hands: {self.play.receiver.attributes.hands})")
-                    
-                    self.logPlay(f"  Gain: {self.play.yardage} yards")
-                    if self.play.isFumbleLost:
-                        self.logPlay(f"  >>> FUMBLE LOST!")
-                    if self.play.isInterception:
-                        self.logPlay(f"  >>> INTERCEPTION!")
-                    if self.play.isSack:
-                        self.logPlay(f"  >>> SACK!")
                 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
@@ -1848,31 +2222,46 @@ class Game:
                         self.homeTurnoversTotal += 1
                     elif self.offensiveTeam is self.awayTeam:
                         self.awayTurnoversTotal += 1
+                    self.formatPlayText()
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                    self.gameFeed.insert(0, {'play': self.play})
+
                     if self.play.yardage >= self.yardsToEndzone:
+                        self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         self._addScore(self.defensiveTeam, 6)
-    
-                        self.play.extraPointTry(self.defensiveTeam)
-                        if self.play.isXpGood:
-                            self.play.playResult = PlayResult.TouchdownXP
-                            self._addScore(self.defensiveTeam, 1) 
+
+                        if self._shouldGoForTwo(self.defensiveTeam):
+                            self.play.playResult = PlayResult.Touchdown
                         else:
-                            self.play.playResult = PlayResult.TouchdownNoXP
+                            self.play.extraPointTry(self.defensiveTeam)
+                            if self.play.isXpGood:
+                                self.play.playResult = PlayResult.TouchdownXP
+                                self._addScore(self.defensiveTeam, 1)
+                            else:
+                                self.play.playResult = PlayResult.TouchdownNoXP
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
                         self.play.isTd = True
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
-                        
+
                         # Check if OT should end after score
                         if self.checkOvertimeEnd():
                             break
-                        
+
+                        self.broadcastGameState(includeLastPlay=True)
+                        if self.play.playResult is PlayResult.Touchdown:
+                            self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
-                        break
                     else:
+                        self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, (self.yardsToSafety + self.play.yardage))
+                    self._pendingPossessionChange = True
+                    lastPlayFormatted = True
                     break
                     
                 # Handle normal play outcomes
@@ -1881,7 +2270,7 @@ class Game:
                         self.play.isTd = True
                         if self.play.playType is PlayType.Run:
                             self.play.runner.addRushTd(self.play.yardage, self.isRegularSeasonGame)
-                            self.play.runner.updateInGameConfidence(.01)
+                            self.play.runner.updateInGameConfidence(.03)
                             self.play.defense.gameDefenseStats['runTdsAlwd'] += 1
                             self.play.defense.gameDefenseStats['tdsAlwd'] += 1
                         elif self.play.playType is PlayType.Pass:
@@ -1889,47 +2278,65 @@ class Game:
                             self.play.receiver.addReceiveTd(self.play.yardage, self.isRegularSeasonGame)
                             self.play.defense.gameDefenseStats['passTdsAlwd'] += 1
                             self.play.defense.gameDefenseStats['tdsAlwd'] += 1
-                            self.play.passer.updateInGameConfidence(.01)
-                            self.play.receiver.updateInGameConfidence(.01)
+                            self.play.passer.updateInGameConfidence(.03)
+                            self.play.receiver.updateInGameConfidence(.03)
 
                         self.play.defense.gameDefenseStats['ptsAlwd'] += 6
 
                         self._addScore(self.offensiveTeam, 6)
 
-                        self.play.extraPointTry(self.offensiveTeam)
-                        if self.play.isXpGood:
-                            self.play.playResult = PlayResult.TouchdownXP
-                            self._addScore(self.offensiveTeam, 1)
-
-                            self.play.defense.gameDefenseStats['ptsAlwd'] += 1
-
+                        if self._shouldGoForTwo(self.offensiveTeam):
+                            # Broadcast TD first, then simulate 2-pt as a separate play
+                            self.play.playResult = PlayResult.Touchdown
+                            self.play.scoreChange = True
+                            self.play.homeTeamScore = self.homeScore
+                            self.play.awayTeamScore = self.awayScore
+                            self.formatPlayText()
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                                self.highlights.insert(0, {'play': self.play})
+                                self.leagueHighlights.insert(0, {'play': self.play})
+                            self.gameFeed.insert(0, {'play': self.play})
+                            self.broadcastGameState(includeLastPlay=True)
+                            if self.checkOvertimeEnd():
+                                break
+                            self._simulate2PointConversionPlay(self.offensiveTeam, self.defensiveTeam)
                         else:
-                            self.play.playResult = PlayResult.TouchdownNoXP
-                        
-                        if self.verbose_logging:
-                            self.logPlay(f"  >>> TOUCHDOWN! {self.offensiveTeam.abbr} scores! XP: {'GOOD' if self.play.isXpGood else 'NO GOOD'}")
-                            self.logPlay(f"  >>> New Score: {self.awayTeam.abbr} {self.awayScore}, {self.homeTeam.abbr} {self.homeScore}")
-                        
-                        self.play.scoreChange = True
-                        self.play.homeTeamScore = self.homeScore
-                        self.play.awayTeamScore = self.awayScore
-                        
-                        # Check if OT should end after score
-                        if self.checkOvertimeEnd():
-                            break
-                        
+                            self.play.extraPointTry(self.offensiveTeam)
+                            if self.play.isXpGood:
+                                self.play.playResult = PlayResult.TouchdownXP
+                                self._addScore(self.offensiveTeam, 1)
+                                self.play.defense.gameDefenseStats['ptsAlwd'] += 1
+                            else:
+                                self.play.playResult = PlayResult.TouchdownNoXP
+                            self.play.scoreChange = True
+                            self.play.homeTeamScore = self.homeScore
+                            self.play.awayTeamScore = self.awayScore
+                            self.formatPlayText()
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                                self.highlights.insert(0, {'play': self.play})
+                                self.leagueHighlights.insert(0, {'play': self.play})
+                            self.gameFeed.insert(0, {'play': self.play})
+                            self.broadcastGameState(includeLastPlay=True)
+                            if self.checkOvertimeEnd():
+                                break
+
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
+                        self._pendingPossessionChange = True
+                        self._pendingKickoff = True
+                        lastPlayFormatted = True
                         break
 
                     elif self.play.yardage >= self.yardsToFirstDown:
-                        if self.verbose_logging:
-                            self.logPlay(f"  >>> FIRST DOWN!")
-                        
+                        downBefore = self.down
                         self.down = 1
                         if self.offensiveTeam is self.homeTeam:
                             self.home1stDownsTotal += 1
+                            if downBefore == 3: self.home3rdDownConv += 1
+                            elif downBefore == 4: self.home4thDownConv += 1
                         elif self.offensiveTeam is self.awayTeam:
                             self.away1stDownsTotal += 1
+                            if downBefore == 3: self.away3rdDownConv += 1
+                            elif downBefore == 4: self.away4thDownConv += 1
                         if self.yardsToEndzone < 10:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
@@ -1942,24 +2349,39 @@ class Game:
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         if self.play.isFumbleLost:
                             self._addScore(self.defensiveTeam, 6)
-    
-                            self.play.extraPointTry(self.defensiveTeam)
-                            if self.play.isXpGood:
-                                self.play.playResult = PlayResult.TouchdownXP
-                                self._addScore(self.defensiveTeam, 1) 
 
+                            if self._shouldGoForTwo(self.defensiveTeam):
+                                self.play.playResult = PlayResult.Touchdown
                             else:
-                                self.play.playResult = PlayResult.TouchdownNoXP
+                                self.play.extraPointTry(self.defensiveTeam)
+                                if self.play.isXpGood:
+                                    self.play.playResult = PlayResult.TouchdownXP
+                                    self._addScore(self.defensiveTeam, 1)
+                                else:
+                                    self.play.playResult = PlayResult.TouchdownNoXP
 
                             self.play.isTd = True
                             self.play.scoreChange = True
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
-                            
+
+                            # Broadcast score update
+                            if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                                event = GameEvent.scoreUpdate(
+                                    gameId=self.id,
+                                    homeScore=self.homeScore,
+                                    awayScore=self.awayScore,
+                                    scoringPlay={'type': 'touchdown', 'team': self.offensiveTeam.abbr}
+                                )
+                                broadcaster.broadcast_sync(self.id, event)
+
                             # Check if OT should end after score
                             if self.checkOvertimeEnd():
                                 break
-                            
+
+                            if self.play.playResult is PlayResult.Touchdown:
+                                self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
+
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
                         else:
@@ -1974,11 +2396,23 @@ class Game:
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
                             
+                            # Broadcast score update
+                            if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                                event = GameEvent.scoreUpdate(
+                                    gameId=self.id,
+                                    homeScore=self.homeScore,
+                                    awayScore=self.awayScore,
+                                    scoringPlay={'type': 'safety', 'team': self.defensiveTeam.abbr}
+                                )
+                                broadcaster.broadcast_sync(self.id, event)
+                            
                             # Check if OT should end after score
                             if self.checkOvertimeEnd():
                                 break
                             
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
+                            self._pendingPossessionChange = True
+                            self._pendingKickoff = True
                             break
 
                     elif self.play.yardage < self.yardsToFirstDown:
@@ -2001,24 +2435,27 @@ class Game:
         
         # Game over - show final play if it was a score or big play
         if self.totalPlays > 0 and self.play:
-            if self.play.scoreChange and not self.isOvertime:
+            if self.play.scoreChange:
                 self.formatPlayText()
                 if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
                     self.highlights.insert(0, {'play': self.play})
                     self.leagueHighlights.insert(0, {'play': self.play})
                 self.gameFeed.insert(0, {'play': self.play})
+                
+                # Broadcast final game state
+                self.broadcastGameState(includeLastPlay=True)
 
         # Determine winner
         if self.awayScore > self.homeScore:
             self.winningTeam = self.awayTeam
             self.losingTeam = self.homeTeam
             self.gameDict['score'] = '{0} - {1}'.format(self.awayScore, self.homeScore)
-            self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Final: {} - {} | {} - {}'.format(self.awayTeam.abbr, self.awayScore, self.homeTeam.abbr, self.homeScore),
-                                                'quarter': 'Final',
-                                                'timeRemaining': '0:00'
-                                            }
-                                        })
+            finalEventMessage = {
+                'text': 'Final: {} - {} | {} - {}'.format(self.awayTeam.abbr, self.awayScore, self.homeTeam.abbr, self.homeScore),
+                'quarter': 'Final',
+                'timeRemaining': '0:00'
+            }
+            self.gameFeed.insert(0, {'event': finalEventMessage})
             self.leagueHighlights.insert(0, {'event':  {
                                                 'text': 'Game Final: {} - {} | {} - {}'.format(self.awayTeam.name, self.awayScore, self.homeTeam.name, self.homeScore)
                                             }
@@ -2028,12 +2465,12 @@ class Game:
             self.winningTeam = self.homeTeam
             self.losingTeam = self.awayTeam
             self.gameDict['score'] = '{0} - {1}'.format(self.homeScore, self.awayScore)
-            self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Final: {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
-                                                'quarter': 'Final',
-                                                'timeRemaining': '0:00'
-                                            }
-                                        })
+            finalEventMessage = {
+                'text': 'Final: {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
+                'quarter': 'Final',
+                'timeRemaining': '0:00'
+            }
+            self.gameFeed.insert(0, {'event': finalEventMessage})
             self.leagueHighlights.insert(0, {'event':  {
                                                 'text': 'Game Final: {} - {} | {} - {}'.format(self.homeTeam.name, self.homeScore, self.awayTeam.name, self.awayScore)
                                             }
@@ -2043,12 +2480,12 @@ class Game:
             self.winningTeam = self.homeTeam  # Arbitrary - treat as home team win
             self.losingTeam = self.awayTeam
             self.gameDict['score'] = '{0} - {1} (TIE)'.format(self.homeScore, self.awayScore)
-            self.gameFeed.insert(0, {'event':  {
-                                                'text': 'Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
-                                                'quarter': 'Final',
-                                                'timeRemaining': '0:00'
-                                            }
-                                        })
+            finalEventMessage = {
+                'text': 'Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
+                'quarter': 'Final',
+                'timeRemaining': '0:00'
+            }
+            self.gameFeed.insert(0, {'event': finalEventMessage})
             self.leagueHighlights.insert(0, {'event':  {
                                                 'text': 'Game Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.name, self.homeScore, self.awayTeam.name, self.awayScore)
                                             }
@@ -2074,35 +2511,37 @@ class Game:
         self.calculateWinProbability()  # Calculate probabilities for external ELO update
         # Note: Post-game stat processing now handled by RecordManager.processPostGameStats()
         
-        # Close play log file if open
-        if self.play_log_file:
-            self.play_log_file.write(f"\n{'='*100}\n")
-            self.play_log_file.write(f"GAME COMPLETE: {self.awayTeam.abbr} {self.awayScore} - {self.homeTeam.abbr} {self.homeScore}\n")
-            self.play_log_file.write(f"{'='*100}\n")
-            self.play_log_file.close()
-            self.play_log_file = None
-    
-    def enableVerboseLogging(self, log_file_path):
-        """Enable verbose play-by-play logging to a file"""
-        try:
-            import os
-            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
-            self.play_log_file = open(log_file_path, 'w', encoding='utf-8')
-            self.verbose_logging = True
+        # Broadcast final game state with the "Final" event message so the play feed updates live
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            self.broadcastGameState(includeLastPlay=False, eventMessage=finalEventMessage, isFinalBroadcast=True)
+        
+        # Broadcast game end event
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            winner = self.winningTeam.name if self.winningTeam else 'Tie'
             
-            # Write header
-            self.play_log_file.write(f"{'='*100}\n")
-            self.play_log_file.write(f"PLAY-BY-PLAY LOG: {self.awayTeam.abbr} @ {self.homeTeam.abbr}\n")
-            self.play_log_file.write(f"{'='*100}\n\n")
-        except Exception as e:
-            print(f"Failed to enable verbose logging: {e}")
-            self.verbose_logging = False
+            # Collect final player and team stats
+            homeStats = self._collect_player_stats_for_broadcast(self.homeTeam)
+            awayStats = self._collect_player_stats_for_broadcast(self.awayTeam)
+            homeTeamStats = self._collect_team_stats_for_broadcast(self.homeTeam, is_home=True)
+            awayTeamStats = self._collect_team_stats_for_broadcast(self.awayTeam, is_home=False)
+            
+            # Broadcast game end with stats
+            event = GameEvent.gameEnd(
+                gameId=self.id,
+                finalScore={'home': self.homeScore, 'away': self.awayScore},
+                winner=winner,
+                stats={
+                    'totalPlays': self.totalPlays,
+                    'homePlays': self.homePlaysTotal,
+                    'awayPlays': self.awayPlaysTotal,
+                    'homePlayerStats': homeStats,
+                    'awayPlayerStats': awayStats,
+                    'homeTeamStats': homeTeamStats,
+                    'awayTeamStats': awayTeamStats
+                }
+            )
+            broadcaster.broadcast_sync(self.id, event)
     
-    def logPlay(self, message):
-        """Log a play-by-play message"""
-        if self.verbose_logging and self.play_log_file:
-            self.play_log_file.write(message + "\n")
-            self.play_log_file.flush()
     
     def getOrdinal(self, n):
         """Get ordinal suffix for a number (1st, 2nd, 3rd, 4th)"""
@@ -2162,6 +2601,251 @@ class Game:
         minutes = seconds // 60
         secs = seconds % 60
         return f"{minutes}:{secs:02d}"
+    
+    def _buildGameStatsSnapshot(self) -> dict:
+        """Build a snapshot of team-level box score and per-player game stats."""
+        def teamSnapshot(team):
+            roster = team.rosterDict
+            qb  = roster.get('qb')
+            rb  = roster.get('rb')
+            wr1 = roster.get('wr1')
+            wr2 = roster.get('wr2')
+            te  = roster.get('te')
+            k   = roster.get('k')
+
+            # Passing (QB only)
+            passYards = qb.gameStatsDict['passing']['yards'] if qb else 0
+            passTds   = qb.gameStatsDict['passing']['tds']   if qb else 0
+            passAtt   = qb.gameStatsDict['passing']['att']   if qb else 0
+            passComp  = qb.gameStatsDict['passing']['comp']  if qb else 0
+            passInts  = qb.gameStatsDict['passing']['ints']  if qb else 0
+
+            # Rushing (aggregate all skill positions)
+            rushYards = rushTds = rushCarries = fumbleLost = 0
+            for slot in ['rb', 'wr1', 'wr2', 'te']:
+                p = roster.get(slot)
+                if p:
+                    rushYards   += p.gameStatsDict['rushing']['yards']
+                    rushTds     += p.gameStatsDict['rushing']['tds']
+                    rushCarries += p.gameStatsDict['rushing']['carries']
+                    fumbleLost  += p.gameStatsDict['rushing']['fumblesLost']
+
+            turnovers = passInts + fumbleLost
+            defense   = team.gameDefenseStats
+
+            def playerDict(p, statsKey):
+                if not p:
+                    return None
+                rating = getattr(p, 'playerRating', 0) or 0
+                stars = round(((rating - 60) / 40) * 4 + 1) if rating >= 60 else 1
+                stats = dict(p.gameStatsDict[statsKey])
+                # Compute per-unit averages live (stored values only update end-of-game)
+                if statsKey == 'rushing':
+                    carries = stats.get('carries', 0)
+                    stats['ypc'] = round(stats.get('yards', 0) / carries, 1) if carries > 0 else 0.0
+                elif statsKey == 'passing':
+                    comp = stats.get('comp', 0)
+                    stats['ypc'] = round(stats.get('yards', 0) / comp, 1) if comp > 0 else 0.0
+                elif statsKey == 'receiving':
+                    recs = stats.get('receptions', 0)
+                    stats['ypr'] = round(stats.get('yards', 0) / recs, 1) if recs > 0 else 0.0
+                return {
+                    'id': p.id,
+                    'name': p.name,
+                    'position': p.position.name if hasattr(p, 'position') and p.position else None,
+                    'playerRating': rating,
+                    'ratingStars': max(1, min(5, stars)),
+                    'fantasyPoints': round(p.gameStatsDict.get('fantasyPoints', 0), 1),
+                    **stats,
+                }
+
+            return {
+                'team': {
+                    'passYards':   passYards,
+                    'passComp':    passComp,
+                    'passAtt':     passAtt,
+                    'passTds':     passTds,
+                    'passInts':    passInts,
+                    'rushYards':   rushYards,
+                    'rushCarries': rushCarries,
+                    'rushTds':     rushTds,
+                    'totalYards':  passYards + rushYards,
+                    'turnovers':   turnovers,
+                    'sacks':       defense.get('sacks', 0),
+                    'firstDowns':  self.home1stDownsTotal if team is self.homeTeam else self.away1stDownsTotal,
+                    'totalPlays':  self.homePlaysTotal if team is self.homeTeam else self.awayPlaysTotal,
+                    'thirdDownConv': self.home3rdDownConv if team is self.homeTeam else self.away3rdDownConv,
+                    'thirdDownAtt':  self.home3rdDownAtt  if team is self.homeTeam else self.away3rdDownAtt,
+                    'fourthDownConv': self.home4thDownConv if team is self.homeTeam else self.away4thDownConv,
+                    'fourthDownAtt':  self.home4thDownAtt  if team is self.homeTeam else self.away4thDownAtt,
+                },
+                'players': {
+                    'qb':  playerDict(qb,  'passing'),
+                    'rb':  playerDict(rb,  'rushing'),
+                    'wr1': playerDict(wr1, 'receiving'),
+                    'wr2': playerDict(wr2, 'receiving'),
+                    'te':  playerDict(te,  'receiving'),
+                    'k':   playerDict(k,   'kicking'),
+                }
+            }
+
+        return {
+            'home': teamSnapshot(self.homeTeam),
+            'away': teamSnapshot(self.awayTeam),
+        }
+
+    def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
+        """
+        Broadcast comprehensive game state after a play or game event.
+        This single event replaces score_update, play_complete, and game_state_update.
+
+        Args:
+            includeLastPlay: If True, include the last play data in the broadcast
+            eventMessage: Optional event message dict (e.g., {'text': 'Halftime', 'quarter': 2, ...})
+            isPossessionChange: If True, omit ball position fields so frontend keeps its current state
+            isFinalBroadcast: If True, broadcast even in TURBO mode (used for game-end state)
+        """
+        if not BROADCASTING_AVAILABLE or not broadcaster.is_enabled():
+            return
+
+        # In TURBO mode skip all per-play broadcasts; only send the final game state
+        from managers.timingManager import TimingMode
+        if self.timingManager and self.timingManager.getMode() == TimingMode.TURBO and not isFinalBroadcast:
+            return
+        
+        # Calculate win probabilities
+        winProb = self.calculateWinProbability()
+        newHomeWp = winProb['home']
+        newAwayWp = winProb['away']
+        homeWpa = float(newHomeWp - self.previousHomeWinProbability)
+        awayWpa = float(newAwayWp - self.previousAwayWinProbability)
+
+        # Compute upset alert: pre-game underdog (35% or less) is now favored by 65%+, starting Q2.
+        # Only qualifies as an upset if the pre-game favorite is currently in a playoff spot
+        # (top half of their league standings as of this week).
+        def teamInPlayoffSpot(team):
+            league = getattr(team, 'leagueRef', None)
+            if not league:
+                return False
+            standings = league.getStandings()
+            numPlayoffSpots = len(standings) // 2
+            for i, entry in enumerate(standings):
+                if entry['team'] is team:
+                    return i < numPlayoffSpots
+            return False
+
+        isUpsetAlert = False
+        if hasattr(self, 'preGameHomeWinProbability') and self.currentQuarter >= 2:
+            preGameHomeWp = self.preGameHomeWinProbability  # 0-1 decimal
+            if preGameHomeWp < 0.35 and newHomeWp >= 65.0 and teamInPlayoffSpot(self.awayTeam):
+                isUpsetAlert = True
+            elif preGameHomeWp > 0.65 and newAwayWp >= 65.0 and teamInPlayoffSpot(self.homeTeam):
+                isUpsetAlert = True
+        self.isUpsetAlert = isUpsetAlert
+
+        # Build last play data if requested (and no event message)
+        lastPlayData = None
+        if eventMessage:
+            # Use event message instead of play data
+            lastPlayData = eventMessage
+        elif includeLastPlay and hasattr(self, 'play') and self.play:
+            lastPlayData = {
+                'playNumber': self.totalPlays,
+                'quarter': self.play.quarter if hasattr(self.play, 'quarter') else self.currentQuarter,
+                'timeRemaining': self.formatTime(self.gameClockSeconds),
+                'down': self.play.down if hasattr(self.play, 'down') else self.down,
+                'distance': self.play.yardsTo1st if hasattr(self.play, 'yardsTo1st') else self.yardsToFirstDown,
+                'yardLine': self.play.yardLine if hasattr(self.play, 'yardLine') else self.yardLine,
+                'playType': self.play.playType.name if hasattr(self.play, 'playType') and hasattr(self.play.playType, 'name') else str(getattr(self.play, 'playType', 'Unknown')),
+                'yardsGained': getattr(self.play, 'yardage', 0),
+                'description': getattr(self.play, 'playText', ''),
+                'playResult': self.play.playResult.value if hasattr(self.play, 'playResult') and self.play.playResult else None,
+                'isTouchdown': getattr(self.play, 'isTd', False),
+                'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
+                'isSack': getattr(self.play, 'isSack', False),
+                'scoreChange': getattr(self.play, 'scoreChange', False),
+                'homeTeamScore': getattr(self.play, 'homeTeamScore', None),
+                'awayTeamScore': getattr(self.play, 'awayTeamScore', None),
+                'offensiveTeam': self.play.offense.abbr if hasattr(self.play, 'offense') else self.offensiveTeam.abbr,
+                'defensiveTeam': self.play.defense.abbr if hasattr(self.play, 'defense') else self.defensiveTeam.abbr,
+                'homeWpa': round(homeWpa, 2),
+                'awayWpa': round(awayWpa, 2),
+                'isBigPlay': bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+            }
+        
+        # Determine possession team abbreviation and booleans
+        possessionAbbr = None
+        homeTeamPoss = False
+        awayTeamPoss = False
+        if hasattr(self, 'offensiveTeam'):
+            possessionAbbr = self.offensiveTeam.abbr
+            homeTeamPoss = (self.offensiveTeam == self.homeTeam)
+            awayTeamPoss = (self.offensiveTeam == self.awayTeam)
+        
+        # Build comprehensive game state
+        gameStateData = {
+            'status': self.status.name if hasattr(self.status, 'name') else str(self.status),
+            'homeScore': self.homeScore,
+            'awayScore': self.awayScore,
+            'quarterScores': {
+                'home': {
+                    'q1': getattr(self, 'homeScoreQ1', 0),
+                    'q2': getattr(self, 'homeScoreQ2', 0),
+                    'q3': getattr(self, 'homeScoreQ3', 0),
+                    'q4': getattr(self, 'homeScoreQ4', 0),
+                    'ot': getattr(self, 'homeScoreOT', 0)
+                },
+                'away': {
+                    'q1': getattr(self, 'awayScoreQ1', 0),
+                    'q2': getattr(self, 'awayScoreQ2', 0),
+                    'q3': getattr(self, 'awayScoreQ3', 0),
+                    'q4': getattr(self, 'awayScoreQ4', 0),
+                    'ot': getattr(self, 'awayScoreOT', 0)
+                }
+            },
+            'possession': possessionAbbr,
+            'homeTeamPoss': homeTeamPoss,
+            'awayTeamPoss': awayTeamPoss,
+            'quarter': self.currentQuarter,
+            'timeRemaining': self.formatTime(self.gameClockSeconds),
+            'down': self.down if hasattr(self, 'down') else None,
+            'distance': self.yardsToFirstDown if hasattr(self, 'yardsToFirstDown') else None,
+            'yardLine': self.yardLine if hasattr(self, 'yardLine') else None,
+            'yardsToEndzone': self.yardsToEndzone if hasattr(self, 'yardsToEndzone') else None,
+            'yardsToSafety': (100 - self.yardsToEndzone) if hasattr(self, 'yardsToEndzone') else None,
+            'isPossessionChange': isPossessionChange,
+            'lastPlay': lastPlayData,
+            'homeWinProbability': round(newHomeWp, 1),
+            'awayWinProbability': round(newAwayWp, 1),
+            'homeWpa': round(homeWpa, 2),
+            'awayWpa': round(awayWpa, 2),
+            'isHalftime': getattr(self, 'isHalftime', False),
+            'isOvertime': self.currentQuarter > 4 if hasattr(self, 'currentQuarter') else False,
+            'isUpsetAlert': isUpsetAlert,
+            'gameStats': self._buildGameStatsSnapshot()
+        }
+        
+        # Create and broadcast event
+        event = GameEvent.gameState(gameId=self.id, gameState=gameStateData)
+        broadcaster.broadcast_sync(self.id, event)
+        
+        # Update win probabilities for API access and next WPA calculation
+        self.homeTeamWinProbability = newHomeWp
+        self.awayTeamWinProbability = newAwayWp
+        self.previousHomeWinProbability = newHomeWp
+        self.previousAwayWinProbability = newAwayWp
+
+        # Store WP and WPA in the most recent gameFeed play entry so the REST API can return it
+        if self.gameFeed and 'play' in self.gameFeed[0]:
+            self.gameFeed[0]['homeWinProbability'] = round(newHomeWp, 1)
+            self.gameFeed[0]['awayWinProbability'] = round(newAwayWp, 1)
+            # Only write WPA and isBigPlay on the play's own broadcast. Subsequent event
+            # broadcasts (two-minute warning, quarter start, possession change, halftime, etc.)
+            # share the same gameFeed[0] and would overwrite the play's real WPA with ~0.
+            if 'homeWpa' not in self.gameFeed[0]:
+                self.gameFeed[0]['homeWpa'] = round(homeWpa, 2)
+                self.gameFeed[0]['awayWpa'] = round(awayWpa, 2)
+                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
     
     def calculatePreSnapTime(self) -> int:
         """
@@ -2224,7 +2908,110 @@ class Game:
             return 40  # Maximum time runoff
         
         return 5  # Default
-    
+
+    def _shouldOnsideKick(self) -> bool:
+        """
+        Decide whether the kicking team should attempt an onside kick.
+        Must be called from the kickoff handler, where:
+          self.defensiveTeam = kicking team (just scored)
+          self.offensiveTeam = receiving team
+        """
+        import random
+
+        if self.currentQuarter >= 5:  # Never in OT
+            return False
+        if self.currentQuarter != 4:  # Only in Q4
+            return False
+
+        kickerScore = self.homeScore if self.defensiveTeam is self.homeTeam else self.awayScore
+        receiverScore = self.homeScore if self.offensiveTeam is self.homeTeam else self.awayScore
+        deficit = receiverScore - kickerScore
+
+        if deficit <= 0:  # Not trailing
+            return False
+
+        # Time threshold: 4 min for any deficit, 8 min for large deficits (14+)
+        timeThreshold = 480 if deficit >= 14 else 240
+        if self.gameClockSeconds >= timeThreshold:
+            return False
+
+        return random.random() < 0.80  # 80% chance they go for it when conditions met
+
+    def _shouldGoForTwo(self, scoringTeam: FloosTeam.Team) -> bool:
+        """
+        Decide whether to go for 2 instead of kicking the extra point.
+        Only in Q4. The 6 TD points are already added before this is called.
+        """
+        import random
+        if self.currentQuarter != 4:  # Q1-Q3: always kick; OT (>=5): always kick
+            return False
+        scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+        opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+        deficit = opponentScore - scoringScore  # positive = still trailing after TD
+        if deficit <= 0:
+            return False
+        if deficit == 2:              return random.random() < 0.85  # Kick = down 1; 2-pt = tied
+        if deficit == 8:              return random.random() < 0.70  # Next TD + 2-pt can tie
+        if deficit in (11, 17, 20):  return random.random() < 0.50  # Multi-score math works out
+        if 1 <= deficit <= 5:        return random.random() < 0.25  # Close game, occasional aggression
+        return False
+
+    def _simulate2PointConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team):
+        """
+        Simulate a 2-point conversion as a real run or pass play from the 2-yard line.
+        Does NOT consume game clock. Broadcasts result as a separate play entry.
+        """
+        # Save game state
+        savedOffensive = self.offensiveTeam
+        savedDefensive = self.defensiveTeam
+        savedYardsToEndzone = self.yardsToEndzone
+        savedYardsToSafety = self.yardsToSafety
+        savedDown = self.down
+        savedYardsToFirstDown = self.yardsToFirstDown
+
+        # Set up 2-yard-line state before snapshotting into Play()
+        self.offensiveTeam = scoringTeam
+        self.defensiveTeam = opposingTeam
+        self.yardsToEndzone = 2
+        self.yardsToSafety = FIELD_LENGTH - 2
+        self.down = 1
+        self.yardsToFirstDown = 2
+
+        self.play = Play(self)
+
+        # 60% pass, 40% run (2-pt conversions favor passing)
+        if batched_randint(1, 10) <= 6:
+            self.play.passPlay(returnShortPassPlay())
+        else:
+            self.play.runPlay()
+
+        twoPointGood = self.play.yardage >= 2
+        if twoPointGood:
+            self._addScore(scoringTeam, 2)
+            self.play.playResult = PlayResult.Touchdown2PtGood
+            self.play.scoreChange = True
+        else:
+            self.play.playResult = PlayResult.Touchdown2PtNoGood
+            self.play.scoreChange = False
+
+        self.play.homeTeamScore = self.homeScore
+        self.play.awayTeamScore = self.awayScore
+
+        self.formatPlayText()
+        self.gameFeed.insert(0, {'play': self.play})
+        if twoPointGood:
+            self.highlights.insert(0, {'play': self.play})
+            self.leagueHighlights.insert(0, {'play': self.play})
+        self.broadcastGameState(includeLastPlay=True)
+
+        # Restore game state (turnover() will reset field position, but restore for cleanliness)
+        self.offensiveTeam = savedOffensive
+        self.defensiveTeam = savedDefensive
+        self.yardsToEndzone = savedYardsToEndzone
+        self.yardsToSafety = savedYardsToSafety
+        self.down = savedDown
+        self.yardsToFirstDown = savedYardsToFirstDown
+
     def shouldClockRun(self) -> bool:
         """
         Determine if clock should be running after a play.
@@ -2280,6 +3067,16 @@ class Game:
                     'quarter': self.currentQuarter,
                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                 }})
+                self.broadcastGameState(includeLastPlay=False, eventMessage={
+                    'text': 'Two-Minute Warning',
+                    'quarter': self.currentQuarter,
+                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                })
+                self.broadcastGameState(includeLastPlay=False, eventMessage={
+                    'text': 'Two-Minute Warning',
+                    'quarter': self.currentQuarter,
+                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                })
     
     def advanceQuarter(self):
         """Transition to next quarter"""
@@ -2318,19 +3115,21 @@ class Game:
     
     def isGameOver(self) -> bool:
         """Check if game should end"""
+        # Check status first - if already marked Final, game is definitely over
+        if hasattr(self, 'status') and self.status == GameStatus.Final:
+            return True
+        
         # Game over if clock expired in regulation and not tied
         if self.currentQuarter == 4 and self.gameClockSeconds <= 0:
             return self.homeScore != self.awayScore
         
         # In OT (Q5+), check if game should end
         if self.currentQuarter >= 5:
-            # If score is not tied and both teams have had possession, game over (sudden death)
-            if self.homeScore != self.awayScore and self.firstOtPossessionComplete:
+            # Both teams must have had their guaranteed possession before game can end
+            if self.homeScore != self.awayScore and self.otSecondPossComplete:
                 return True
-            # If clock expires and game is still tied, reset for another OT period
+            # Clock expired and still tied — let advanceQuarter handle the new OT period
             if self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
-                # This shouldn't normally happen here (advanceQuarter should handle it)
-                # but adding as defensive check to prevent infinite loops
                 return False
         
         return False
@@ -2353,95 +3152,79 @@ class Game:
         else:  # Overtime
             total_seconds = self.gameClockSeconds  # OT period
         
-        # ELO-based pre-game expectation
-        # Calculate ELO advantage (positive = home favored)
-        elo_diff = 0
+        # Standard ELO pre-game win probability (properly calibrated)
+        eloDiff = 0
         if self.homeTeamElo is not None and self.awayTeamElo is not None:
-            elo_diff = self.homeTeamElo - self.awayTeamElo
-        
-        # Convert ELO difference to point advantage
-        # Rule of thumb: ~25 ELO points ≈ 1 point advantage
-        # Example: 100 ELO difference ≈ 4 point favorite
-        elo_point_advantage = elo_diff / 25.0
-        
-        # ELO influence decreases as game progresses (actual results matter more)
-        total_game_time = 3600  # 60 minutes
-        time_elapsed = total_game_time - total_seconds
-        elo_influence = max(0.2, 1.0 - (time_elapsed / total_game_time) * 0.8)
-        # ^^ Early game: 100% influence, End of regulation: 20% influence
-        
-        # Apply ELO influence to create an adjusted baseline
-        elo_adjusted_advantage = elo_point_advantage * elo_influence
-        
+            eloDiff = self.homeTeamElo - self.awayTeamElo
+        eloHomeWp = 100 / (1 + 10 ** (-eloDiff / 400))
+
+        # Game progress: 0.0 at kickoff, 1.0 at end of regulation
+        totalGameTime = 3600
+        timeElapsed = totalGameTime - total_seconds
+        gameProgress = min(1.0, timeElapsed / totalGameTime)
+
+        # ELO weight: 1.0 pre-game (pure ELO baseline), decays smoothly to 0.05 by end
+        # Stays meaningful through the first half, minor effect in Q4
+        eloWeight = max(0.05, 1.0 - gameProgress * 0.95)
+
         # Score differential from home team's perspective
-        score_diff = self.homeScore - self.awayScore
-        
+        scoreDiff = self.homeScore - self.awayScore
+
         # Expected points from current field position
-        # Uses expected points model based on field position
-        expected_points = self.calculateExpectedPoints()
-        
+        expectedPoints = self.calculateExpectedPoints()
+
         # Adjust expected points based on who has possession
         if self.offensiveTeam == self.homeTeam:
-            home_expected = expected_points
-            away_expected = 0
+            homeExpected = expectedPoints
+            awayExpected = 0
         else:
-            home_expected = 0
-            away_expected = expected_points
-        
-        # Calculate adjusted score differential including expected points AND ELO
-        adjusted_score_diff = score_diff + home_expected - away_expected + elo_adjusted_advantage
-        
-        # Time scaling factor: importance of score diff increases as time decreases
-        # Early game: score matters less, Late game: score matters more
-        if total_seconds > 1800:  # More than 1 half remaining
-            time_factor = 0.6
-        elif total_seconds > 900:  # More than 1 quarter remaining
-            time_factor = 1.0
-        elif total_seconds > 300:  # 5+ minutes remaining
-            time_factor = 1.5
-        elif total_seconds > 120:  # 2-5 minutes
-            time_factor = 2.5
-        else:  # Final 2 minutes
-            time_factor = 4.0
-        
-        # Logistic function to convert adjusted score diff to win probability
-        # Formula: P(win) = 1 / (1 + e^(-k * score_diff))
-        # k controls sensitivity - higher k = steeper curve
-        k = 0.15 * time_factor  # Scale sensitivity by time remaining
-        
-        # Calculate home team win probability using logistic function
-        home_win_prob = 100 / (1 + np.exp(-k * adjusted_score_diff))
-        
-        # Away team win probability is complement
-        away_win_prob = 100 - home_win_prob
-        
-        # Special cases
-        if self.currentQuarter >= 5:  # Overtime
-            # In OT, if tied with possession, slight advantage
-            if score_diff == 0:
+            homeExpected = 0
+            awayExpected = expectedPoints
+
+        # EP weight grows with game progress: early on, the current drive is just one of many;
+        # late in Q4 it's nearly the whole story, so field position should count almost fully.
+        epWeight = 0.3 + gameProgress * 0.7
+        adjustedScoreDiff = scoreDiff + (homeExpected - awayExpected) * epWeight
+
+        # Smooth time-sensitivity: k increases from 0.06 at kickoff to ~0.40 late in Q4
+        # Power function avoids the discontinuous step jumps of the old approach
+        k = 0.06 + (gameProgress ** 0.8) * 0.34
+
+        # Score-based win probability via logistic
+        scoreWp = 100 / (1 + np.exp(-k * adjustedScoreDiff))
+
+        # Blend: ELO prior dominates pre-game, actual score dominates as game progresses
+        homeWinProb = eloWeight * eloHomeWp + (1 - eloWeight) * scoreWp
+        awayWinProb = 100 - homeWinProb
+
+        # Overtime: if tied with possession, slight advantage based on field position
+        if self.currentQuarter >= 5:
+            if scoreDiff == 0:
                 if self.offensiveTeam == self.homeTeam:
-                    home_win_prob = 52 + (expected_points * 2)
+                    homeWinProb = 52 + (expectedPoints * 2)
                 else:
-                    away_win_prob = 52 + (expected_points * 2)
-                home_win_prob = min(100, max(0, home_win_prob))
-                away_win_prob = 100 - home_win_prob
-        
+                    awayWinProb = 52 + (expectedPoints * 2)
+                homeWinProb = min(100, max(0, homeWinProb))
+                awayWinProb = 100 - homeWinProb
+
         # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over)
         if not self.isGameOver():
-            home_win_prob = max(0.1, min(99.9, home_win_prob))
-            away_win_prob = max(0.1, min(99.9, away_win_prob))
+            homeWinProb = max(0.1, min(99.9, homeWinProb))
+            awayWinProb = max(0.1, min(99.9, awayWinProb))
         else:
-            # Game is over, set to 100/0
             if self.homeScore > self.awayScore:
-                home_win_prob = 100
-                away_win_prob = 0
+                homeWinProb = 100
+                awayWinProb = 0
+            elif self.awayScore > self.homeScore:
+                homeWinProb = 0
+                awayWinProb = 100
             else:
-                home_win_prob = 0
-                away_win_prob = 100
-        
+                homeWinProb = 50
+                awayWinProb = 50
+
         return {
-            'home': round(home_win_prob, 1),
-            'away': round(away_win_prob, 1)
+            'home': round(homeWinProb, 1),
+            'away': round(awayWinProb, 1)
         }
     
     def calculateExpectedPoints(self) -> float:
@@ -2450,6 +3233,11 @@ class Game:
         Based on NFL expected points model - varies by field position and situation.
         Returns: Expected points for offensive team (can be negative near own endzone)
         """
+        # After any scoring play, field position is stale (ball is about to be
+        # placed for a kickoff). Return neutral EP so it doesn't inflate the WP.
+        if hasattr(self, 'play') and self.play and getattr(self.play, 'scoreChange', False):
+            return 0.0
+
         # Field position value (0 = own goal line, 100 = opponent goal line)
         field_position = 100 - self.yardsToEndzone
         
@@ -2506,18 +3294,15 @@ class Game:
         return expected_points
     
     def checkOvertimeEnd(self) -> bool:
-        """Check if scoring in OT should end the game (hybrid sudden death)"""
-        if self.currentQuarter != 5:
+        """Check if scoring in OT should end the game.
+        Both teams must have had a possession before a score can end the game."""
+        if self.currentQuarter < 5:
             return False
-        
-        # Mark if both teams have now had possession
-        if self.otHomeHadPos and self.otAwayHadPos:
-            self.firstOtPossessionComplete = True
-        
-        # If both teams have had possession and someone is ahead, game over (sudden death)
-        if self.firstOtPossessionComplete and self.homeScore != self.awayScore:
+
+        # Game ends on a score only after both teams have had their guaranteed possession
+        if self.otSecondPossComplete and self.homeScore != self.awayScore:
             return True
-        
+
         return False
 
     def _addScore(self, team: FloosTeam.Team, points: int):
@@ -2553,6 +3338,16 @@ class Game:
                 self.awayScoreQ4 += points
             elif self.currentQuarter == 5:
                 self.awayScoreOT += points
+        
+        # Broadcast score update
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            event = GameEvent.scoreUpdate(
+                gameId=self.id,
+                homeScore=self.homeScore,
+                awayScore=self.awayScore,
+                scoringPlay={'team': team.abbr, 'points': points, 'quarter': self.currentQuarter}
+            )
+            broadcaster.broadcast_sync(self.id, event)
 
 
 class Play():
@@ -2603,7 +3398,10 @@ class Play():
     def fieldGoalTry(self):
         self.game.gamePressure = self.game.calculateGamePressure()
         self.kicker = self.offense.rosterDict['k']
-        assert self.kicker is not None, f"Team {self.offense.teamName} has no kicker in roster!"
+        if self.kicker is None:
+            logging.error(f"Team {self.offense.teamName} has no kicker - field goal attempt treated as no good")
+            self.isFgGood = False
+            return
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
         self.fgDistance = yardsToFG
@@ -2639,50 +3437,53 @@ class Play():
 
         if yardsToFG <= 20:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.005)
+                self.kicker.updateInGameConfidence(.015)
             else:
-                self.kicker.updateInGameConfidence(-.02)
+                self.kicker.updateInGameConfidence(-.05)
         elif yardsToFG > 20 and yardsToFG <= 30:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.01)
+                self.kicker.updateInGameConfidence(.03)
             else:
-                self.kicker.updateInGameConfidence(-.015)
+                self.kicker.updateInGameConfidence(-.04)
         elif yardsToFG > 30 and yardsToFG <= 40:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.01)
+                self.kicker.updateInGameConfidence(.03)
             else:
-                self.kicker.updateInGameConfidence(-.015)
+                self.kicker.updateInGameConfidence(-.04)
         elif yardsToFG > 40 and yardsToFG <= 45:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.015)
+                self.kicker.updateInGameConfidence(.045)
             else:
-                self.kicker.updateInGameConfidence(-.01)
+                self.kicker.updateInGameConfidence(-.03)
         elif yardsToFG > 45 and yardsToFG <= 50:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.015)
+                self.kicker.updateInGameConfidence(.045)
             else:
-                self.kicker.updateInGameConfidence(-.01)
+                self.kicker.updateInGameConfidence(-.03)
         elif yardsToFG > 50 and yardsToFG <= 55:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.015)
+                self.kicker.updateInGameConfidence(.045)
             else:
-                self.kicker.updateInGameConfidence(-.01)
+                self.kicker.updateInGameConfidence(-.03)
         elif yardsToFG > 55 and yardsToFG <= 60:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.02)
+                self.kicker.updateInGameConfidence(.06)
             else:
-                self.kicker.updateInGameConfidence(-.005)
+                self.kicker.updateInGameConfidence(-.015)
         else:
             if self.isFgGood:
-                self.kicker.updateInGameConfidence(.025)
+                self.kicker.updateInGameConfidence(.075)
             else:
-                self.kicker.updateInGameConfidence(-.005)
+                self.kicker.updateInGameConfidence(-.015)
 
         self.kicker.updateInGameRating()
 
     def extraPointTry(self, offense: FloosTeam.Team):
         self.kicker = offense.rosterDict['k']
-        assert self.kicker is not None, f"Team {offense.teamName} has no kicker in roster!"
+        if self.kicker is None:
+            logging.error(f"Team {offense.teamName} has no kicker - extra point treated as no good")
+            self.isXpGood = False
+            return
         x = batched_randint(1,100)
         
         # Apply pressure modifier to kicker's rating for extra point attempts
@@ -2829,9 +3630,14 @@ class Play():
         """
         self.playType = PlayType.Run
         self.runner = self.offense.rosterDict['rb']
-        assert self.runner is not None, f"Team {self.offense.teamName} has no RB in roster!"
+        if self.runner is None:
+            logging.error(f"Team {self.offense.teamName} has no RB - run play yields 0 yards")
+            self.yardage = 0
+            self.playResult = PlayResult.SecondDown
+            return
         blocker: FloosPlayer.PlayerTE = self.offense.rosterDict['te']
-        assert blocker is not None, f"Team {self.offense.teamName} has no TE in roster!"
+        if blocker is None:
+            logging.error(f"Team {self.offense.teamName} has no TE - run play using no blocking bonus")
 
         # Apply pressure modifier to runner's performance
         runnerPressureMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
@@ -2840,13 +3646,14 @@ class Play():
         # Randomly determine designed play (which gap is the call)
         designedGapType = batched_choice(['A-gap', 'B-gap', 'C-gap'])
         
+        blockerRating = blocker.attributes.blocking if blocker else 50
         gapList = []
         for gapType in ['A-gap', 'B-gap', 'C-gap', 'bounce']:
             quality = self.calculateGapQuality(
                 gapType,
                 self.runner.attributes.power,
                 self.runner.attributes.agility,
-                blocker.attributes.blocking,
+                blockerRating,
                 self.defense.defenseRunCoverageRating
             )
             gapList.append({
@@ -2872,7 +3679,7 @@ class Play():
                         self.runner.attributes.playMakingAbility * 0.8 +
                         self.runner.attributes.xFactor * 0.5) / 4
         
-        stage1Offense = ((rbPowerRating * 0.8) + (blocker.attributes.blocking * 0.2)) + runnerPressureMod
+        stage1Offense = ((rbPowerRating * 0.8) + (blockerRating * 0.2)) + runnerPressureMod
         
         # Adjust offense rating based on gap quality
         # Good gap quality = better chance for yards
@@ -2904,7 +3711,7 @@ class Play():
         
         # STAGE 4: Breakaway potential (second level)
         if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * 0.5:
-            self.runner.updateInGameConfidence(.005)
+            self.runner.updateInGameConfidence(.015)
             
             # Calculate breakaway potential (speed/agility focused) - BOOSTED
             stage2Offense = ((self.runner.attributes.speed * 1.5 + 
@@ -2949,7 +3756,7 @@ class Play():
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
                (self.runner.gameAttributes.overallRating + runnerRecoveryMod + batched_randint(-5, 5)):
                 self.runner.addFumble(self.game.isRegularSeasonGame)
-                self.runner.updateInGameConfidence(-.02)
+                self.runner.updateInGameConfidence(-.05)
                 self.defense.updateInGameConfidence(.02)
                 self.defense.gameDefenseStats['fumRec'] += 1
                 self.isFumbleLost = True
@@ -3212,7 +4019,12 @@ class Play():
         self.play = passPlayBook[playKey]
         self.playType = PlayType.Pass
         self.passer: FloosPlayer.PlayerQB = self.offense.rosterDict['qb']
-        assert self.passer is not None, f"Team {self.offense.teamName} has no QB in roster!"
+        if self.passer is None:
+            logging.error(f"Team {self.offense.teamName} has no QB - pass play treated as incomplete")
+            self.yardage = 0
+            self.isPassCompletion = False
+            self.playResult = PlayResult.SecondDown
+            return
         self.receiver: FloosPlayer.PlayerWR = None
         self.selectedTarget = None
         self.blockingModifier = 0
@@ -3220,12 +4032,12 @@ class Play():
 
         if passPlayBook[playKey]['targets']['te'] is None:
             te = self.offense.rosterDict['te']
-            assert te is not None, f"Team {self.offense.teamName} has no TE in roster!"
-            self.blockingModifier += te.attributes.blockingModifier
+            if te is not None:
+                self.blockingModifier += te.attributes.blockingModifier
         if passPlayBook[playKey]['targets']['rb'] is None:
             rb = self.offense.rosterDict['rb']
-            assert rb is not None, f"Team {self.offense.teamName} has no RB in roster!"
-            self.blockingModifier += rb.attributes.blockingModifier
+            if rb is not None:
+                self.blockingModifier += rb.attributes.blockingModifier
 
         # Calculate sack probability using probability curve
         qbMobility = round((self.passer.gameAttributes.agility + self.passer.gameAttributes.xFactor) / 2)

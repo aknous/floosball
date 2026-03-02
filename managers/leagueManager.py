@@ -7,6 +7,17 @@ from typing import List, Dict, Any, Optional
 import floosball_team as FloosTeam
 from logger_config import get_logger
 
+# Database imports
+try:
+    from database.config import USE_DATABASE
+    from database.connection import get_session
+    from database.repositories import LeagueRepository, TeamRepository
+    from database.models import League as DBLeague, Team as DBTeam
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
+    USE_DATABASE = False
+
 logger = get_logger("floosball.leagueManager")
 
 class League:
@@ -24,6 +35,8 @@ class League:
         """Add a team to this league"""
         if team not in self.teamList:
             self.teamList.append(team)
+            team.league = self.name
+            team.leagueRef = self
             
     def removeTeam(self, team: FloosTeam.Team) -> None:
         """Remove a team from this league"""
@@ -63,6 +76,19 @@ class LeagueManager:
         self.leagues: List[League] = []
         self.teams: List[FloosTeam.Team] = []
         
+        # Database session and repositories (if database enabled)
+        self.db_session = None
+        self.league_repo = None
+        self.team_repo = None
+        
+        if DATABASE_AVAILABLE and USE_DATABASE:
+            self.db_session = get_session()
+            self.league_repo = LeagueRepository(self.db_session)
+            self.team_repo = TeamRepository(self.db_session)
+            logger.info("LeagueManager using DATABASE storage")
+        else:
+            logger.info("LeagueManager using JSON file storage")
+        
         logger.info("LeagueManager initialized")
     
     def createLeagues(self, config: Dict[str, Any]) -> None:
@@ -85,7 +111,41 @@ class LeagueManager:
         # Distribute teams across leagues
         self._distributeTeamsToLeagues(config)
         
+        # Save to database if enabled
+        if DATABASE_AVAILABLE and USE_DATABASE:
+            self._saveLeaguesToDatabase()
+        
         logger.info(f"Created {len(self.leagues)} leagues with {len(self.teams)} teams")
+    
+    def _saveLeaguesToDatabase(self) -> None:
+        """Save leagues and team assignments to database"""
+        try:
+            # Save each league
+            for league in self.leagues:
+                # Check if league exists
+                db_league = self.league_repo.get_by_name(league.name)
+                if not db_league:
+                    # Create new league
+                    db_league = DBLeague(name=league.name)
+                    self.league_repo.save(db_league)
+                    self.db_session.flush()  # Get the ID
+                
+                # Update team league assignments
+                for team in league.teamList:
+                    db_team = self.team_repo.get_by_id(team.id)
+                    if db_team:
+                        db_team.league_id = db_league.id
+                        team.league = league.name  # Update in-memory object too
+                        logger.debug(f"Assigned team {team.name} (id={team.id}) to league {league.name} (id={db_league.id})")
+                    else:
+                        logger.warning(f"Could not find team {team.name} (id={team.id}) in database")
+            
+            self.db_session.commit()
+            logger.info(f"Saved {len(self.leagues)} leagues to database")
+            
+        except Exception as e:
+            logger.error(f"Failed to save leagues to database: {e}")
+            self.db_session.rollback()
     
     def _distributeTeamsToLeagues(self, config: Dict[str, Any]) -> None:
         """Distribute teams across leagues based on config or evenly"""
@@ -520,15 +580,14 @@ class LeagueManager:
                                         playoffTeams[league.name].remove(team)
                                         break
             
-            # Save playoff results
-            seasonDir = f'data/season{currentSeason}/games'
-            os.makedirs(seasonDir, exist_ok=True)
-            
-            try:
-                with open(os.path.join(seasonDir, 'postseason.json'), 'w') as jsonFile:
-                    json.dump(playoffDict, jsonFile, indent=4)
-            except Exception as e:
-                logger.error(f"Failed to save playoff results: {e}")
+            # Note: Playoff results now stored in database, JSON output disabled
+            # seasonDir = f'data/season{currentSeason}/games'
+            # os.makedirs(seasonDir, exist_ok=True)
+            # try:
+            #     with open(os.path.join(seasonDir, 'postseason.json'), 'w') as jsonFile:
+            #         json.dump(playoffDict, jsonFile, indent=4)
+            # except Exception as e:
+            #     logger.error(f"Failed to save playoff results: {e}")
         
         # Store championship history and free agency order
         self.championshipHistory = championshipHistory
@@ -543,103 +602,99 @@ class LeagueManager:
         now = datetime.datetime.utcnow()
         return now + datetime.timedelta(days=week)
     
-    def checkPlayoffClinching(self, currentWeek: int, leagueHighlights: List = None) -> None:
+    def checkPlayoffClinching(self, currentWeek: int, leagueHighlights: List = None) -> List[str]:
         """
-        Check for playoff clinching and elimination during regular season
+        Check for playoff clinching and elimination during regular season.
+        Returns a list of new event texts that were triggered this week.
         """
         import floosball_methods as FloosMethods
-        
+
         if leagueHighlights is None:
             leagueHighlights = []
-        
+
+        newEvents: List[str] = []
+        remaining = 28 - currentWeek
+
+        def _emit(text: str) -> None:
+            leagueHighlights.insert(0, {'event': {'text': text}})
+            newEvents.append(text)
+
         for league in self.leagues:
             standings = league.getStandings()
             if not standings:
                 continue
-                
+
             numPlayoffTeams = len(league.teamList) // 2
             playoffTeamList = standings[:numPlayoffTeams]
             nonPlayoffTeamsList = standings[numPlayoffTeams:]
-            
-            # Check if teams are already marked for clinching/elimination
+
+            # Ensure flags exist
             for standing in playoffTeamList:
                 team = standing['team']
                 if not hasattr(team, 'clinchedPlayoffs'):
                     team.clinchedPlayoffs = False
                 if not hasattr(team, 'eliminated'):
                     team.eliminated = False
-            
+
             if nonPlayoffTeamsList:
                 lastTeamIn = playoffTeamList[-1]['team'] if playoffTeamList else None
                 firstTeamOut = nonPlayoffTeamsList[0]['team'] if nonPlayoffTeamsList else None
-                
-                # Check top seed clinching
+
+                # --- Top seed clinch ---
                 if len(standings) >= 2:
                     team1 = standings[0]['team']
                     team2 = standings[1]['team']
-                    
                     if not hasattr(team1, 'clinchedTopSeed'):
                         team1.clinchedTopSeed = False
-                        
                     if not team1.clinchedTopSeed:
-                        team1.clinchedTopSeed = FloosMethods.checkIfClinched(
+                        if FloosMethods.checkIfClinched(
                             team1.seasonTeamStats.get('wins', 0),
                             team2.seasonTeamStats.get('wins', 0),
-                            28 - currentWeek
-                        )
-                        if team1.clinchedTopSeed:
-                            leagueHighlights.insert(0, {
-                                'event': {'text': f'{team1.city} {team1.name} have clinched the #1 seed'}
-                            })
-                        elif currentWeek == 28:
+                            remaining
+                        ) or currentWeek == 28:
                             team1.clinchedTopSeed = True
-                            leagueHighlights.insert(0, {
-                                'event': {'text': f'{team1.city} {team1.name} have clinched the #1 seed'}
-                            })
-                
-                # Check playoff clinching
+                            _emit(f'{team1.city} {team1.name} have clinched the #1 seed')
+
+                # --- Playoff berth clinches ---
                 if lastTeamIn and firstTeamOut:
                     for standing in playoffTeamList:
                         team = standing['team']
                         if not team.clinchedPlayoffs and not team.eliminated:
-                            team.clinchedPlayoffs = FloosMethods.checkIfClinched(
+                            if FloosMethods.checkIfClinched(
                                 team.seasonTeamStats.get('wins', 0),
                                 firstTeamOut.seasonTeamStats.get('wins', 0),
-                                28 - currentWeek
-                            )
-                            if team.clinchedPlayoffs:
-                                leagueHighlights.insert(0, {
-                                    'event': {'text': f'{team.city} {team.name} have clinched a playoff berth'}
-                                })
-                    
-                    # Check elimination
+                                remaining
+                            ) or currentWeek == 28:
+                                team.clinchedPlayoffs = True
+                                _emit(f'{team.city} {team.name} have clinched a playoff berth')
+
+                    # --- Eliminations ---
                     for standing in nonPlayoffTeamsList:
                         team = standing['team']
-                        
-                        # Set pressure modifiers based on performance
+
                         if team.seasonTeamStats.get('winPerc', 0) < 0.45 and currentWeek >= 14:
                             team.pressureModifier = 0.9
-                            
+
                         if not team.clinchedPlayoffs and not team.eliminated:
-                            team.eliminated = FloosMethods.checkIfEliminated(
+                            if FloosMethods.checkIfEliminated(
                                 team.seasonTeamStats.get('wins', 0),
                                 lastTeamIn.seasonTeamStats.get('wins', 0),
-                                28 - currentWeek
-                            )
-                            if team.eliminated:
-                                leagueHighlights.insert(0, {
-                                    'event': {'text': f'{team.city} {team.name} have faded from playoff contention'}
-                                })
+                                remaining
+                            ) or currentWeek == 28:
+                                team.eliminated = True
+                                _emit(f'{team.city} {team.name} have faded from playoff contention')
                                 team.pressureModifier = 0.7
                             else:
-                                # Check if team is on brink of elimination
-                                if (team.seasonTeamStats.get('wins', 0) + (28 - currentWeek) == 
-                                    lastTeamIn.seasonTeamStats.get('wins', 0)):
+                                # On the brink of elimination
+                                if (team.seasonTeamStats.get('wins', 0) + remaining ==
+                                        lastTeamIn.seasonTeamStats.get('wins', 0)):
                                     leagueHighlights.insert(0, {
                                         'event': {'text': f'{team.city} {team.name} are on the brink of elimination!'}
                                     })
-                                    if (28 - currentWeek) <= 5:
+                                    if remaining <= 5:
                                         team.pressureModifier = 2.0
+
+        return newEvents
     
     @property
     def leagueList(self) -> List[League]:

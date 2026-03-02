@@ -206,7 +206,10 @@ class Player:
     def reset_game_stats(self):
         """Reset game stats for a new game using optimized stats"""
         self.gameStats.reset_for_new_game()
-        self.sync_stats_dicts()
+        # Sync the reset stats TO the legacy dict (not FROM it)
+        self.gameStatsDict = self.gameStats.to_legacy_dict()
+        # Update stat_tracker reference to the new dict
+        self.stat_tracker.game_stats_dict = self.gameStatsDict
 
         self.seasonStatsArchive = []
 
@@ -422,7 +425,7 @@ class PlayerAttributes:
         
     def calculateIntangibles(self):
         self.playMakingAbility = round((self.instinct+self.creativity)/2)
-        self.xFactor = round((((self.focus*1.8) + (self.discipline*1.2))/3) + ((self.confidenceModifier*1.8)+(self.determinationModifier*1.2)/3) + (self.luckModifier))
+        self.xFactor = round((((self.focus*1.8) + (self.discipline*1.2))/3) + ((self.confidenceModifier*2.2)+(self.determinationModifier*1.2)/3) + (self.luckModifier))
         if self.xFactor > 100:
             self.xFactor = 100
 
@@ -490,15 +493,17 @@ class PlayerAttributes:
             return -(batched_random() * maxVariance)
 
 
-    def getPlayerAttributes(self, position, seed = None):
-        x = 0
-        if seed is None:
-            x = randint(1, 100)
-        else:
-            x = seed
+    def getPlayerAttributes(self, position, physicalSeed = None, mentalSeed = None):
+        # Generate seeds if not provided
+        if physicalSeed is None:
+            physicalSeed = randint(60, 100)
+        if mentalSeed is None:
+            mentalSeed = randint(60, 100)
+        
+        # Physical skills: use physicalSeed as center with tight variance
         stdDev = 5
         numSkills = 3
-        skillValList = np.random.normal(seed, stdDev, numSkills)
+        skillValList = np.random.normal(physicalSeed, stdDev, numSkills)
         skillValList = np.clip(skillValList, 60, 100)
         skillValList: list = skillValList.tolist()
 
@@ -511,7 +516,7 @@ class PlayerAttributes:
             self.power = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
-            self.hands = np.random.normal(80, stdDev)
+            self.hands = np.random.normal(physicalSeed, stdDev)
             self.hands = int(np.clip(self.hands, 60, 100))
         elif position is Position.WR:
             self.hands = int(skillValList.pop(randint(0, len(skillValList)) - 1))
@@ -530,9 +535,11 @@ class PlayerAttributes:
             self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
 
-        stdDev = 10
+        # Intangibles: use mentalSeed as center with moderate variance
+        # This allows independent control of physical vs mental abilities
+        stdDev = 7
         numSkills = 5
-        intSkillValList = np.random.normal(80, stdDev, numSkills)
+        intSkillValList = np.random.normal(mentalSeed, stdDev, numSkills)
         intSkillValList = np.clip(intSkillValList, 60, 100)
         intSkillValList: list = intSkillValList.tolist()
 
@@ -552,10 +559,10 @@ class PlayerAttributes:
 
 
 class PlayerQB(Player, CachedRatingMixin):
-    def __init__(self, seed = None):
+    def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.QB
-        self.attributes.getPlayerAttributes(self.position, seed)
+        self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
         self.playerRating = self.attributes.overallRating
 
@@ -608,11 +615,11 @@ class PlayerQB(Player, CachedRatingMixin):
         self.updateRating()
 
 class PlayerRB(Player):
-    def __init__(self, seed = None):
+    def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.RB
         self.isOpen = False
-        self.attributes.getPlayerAttributes(self.position, seed)
+        self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
         self.playerRating = self.attributes.overallRating
 
@@ -647,11 +654,11 @@ class PlayerRB(Player):
         self.updateRating()
         
 class PlayerWR(Player):
-    def __init__(self, seed = None):
+    def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.WR
         self.isOpen = False
-        self.attributes.getPlayerAttributes(self.position, seed)
+        self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
         self.playerRating = self.attributes.overallRating
 
@@ -686,11 +693,11 @@ class PlayerWR(Player):
         self.updateRating()
 
 class PlayerTE(Player):
-    def __init__(self, seed = None):
+    def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.TE
         self.isOpen = False
-        self.attributes.getPlayerAttributes(self.position, seed)
+        self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
         self.playerRating = self.attributes.overallRating
 
@@ -726,11 +733,11 @@ class PlayerTE(Player):
         self.updateRating()
 
 class PlayerK(Player):
-    def __init__(self, seed = None):
+    def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.K
         self.maxFgDistance = 0
-        self.attributes.getPlayerAttributes(self.position, seed)
+        self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
         self.playerRating = self.attributes.overallRating
 

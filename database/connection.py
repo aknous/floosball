@@ -18,7 +18,20 @@ engine = create_engine(
     DB_URL,
     echo=False,  # Set to True for SQL debugging
     future=True,
+    connect_args={
+        "timeout": 30,  # Increase timeout for busy database
+        "check_same_thread": False  # Allow multiple threads (needed for async)
+    }
 )
+
+# Enable WAL mode for better concurrent access
+from sqlalchemy import event
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_conn, connection_record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
+    cursor.close()
 
 # Session factory
 SessionLocal = sessionmaker(
@@ -32,6 +45,13 @@ def init_db():
     """Initialize the database by creating all tables."""
     Base.metadata.create_all(bind=engine)
     print(f"Database initialized at {DB_PATH}")
+
+
+def clear_db():
+    """Clear all data from the database by dropping and recreating all tables."""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    print(f"Database cleared and reinitialized at {DB_PATH}")
 
 
 def get_session() -> Session:
@@ -96,5 +116,41 @@ def get_db_stats():
             "unused_names": session.query(func.count(UnusedName.id)).scalar(),
         }
         return stats
+    finally:
+        session.close()
+
+
+def clear_database():
+    """Clear all data from database (for fresh start).
+    
+    This is useful for testing or when regenerating all data.
+    Preserves the schema, just deletes all records.
+    """
+    from .models import (
+        GamePlayerStats, Game, PlayerCareerStats, PlayerAttributes, 
+        Player, TeamSeasonStats, Team, League, Season, Record, UnusedName
+    )
+    
+    session = get_session()
+    try:
+        # Delete in reverse dependency order
+        session.query(GamePlayerStats).delete()
+        session.query(Game).delete()
+        session.query(PlayerCareerStats).delete()
+        session.query(PlayerAttributes).delete()
+        session.query(Player).delete()
+        session.query(TeamSeasonStats).delete()
+        session.query(Team).delete()
+        session.query(League).delete()
+        session.query(Season).delete()
+        session.query(Record).delete()
+        session.query(UnusedName).delete()
+        
+        session.commit()
+        print("Database cleared successfully")
+    except Exception as e:
+        session.rollback()
+        print(f"Error clearing database: {e}")
+        raise
     finally:
         session.close()

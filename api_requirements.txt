@@ -1,0 +1,15 @@
+# Floosball API - Python Dependencies
+# Install with: pip install -r api_requirements.txt
+
+# Core API Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# WebSocket support
+websockets>=12.0
+
+# Already required by main application
+# (These should already be installed)
+# sqlalchemy>=2.0.0
+# numpy>=1.24.0
+# matplotlib>=3.7.0

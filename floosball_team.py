@@ -68,6 +68,8 @@ class Team:
         self.city = None
         self.abbr = None
         self.color = None
+        self.secondaryColor = None
+        self.tertiaryColor = None
         self.league = None
         self.offenseRating = 0
         self.defenseRunCoverageRating = 0
@@ -89,7 +91,7 @@ class Team:
         self.pressureModifier = 1.0
         self.leagueChampionships = []
         self.floosbowlChampionships = []
-        self.regularSeasonChampions = []
+        self.topSeeds = []
         self.playoffAppearances = 0
         self.defenseRunCoverageSeasonPerformanceRating = 0
         self.defensePassCoverageSeasonPerformanceRating = 0
@@ -117,7 +119,15 @@ class Team:
 
     def setupTeam(self):
         if self.overallRating == 0:
-            self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
+            # Calculate offense rating with defensive checks for None positions
+            qb_rating = self.rosterDict.get('qb').attributes.overallRating if self.rosterDict.get('qb') else 50
+            rb_rating = self.rosterDict.get('rb').attributes.overallRating if self.rosterDict.get('rb') else 50
+            wr1_rating = self.rosterDict.get('wr1').attributes.overallRating if self.rosterDict.get('wr1') else 50
+            wr2_rating = self.rosterDict.get('wr2').attributes.overallRating if self.rosterDict.get('wr2') else 50
+            te_rating = self.rosterDict.get('te').attributes.overallRating if self.rosterDict.get('te') else 50
+            k_rating = self.rosterDict.get('k').attributes.overallRating if self.rosterDict.get('k') else 50
+            
+            self.offenseRating = round(((qb_rating*1.2)+(rb_rating*1.1)+(wr1_rating*.5)+(wr2_rating*.5)+(te_rating*.9)+(k_rating*.8))/5)
             self.defensePassCoverageRating = randint(70, 90)
             self.defensePassRushRating = randint(70, 90)
             self.defenseRunCoverageRating = randint(70, 90)
@@ -137,7 +147,16 @@ class Team:
     def updateRating(self):
         self.defensePassRating = round(((self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*.8))/2)
         self.defenseRating = round((((self.defenseRunCoverageRating*.8)+(self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*1))/3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination)/2))
-        self.offenseRating = round(((self.rosterDict['qb'].attributes.overallRating*1.2)+(self.rosterDict['rb'].attributes.overallRating*1.1)+(self.rosterDict['wr1'].attributes.overallRating*.5)+(self.rosterDict['wr2'].attributes.overallRating*.5)+(self.rosterDict['te'].attributes.overallRating*.9)+(self.rosterDict['k'].attributes.overallRating*.8))/5)
+        
+        # Calculate offense rating with defensive checks for None positions
+        qb_rating = self.rosterDict.get('qb').attributes.overallRating if self.rosterDict.get('qb') else 50
+        rb_rating = self.rosterDict.get('rb').attributes.overallRating if self.rosterDict.get('rb') else 50
+        wr1_rating = self.rosterDict.get('wr1').attributes.overallRating if self.rosterDict.get('wr1') else 50
+        wr2_rating = self.rosterDict.get('wr2').attributes.overallRating if self.rosterDict.get('wr2') else 50
+        te_rating = self.rosterDict.get('te').attributes.overallRating if self.rosterDict.get('te') else 50
+        k_rating = self.rosterDict.get('k').attributes.overallRating if self.rosterDict.get('k') else 50
+        
+        self.offenseRating = round(((qb_rating*1.2)+(rb_rating*1.1)+(wr1_rating*.5)+(wr2_rating*.5)+(te_rating*.9)+(k_rating*.8))/5)
         self.overallRating = round(statistics.mean([self.offenseRating, self.defenseRunCoverageRating, self.defensePassCoverageRating]))
         if self.defenseSeasonPerformanceRating < 0:
             self.defenseOverallRating = self.defenseRating

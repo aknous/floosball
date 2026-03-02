@@ -6,10 +6,24 @@ game, season, and career categories. Replaces scattered record management
 functions from floosball.py
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 from logger_config import getLogger
+
+# Database imports
+try:
+    from database.config import USE_DATABASE
+    from database.connection import get_session
+    from database import repositories
+    from database.models import Record as DBRecord
+    DB_IMPORTS_AVAILABLE = True
+except ImportError:
+    USE_DATABASE = False
+    DB_IMPORTS_AVAILABLE = False
+    DBRecord = None
+    repositories = None
+    get_session = None
 
 class RecordManager:
     """Manages all record tracking operations for players and teams"""
@@ -19,6 +33,17 @@ class RecordManager:
         self.logger = getLogger("floosball.record_manager")
         self._records = None  # Lazy initialization
         self._championshipRecords: list[Dict[str, Any]] = []  # Placeholder for championship records if needed
+        
+        # Database support
+        self.db_session = None
+        self.record_repo = None
+        
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE:
+            self.db_session = get_session()
+            self.record_repo = repositories.RecordRepository(self.db_session)
+            self.logger.info("RecordManager using DATABASE storage")
+        else:
+            self.logger.info("RecordManager using JSON file storage")
     
     def _initializeRecordStructure(self) -> Dict[str, Any]:
         """Initialize the complete record structure - moved from floosball.py"""
@@ -502,28 +527,33 @@ class RecordManager:
         self._records = records
     
     def loadRecordsFromFile(self, filePath: str = "data/allTimeRecords.json") -> None:
-        """Load records from JSON file and ensure complete structure"""
-        import json
-        import os
-        
-        try:
-            if os.path.exists(filePath):
-                with open(filePath, 'r') as f:
-                    loaded_records = json.load(f)
-                
-                # Get the complete structure template
-                complete_structure = self._initializeRecordStructure()
-                
-                # Merge loaded records with complete structure to fill any missing sections
-                self._records = self._mergeRecordStructures(complete_structure, loaded_records)
-                
-                self.logger.info(f"Loaded records from {filePath} and validated structure")
-            else:
+        """Load records from JSON file or database and ensure complete structure"""
+        # Try database first if available
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.record_repo:
+            self._loadRecordsFromDatabase()
+        else:
+            # Fall back to JSON file
+            import json
+            import os
+            
+            try:
+                if os.path.exists(filePath):
+                    with open(filePath, 'r') as f:
+                        loaded_records = json.load(f)
+                    
+                    # Get the complete structure template
+                    complete_structure = self._initializeRecordStructure()
+                    
+                    # Merge loaded records with complete structure to fill any missing sections
+                    self._records = self._mergeRecordStructures(complete_structure, loaded_records)
+                    
+                    self.logger.info(f"Loaded records from {filePath} and validated structure")
+                else:
+                    self._records = self._initializeRecordStructure()
+                    self.logger.info("Initialized new record structure")
+            except Exception as e:
+                self.logger.error(f"Failed to load records from {filePath}: {e}")
                 self._records = self._initializeRecordStructure()
-                self.logger.info("Initialized new record structure")
-        except Exception as e:
-            self.logger.error(f"Failed to load records from {filePath}: {e}")
-            self._records = self._initializeRecordStructure()
     
     def _mergeRecordStructures(self, complete: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:
         """Recursively merge loaded records with complete structure to fill missing sections"""
@@ -544,24 +574,182 @@ class RecordManager:
         return result
     
     def saveRecordsToFile(self, filePath: str = "data/allTimeRecords.json") -> None:
-        """Save records to JSON file"""
-        import json
-        import os
-        
-        try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(filePath), exist_ok=True)
+        """Save records to database or JSON file"""
+        # Try database first if available
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.record_repo:
+            self._saveRecordsToDatabase()
+        else:
+            # Fall back to JSON file
+            import json
+            import os
             
-            with open(filePath, 'w') as f:
-                json.dump(self.getRecords(), f, indent=4)
-            self.logger.info(f"Saved records to {filePath}")
-        except Exception as e:
-            self.logger.error(f"Failed to save records to {filePath}: {e}")
+            try:
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(filePath), exist_ok=True)
+                
+                with open(filePath, 'w') as f:
+                    json.dump(self.getRecords(), f, indent=4)
+                self.logger.info(f"Saved records to {filePath}")
+            except Exception as e:
+                self.logger.error(f"Failed to save records to {filePath}: {e}")
     
     def resetRecords(self) -> None:
         """Reset all records to initial state"""
         self._records = self._initializeRecordStructure()
         self.logger.info("Reset all records to initial state")
+    
+    def _loadRecordsFromDatabase(self) -> None:
+        """Load all records from database and convert to in-memory structure"""
+        try:
+            self._records = self._initializeRecordStructure()
+            
+            # Query all records from database
+            all_records = self.db_session.query(DBRecord).all()
+            
+            if not all_records:
+                self.logger.info("No records found in database, using empty structure")
+                return
+            
+            # Convert database records to in-memory structure
+            for db_record in all_records:
+                self._updateRecordFromDB(db_record)
+            
+            self.logger.info(f"Loaded {len(all_records)} records from database")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load records from database: {e}")
+            self._records = self._initializeRecordStructure()
+    
+    def _updateRecordFromDB(self, db_record) -> None:
+        """Update in-memory record structure from a database record"""
+        try:
+            # Navigate to the correct location in the nested structure
+            # Structure: players/team -> category -> scope -> stat_name
+            records = self.getRecords()
+            
+            # Determine if player or team record
+            entity_type = 'players' if db_record.player_id else 'team'
+            
+            # Navigate to the correct nested location
+            if entity_type in records:
+                if db_record.category in records[entity_type]:
+                    if db_record.scope in records[entity_type][db_record.category]:
+                        if db_record.stat_name in records[entity_type][db_record.category][db_record.scope]:
+                            # Update the record values
+                            record_dict = records[entity_type][db_record.category][db_record.scope][db_record.stat_name]
+                            record_dict['value'] = db_record.value
+                            record_dict['id'] = db_record.player_id or db_record.team_id
+                            
+                            # Get the name from player/team if possible
+                            if db_record.player_id:
+                                player_manager = self.serviceContainer.getService('player_manager')
+                                if player_manager:
+                                    player = player_manager.getPlayerById(db_record.player_id)
+                                    if player:
+                                        record_dict['name'] = player.name
+                            elif db_record.team_id:
+                                team_manager = self.serviceContainer.getService('team_manager')
+                                if team_manager:
+                                    team = team_manager.getTeamById(db_record.team_id)
+                                    if team:
+                                        record_dict['name'] = team.name
+                            
+                            # Add season if it's a season record
+                            if db_record.season:
+                                record_dict['season'] = db_record.season
+                                
+        except Exception as e:
+            self.logger.error(f"Failed to update record from DB: {e}")
+    
+    def _saveRecordsToDatabase(self) -> None:
+        """Save all records from in-memory structure to database"""
+        try:
+            records = self.getRecords()
+            saved_count = 0
+            
+            # Clear existing records (we'll do a full replace for simplicity)
+            self.db_session.query(DBRecord).delete()
+            
+            # Save player records
+            if 'players' in records:
+                saved_count += self._saveRecordCategory(records['players'], 'players')
+            
+            # Save team records
+            if 'team' in records:
+                saved_count += self._saveRecordCategory(records['team'], 'team')
+            
+            self.db_session.commit()
+            self.logger.info(f"Saved {saved_count} records to database")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save records to database: {e}")
+            self.db_session.rollback()
+    
+    def _saveRecordCategory(self, category_data: Dict[str, Any], entity_type: str) -> int:
+        """Recursively save record category to database"""
+        saved_count = 0
+        
+        for category_name, category_value in category_data.items():
+            if isinstance(category_value, dict):
+                # Check if this is a direct stat (has 'value' key) or nested structure
+                if 'value' in category_value:
+                    # Direct stat record (no deeper nesting)
+                    if category_value['value'] > 0 and category_value.get('id', 0) > 0:
+                        db_record = DBRecord(
+                            record_type=category_value.get('record', category_name),
+                            category='team' if entity_type == 'team' else 'player',
+                            subcategory='',
+                            scope=category_name,
+                            stat_name=category_name,
+                            player_id=category_value['id'] if entity_type == 'players' else None,
+                            team_id=category_value['id'] if entity_type == 'team' else None,
+                            value=float(category_value['value']),
+                            season=category_value.get('season')
+                        )
+                        self.record_repo.save(db_record)
+                        saved_count += 1
+                else:
+                    # Nested structure - go deeper
+                    for scope_name, scope_value in category_value.items():
+                        if isinstance(scope_value, dict):
+                            # Check again if this level has 'value' or goes deeper
+                            if 'value' in scope_value:
+                                # This is the stat level
+                                if scope_value['value'] > 0 and scope_value.get('id', 0) > 0:
+                                    db_record = DBRecord(
+                                        record_type=scope_value.get('record', f"{category_name} {scope_name}"),
+                                        category=category_name,
+                                        subcategory='',
+                                        scope=scope_name,
+                                        stat_name=scope_name,
+                                        player_id=scope_value['id'] if entity_type == 'players' else None,
+                                        team_id=scope_value['id'] if entity_type == 'team' else None,
+                                        value=float(scope_value['value']),
+                                        season=scope_value.get('season')
+                                    )
+                                    self.record_repo.save(db_record)
+                                    saved_count += 1
+                            else:
+                                # Go one more level deep (for players: category -> scope -> stat)
+                                for stat_name, stat_data in scope_value.items():
+                                    if isinstance(stat_data, dict) and 'value' in stat_data:
+                                        # Only save if there's actually a value
+                                        if stat_data['value'] > 0 and stat_data.get('id', 0) > 0:
+                                            db_record = DBRecord(
+                                                record_type=stat_data.get('record', f"{category_name} {stat_name}"),
+                                                category=category_name,
+                                                subcategory='',
+                                                scope=scope_name,
+                                                stat_name=stat_name,
+                                                player_id=stat_data['id'] if entity_type == 'players' else None,
+                                                team_id=stat_data['id'] if entity_type == 'team' else None,
+                                                value=float(stat_data['value']),
+                                                season=stat_data.get('season')
+                                            )
+                                            self.record_repo.save(db_record)
+                                            saved_count += 1
+        
+        return saved_count
     
     def getRecordStatistics(self) -> Dict[str, Any]:
         """Get comprehensive statistics about current records"""
@@ -624,7 +812,7 @@ class RecordManager:
             homeTeam.seasonTeamStats['Offense']['passYards'] += homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
             homeTeam.seasonTeamStats['Offense']['runYards'] += homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
             homeTeam.seasonTeamStats['Offense']['totalYards'] += (homeTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + homeTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
-            homeScoreDiff = gameInstance.homeScore - homeTeam.gameDefenseStats['ptsAlwd']
+            homeScoreDiff = gameInstance.homeScore - gameInstance.awayScore
             homeTeam.seasonTeamStats['scoreDiff'] += homeScoreDiff
 
             # Away team offensive stats (lines 1238-1248)
@@ -636,38 +824,51 @@ class RecordManager:
             awayTeam.seasonTeamStats['Offense']['passYards'] += awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards']
             awayTeam.seasonTeamStats['Offense']['runYards'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards']
             awayTeam.seasonTeamStats['Offense']['totalYards'] += (awayTeam.rosterDict['qb'].gameStatsDict['passing']['yards'] + awayTeam.rosterDict['rb'].gameStatsDict['rushing']['yards'])
-            awayScoreDiff = gameInstance.awayScore - awayTeam.gameDefenseStats['ptsAlwd']
+            awayScoreDiff = gameInstance.awayScore - gameInstance.homeScore
             awayTeam.seasonTeamStats['scoreDiff'] += awayScoreDiff
 
             # Winning team defensive stats (lines 1258-1269)
+            # Note: winningTeam/losingTeam should never be None after a game completes
             winningTeam: FloosTeam.Team = gameInstance.winningTeam
-            winningTeam.seasonTeamStats['Defense']['ints'] += winningTeam.gameDefenseStats['ints']
-            winningTeam.seasonTeamStats['Defense']['fumRec'] += winningTeam.gameDefenseStats['fumRec']
-            winningTeam.seasonTeamStats['Defense']['sacks'] += winningTeam.gameDefenseStats['sacks']
-            winningTeam.seasonTeamStats['Defense']['safeties'] += winningTeam.gameDefenseStats['safeties']
-            winningTeam.seasonTeamStats['Defense']['runYardsAlwd'] += winningTeam.gameDefenseStats['runYardsAlwd']
-            winningTeam.seasonTeamStats['Defense']['passYardsAlwd'] += winningTeam.gameDefenseStats['passYardsAlwd']
-            winningTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += winningTeam.gameDefenseStats['totalYardsAlwd']
-            winningTeam.seasonTeamStats['Defense']['runTdsAlwd'] += winningTeam.gameDefenseStats['runTdsAlwd']
-            winningTeam.seasonTeamStats['Defense']['passTdsAlwd'] += winningTeam.gameDefenseStats['passTdsAlwd']
-            winningTeam.seasonTeamStats['Defense']['tdsAlwd'] += winningTeam.gameDefenseStats['tdsAlwd']
-            winningTeam.seasonTeamStats['Defense']['ptsAlwd'] += winningTeam.gameDefenseStats['ptsAlwd']
-            winningTeam.seasonTeamStats['winPerc'] = round(winningTeam.seasonTeamStats['wins']/(winningTeam.seasonTeamStats['wins']+winningTeam.seasonTeamStats['losses']),3)
+            losingTeam: FloosTeam.Team = gameInstance.losingTeam
+            
+            if winningTeam is None or losingTeam is None:
+                raise ValueError(
+                    f"Game ended without proper winner/loser assignment! "
+                    f"{gameInstance.homeTeam.name} vs {gameInstance.awayTeam.name} - "
+                    f"Score: {gameInstance.homeScore}-{gameInstance.awayScore}, "
+                    f"winningTeam={winningTeam}, losingTeam={losingTeam}, "
+                    f"isOvertime={gameInstance.isOvertime}, currentQuarter={gameInstance.currentQuarter}"
+                )
+            
+            if winningTeam is not None:
+                winningTeam.seasonTeamStats['Defense']['ints'] += winningTeam.gameDefenseStats['ints']
+                winningTeam.seasonTeamStats['Defense']['fumRec'] += winningTeam.gameDefenseStats['fumRec']
+                winningTeam.seasonTeamStats['Defense']['sacks'] += winningTeam.gameDefenseStats['sacks']
+                winningTeam.seasonTeamStats['Defense']['safeties'] += winningTeam.gameDefenseStats['safeties']
+                winningTeam.seasonTeamStats['Defense']['runYardsAlwd'] += winningTeam.gameDefenseStats['runYardsAlwd']
+                winningTeam.seasonTeamStats['Defense']['passYardsAlwd'] += winningTeam.gameDefenseStats['passYardsAlwd']
+                winningTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += winningTeam.gameDefenseStats['totalYardsAlwd']
+                winningTeam.seasonTeamStats['Defense']['runTdsAlwd'] += winningTeam.gameDefenseStats['runTdsAlwd']
+                winningTeam.seasonTeamStats['Defense']['passTdsAlwd'] += winningTeam.gameDefenseStats['passTdsAlwd']
+                winningTeam.seasonTeamStats['Defense']['tdsAlwd'] += winningTeam.gameDefenseStats['tdsAlwd']
+                winningTeam.seasonTeamStats['Defense']['ptsAlwd'] += winningTeam.gameDefenseStats['ptsAlwd']
+                winningTeam.seasonTeamStats['winPerc'] = round(winningTeam.seasonTeamStats['wins']/(winningTeam.seasonTeamStats['wins']+winningTeam.seasonTeamStats['losses']),3)
 
             # Losing team defensive stats (lines 1281-1292)
-            losingTeam: FloosTeam.Team = gameInstance.losingTeam
-            losingTeam.seasonTeamStats['Defense']['ints'] += losingTeam.gameDefenseStats['ints']
-            losingTeam.seasonTeamStats['Defense']['fumRec'] += losingTeam.gameDefenseStats['fumRec']
-            losingTeam.seasonTeamStats['Defense']['sacks'] += losingTeam.gameDefenseStats['sacks']
-            losingTeam.seasonTeamStats['Defense']['safeties'] += losingTeam.gameDefenseStats['safeties']
-            losingTeam.seasonTeamStats['Defense']['runYardsAlwd'] += losingTeam.gameDefenseStats['runYardsAlwd']
-            losingTeam.seasonTeamStats['Defense']['passYardsAlwd'] += losingTeam.gameDefenseStats['passYardsAlwd']
-            losingTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += losingTeam.gameDefenseStats['totalYardsAlwd']
-            losingTeam.seasonTeamStats['Defense']['runTdsAlwd'] += losingTeam.gameDefenseStats['runTdsAlwd']
-            losingTeam.seasonTeamStats['Defense']['passTdsAlwd'] += losingTeam.gameDefenseStats['passTdsAlwd']
-            losingTeam.seasonTeamStats['Defense']['tdsAlwd'] += losingTeam.gameDefenseStats['tdsAlwd']
-            losingTeam.seasonTeamStats['Defense']['ptsAlwd'] += losingTeam.gameDefenseStats['ptsAlwd']
-            losingTeam.seasonTeamStats['winPerc'] = round(losingTeam.seasonTeamStats['wins']/(losingTeam.seasonTeamStats['wins']+losingTeam.seasonTeamStats['losses']),3)
+            if losingTeam is not None:
+                losingTeam.seasonTeamStats['Defense']['ints'] += losingTeam.gameDefenseStats['ints']
+                losingTeam.seasonTeamStats['Defense']['fumRec'] += losingTeam.gameDefenseStats['fumRec']
+                losingTeam.seasonTeamStats['Defense']['sacks'] += losingTeam.gameDefenseStats['sacks']
+                losingTeam.seasonTeamStats['Defense']['safeties'] += losingTeam.gameDefenseStats['safeties']
+                losingTeam.seasonTeamStats['Defense']['runYardsAlwd'] += losingTeam.gameDefenseStats['runYardsAlwd']
+                losingTeam.seasonTeamStats['Defense']['passYardsAlwd'] += losingTeam.gameDefenseStats['passYardsAlwd']
+                losingTeam.seasonTeamStats['Defense']['totalYardsAlwd'] += losingTeam.gameDefenseStats['totalYardsAlwd']
+                losingTeam.seasonTeamStats['Defense']['runTdsAlwd'] += losingTeam.gameDefenseStats['runTdsAlwd']
+                losingTeam.seasonTeamStats['Defense']['passTdsAlwd'] += losingTeam.gameDefenseStats['passTdsAlwd']
+                losingTeam.seasonTeamStats['Defense']['tdsAlwd'] += losingTeam.gameDefenseStats['tdsAlwd']
+                losingTeam.seasonTeamStats['Defense']['ptsAlwd'] += losingTeam.gameDefenseStats['ptsAlwd']
+                losingTeam.seasonTeamStats['winPerc'] = round(losingTeam.seasonTeamStats['wins']/(losingTeam.seasonTeamStats['wins']+losingTeam.seasonTeamStats['losses']),3)
             
             # Defensive fantasy points calculation (lines 1295-1319)
             # Home team defensive fantasy points
@@ -770,6 +971,7 @@ class RecordManager:
             # The full implementation would mirror the original postgame() logic
 
             player.seasonStatsDict['fantasyPoints'] += player.gameStatsDict['fantasyPoints']
+            player.gameStatsDict['fantasyPoints'] = 0  # prevent double-count in leaderboard/players page
             if position == 'qb' and 'passing' in gameStats:
                 if 'passing' not in seasonStats:
                     seasonStats['passing'] = {
@@ -1459,8 +1661,8 @@ class RecordManager:
                     'id': team.id
                 })
             
-            # Regular season championships (original field name was 'regSeasonTitles')
-            regularSeasonTitles = len(team.regularSeasonChampions) if hasattr(team, 'regularSeasonChampions') else 0
+            # Top seeds (original field name was 'regSeasonTitles', then 'regularSeasonChampions')
+            regularSeasonTitles = len(team.topSeeds) if hasattr(team, 'topSeeds') else 0
             if regularSeasonTitles > team_records.get('regSeasonTitles', {}).get('value', 0):
                 if 'regSeasonTitles' not in team_records:
                     team_records['regSeasonTitles'] = {'value': 0, 'name': '', 'id': 0}
@@ -1869,36 +2071,6 @@ class RecordManager:
                     'id': team.id,
                     'season': season.currentSeason if hasattr(season, 'currentSeason') else 0
                 })
-    
-    def getRecordStatistics(self, allTimeRecordsDict: Dict[str, Any]) -> Dict[str, Any]:
-        """Get comprehensive record statistics"""
-        return {
-            'totalRecords': self._countRecords(allTimeRecordsDict),
-            'playerRecords': self._countPlayerRecords(allTimeRecordsDict),
-            'teamRecords': self._countTeamRecords(allTimeRecordsDict)
-        }
-    
-    def _countRecords(self, records: Dict[str, Any]) -> int:
-        """Count total number of records"""
-        total = 0
-        for category in records.values():
-            if isinstance(category, dict):
-                total += self._countRecords(category)
-            else:
-                total += 1
-        return total
-    
-    def _countPlayerRecords(self, records: Dict[str, Any]) -> int:
-        """Count player-specific records"""
-        if 'players' in records:
-            return self._countRecords(records['players'])
-        return 0
-    
-    def _countTeamRecords(self, records: Dict[str, Any]) -> int:
-        """Count team-specific records"""
-        if 'team' in records:
-            return self._countRecords(records['team'])
-        return 0
     
     def updateChampionshipHistory(self, season, winningTeam, losingTeam) -> None:
         """Update championship history for teams"""

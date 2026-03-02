@@ -1,7 +1,8 @@
 {
+    "adminPassword": "floosball",
     "leagueConfig": {
         "cap": 30,
-        "totalSeasons": 20,
+        "totalSeasons": 2,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
         "lastSeason": 0,
@@ -20,145 +21,193 @@
             "city": "New York",
             "name": "Strangers",
             "abbr": "NYS",
-            "color": "#E93479"
+            "color": "#E91E8C",
+            "secondaryColor": "#ECEFF1",
+            "tertiaryColor": "#F06292"
         },
         {
             "city": "Boston",
             "name": "Normals",
             "abbr": "BOS",
-            "color": "#16a085"
+            "color": "#1565C0",
+            "secondaryColor": "#FF8C00",
+            "tertiaryColor": "#1976D2"
         },
         {
             "city": "Philadelphia",
             "name": "Broads",
             "abbr": "PHI",
-            "color": "#26A69A"
+            "color": "#C51162",
+            "secondaryColor": "#00BCD4",
+            "tertiaryColor": "#F50057"
         },
         {
             "city": "Maryland",
             "name": "Drivers",
             "abbr": "MDD",
-            "color": "#ffa801"
+            "color": "#FFB300",
+            "secondaryColor": "#D32F2F",
+            "tertiaryColor": "#FFD740"
         },
         {
             "city": "Pittsburgh",
             "name": "Melons",
             "abbr": "PIT",
-            "color": "#27ae60"
+            "color": "#FF4081",
+            "secondaryColor": "#76FF03",
+            "tertiaryColor": "#FF80AB"
         },
         {
             "city": "Cleveland",
             "name": "Rocks",
             "abbr": "CLE",
-            "color": "#26C6DA"
+            "color": "#B2FF59",
+            "secondaryColor": "#D50000",
+            "tertiaryColor": "#CCFF90"
         },
         {
             "city": "Chicago",
             "name": "Beans",
             "abbr": "CHI",
-            "color": "#651FFF"
+            "color": "#7C4DFF",
+            "secondaryColor": "#18FFFF",
+            "tertiaryColor": "#B388FF"
         },
         {
             "city": "Detroit",
             "name": "Caddies",
             "abbr": "DET",
-            "color": "#1B9CFC"
+            "color": "#FFD600",
+            "secondaryColor": "#1A237E",
+            "tertiaryColor": "#FFE040"
         },
         {
             "city": "Minnesota",
             "name": "Blouses",
             "abbr": "MIN",
-            "color": "#D500F9"
+            "color": "#D500F9",
+            "secondaryColor": "#00E5FF",
+            "tertiaryColor": "#E040FB"
         },
         {
             "city": "Seattle",
             "name": "Cranes",
             "abbr": "SEA",
-            "color": "#60a3bc"
+            "color": "#26C6DA",
+            "secondaryColor": "#F4511E",
+            "tertiaryColor": "#4DD0E1"
         },
         {
             "city": "Vancouver",
             "name": "Pinecones",
             "abbr": "VAN",
-            "color": "#ff6348"
+            "color": "#8BC34A",
+            "secondaryColor": "#7E57C2",
+            "tertiaryColor": "#AED581"
         },
         {
             "city": "Colorado",
             "name": "Leg Warmers",
             "abbr": "DEN",
-            "color": "#1e3799"
+            "color": "#F06292",
+            "secondaryColor": "#536DFE",
+            "tertiaryColor": "#F48FB1"
         },
         {
             "city": "Austin",
             "name": "Moonlight",
             "abbr": "AUS",
-            "color": "#FF6D00"
+            "color": "#FF6D00",
+            "secondaryColor": "#6200EA",
+            "tertiaryColor": "#FF9E40"
         },
         {
             "city": "Kansas City",
             "name": "Slippers",
             "abbr": "KCS",
-            "color": "#EA2027"
+            "color": "#C41E3A",
+            "secondaryColor": "#ECEFF1",
+            "tertiaryColor": "#E8294F"
         },
         {
             "city": "San Diego",
             "name": "Sand Dollars",
             "abbr": "SND",
-            "color": "#487eb0"
+            "color": "#29B6F6",
+            "secondaryColor": "#FF8A65",
+            "tertiaryColor": "#4FC3F7"
         },
         {
             "city": "Arizona",
             "name": "Dry Heat",
             "abbr": "ARI",
-            "color": "#8e44ad"
+            "color": "#E64A19",
+            "secondaryColor": "#6A1B9A",
+            "tertiaryColor": "#FF7043"
         },
         {
             "city": "Las Vegas",
             "name": "Residents",
             "abbr": "LVR",
-            "color": "#9C27B0"
+            "color": "#FFD700",
+            "secondaryColor": "#AA00FF",
+            "tertiaryColor": "#FFE040"
         },
         {
             "city": "Anaheim",
             "name": "Rhyme",
             "abbr": "ANA",
-            "color": "#58D68D"
+            "color": "#00BFA5",
+            "secondaryColor": "#FF5252",
+            "tertiaryColor": "#1DE9B6"
         },
         {
             "city": "Carolina",
             "name": "Boil",
             "abbr": "CAR",
-            "color": "#ff4757"
+            "color": "#4A148C",
+            "secondaryColor": "#FF6F00",
+            "tertiaryColor": "#6A1B9A"
         },
         {
             "city": "Portland",
             "name": "Lattes",
             "abbr": "POR",
-            "color": "#B53471"
+            "color": "#E91E63",
+            "secondaryColor": "#00BCD4",
+            "tertiaryColor": "#F06292"
         },
         {
             "city": "Miami",
             "name": "Jetskis",
             "abbr": "MIA",
-            "color": "#ff00a0"
+            "color": "#FF00B8",
+            "secondaryColor": "#00FFFF",
+            "tertiaryColor": "#FF40CC"
         },
         {
             "city": "San Francisco",
             "name": "Phones",
             "abbr": "SFP",
-            "color": "#0fbcf9"
+            "color": "#0071E3",
+            "secondaryColor": "#FF3B30",
+            "tertiaryColor": "#409EFF"
         },
         {
             "city": "Tampa",
             "name": "Babies",
             "abbr": "TAM",
-            "color": "#FFC400"
+            "color": "#FFC107",
+            "secondaryColor": "#7B1FA2",
+            "tertiaryColor": "#FFD54F"
         },
         {
             "city": "Georgia",
             "name": "Classics",
             "abbr": "GAC",
-            "color": "#3498db"
+            "color": "#3F51B5",
+            "secondaryColor": "#FF8F00",
+            "tertiaryColor": "#5C6BC0"
         }
     ],
     "players": [

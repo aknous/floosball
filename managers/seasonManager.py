@@ -6,6 +6,7 @@ Replaces the scattered season-related functions and global variables from floosb
 import math
 import os
 import json
+import traceback
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 import datetime
@@ -14,6 +15,36 @@ import floosball_player as FloosPlayer
 import floosball_game as FloosGame
 from logger_config import get_logger
 from .timingManager import TimingManager, TimingMode
+
+# Database imports
+try:
+    from database.config import USE_DATABASE
+    from database.connection import get_session
+    from database import repositories
+    from database.models import Game as DBGame, GamePlayerStats as DBGamePlayerStats
+    DB_IMPORTS_AVAILABLE = True
+except ImportError:
+    USE_DATABASE = False
+    DB_IMPORTS_AVAILABLE = False
+    DBGame = None
+    DBGamePlayerStats = None
+    repositories = None
+    get_session = None
+
+# WebSocket broadcasting support (optional)
+try:
+    from api.game_broadcaster import broadcaster
+    from api.event_models import SeasonEvent, StandingsEvent, LeagueNewsEvent, OffseasonEvent
+    from api_response_builders import LeagueResponseBuilder
+    BROADCASTING_AVAILABLE = True
+except ImportError:
+    BROADCASTING_AVAILABLE = False
+    broadcaster = None
+    SeasonEvent = None
+    StandingsEvent = None
+    LeagueNewsEvent = None
+    OffseasonEvent = None
+    LeagueResponseBuilder = None
 
 logger = get_logger("floosball.seasonManager")
 
@@ -47,11 +78,42 @@ class SeasonManager:
         
         self.currentSeason: Optional[Season] = None
         self.seasonHistory: List[Season] = []
+        
+        # Callback for state updates (set by application)
+        self.stateUpdateCallback = None
+        
+        # Database support
+        self.db_session = None
+        self.game_repo = None
+        
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE:
+            self.db_session = get_session()
+            self.game_repo = repositories.GameRepository(self.db_session)
+            logger.info("SeasonManager using DATABASE storage")
+        else:
+            logger.info("SeasonManager using JSON file storage")
 
         # Initialize timing manager with default fast mode
         self.timingManager = TimingManager(TimingMode.FAST)
         
+        # Game stats file
+        self.game_stats_file = None
+        
+        # Track games for verbose logging
+        self.games_simulated_this_season = 0
+        
+        # Global game counter for unique IDs across all seasons
+        self._gameIdCounter = 0
+
+        # Offseason transaction history (persists for page refresh)
+        self._offseasonTransactions: list = []
+
         logger.info("SeasonManager initialized")
+    
+    def setStateUpdateCallback(self, callback):
+        """Set callback function for state updates"""
+        self.stateUpdateCallback = callback
+        logger.debug("State update callback registered")
     
     def setTimingMode(self, mode: TimingMode) -> None:
         """Set timing mode for simulation"""
@@ -59,14 +121,18 @@ class SeasonManager:
         logger.info(f"Season timing mode set to {mode.value}")
     
     def setTimingModeFromString(self, mode_str: str) -> None:
-        """Set timing mode from string (scheduled/sequential/fast)"""
+        """Set timing mode from string (scheduled/sequential/turbo/fast)"""
         mode_str = mode_str.lower()
         if mode_str == 'scheduled':
             self.setTimingMode(TimingMode.SCHEDULED)
         elif mode_str == 'sequential':
             self.setTimingMode(TimingMode.SEQUENTIAL)
+        elif mode_str == 'turbo':
+            self.setTimingMode(TimingMode.TURBO)
         elif mode_str == 'fast':
             self.setTimingMode(TimingMode.FAST)
+        elif mode_str == 'demo':
+            self.setTimingMode(TimingMode.DEMO)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -105,11 +171,20 @@ class SeasonManager:
             
         logger.info(f"Running simulation for season {self.currentSeason.seasonNumber}")
         
+        # Reset game counter for verbose logging
+        self.games_simulated_this_season = 0
+        
+        # Open game stats file
+        self._openGameStatsFile()
+        
         # Simulate regular season
         await self._simulateRegularSeason()
         
         # Simulate playoffs
         await self._simulatePlayoffs()
+        
+        # Close game stats file
+        self._closeGameStatsFile()
         
         # Handle season completion
         await self._completeSeasonSimulation()
@@ -119,18 +194,28 @@ class SeasonManager:
     async def _simulateRegularSeason(self) -> None:
         """Simulate all regular season games"""
         strCurrentSeason = 'season{}'.format(self.currentSeason.seasonNumber)
-        weekFilePath = '{}/games'.format(strCurrentSeason)
+        # weekFilePath = '{}/games'.format(strCurrentSeason)
         
-        # Create games directory if it doesn't exist
-        if not os.path.isdir(strCurrentSeason):
-            os.mkdir(strCurrentSeason)
-        if not os.path.isdir(weekFilePath):
-            os.mkdir(weekFilePath)
+        # Note: Season directory creation disabled - data is in database
+        # if not os.path.isdir(strCurrentSeason):
+        #     os.mkdir(strCurrentSeason)
+        # if not os.path.isdir(weekFilePath):
+        #     os.mkdir(weekFilePath)
         
         for week in self.currentSeason.schedule:
             self.currentSeason.currentWeek = self.currentSeason.schedule.index(week)+1
             self.currentSeason.currentWeekText = f'Week {self.currentSeason.currentWeek}'
             logger.info(f"Simulating week {self.currentSeason.currentWeek} in {self.timingManager.getModeString()} mode")
+            
+            # Broadcast week start event
+            if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                week_event = SeasonEvent.weekStart(
+                    seasonNumber=self.currentSeason.seasonNumber,
+                    weekNumber=self.currentSeason.currentWeek,
+                    games=[]  # Could populate with game info if needed
+                )
+                broadcaster.broadcast_sync('season', week_event)
+            
             weekStartTime = week['startTime']
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
             self.currentSeason.activeGames = week['games']
@@ -165,19 +250,21 @@ class SeasonManager:
 
             # Wait for all games in the week to complete concurrently
             await asyncio.gather(*gameTasks)
-
-            # Save week's game data to file (matches original startSeason)
-            gameDict = {}
-            for game_idx, game in enumerate(weekGames):
-                strGame = f'Game {game_idx + 1}'
-                gameResults = game.gameDict
-                gameDict[strGame] = gameResults
             
-            from serializers import serialize_object
-            weekDict = serialize_object(gameDict)
-            jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentSeason.currentWeekText)), "w+")
-            jsonFile.write(json.dumps(weekDict, indent=4))
-            jsonFile.close()
+            # Notify about week completion (for state saving)
+            await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
+
+            # Note: Week game data is now stored in the database, JSON output disabled
+            # gameDict = {}
+            # for game_idx, game in enumerate(weekGames):
+            #     strGame = f'Game {game_idx + 1}'
+            #     gameResults = game.gameDict
+            #     gameDict[strGame] = gameResults
+            # from serializers import serialize_object
+            # weekDict = serialize_object(gameDict)
+            # jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentSeason.currentWeekText)), "w+")
+            # jsonFile.write(json.dumps(weekDict, indent=4))
+            # jsonFile.close()
 
             # Post-week processing (matches original floosball.py lines 688-699)
             self._updateWeeklyStats()
@@ -194,12 +281,38 @@ class SeasonManager:
 
             # Update playoff picture and check for clinches (matches original)
             self.updatePlayoffPicture()
-            self.checkForClinches()
+            newClinchEvents = self.checkForClinches()
+
+            # Broadcast any new clinch/elimination events
+            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                for text in newClinchEvents:
+                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(text))
+
+            # Broadcast standings with updated clinch/elimination flags
+            # Use await directly (we're in an async method) so it fires immediately, not as a deferred task
+            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and StandingsEvent and LeagueResponseBuilder:
+                standingsData = []
+                for league in self.leagueManager.leagues:
+                    standingsData.append({
+                        'name': league.name,
+                        'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList)['standings']
+                    })
+                await broadcaster.broadcast_season_event(StandingsEvent.standingsUpdate(standings=standingsData))
+
             self._checkRecords()
 
             # Additional record checks (matches original)
             self.recordsManager.checkCareerRecords()
             self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber)
+
+            # Commit all games from this week to database
+            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session:
+                try:
+                    self.db_session.commit()
+                    logger.debug(f"Committed {len(weekGames)} games from week {self.currentSeason.currentWeek}")
+                except Exception as e:
+                    logger.error(f"Failed to commit week games: {e}")
+                    self.db_session.rollback()
 
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -225,6 +338,9 @@ class SeasonManager:
             # Create game instance with timing manager
             gameInstance = game
             
+            # Track games simulated this season
+            self.games_simulated_this_season += 1
+            
             # Simulate the game
             await gameInstance.playGame()
             
@@ -234,25 +350,241 @@ class SeasonManager:
             # Process post-game statistics (replaces original postgame() method)
             self.recordsManager.processPostGameStats(gameInstance)
             
-            # Update ELO ratings based on game result
+            # Log detailed game stats
+            self._logGameStats(gameInstance)
+            
+            # Update ELO ratings based on game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
                 teamManager.updateEloAfterGame(
-                    gameInstance.homeTeam, 
-                    gameInstance.awayTeam, 
-                    gameInstance.homeScore, 
-                    gameInstance.awayScore, 
+                    gameInstance.homeTeam,
+                    gameInstance.awayTeam,
+                    gameInstance.homeScore,
+                    gameInstance.awayScore,
                     gameInstance.winningTeam,
-                    getattr(gameInstance, 'homeTeamWinProbability', None),
-                    getattr(gameInstance, 'awayTeamWinProbability', None)
+                    getattr(gameInstance, 'preGameHomeWinProbability', None),
+                    getattr(gameInstance, 'preGameAwayWinProbability', None)
                 )
-            
+
+            # Broadcast standings update after ELO has been updated
+            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and StandingsEvent and LeagueResponseBuilder:
+                standingsData = []
+                for league in self.leagueManager.leagues:
+                    standingsData.append({
+                        'name': league.name,
+                        'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList)['standings']
+                    })
+                await broadcaster.broadcast_season_event(StandingsEvent.standingsUpdate(standings=standingsData))
+
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+
+            # Save game to database if enabled
+            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+                self._saveGameToDatabase(gameInstance)
+
+        except Exception as e:
+            logger.error(
+                f"Error simulating game ({game.homeTeam.name} vs {game.awayTeam.name}): {e}\n"
+                + traceback.format_exc()
+            )
+            # Force-finish the game so it doesn't stay stuck as "Live" forever
+            if getattr(game, 'status', None) != FloosGame.GameStatus.Final:
+                game.status = FloosGame.GameStatus.Final
+                if not getattr(game, 'winningTeam', None):
+                    if game.homeScore > game.awayScore:
+                        game.winningTeam = game.homeTeam
+                        game.losingTeam = game.awayTeam
+                    elif game.awayScore > game.homeScore:
+                        game.winningTeam = game.awayTeam
+                        game.losingTeam = game.homeTeam
+                    else:
+                        game.winningTeam = game.homeTeam
+                        game.losingTeam = game.awayTeam
+                try:
+                    # Update season win/loss records (normally done inside playGame())
+                    if getattr(game, 'isRegularSeasonGame', False) and getattr(game, 'winningTeam', None):
+                        game.winningTeam.seasonTeamStats.setdefault('wins', 0)
+                        game.losingTeam.seasonTeamStats.setdefault('losses', 0)
+                        game.winningTeam.seasonTeamStats['wins'] += 1
+                        game.losingTeam.seasonTeamStats['losses'] += 1
+                    self._updateTeamRecords(game)
+                except Exception:
+                    pass
+
+    def _openGameStatsFile(self) -> None:
+        """Open file for game statistics logging"""
+        try:
+            filename = f"logs/game_stats_season_{self.currentSeason.seasonNumber}.txt"
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            self.game_stats_file = open(filename, 'w', encoding='utf-8')
+            self.game_stats_file.write(f"GAME STATISTICS - SEASON {self.currentSeason.seasonNumber}\n")
+            self.game_stats_file.write(f"{'='*80}\n\n")
+            logger.info(f"Opened game stats file: {filename}")
+        except Exception as e:
+            logger.error(f"Failed to open game stats file: {e}")
+            self.game_stats_file = None
+    
+    def _closeGameStatsFile(self) -> None:
+        """Close game statistics file"""
+        try:
+            if self.game_stats_file:
+                self.game_stats_file.write(f"\n{'='*80}\n")
+                self.game_stats_file.write(f"END OF SEASON {self.currentSeason.seasonNumber}\n")
+                self.game_stats_file.close()
+                self.game_stats_file = None
+                logger.info("Closed game stats file")
+        except Exception as e:
+            logger.error(f"Failed to close game stats file: {e}")
+    
+    def _logGameStats(self, game: FloosGame.Game) -> None:
+        """Log detailed game statistics to file"""
+        if not self.game_stats_file:
+            return
+            
+        try:
+            # Get game data which calculates yards
+            gameData = game.getGameData()
+            homeStats = gameData['homeTeam']
+            awayStats = gameData['awayTeam']
+            
+            # Write to file instead of logger
+            f = self.game_stats_file
+            
+            # Basic game info
+            f.write(f"\n{'='*80}\n")
+            f.write(f"GAME COMPLETE: {game.awayTeam.abbr} @ {game.homeTeam.abbr}\n")
+            f.write(f"FINAL SCORE: {game.awayTeam.abbr} {game.awayScore} - {game.homeTeam.abbr} {game.homeScore}\n")
+            
+            # Quarter scores
+            f.write(f"  Q1: {game.awayScoreQ1}-{game.homeScoreQ1}  |  Q2: {game.awayScoreQ2}-{game.homeScoreQ2}  |  Q3: {game.awayScoreQ3}-{game.homeScoreQ3}  |  Q4: {game.awayScoreQ4}-{game.homeScoreQ4}")
+            if game.awayScoreOT > 0 or game.homeScoreOT > 0:
+                f.write(f"  |  OT: {game.awayScoreOT}-{game.homeScoreOT}")
+            f.write("\n")
+            
+            # Team stats comparison
+            f.write(f"\nTEAM STATISTICS:\n")
+            f.write(f"{'Stat':<25} {game.awayTeam.abbr:>10} {game.homeTeam.abbr:>10}\n")
+            f.write(f"{'-'*45}\n")
+            
+            # Basic game stats
+            f.write(f"{'Total Plays':<25} {awayStats['totalPlays']:>10} {homeStats['totalPlays']:>10}\n")
+            f.write(f"{'First Downs':<25} {awayStats['1stDowns']:>10} {homeStats['1stDowns']:>10}\n")
+            f.write(f"{'Turnovers':<25} {awayStats['turnovers']:>10} {homeStats['turnovers']:>10}\n")
+            
+            # Offensive stats
+            f.write(f"{'Pass Yards':<25} {awayStats['offense']['passYards']:>10} {homeStats['offense']['passYards']:>10}\n")
+            f.write(f"{'Rush Yards':<25} {awayStats['offense']['rushYards']:>10} {homeStats['offense']['rushYards']:>10}\n")
+            f.write(f"{'Total Yards':<25} {awayStats['offense']['totalYards']:>10} {homeStats['offense']['totalYards']:>10}\n")
+            f.write(f"{'Pass TDs':<25} {awayStats['offense']['passTds']:>10} {homeStats['offense']['passTds']:>10}\n")
+            f.write(f"{'Rush TDs':<25} {awayStats['offense']['runTds']:>10} {homeStats['offense']['runTds']:>10}\n")
+            f.write(f"{'Field Goals':<25} {awayStats['offense']['fgs']:>10} {homeStats['offense']['fgs']:>10}\n")
+            
+            # Defensive stats
+            f.write(f"{'Sacks':<25} {awayStats['sacks']:>10} {homeStats['sacks']:>10}\n")
+            f.write(f"{'Interceptions':<25} {game.awayTeam.gameDefenseStats.get('ints', 0):>10} {game.homeTeam.gameDefenseStats.get('ints', 0):>10}\n")
+            f.write(f"{'Fumbles Recovered':<25} {game.awayTeam.gameDefenseStats.get('fumRec', 0):>10} {game.homeTeam.gameDefenseStats.get('fumRec', 0):>10}\n")
+            
+            # Team ratings
+            f.write(f"\nTEAM RATINGS:\n")
+            f.write(f"{'Offense Rating':<25} {game.awayTeam.offenseRating:>10} {game.homeTeam.offenseRating:>10}\n")
+            f.write(f"{'Defense Rating':<25} {game.awayTeam.defenseOverallRating:>10} {game.homeTeam.defenseOverallRating:>10}\n")
+            f.write(f"{'Overall Rating':<25} {game.awayTeam.overallRating:>10} {game.homeTeam.overallRating:>10}\n")
+            
+            f.write(f"{'='*80}\n\n")
+            
+            # Flush to ensure it's written
+            f.flush()
             
         except Exception as e:
-            logger.error(f"Error simulating game: {e}")
+            logger.error(f"Error logging game stats: {e}")
+    
+    async def _onWeekComplete(self, week: int, in_playoffs: bool, playoff_round: Optional[str] = None) -> None:
+        """Called after each week completes - triggers state save"""
+        if self.stateUpdateCallback:
+            await self.stateUpdateCallback(
+                current_season=self.currentSeason.seasonNumber,
+                current_week=week,
+                in_playoffs=in_playoffs,
+                playoff_round=playoff_round
+            )
+    
+    def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
+        """Save a completed game to the database"""
+        try:
+            # Create database game record
+            db_game = DBGame(
+                season=self.currentSeason.seasonNumber,
+                week=self.currentSeason.currentWeek,
+                home_team_id=game.homeTeam.id,
+                away_team_id=game.awayTeam.id,
+                home_score=game.homeScore,
+                away_score=game.awayScore,
+                is_overtime=game.isOvertimeGame if hasattr(game, 'isOvertimeGame') else False,
+                is_playoff=game.isPlayoff if hasattr(game, 'isPlayoff') else False,
+                playoff_round=getattr(game, 'playoffRound', None),
+                total_plays=game.totalPlays if hasattr(game, 'totalPlays') else None,
+            )
+            
+            # Save quarter scores if available
+            if hasattr(game, 'homeScoresByQuarter') and game.homeScoresByQuarter:
+                if len(game.homeScoresByQuarter) > 0:
+                    db_game.home_score_q1 = game.homeScoresByQuarter[0]
+                if len(game.homeScoresByQuarter) > 1:
+                    db_game.home_score_q2 = game.homeScoresByQuarter[1]
+                if len(game.homeScoresByQuarter) > 2:
+                    db_game.home_score_q3 = game.homeScoresByQuarter[2]
+                if len(game.homeScoresByQuarter) > 3:
+                    db_game.home_score_q4 = game.homeScoresByQuarter[3]
+                if len(game.homeScoresByQuarter) > 4:
+                    db_game.home_score_ot = sum(game.homeScoresByQuarter[4:])
+            
+            if hasattr(game, 'awayScoresByQuarter') and game.awayScoresByQuarter:
+                if len(game.awayScoresByQuarter) > 0:
+                    db_game.away_score_q1 = game.awayScoresByQuarter[0]
+                if len(game.awayScoresByQuarter) > 1:
+                    db_game.away_score_q2 = game.awayScoresByQuarter[1]
+                if len(game.awayScoresByQuarter) > 2:
+                    db_game.away_score_q3 = game.awayScoresByQuarter[2]
+                if len(game.awayScoresByQuarter) > 3:
+                    db_game.away_score_q4 = game.awayScoresByQuarter[3]
+                if len(game.awayScoresByQuarter) > 4:
+                    db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
+            
+            self.game_repo.save(db_game)
+            self.db_session.flush()  # Get the ID
+            
+            # Save player stats if available
+            if hasattr(game, 'playerStats') and game.playerStats:
+                self._savePlayerGameStats(db_game.id, game.playerStats)
+            
+            # Don't commit yet - will batch commit at end of week
+            self.db_session.flush()  # Flush to get IDs but don't commit
+            logger.debug(f"Saved game to database: {game.awayTeam.abbr} @ {game.homeTeam.abbr}, Score: {game.awayScore}-{game.homeScore}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save game to database: {e}")
+            self.db_session.rollback()
+    
+    def _savePlayerGameStats(self, game_id: int, player_stats: Dict) -> None:
+        """Save player game statistics to database"""
+        try:
+            for player_id, stats in player_stats.items():
+                if isinstance(stats, dict):
+                    db_stats = DBGamePlayerStats(
+                        game_id=game_id,
+                        player_id=player_id,
+                        fantasy_points=stats.get('fantasyPoints', 0),
+                        passing_stats=stats.get('passing'),
+                        rushing_stats=stats.get('rushing'),
+                        receiving_stats=stats.get('receiving'),
+                        kicking_stats=stats.get('kicking'),
+                        defense_stats=stats.get('defense'),
+                    )
+                    self.game_repo.save_player_stats(db_stats)
+        except Exception as e:
+            logger.error(f"Failed to save player game stats: {e}")
     
     def _updateTeamRecords(self, game) -> None:
         """Update team win/loss records"""
@@ -328,7 +660,15 @@ class SeasonManager:
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
                     newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager)
-                    newGame.id = 's{0}w{1}g{2}'.format(self.currentSeason, week, newGame)
+                    
+                    # Assign unique integer ID and metadata
+                    self._gameIdCounter += 1
+                    newGame.id = self._gameIdCounter
+                    newGame.seasonNumber = self.currentSeason.seasonNumber
+                    newGame.week = week
+                    newGame.gameNumber = x
+                    newGame.gameType = 'regular'
+                    
                     newGame.status = FloosGame.GameStatus.Scheduled
                     newGame.isRegularSeasonGame = True
                     newGame.startTime = weekStartTime
@@ -395,16 +735,15 @@ class SeasonManager:
             dayOffset = math.floor((week)/7) + startDayOffset
 
 
+        adjustedHour = (startTimeHour + utcOffset) % 24
+
         if (now.day + dayOffset) > monthDays:
             if now.month + 1 > 12:
-                return datetime.datetime(now.year + 1, 1, dayOffset - (monthDays - now.day), startTimeHour)
+                return datetime.datetime(now.year + 1, 1, dayOffset - (monthDays - now.day), adjustedHour)
             else:
-                return datetime.datetime(now.year, now.month + 1, dayOffset - (monthDays - now.day), startTimeHour)
+                return datetime.datetime(now.year, now.month + 1, dayOffset - (monthDays - now.day), adjustedHour)
         else:
-            if startTimeHour + utcOffset == 24:
-                return datetime.datetime(now.year, now.month, now.day + dayOffset, 0)
-            else:
-                return datetime.datetime(now.year, now.month, now.day + dayOffset, startTimeHour + utcOffset)
+            return datetime.datetime(now.year, now.month, now.day + dayOffset, adjustedHour)
     
     def _generateSchedule(self) -> List[List[tuple]]:
         """Generate full season schedule using original algorithm"""
@@ -546,6 +885,16 @@ class SeasonManager:
 
             playoffsByeTeamList[0].clinchedTopSeed = True
             playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
+            
+            # Mark top seed in their league
+            topSeed = playoffsByeTeamList[0]
+            season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
+            if season_str not in topSeed.topSeeds:
+                topSeed.topSeeds.append(season_str)
+            _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
+            self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
+            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
 
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
@@ -565,7 +914,10 @@ class SeasonManager:
                 if not team.clinchedPlayoffs:
                     team.clinchedPlayoffs = True
                     team.eliminated = False
-                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have clinched a playoff berth'.format(team.city, team.name)}})
+                    _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
+                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
 
         for team in nonPlayoffTeamList:
             team: FloosTeam.Team
@@ -573,8 +925,11 @@ class SeasonManager:
             if not team.eliminated:
                 team.eliminated = True
                 team.clinchedPlayoffs = False
-                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
-        
+                _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
+
 
         self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
         list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
@@ -615,8 +970,16 @@ class SeasonManager:
                     lowSeed = len(teamsInRound) - 1
 
                     while lowSeed > hiSeed:
-                        newGame = FloosGame.Game(teamsInRound[hiSeed], teamsInRound[lowSeed])
-                        newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
+                        newGame = FloosGame.Game(teamsInRound[hiSeed], teamsInRound[lowSeed], timingManager=self.timingManager)
+                        
+                        # Assign unique integer ID and metadata
+                        self._gameIdCounter += 1
+                        newGame.id = self._gameIdCounter
+                        newGame.seasonNumber = self.currentSeason.seasonNumber
+                        newGame.playoffRound = currentRound
+                        newGame.gameNumber = gameNumber
+                        newGame.gameType = 'playoff'
+                        
                         newGame.status = FloosGame.GameStatus.Scheduled
                         newGame.startTime = roundStartTime
                         newGame.isRegularSeasonGame = False
@@ -642,8 +1005,16 @@ class SeasonManager:
                 for team in floosbowlTeams:
                     team.leagueChampion = True
                 list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-                newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1])
-                newGame.id = 's{0}r{1}g{2}'.format(self.currentSeason, currentRound, gameNumber)
+                newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1], timingManager=self.timingManager)
+                
+                # Assign unique integer ID and metadata
+                self._gameIdCounter += 1
+                newGame.id = self._gameIdCounter
+                newGame.seasonNumber = self.currentSeason.seasonNumber
+                newGame.playoffRound = currentRound
+                newGame.gameNumber = gameNumber
+                newGame.gameType = 'playoff'
+                
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.startTime = roundStartTime
                 newGame.isRegularSeasonGame = False
@@ -657,8 +1028,18 @@ class SeasonManager:
                 newGame.awayTeam.pressureModifier = 2.5
                 await self.timingManager.waitForChampionship()
 
-            self.activeGames = playoffGamesList
+            self.currentSeason.activeGames = playoffGamesList
+            self.currentSeason.currentWeekText = self.currentWeekText
             self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
+
+            # Broadcast playoff round start so the frontend updates the week label
+            if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                await broadcaster.broadcast_season_event(SeasonEvent.weekStart(
+                    seasonNumber=self.currentSeason.seasonNumber,
+                    weekNumber=28 + currentRound,
+                    games=[],
+                    weekText=self.currentWeekText
+                ))
 
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
 
@@ -672,18 +1053,43 @@ class SeasonManager:
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
                 playoffTeamsList.clear()
-                game.winningTeam.leagueChampionships.append('Season {}'.format(self.currentSeason.seasonNumber))
+                
+                season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
+                
+                # Both teams in the Floosbowl are league champions
+                if season_str not in game.winningTeam.leagueChampionships:
+                    game.winningTeam.leagueChampionships.append(season_str)
+                game.winningTeam.seasonTeamStats['leagueChamp'] = True
+                
+                # Only the winner is the Floosball champion
+                if season_str not in game.winningTeam.floosbowlChampionships:
+                    game.winningTeam.floosbowlChampionships.append(season_str)
                 game.winningTeam.floosbowlChampion = True
+                game.winningTeam.seasonTeamStats['floosbowlChamp'] = True
+                
                 self.currentSeason.champion = game.winningTeam
                 runnerUp: FloosTeam.Team = game.losingTeam
+                
+                # Runner-up is also a league champion (made it to Floosbowl)
+                if season_str not in runnerUp.leagueChampionships:
+                    runnerUp.leagueChampionships.append(season_str)
+                runnerUp.seasonTeamStats['leagueChamp'] = True
                 runnerUp.eliminated = True
-                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} are Floos Bowl champions!'.format(self.currentSeason.champion.city, self.currentSeason.champion.name)}})
+                
+                _champText = '{0} {1} are Floos Bowl champions!'.format(self.currentSeason.champion.city, self.currentSeason.champion.name)
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _champText}})
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_champText))
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)
                 self.currentSeason.freeAgencyOrder.append(self.currentSeason.champion)
                 for player in self.currentSeason.champion.rosterDict.values():
-                    player:FloosPlayer.Player
-                    player.leagueChampionships.append({'Season': self.currentSeason.seasonNumber, 'team': player.team.abbr, 'teamColor': player.team.color})
+                    if player:
+                        player:FloosPlayer.Player
+                        # Make sure team reference is valid
+                        team_abbr = player.team.abbr if hasattr(player.team, 'abbr') else 'UNK'
+                        team_color = player.team.color if hasattr(player.team, 'color') else '#000000'
+                        player.leagueChampionships.append({'Season': self.currentSeason.seasonNumber, 'team': team_abbr, 'teamColor': team_color})
 
                 self.recordsManager.updateChampionshipHistory(self.currentSeason.seasonNumber, self.currentSeason.champion, runnerUp)
             else:
@@ -693,22 +1099,35 @@ class SeasonManager:
                         gameResults = game.gameDict
                         playoffDict[game.id] = gameResults
                         for team in playoffTeams[league.name]:
-                            if team.name == gameResults['losingTeam']:
+                            # Use direct object reference instead of gameDict to avoid KeyError
+                            if game.losingTeam and team.name == game.losingTeam.name:
                                 team.eliminated = True
-                                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{0} {1} have faded from playoff contention'.format(team.city, team.name)}})
+                                _playoffElimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
+                                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _playoffElimText}})
+                                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_playoffElimText))
                                 self.currentSeason.freeAgencyOrder.append(team)
                                 playoffTeams[league.name].remove(team)
                                 break
 
                 
 
-            # Create directory if it doesn't exist
-            games_dir = os.path.join('{}/games'.format(strCurrentSeason))
-            os.makedirs(games_dir, exist_ok=True)
+            # Note: Postseason data is now stored in the database, JSON output disabled
+            # games_dir = os.path.join('{}/games'.format(strCurrentSeason))
+            # os.makedirs(games_dir, exist_ok=True)
+            # jsonFile = open(os.path.join(games_dir, 'postseason.json'), "w+")
+            # jsonFile.write(json.dumps(playoffDict, indent=4))
+            # jsonFile.close()
             
-            jsonFile = open(os.path.join(games_dir, 'postseason.json'), "w+")
-            jsonFile.write(json.dumps(playoffDict, indent=4))
-            jsonFile.close()
+            # Commit playoff games from this round to database
+            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session:
+                try:
+                    self.db_session.commit()
+                    logger.debug(f"Committed playoff round {x+1} games")
+                except Exception as e:
+                    logger.error(f"Failed to commit playoff games: {e}")
+                    self.db_session.rollback()
+            
             if x < numOfRounds - 1:
                 self.playerManager.sortPlayersByPosition()
                 teamManager = self.serviceContainer.getService('team_manager')
@@ -726,6 +1145,7 @@ class SeasonManager:
             
             # Set game type (playoff games)
             gameInstance.isRegularSeasonGame = False
+            gameInstance.isPlayoff = True
             
             # Simulate the game
             await gameInstance.playGame()
@@ -740,21 +1160,26 @@ class SeasonManager:
             self.recordsManager.processPostGameStats(gameInstance)
             
             # Update ELO ratings based on playoff game result
+            # Update ELO ratings based on playoff game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
                 teamManager.updateEloAfterGame(
-                    gameInstance.homeTeam, 
-                    gameInstance.awayTeam, 
-                    gameInstance.homeScore, 
-                    gameInstance.awayScore, 
+                    gameInstance.homeTeam,
+                    gameInstance.awayTeam,
+                    gameInstance.homeScore,
+                    gameInstance.awayScore,
                     gameInstance.winningTeam,
-                    getattr(gameInstance, 'homeTeamWinProbability', None),
-                    getattr(gameInstance, 'awayTeamWinProbability', None)
+                    getattr(gameInstance, 'preGameHomeWinProbability', None),
+                    getattr(gameInstance, 'preGameAwayWinProbability', None)
                 )
             
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+            
+            # Save playoff game to database if enabled
+            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+                self._saveGameToDatabase(gameInstance)
             
         except Exception as e:
             logger.error(f"Error simulating playoff game: {e}")
@@ -810,33 +1235,39 @@ class SeasonManager:
         # Wait for offseason timing
         await self.timingManager.waitForOffseason()
         
-        # STEP 1: Player offseason training
+        # STEP 1: Player offseason training (without resetting performance ratings yet)
         logger.info("Step 1: Player offseason training")
         for player in self.playerManager.activePlayers:
             if hasattr(player, 'offseasonTraining'):
                 player.offseasonTraining()
-            # Reset season performance rating
-            if hasattr(player, 'seasonPerformanceRating'):
-                player.seasonPerformanceRating = 0
         
         # STEP 1.5: Increment free agent years for existing free agents
         logger.info("Step 1.5: Increment free agent years")
         for player in self.playerManager.freeAgents:
             if hasattr(player, 'freeAgentYears'):
                 player.freeAgentYears += 1
+            else:
+                # Initialize for players missing the attribute
+                player.freeAgentYears = 1
         
         # STEP 2: Process contract decrements and retirements for rostered players
         logger.info("Step 2: Contract decrements and team retirements")
         await self._processRosteredPlayerContracts()
         
-        # STEP 3: Generate replacement players for retirees (from rostered player retirements)
-        # Note: Free agent retirements are handled within conductFreeAgencySimulation in Step 4
-        logger.info("Step 3: Generate replacement players for retired rostered players")
-        self._generateReplacementPlayers()
+        # STEP 3: Replacement player generation is handled in conductFreeAgencySimulation (Step 4)
+        # This ensures all retirements (both rostered and free agent) are processed before generating replacements
         
-        # STEP 4: Run comprehensive free agency simulation (includes free agent retirements)
+        # STEP 4: Run comprehensive free agency simulation (includes free agent retirements and replacement generation)
+        # Performance ratings from previous season are used to evaluate cuts
         logger.info("Step 4: Free agency simulation")
         await self._processFreeAgency()
+        
+        # STEP 5: Reset season performance ratings AFTER free agency
+        # This allows performance ratings to be used in cut decisions
+        logger.info("Step 5: Reset season performance ratings")
+        for player in self.playerManager.activePlayers:
+            if hasattr(player, 'seasonPerformanceRating'):
+                player.seasonPerformanceRating = 0
         
         # STEP 6: Update team ratings and defenses after roster changes
         logger.info("Step 6: Update team ratings")
@@ -868,14 +1299,80 @@ class SeasonManager:
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
         
-        # Run the comprehensive free agency simulation
+        # Broadcast offseason start with draft order
+        if BROADCASTING_AVAILABLE and broadcaster:
+            try:
+                draftOrderList = [
+                    {'name': t.name, 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None)}
+                    for t in freeAgencyOrder
+                ]
+                await broadcaster.broadcast_season_event(OffseasonEvent.start(draftOrderList))
+            except Exception as e:
+                logger.warning(f"Could not broadcast offseason start: {e}")
+
+        # Run the comprehensive free agency simulation (sync), collecting events
         currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
+        eventLog = []
         freeAgencyHistory = self.playerManager.conductFreeAgencySimulation(
             freeAgencyOrder=freeAgencyOrder,
             currentSeason=currentSeasonNum,
-            leagueHighlights=leagueHighlights
+            leagueHighlights=leagueHighlights,
+            eventLog=eventLog,
         )
-        
+
+        # Replay events with delay so frontend sees live updates
+        self._offseasonTransactions = []
+        if BROADCASTING_AVAILABLE and broadcaster and eventLog:
+            try:
+                for entry in eventLog:
+                    if entry['type'] == 'pick':
+                        # Keep snapshot in sync: remove signed player before broadcasting
+                        if self.playerManager._freeAgentSnapshot is not None:
+                            self.playerManager._freeAgentSnapshot = [
+                                fa for fa in self.playerManager._freeAgentSnapshot
+                                if fa['name'] != entry['player']
+                            ]
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.pick(
+                                entry['team'], entry['teamAbbr'],
+                                entry['player'], entry['position'],
+                                entry['rating'], entry['tier'],
+                            )
+                        )
+                    elif entry['type'] == 'cut':
+                        # Keep snapshot in sync: add cut player back before broadcasting
+                        if self.playerManager._freeAgentSnapshot is not None:
+                            cutFa = {
+                                'name': entry['player'], 'position': entry['position'],
+                                'rating': entry['rating'], 'tier': entry.get('tier', 'TierC'),
+                            }
+                            self.playerManager._freeAgentSnapshot = sorted(
+                                self.playerManager._freeAgentSnapshot + [cutFa],
+                                key=lambda fa: -fa['rating']
+                            )
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.cut(
+                                entry['team'], entry['teamAbbr'],
+                                entry['player'], entry['position'],
+                                entry['rating'], entry.get('tier', ''),
+                            )
+                        )
+                    elif entry['type'] == 'team_complete':
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.team_complete(entry['team'], entry['teamAbbr'])
+                        )
+                    if entry['type'] != 'team_complete':
+                        self._offseasonTransactions.append(entry)
+                    await self.timingManager.waitBetweenOffseasonPicks()
+                await broadcaster.broadcast_season_event(
+                    OffseasonEvent.complete(len(self.playerManager.freeAgents))
+                )
+                # Clear snapshot so REST endpoint switches back to live freeAgents
+                self.playerManager._freeAgentSnapshot = None
+            except Exception as e:
+                logger.warning(f"Could not broadcast offseason events: {e}")
+                self.playerManager._freeAgentSnapshot = None
+
         logger.info(f"Free agency complete: {len(freeAgencyHistory)} transactions")
     
     async def _processRosteredPlayerContracts(self) -> None:
@@ -909,7 +1406,7 @@ class SeasonManager:
                 
                 if player.seasonsPlayed > player.attributes.longevity:
                     # Player is past their longevity
-                    if player.termRemaining == 0:
+                    if player.termRemaining <= 0:
                         # Contract expired - higher retirement chance
                         if player.seasonsPlayed > 15:
                             shouldRetire = randint(1, 100) > 10  # 90% retire
@@ -929,7 +1426,7 @@ class SeasonManager:
                 if shouldRetire:
                     # Player retires
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
-                elif player.termRemaining == 0:
+                elif player.termRemaining <= 0:
                     # Contract expired - move to free agency
                     player.previousTeam = team.name
                     # TODO: capHit feature not fully developed - disabled for now
@@ -938,7 +1435,9 @@ class SeasonManager:
                         team.playerNumbersList.remove(player.currentNumber)
                     player.team = 'Free Agent'
                     player.freeAgentYears = 0
-                    self.playerManager.freeAgents.append(player)
+                    # Only add to free agents if not already there (defensive check)
+                    if player not in self.playerManager.freeAgents:
+                        self.playerManager.freeAgents.append(player)
                     team.rosterDict[position] = None
                     
                     leagueHighlights.insert(0, {
@@ -958,7 +1457,10 @@ class SeasonManager:
         
         self.playerManager.retiredPlayers.append(player)
         self.playerManager.newlyRetiredPlayers.append(player)
-        self.playerManager.activePlayers.remove(player)
+        if player in self.playerManager.activePlayers:
+            self.playerManager.activePlayers.remove(player)
+        if player in self.playerManager.freeAgents:
+            self.playerManager.freeAgents.remove(player)
         self.playerManager.removeFromPositionList(player)
         
         team.rosterDict[position] = None
@@ -1156,10 +1658,17 @@ class SeasonManager:
             if hasattr(player, 'termRemaining') and player.termRemaining > 0:
                 player.termRemaining -= 1
             
-            # Update service time
-            if hasattr(player, 'serviceTime'):
-                if player.seasonsPlayed >= 3 and player.serviceTime == FloosPlayer.PlayerServiceTime.Rookie:
-                    player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
+            # Update service time using proper progression logic
+            if player.seasonsPlayed >= 10:
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran4
+            elif player.seasonsPlayed >= 7:
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran3
+            elif player.seasonsPlayed >= 4:
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran2
+            elif player.seasonsPlayed >= 2:
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran1
+            else:
+                player.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
             
             # Archive season stats
             if hasattr(player, 'seasonStatsDict') and hasattr(player, 'seasonStatsArchive'):
@@ -1189,9 +1698,57 @@ class SeasonManager:
             teamManager.clearTeamSeasonStats()
         
         # Clear player season stats (handled in progression)
+    
+    def _saveRosterHistory(self) -> None:
+        """Save current roster for each team in their roster history"""
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+        
+        for team in teamManager.teams:
+            # Build roster snapshot
+            rosterDict = {}
+            for pos, player in team.rosterDict.items():
+                if player:
+                    # Get position as integer (enum value)
+                    position_value = player.position if isinstance(player.position, int) else player.position.value if hasattr(player.position, 'value') else 0
+                    # Get tier as integer (enum value)
+                    tier_value = player.playerTier if isinstance(player.playerTier, int) else player.playerTier.value if hasattr(player, 'playerTier') and hasattr(player.playerTier, 'value') else 0
+                    
+                    rosterDict[pos] = {
+                        'name': player.name,
+                        'pos': position_value,
+                        'rating': player.playerRating,
+                        'stars': tier_value,
+                        'termRemaining': player.termRemaining,
+                        'id': player.id,
+                        'number': player.currentNumber
+                    }
+            
+            # Add defense info
+            rosterDict['defense'] = {
+                'passDefenseStars': round((((team.defensePassCoverageRating - 60)/40)*4)+1) if team.defensePassCoverageRating else 1,
+                'runDefenseStars': round((((team.defenseRunCoverageRating - 60)/40)*4)+1) if team.defenseRunCoverageRating else 1,
+                'passDefenseRating': team.defensePassCoverageRating,
+                'runDefenseRating': team.defenseRunCoverageRating
+            }
+            
+            # Add to roster history
+            if not hasattr(team, 'rosterHistory'):
+                team.rosterHistory = []
+            
+            team.rosterHistory.append({
+                'season': self.currentSeason.seasonNumber,
+                'roster': rosterDict
+            })
+            
+            logger.debug(f"Saved roster history for {team.name}, season {self.currentSeason.seasonNumber}")
         
     def _initializeSeasonStats(self) -> None:
         """Initialize season statistics tracking"""
+        # Save roster history for each team at the start of the season
+        self._saveRosterHistory()
+        
         # Initialize team season stats
         for team in self.leagueManager.teams:
             if not hasattr(team, 'seasonTeamStats'):
@@ -1286,57 +1843,17 @@ class SeasonManager:
         # Store non-playoff teams for clinching logic
         self.currentSeason.nonPlayoffTeams = nonPlayoffTeams
     
-    def checkForClinches(self) -> None:
-        """Check for playoff clinches and top seed clinches (matches original Season.checkForClinches)"""
-        if not self.currentSeason or not hasattr(self.currentSeason, 'playoffTeams'):
-            return
-            
-        remainingWeeks = 28 - self.currentSeason.currentWeek if self.currentSeason.currentWeek else 28
-        
-        for league in self.leagueManager.leagues:
-            standings = league.getStandings()
-            if len(standings) < 2:
-                continue
-                
-            team1 = standings[0]['team']  # First place team
-            team2 = standings[1]['team']  # Second place team
-            
-            playoffTeamList = self.currentSeason.playoffTeams.get(league.name, [])
-            nonPlayoffTeamsList = self.currentSeason.nonPlayoffTeams.get(league.name, [])
-            
-            # Check for top seed clinch
-            if not getattr(team1, 'clinchedTopSeed', False):
-                team1_wins = team1.seasonTeamStats.get('wins', 0) if hasattr(team1, 'seasonTeamStats') else 0
-                team2_wins = team2.seasonTeamStats.get('wins', 0) if hasattr(team2, 'seasonTeamStats') else 0
-                
-                # Simple clinch check: if team1 wins + remaining weeks < team2 max possible wins
-                if team1_wins > team2_wins + remainingWeeks or remainingWeeks == 0:
-                    team1.clinchedTopSeed = True
-                    if hasattr(self.currentSeason, 'leagueHighlights'):
-                        highlight = {
-                            'event': {
-                                'text': f'{team1.city} {team1.name} have clinched the #1 seed'
-                            }
-                        }
-                        self.currentSeason.leagueHighlights.insert(0, highlight)
-            
-            # Check for playoff clinches on final week
-            if remainingWeeks == 0:  # Final week
-                for team in playoffTeamList:
-                    if not getattr(team, 'clinchedPlayoffs', False):
-                        team.clinchedPlayoffs = True
-                        if hasattr(self.currentSeason, 'leagueHighlights'):
-                            highlight = {
-                                'event': {
-                                    'text': f'{team.city} {team.name} have clinched a playoff berth'
-                                }
-                            }
-                            self.currentSeason.leagueHighlights.insert(0, highlight)
-                
-                # Mark eliminated teams
-                for team in nonPlayoffTeamsList:
-                    if not getattr(team, 'eliminated', False):
-                        team.eliminated = True
+    def checkForClinches(self) -> list:
+        """Check for playoff clinches, top seed clinches, and eliminations mid-season.
+        Delegates to leagueManager.checkPlayoffClinching() and returns new event texts to broadcast.
+        """
+        if not self.currentSeason:
+            return []
+        leagueHighlights = getattr(self.currentSeason, 'leagueHighlights', [])
+        return self.leagueManager.checkPlayoffClinching(
+            currentWeek=self.currentSeason.currentWeek,
+            leagueHighlights=leagueHighlights
+        )
     
     def saveSeasonStats(self) -> None:
         """Save season statistics to file (matches original Season.saveSeasonStats)"""
@@ -1346,10 +1863,22 @@ class SeasonManager:
         import json
         import os
         
-        # Create season directory
-        seasonDir = f'season{self.currentSeason.seasonNumber}'
-        if not os.path.exists(seasonDir):
-            os.makedirs(seasonDir)
+        # Save season to database
+        self._saveSeasonToDatabase()
+        
+        # Save team season stats to database
+        self._saveTeamSeasonStatsToDatabase()
+        
+        # Save championships to Championship table
+        self._saveChampionshipsToDatabase()
+        
+        # Accumulate season stats into all-time stats
+        self._accumulateAllTimeStats()
+        
+        # Note: Season directories and JSON files disabled - data is in database
+        # seasonDir = f'season{self.currentSeason.seasonNumber}'
+        # if not os.path.exists(seasonDir):
+        #     os.makedirs(seasonDir)
         
         # Save standings history
         standingsData = {}
@@ -1368,26 +1897,241 @@ class SeasonManager:
                 }
                 standingsData[league.name].append(teamData)
         
-        # Save standings to file
-        standingsFile = os.path.join(seasonDir, 'standings.json')
+        # Note: Standings and highlights are now stored in the database, JSON output disabled
+        # standingsFile = os.path.join(seasonDir, 'standings.json')
+        # try:
+        #     with open(standingsFile, 'w') as f:
+        #         json.dump(standingsData, f, indent=4)
+        #     logger.info(f"Saved season {self.currentSeason.seasonNumber} standings")
+        # except Exception as e:
+        #     logger.error(f"Failed to save standings: {e}")
+        # 
+        # if hasattr(self.currentSeason, 'leagueHighlights') and self.currentSeason.leagueHighlights:
+        #     highlightsFile = os.path.join(seasonDir, 'highlights.json')
+        #     try:
+        #         from serializers import serialize_object
+        #         serializedHighlights = serialize_object(self.currentSeason.leagueHighlights)
+        #         with open(highlightsFile, 'w') as f:
+        #             json.dump(serializedHighlights, f, indent=4)
+        #         logger.info(f"Saved season {self.currentSeason.seasonNumber} highlights")
+        #     except Exception as e:
+        #         logger.error(f"Failed to save highlights: {e}")
+    
+    def _saveSeasonToDatabase(self) -> None:
+        """Save season record to database"""
+        if not DB_IMPORTS_AVAILABLE or not USE_DATABASE or not self.db_session:
+            return
+            
         try:
-            with open(standingsFile, 'w') as f:
-                json.dump(standingsData, f, indent=4)
-            logger.info(f"Saved season {self.currentSeason.seasonNumber} standings")
+            from database.models import Season as DBSeason
+            
+            # Create or update season record
+            db_season = self.db_session.query(DBSeason).filter_by(season_number=self.currentSeason.seasonNumber).first()
+            
+            if not db_season:
+                db_season = DBSeason(
+                    season_number=self.currentSeason.seasonNumber,
+                    start_date=getattr(self.currentSeason, 'startDate', None),
+                    current_week=self.currentSeason.currentWeek if isinstance(self.currentSeason.currentWeek, int) else 1,
+                    playoffs_started=getattr(self.currentSeason, 'playoffsStarted', False)
+                )
+            else:
+                db_season.current_week = self.currentSeason.currentWeek if isinstance(self.currentSeason.currentWeek, int) else 1
+                db_season.playoffs_started = getattr(self.currentSeason, 'playoffsStarted', False)
+                db_season.end_date = datetime.now()
+            
+            # Set champion team ID
+            if hasattr(self.currentSeason, 'champion') and self.currentSeason.champion:
+                db_season.champion_team_id = self.currentSeason.champion.id
+            
+            self.db_session.add(db_season)
+            self.db_session.commit()
+            logger.info(f"Saved season {self.currentSeason.seasonNumber} to database")
+            
         except Exception as e:
-            logger.error(f"Failed to save standings: {e}")
+            logger.error(f"Failed to save season to database: {e}")
+            self.db_session.rollback()
+    
+    def _saveTeamSeasonStatsToDatabase(self) -> None:
+        """Save team season stats to database including ELO"""
+        if not DB_IMPORTS_AVAILABLE or not USE_DATABASE or not self.db_session:
+            return
+            
+        try:
+            from database.models import TeamSeasonStats as DBTeamSeasonStats
+            
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            
+            for team in teamManager.teams:
+                if not hasattr(team, 'seasonTeamStats'):
+                    continue
+                
+                stats = team.seasonTeamStats
+                
+                # Create or update team season stats
+                db_stats = self.db_session.query(DBTeamSeasonStats).filter_by(
+                    team_id=team.id,
+                    season=self.currentSeason.seasonNumber
+                ).first()
+                
+                if not db_stats:
+                    db_stats = DBTeamSeasonStats(
+                        team_id=team.id,
+                        season=self.currentSeason.seasonNumber
+                    )
+                
+                # Update stats
+                db_stats.elo = stats.get('elo', getattr(team, 'elo', 1500))
+                db_stats.wins = stats.get('wins', 0)
+                db_stats.losses = stats.get('losses', 0)
+                db_stats.win_percentage = stats.get('winPerc', 0.0)
+                db_stats.streak = stats.get('streak', 0)
+                db_stats.score_differential = stats.get('scoreDiff', 0)
+                db_stats.made_playoffs = stats.get('madePlayoffs', False)
+                db_stats.league_champion = stats.get('leagueChamp', False)
+                db_stats.floosball_champion = stats.get('floosbowlChamp', False)
+                db_stats.top_seed = stats.get('topSeed', False)
+                
+                # Denormalized offensive stats
+                offense = stats.get('Offense', {})
+                db_stats.points = offense.get('pts', 0)
+                db_stats.touchdowns = offense.get('tds', 0)
+                db_stats.field_goals = offense.get('fgs', 0)
+                db_stats.total_yards = offense.get('totalYards', 0)
+                db_stats.passing_yards = offense.get('passYards', 0)
+                db_stats.rushing_yards = offense.get('runYards', 0)
+                db_stats.passing_tds = offense.get('passTds', 0)
+                db_stats.rushing_tds = offense.get('runTds', 0)
+                
+                # Denormalized defensive stats
+                defense = stats.get('Defense', {})
+                db_stats.points_allowed = defense.get('ptsAlwd', 0)
+                db_stats.sacks = defense.get('sacks', 0)
+                db_stats.interceptions = defense.get('ints', 0)
+                db_stats.fumbles_recovered = defense.get('fumRec', 0)
+                db_stats.total_yards_allowed = defense.get('totalYardsAlwd', 0)
+                
+                # JSON for detailed breakdown
+                db_stats.offense_stats = stats.get('Offense', {})
+                db_stats.defense_stats = stats.get('Defense', {})
+                
+                self.db_session.add(db_stats)
+            
+            self.db_session.commit()
+            logger.info(f"Saved team season stats for season {self.currentSeason.seasonNumber}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save team season stats: {e}")
+            self.db_session.rollback()
+    
+    def _saveChampionshipsToDatabase(self) -> None:
+        """Save championships to Championship table for efficient querying"""
+        if not DB_IMPORTS_AVAILABLE or not USE_DATABASE or not self.db_session:
+            return
+            
+        try:
+            from database.models import Championship as DBChampionship
+            
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            
+            for team in teamManager.teams:
+                # Save top seeds
+                if hasattr(team, 'topSeeds') and team.topSeeds:
+                    for season_str in team.topSeeds:
+                        season_num = int(season_str.replace('Season ', ''))
+                        
+                        # Check if already exists
+                        existing = self.db_session.query(DBChampionship).filter_by(
+                            team_id=team.id,
+                            season=season_num,
+                            championship_type='regular_season'
+                        ).first()
+                        
+                        if not existing:
+                            championship = DBChampionship(
+                                team_id=team.id,
+                                season=season_num,
+                                championship_type='regular_season'
+                            )
+                            self.db_session.add(championship)
+                
+                # Save league championships (Floosbowl finalists)
+                if hasattr(team, 'leagueChampionships') and team.leagueChampionships:
+                    for season_str in team.leagueChampionships:
+                        season_num = int(season_str.replace('Season ', ''))
+                        
+                        existing = self.db_session.query(DBChampionship).filter_by(
+                            team_id=team.id,
+                            season=season_num,
+                            championship_type='league'
+                        ).first()
+                        
+                        if not existing:
+                            championship = DBChampionship(
+                                team_id=team.id,
+                                season=season_num,
+                                championship_type='league'
+                            )
+                            self.db_session.add(championship)
+                
+                # Save Floosbowl championships (winners only)
+                if hasattr(team, 'floosbowlChampionships') and team.floosbowlChampionships:
+                    for season_str in team.floosbowlChampionships:
+                        season_num = int(season_str.replace('Season ', ''))
+                        
+                        existing = self.db_session.query(DBChampionship).filter_by(
+                            team_id=team.id,
+                            season=season_num,
+                            championship_type='floosbowl'
+                        ).first()
+                        
+                        if not existing:
+                            championship = DBChampionship(
+                                team_id=team.id,
+                                season=season_num,
+                                championship_type='floosbowl'
+                            )
+                            self.db_session.add(championship)
+            
+            self.db_session.commit()
+            logger.info(f"Saved championships for season {self.currentSeason.seasonNumber}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save championships: {e}")
+            self.db_session.rollback()
+    
+    def _accumulateAllTimeStats(self) -> None:
+        """Accumulate season stats into all-time stats (matches legacy floosball_legacy.py lines 459-469)"""
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
         
-        # Save season highlights if available
-        if hasattr(self.currentSeason, 'leagueHighlights') and self.currentSeason.leagueHighlights:
-            highlightsFile = os.path.join(seasonDir, 'highlights.json')
-            try:
-                from serializers import serialize_object
-                serializedHighlights = serialize_object(self.currentSeason.leagueHighlights)
-                with open(highlightsFile, 'w') as f:
-                    json.dump(serializedHighlights, f, indent=4)
-                logger.info(f"Saved season {self.currentSeason.seasonNumber} highlights")
-            except Exception as e:
-                logger.error(f"Failed to save highlights: {e}")
+        for team in teamManager.teams:
+            if not hasattr(team, 'seasonTeamStats') or not hasattr(team, 'allTimeTeamStats'):
+                continue
+            
+            # Accumulate stats from season into all-time
+            team.allTimeTeamStats['wins'] += team.seasonTeamStats['wins']
+            team.allTimeTeamStats['losses'] += team.seasonTeamStats['losses']
+            team.allTimeTeamStats['Offense']['tds'] += team.seasonTeamStats['Offense']['tds']
+            team.allTimeTeamStats['Offense']['fgs'] += team.seasonTeamStats['Offense']['fgs']
+            team.allTimeTeamStats['Offense']['passYards'] += team.seasonTeamStats['Offense']['passYards']
+            team.allTimeTeamStats['Offense']['runYards'] += team.seasonTeamStats['Offense']['runYards']
+            team.allTimeTeamStats['Offense']['totalYards'] += team.seasonTeamStats['Offense']['totalYards']
+            team.allTimeTeamStats['Defense']['sacks'] += team.seasonTeamStats['Defense']['sacks']
+            team.allTimeTeamStats['Defense']['ints'] += team.seasonTeamStats['Defense']['ints']
+            team.allTimeTeamStats['Defense']['fumRec'] += team.seasonTeamStats['Defense']['fumRec']
+            
+            # Calculate all-time win percentage
+            total_games = team.allTimeTeamStats['wins'] + team.allTimeTeamStats['losses']
+            if total_games > 0:
+                team.allTimeTeamStats['winPerc'] = round(team.allTimeTeamStats['wins'] / total_games, 3)
+        
+        logger.info("Accumulated season stats into all-time stats")
     
     def advanceToNextSeason(self) -> None:
         """Move to next season"""

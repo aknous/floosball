@@ -71,3 +71,11 @@ data/leagueData.json
 /logs
 *.log
 logs/floosball.log
+
+# SQLite database files
+data/floosball.db
+data/floosball.db-shm
+data/floosball.db-wal
+
+# Generated avatars
+data/avatars/

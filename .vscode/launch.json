@@ -5,50 +5,32 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Floosball Refactored (Fast)",
+            "name": "Floosball API Server (Fast)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/floosball.py",
-            "console": "integratedTerminal",
-            "args": ["--refactored", "--timing=fast"],
-            "cwd": "${workspaceFolder}",
-            "justMyCode": true
-        },
-        {
-            "name": "Floosball Fresh Start (Fast)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/floosball.py",
-            "console": "integratedTerminal",
-            "args": ["--refactored", "--timing=fast", "--fresh"],
-            "cwd": "${workspaceFolder}",
-            "justMyCode": true
-        },
-        {
-            "name": "Floosball API Server",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "uvicorn",
-            "args": [
-                "floosball_api:app",
-                "--host", "0.0.0.0",
-                "--port", "8000",
-                "--reload"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            }
-        },
-        {
-            "name": "Floosball Legacy",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/floosball.py",
+            "program": "${workspaceFolder}/run_api.py",
             "console": "integratedTerminal",
             "args": ["--timing=fast"],
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Floosball API Server (Fresh Sequential)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_api.py",
+            "console": "integratedTerminal",
+            "args": ["--timing=sequential", "--fresh"],
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Floosball API Server (Fresh Start)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_api.py",
+            "console": "integratedTerminal",
+            "args": ["--timing=fast", "--fresh"],
             "cwd": "${workspaceFolder}",
             "justMyCode": true
         },

@@ -5,8 +5,9 @@ from re import T
 #from turtle import home
 import floosball
 import floosball_game as FloosGame
-from fastapi import FastAPI
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import asyncio
 import os
 from constants import (
@@ -16,6 +17,7 @@ from api_response_builders import (
     TeamResponseBuilder, PlayerResponseBuilder, GameResponseBuilder, 
     LeagueResponseBuilder, build_success_response, build_error_response
 )
+from avatar_generator import getAvatarGenerator
 import json
 import uvicorn
 import datetime
@@ -25,6 +27,7 @@ from floosball_player import Player, Position, PlayerServiceTime
 from floosball_team import Team
 
 app = FastAPI()
+api_router = APIRouter(prefix="/api")
 
 origins = [
     "http://localhost",
@@ -61,7 +64,7 @@ async def shutdown_event():
     
     shutdown_services()
 
-@app.get('/teams')
+@api_router.get('/teams')
 async def returnTeams(id = None):
     if id is None:
         leagueList = []
@@ -113,7 +116,79 @@ async def returnTeams(id = None):
 
                 return teamDict
 
-@app.get('/players')
+@api_router.options('/teams/{teamId}/avatar')
+async def avatarOptions(teamId: int):
+    """Handle CORS preflight requests for avatar endpoint"""
+    return Response(
+        content="",
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "86400"
+        }
+    )
+
+@api_router.get('/teams/{teamId}/avatar')
+async def getTeamAvatar(teamId: int, size: int = 32):
+    """
+    Generate and return SVG avatar for a team
+    Avatars are cached for performance
+    """
+    # Find team - check both floosball.teamList and teamManager
+    team = None
+    
+    # Try floosball.teamList first (legacy)
+    if hasattr(floosball, 'teamList') and floosball.teamList:
+        for t in floosball.teamList:
+            if t.id == teamId:
+                team = t
+                break
+    
+    # If not found and we have teamManager, try there
+    if team is None and hasattr(floosball, 'teamManager'):
+        team = floosball.teamManager.getTeamById(teamId)
+    
+    if team is None:
+        return Response(content=f"Team {teamId} not found", status_code=404, media_type="text/plain")
+    
+    # Get avatar generator
+    try:
+        avatarGen = getAvatarGenerator()
+        
+        # Get team colors with fallbacks
+        primaryColor = team.color
+        secondaryColor = getattr(team, 'secondaryColor', team.color)
+        tertiaryColor = getattr(team, 'tertiaryColor', team.color)
+        
+        # Generate SVG
+        svg = avatarGen.generateTeamAvatar(
+            team.name,
+            primaryColor,
+            secondaryColor,
+            tertiaryColor,
+            size
+        )
+        
+        # Return as SVG with proper content type
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={
+                "Cache-Control": "public, max-age=86400",  # Cache for 24 hours
+                "Content-Type": "image/svg+xml",
+                "Access-Control-Allow-Origin": "*",  # Allow CORS for images
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+    except Exception as e:
+        import traceback
+        error_msg = f"Error generating avatar: {str(e)}\n{traceback.format_exc()}"
+        return Response(content=error_msg, status_code=500, media_type="text/plain")
+
+@api_router.get('/players')
 async def returnPlayers(id = None):
     playerList = []
     if id is None:
@@ -196,7 +271,7 @@ async def returnPlayers(id = None):
             
             return dict
 
-@app.get('/standings')
+@api_router.get('/standings')
 async def returnStandings():
     standingsList = []
     for league in floosball.leagueList:
@@ -222,7 +297,7 @@ async def returnStandings():
         standingsList.append(leagueDict)
     return standingsList
 
-@app.get('/schedule')
+@api_router.get('/schedule')
 async def returnSchedule(id = None):
     for team in floosball.teamList:
             if team.id == int(id):
@@ -290,7 +365,7 @@ async def returnSchedule(id = None):
                 return scheduleList
 
 
-@app.get('/game')
+@api_router.get('/game')
 async def returnGame(id = None):
     if id is None:
         return 'No ID specified'
@@ -356,7 +431,7 @@ async def returnGame(id = None):
             return 'Game Not Found'
         else: return dict
 
-@app.get('/currentGames')
+@api_router.get('/currentGames')
 async def returnCurrentGames():
     gameList = []
     activeGameList = floosball.activeSeason.activeGames
@@ -413,7 +488,7 @@ async def returnCurrentGames():
     list.sort(gameList, key=itemgetter('status'), reverse=False)
     return gameList
 
-@app.get('/results')
+@api_router.get('/results')
 async def returnResults(week = None):
     gameList = []
     weekGameList = floosball.scheduleList[int(week)-1]
@@ -451,7 +526,7 @@ async def returnResults(week = None):
         gameList.append(gameDict)
     return gameList
 
-@app.get('/lastPlay')
+@api_router.get('/lastPlay')
 async def returnLastPlay(id = None):
     activeGameList = floosball.activeSeason.activeGames
     if id is None:
@@ -466,7 +541,7 @@ async def returnLastPlay(id = None):
                     return 'No Plays!'
         return 'Game Not In Progress'
     
-@app.get('/powerRankings')
+@api_router.get('/powerRankings')
 async def returnPowerRankings():
     teamListRanked = floosball.teamList.copy()
     list.sort(teamListRanked, key=lambda team: (team.elo,team.overallRating), reverse=True)
@@ -478,7 +553,7 @@ async def returnPowerRankings():
         teamList.append(teamDict)
     return teamList
 
-@app.get('/playoffPicture')
+@api_router.get('/playoffPicture')
 async def returnPlayoffPicture():
     playoffList = []
     for league in floosball.leagueList:
@@ -528,7 +603,7 @@ async def returnPlayoffPicture():
     return playoffList
 
 
-@app.get('/seasonResults')
+@api_router.get('/seasonResults')
 async def returnSeasonResults(season = None):
     if season is None:
         season = floosball.seasonsPlayed
@@ -541,16 +616,16 @@ async def returnSeasonResults(season = None):
     else:
         return 'No Data'
     
-@app.get('/championshipHistory')
+@api_router.get('/championshipHistory')
 async def returnChampionshipHistory():
     return floosball.championshipHistory
 
-@app.get('/standingsHistory')
+@api_router.get('/standingsHistory')
 async def returnStandingsHistory(season):
     if season and len(floosball.standingsHistory):
         return floosball.standingsHistory[int(season) - 1]
 
-@app.get('/records')
+@api_router.get('/records')
 async def returnRecords(selection):
     gameRecordsList = []
     seasonRecordsList = []
@@ -583,7 +658,7 @@ async def returnRecords(selection):
     return {'game': gameRecordsList,'career': careerRecordsList, 'season': seasonRecordsList}
 
 
-@app.get('/gameStats')
+@api_router.get('/gameStats')
 async def returnGameStats(id = None):
     if id is None:
         return 'No ID specified'
@@ -600,7 +675,7 @@ async def returnGameStats(id = None):
         else:
             return 'Game Not Found'
 
-@app.get('/plays')
+@api_router.get('/plays')
 async def returnPlays(id = None):
     if id is None:
         return 'No ID specified'
@@ -653,7 +728,7 @@ async def returnPlays(id = None):
         else:
             return 'Game Not Found'
 
-@app.get('/highlights')
+@api_router.get('/highlights')
 async def returnHighlights(id = None):
     if id is None:
         eventList = []
@@ -741,14 +816,14 @@ async def returnHighlights(id = None):
         else:
             return 'Game Not Found'
 
-@app.get('/rosterHistory')
+@api_router.get('/rosterHistory')
 async def returnTeamRosters(id = None):
     team: Team
     for team in floosball.teamList:
         if team.id == int(id):
             return team.rosterHistory
 
-@app.get('/playerStats')
+@api_router.get('/playerStats')
 async def returnPlayerStats(pos = None):
     statList = []
     playerList = []
@@ -837,7 +912,7 @@ async def returnPlayerStats(pos = None):
     list.sort(statList, key=itemgetter('ratingStars'), reverse=True)
     return statList
 
-@app.get('/topPlayers')
+@api_router.get('/topPlayers')
 async def returnTopPlayers(pos = None):
     playerList = []
     if pos == 'QB':
@@ -1029,7 +1104,7 @@ async def returnTopPlayers(pos = None):
     return playerList
 
 
-@app.get('/fantasySeason')
+@api_router.get('/fantasySeason')
 async def returnFantasySeason(pos = None):
     fantasyList = []
     if pos == 'D':
@@ -1077,7 +1152,7 @@ async def returnFantasySeason(pos = None):
 
     return fantasyList
 
-@app.get('/fantasyGame')
+@api_router.get('/fantasyGame')
 async def returnFantasyGame(pos = None):
     fantasyList = []
     if pos == 'D':
@@ -1126,22 +1201,22 @@ async def returnFantasyGame(pos = None):
 
     return fantasyList
 
-@app.get('/seasonInfo')
+@api_router.get('/seasonInfo')
 async def returnSeasonInfo():
     return {'season': floosball.activeSeason.currentSeason, 'currentWeek': floosball.activeSeason.currentWeek, 'currentWeekText': floosball.activeSeason.currentWeekText, 'totalWeeks': len(floosball.scheduleList)}
 
-@app.get('/champion')
+@api_router.get('/champion')
 async def returnChampion():
     if isinstance(floosball.floosbowlChampion, Team):
         return {'team': '{} {}'.format(floosball.floosbowlChampion.city, floosball.floosbowlChampion.name), 'color': floosball.floosbowlChampion.color, 'id': floosball.floosbowlChampion.id}
     else: return {}
             
 
-@app.get('/info')
+@api_router.get('/info')
 async def returnInfo():
     return floosball.__version__
 
-@app.get('/performance')
+@api_router.get('/performance')
 async def returnPerformance():
     """Return performance statistics from service container"""
     from service_container import get_service, container
@@ -1172,6 +1247,8 @@ async def returnPerformance():
     return performance_stats
 
 
+# Include the API router with /api prefix
+app.include_router(api_router)
 
 uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 

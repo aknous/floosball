@@ -1,0 +1,166 @@
+"""
+Floosball API Server Entry Point
+
+This script initializes the FloosballApplication and runs the API server
+using the modern api/main.py implementation.
+
+Usage:
+    python run_api.py [--timing=MODE] [--fresh]
+    python run_api.py [--fast|--slow|--turbo|--scheduled|--demo] [--fresh]
+
+Timing Modes:
+    --fast, --timing=fast           Fast mode - no delays (default)
+    --turbo, --timing=turbo         Turbo mode - no in-game delays, pauses between games/weeks
+    --slow, --timing=slow           Slow mode - fixed delays between all events
+    --sequential, --timing=sequential   Same as slow mode
+    --scheduled, --timing=scheduled     Real-time scheduling
+    --demo, --timing=demo           Demo mode - fast games, visible offseason pick delays (UI testing)
+
+Options:
+    --fresh                         Clear database and start fresh
+
+Examples:
+    python run_api.py --fast
+    python run_api.py --turbo --fresh
+    python run_api.py --slow
+    python run_api.py --fresh --fast
+    python run_api.py --demo --fresh
+"""
+
+import sys
+import asyncio
+import uvicorn
+from logger_config import get_logger
+from service_container import ServiceContainer
+from managers.floosballApplication import FloosballApplication
+from managers.timingManager import TimingMode
+from api.main import app, set_floosball_app
+from api.game_broadcaster import broadcaster
+from api.websocket_manager import manager as ws_manager
+from database.connection import init_db, clear_db
+
+logger = get_logger("floosball.api_server")
+
+
+def parse_args():
+    """Parse command line arguments"""
+    args = {
+        'timing_mode': TimingMode.FAST,
+        'fresh_start': False
+    }
+    
+    for arg in sys.argv[1:]:
+        if arg.startswith('--timing='):
+            mode_str = arg.split('=')[1].lower()
+            if mode_str == 'fast':
+                args['timing_mode'] = TimingMode.FAST
+            elif mode_str == 'turbo':
+                args['timing_mode'] = TimingMode.TURBO
+            elif mode_str in ['sequential', 'slow']:
+                args['timing_mode'] = TimingMode.SEQUENTIAL
+            elif mode_str == 'scheduled':
+                args['timing_mode'] = TimingMode.SCHEDULED
+            elif mode_str == 'demo':
+                args['timing_mode'] = TimingMode.DEMO
+        elif arg in ['--timing-fast', '--fast']:
+            args['timing_mode'] = TimingMode.FAST
+        elif arg in ['--timing-turbo', '--turbo']:
+            args['timing_mode'] = TimingMode.TURBO
+        elif arg in ['--timing-sequential', '--slow', '--sequential']:
+            args['timing_mode'] = TimingMode.SEQUENTIAL
+        elif arg in ['--timing-scheduled', '--scheduled']:
+            args['timing_mode'] = TimingMode.SCHEDULED
+        elif arg in ['--timing-demo', '--demo']:
+            args['timing_mode'] = TimingMode.DEMO
+        elif arg == '--fresh':
+            args['fresh_start'] = True
+    
+    return args
+
+
+async def initialize_application(timing_mode: TimingMode, fresh_start: bool):
+    """Initialize the Floosball application"""
+    logger.info("Initializing Floosball Application...")
+    
+    # Initialize or clear database based on fresh flag
+    if fresh_start:
+        logger.info("Fresh start requested - clearing database")
+        clear_db()
+    else:
+        init_db()
+    
+    # Use global service container (has game_state and config_manager registered)
+    from service_container import container as service_container
+    from config_manager import get_config
+    
+    # Get configuration
+    config = get_config()
+    
+    # Add timing configuration to config
+    config['timingMode'] = timing_mode.name.lower()
+    
+    # Create application (timing will be set via TimingManager in container)
+    floosball_app = FloosballApplication(service_container)
+    
+    # Initialize league system (this handles fresh start via force_fresh)
+    await floosball_app.initializeLeague(config, force_fresh=fresh_start)
+    
+    # Set reference in API
+    set_floosball_app(floosball_app)
+    
+    # Enable broadcasting
+    broadcaster.enable(ws_manager)
+    logger.info("Game broadcasting enabled")
+    
+    # Start the application in background
+    asyncio.create_task(floosball_app.runSimulation())
+    
+    logger.info("FloosballApplication initialized successfully")
+    return floosball_app
+
+
+async def run_server():
+    """Run the API server"""
+    args = parse_args()
+    
+    logger.info("="*60)
+    logger.info("Floosball API Server")
+    logger.info("="*60)
+    logger.info(f"Timing Mode: {args['timing_mode'].name}")
+    logger.info(f"Fresh Start: {args['fresh_start']}")
+    logger.info("="*60)
+    
+    # Initialize application
+    floosball_app = await initialize_application(
+        args['timing_mode'],
+        args['fresh_start']
+    )
+    
+    # Configure uvicorn
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+        access_log=True
+    )
+    
+    server = uvicorn.Server(config)
+    
+    logger.info("Starting API server on http://0.0.0.0:8000")
+    logger.info("API documentation: http://localhost:8000/docs")
+    logger.info("WebSocket endpoints:")
+    logger.info("  - ws://localhost:8000/ws/game/{game_id}")
+    logger.info("  - ws://localhost:8000/ws/season")
+    logger.info("  - ws://localhost:8000/ws/standings")
+    logger.info("="*60)
+    
+    await server.serve()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_server())
+    except KeyboardInterrupt:
+        logger.info("\nShutting down API server...")
+        sys.exit(0)

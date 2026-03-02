@@ -48,6 +48,8 @@ class Team(Base):
     city: Mapped[str] = mapped_column(String(100))
     abbr: Mapped[str] = mapped_column(String(10), unique=True)
     color: Mapped[str] = mapped_column(String(50))
+    secondary_color: Mapped[Optional[str]] = mapped_column(String(50))
+    tertiary_color: Mapped[Optional[str]] = mapped_column(String(50))
     offense_rating: Mapped[int] = mapped_column(Integer)
     defense_rating: Mapped[int] = mapped_column(Integer)
     overall_rating: Mapped[int] = mapped_column(Integer)
@@ -57,6 +59,23 @@ class Team(Base):
     defense_run_coverage_rating: Mapped[Optional[int]] = mapped_column(Integer)
     defense_pass_coverage_rating: Mapped[Optional[int]] = mapped_column(Integer)
     defense_pass_rush_rating: Mapped[Optional[int]] = mapped_column(Integer)
+    defense_season_performance: Mapped[Optional[int]] = mapped_column(Integer)
+    
+    # Denormalized all-time stats for efficient querying
+    all_time_wins: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    all_time_losses: Mapped[int] = mapped_column(Integer, default=0)
+    all_time_points: Mapped[int] = mapped_column(Integer, default=0)
+    all_time_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    all_time_touchdowns: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # JSON columns for historical data (detailed stats)
+    all_time_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    league_championships: Mapped[Optional[list]] = mapped_column(JSON)
+    floosbowl_championships: Mapped[Optional[list]] = mapped_column(JSON)
+    top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
+    playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -66,6 +85,12 @@ class Team(Base):
     season_stats: Mapped[list["TeamSeasonStats"]] = relationship("TeamSeasonStats", back_populates="team")
     home_games: Mapped[list["Game"]] = relationship("Game", foreign_keys="Game.home_team_id", back_populates="home_team")
     away_games: Mapped[list["Game"]] = relationship("Game", foreign_keys="Game.away_team_id", back_populates="away_team")
+    championships: Mapped[list["Championship"]] = relationship("Championship", back_populates="team")
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_team_league", "league_id"),
+    )
 
     def __repr__(self):
         return f"<Team(id={self.id}, name='{self.name}', abbr='{self.abbr}')>"
@@ -96,6 +121,7 @@ class Player(Base):
     team: Mapped[Optional["Team"]] = relationship("Team", back_populates="players")
     attributes: Mapped[Optional["PlayerAttributes"]] = relationship("PlayerAttributes", back_populates="player", uselist=False)
     career_stats: Mapped[list["PlayerCareerStats"]] = relationship("PlayerCareerStats", back_populates="player")
+    season_stats: Mapped[list["PlayerSeasonStats"]] = relationship("PlayerSeasonStats", back_populates="player")
     game_stats: Mapped[list["GamePlayerStats"]] = relationship("GamePlayerStats", back_populates="player")
 
     # Indexes
@@ -173,7 +199,16 @@ class PlayerCareerStats(Base):
     games_played: Mapped[int] = mapped_column(Integer, default=0)
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
     
-    # Stats stored as JSON for flexibility
+    # Denormalized stats for efficient querying (leaderboards)
+    passing_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    passing_tds: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    passing_ints: Mapped[int] = mapped_column(Integer, default=0)
+    rushing_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    rushing_tds: Mapped[int] = mapped_column(Integer, default=0)
+    receiving_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    receiving_tds: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Stats stored as JSON for flexibility (detailed breakdown)
     passing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     rushing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -192,6 +227,59 @@ class PlayerCareerStats(Base):
 
     def __repr__(self):
         return f"<PlayerCareerStats(player_id={self.player_id}, season={self.season})>"
+
+
+class PlayerSeasonStats(Base):
+    """Player season stats table - stores player stats by season."""
+    __tablename__ = "player_season_stats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    games_played: Mapped[int] = mapped_column(Integer, default=0)
+    fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Denormalized stats for efficient querying (season leaderboards)
+    passing_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    passing_tds: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    passing_ints: Mapped[int] = mapped_column(Integer, default=0)
+    passing_completions: Mapped[int] = mapped_column(Integer, default=0)
+    passing_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    rushing_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    rushing_tds: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    rushing_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    receiving_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    receiving_tds: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    receptions: Mapped[int] = mapped_column(Integer, default=0)
+    sacks: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    interceptions: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    tackles: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Stats stored as JSON for flexibility (detailed breakdown)
+    passing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    rushing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    # Relationships
+    player: Mapped["Player"] = relationship("Player", back_populates="season_stats")
+    team: Mapped["Team"] = relationship("Team")
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", name="uq_player_season_stats"),
+        Index("idx_season_stats_player", "player_id"),
+        Index("idx_season_stats_season", "season"),
+        Index("idx_season_stats_team", "team_id"),
+        Index("idx_season_stats_season_yards", "season", "passing_yards"),
+        Index("idx_season_stats_season_rush", "season", "rushing_yards"),
+        Index("idx_season_stats_season_rec", "season", "receiving_yards"),
+    )
+
+    def __repr__(self):
+        return f"<PlayerSeasonStats(player_id={self.player_id}, season={self.season})>"
 
 
 class TeamSeasonStats(Base):
@@ -216,7 +304,24 @@ class TeamSeasonStats(Base):
     floosball_champion: Mapped[bool] = mapped_column(Boolean, default=False)
     top_seed: Mapped[bool] = mapped_column(Boolean, default=False)
     
-    # Stats stored as JSON
+    # Denormalized offensive stats for efficient querying
+    points: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    touchdowns: Mapped[int] = mapped_column(Integer, default=0)
+    field_goals: Mapped[int] = mapped_column(Integer, default=0)
+    total_yards: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    passing_yards: Mapped[int] = mapped_column(Integer, default=0)
+    rushing_yards: Mapped[int] = mapped_column(Integer, default=0)
+    passing_tds: Mapped[int] = mapped_column(Integer, default=0)
+    rushing_tds: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Denormalized defensive stats for efficient querying
+    points_allowed: Mapped[int] = mapped_column(Integer, default=0)
+    sacks: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    interceptions: Mapped[int] = mapped_column(Integer, default=0)
+    fumbles_recovered: Mapped[int] = mapped_column(Integer, default=0)
+    total_yards_allowed: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # Stats stored as JSON (detailed breakdown)
     offense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
@@ -228,6 +333,10 @@ class TeamSeasonStats(Base):
         UniqueConstraint("team_id", "season", name="uq_team_season"),
         Index("idx_team_stats_team", "team_id"),
         Index("idx_team_stats_season", "season"),
+        Index("idx_team_stats_wins", "wins"),
+        Index("idx_team_stats_elo", "elo"),
+        Index("idx_team_stats_playoffs", "made_playoffs"),
+        Index("idx_team_stats_season_wins", "season", "wins"),
     )
 
     def __repr__(self):
@@ -281,6 +390,8 @@ class Game(Base):
         Index("idx_games_season_week", "season", "week"),
         Index("idx_games_home_team", "home_team_id"),
         Index("idx_games_away_team", "away_team_id"),
+        Index("idx_games_is_playoff", "is_playoff"),
+        Index("idx_games_season_playoff", "season", "is_playoff"),
     )
 
     def __repr__(self):
@@ -320,6 +431,32 @@ class GamePlayerStats(Base):
         return f"<GamePlayerStats(game_id={self.game_id}, player_id={self.player_id})>"
 
 
+class Championship(Base):
+    """Championship table - tracks team championships by season and type."""
+    __tablename__ = "championships"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    championship_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Types: 'regular_season', 'league', 'floosbowl'
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationship
+    team: Mapped["Team"] = relationship("Team", back_populates="championships")
+
+    # Constraints and Indexes
+    __table_args__ = (
+        UniqueConstraint("team_id", "season", "championship_type", name="uq_team_season_type"),
+        Index("idx_championships_season", "season"),
+        Index("idx_championships_type", "championship_type"),
+        Index("idx_championships_team", "team_id"),
+    )
+
+    def __repr__(self):
+        return f"<Championship(team_id={self.team_id}, season={self.season}, type='{self.championship_type}')>"
+
+
 class Season(Base):
     """Season table - tracks season metadata."""
     __tablename__ = "seasons"
@@ -331,6 +468,11 @@ class Season(Base):
     playoffs_started: Mapped[bool] = mapped_column(Boolean, default=False)
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_season_champion", "champion_team_id"),
+    )
 
     def __repr__(self):
         return f"<Season(season={self.season_number}, week={self.current_week})>"
@@ -372,3 +514,21 @@ class UnusedName(Base):
 
     def __repr__(self):
         return f"<UnusedName(id={self.id}, name='{self.name}')>"
+
+
+class SimulationState(Base):
+    """Simulation state table - stores current simulation progress for resumability."""
+    __tablename__ = "simulation_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    current_season: Mapped[int] = mapped_column(Integer, default=0)
+    current_week: Mapped[int] = mapped_column(Integer, default=0)
+    in_playoffs: Mapped[bool] = mapped_column(Boolean, default=False)
+    playoff_round: Mapped[Optional[str]] = mapped_column(String(50))
+    total_seasons: Mapped[int] = mapped_column(Integer, default=20)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<SimulationState(season={self.current_season}, week={self.current_week}, playoffs={self.in_playoffs})>"

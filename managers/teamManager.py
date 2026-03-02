@@ -14,6 +14,17 @@ import floosball_player as FloosPlayer
 from logger_config import getLogger
 import numpy as np
 
+# Database imports
+try:
+    from database.config import USE_DATABASE
+    from database.connection import get_session
+    from database.repositories import TeamRepository, LeagueRepository
+    from database.models import Team as DBTeam, League as DBLeague
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
+    USE_DATABASE = False
+
 class TeamManager:
     """Manages all team-related operations including creation, loading, and roster management"""
     
@@ -23,6 +34,19 @@ class TeamManager:
         self.leagues: List = []  # Will be typed properly when League class is available
         self.logger = getLogger("floosball.team_manager")
         
+        # Database session and repositories (if database enabled)
+        self.db_session = None
+        self.team_repo = None
+        self.league_repo = None
+        
+        if DATABASE_AVAILABLE and USE_DATABASE:
+            self.db_session = get_session()
+            self.team_repo = TeamRepository(self.db_session)
+            self.league_repo = LeagueRepository(self.db_session)
+            self.logger.info("TeamManager using DATABASE storage")
+        else:
+            self.logger.info("TeamManager using JSON file storage")
+        
     def generateTeams(self, config: Dict[str, Any]) -> None:
         """
         Generate teams from config or load from saved data
@@ -30,6 +54,13 @@ class TeamManager:
         """
         self.teams.clear()
         
+        # Try database first if enabled
+        if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
+            if self._loadTeamsFromDatabase():
+                self.logger.info(f"Generated {len(self.teams)} teams from database")
+                return
+        
+        # Fall back to JSON file loading
         if os.path.exists("data/teamData"):
             self._loadTeamsFromData()
             # If no teams were loaded, fall back to config
@@ -39,6 +70,80 @@ class TeamManager:
             self._createTeamsFromConfig(config)
             
         self.logger.info(f"Generated {len(self.teams)} teams")
+    
+    def _loadTeamsFromDatabase(self) -> bool:
+        """Load teams from database"""
+        try:
+            # Get all teams from database
+            db_teams = self.team_repo.get_all()
+            
+            if not db_teams:
+                self.logger.debug("No teams found in database")
+                return False
+            
+            # Convert database teams to game Team objects
+            for db_team in db_teams:
+                team = self._createTeamFromDatabase(db_team)
+                if team:
+                    self.teams.append(team)
+            
+            self.logger.info(f"Loaded {len(self.teams)} teams from database")
+            
+            # Rebuild team rosters from player-team relationships
+            self._rebuildTeamRosters()
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load teams from database: {e}")
+            return False
+    
+    def _createTeamFromDatabase(self, db_team) -> Optional[FloosTeam.Team]:
+        """Create a game Team object from database Team model"""
+        try:
+            # Create basic team
+            team = FloosTeam.Team(db_team.name)
+            
+            # Basic info
+            team.id = db_team.id
+            team.city = db_team.city
+            team.abbr = db_team.abbr
+            team.color = db_team.color
+            team.secondaryColor = getattr(db_team, 'secondary_color', db_team.color)
+            team.tertiaryColor = getattr(db_team, 'tertiary_color', db_team.color)
+            
+            # Ratings
+            team.offenseRating = db_team.offense_rating or 0
+            team.defenseRunCoverageRating = db_team.defense_run_coverage_rating or 0
+            team.defensePassCoverageRating = db_team.defense_pass_coverage_rating or 0
+            team.defensePassRushRating = db_team.defense_pass_rush_rating or 0
+            team.defenseRating = db_team.defense_rating or 0
+            team.overallRating = db_team.overall_rating or 0
+            
+            # Performance data
+            team.gmScore = db_team.gm_score or 0
+            team.defenseOverallTier = db_team.defense_tier or 0
+            team.defenseSeasonPerformanceRating = db_team.defense_season_performance or 0
+            
+            # Historical stats (stored as JSON in database)
+            team.allTimeTeamStats = db_team.all_time_stats or {}
+            team.leagueChampionships = db_team.league_championships or []
+            team.floosbowlChampionships = db_team.floosbowl_championships or []
+            team.regularSeasonChampions = db_team.top_seeds or []  # top_seeds = regular season champions
+            team.playoffAppearances = db_team.playoff_appearances if isinstance(db_team.playoff_appearances, int) else 0
+            
+            # Roster history if available
+            if db_team.roster_history:
+                team.rosterHistory = db_team.roster_history
+            
+            # Note: Roster will be populated separately after players are loaded
+            # This is handled by PlayerManager assigning players to teams
+            
+            return team
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create team from database: {e}")
+            return None
     
     def _loadTeamsFromData(self) -> None:
         """Load teams from saved JSON data files"""
@@ -61,6 +166,8 @@ class TeamManager:
         newTeam.city = teamData['city']
         newTeam.abbr = teamData['abbr']
         newTeam.color = teamData['color']
+        newTeam.secondaryColor = teamData.get('secondaryColor', teamData['color'])
+        newTeam.tertiaryColor = teamData.get('tertiaryColor', teamData['color'])
         
         # Ratings
         newTeam.offenseRating = teamData['offenseRating']
@@ -79,7 +186,7 @@ class TeamManager:
         newTeam.allTimeTeamStats = teamData['allTimeTeamStats']
         newTeam.leagueChampionships = teamData['leagueChampionships']
         newTeam.floosbowlChampionships = teamData['floosbowlChampionships']
-        newTeam.regularSeasonChampions = teamData['regularSeasonChampions']
+        newTeam.topSeeds = teamData.get('topSeeds', teamData.get('regularSeasonChampions', []))
         newTeam.playoffAppearances = teamData['playoffAppearances']
         
         if 'rosterHistory' in teamData:
@@ -103,6 +210,101 @@ class TeamManager:
                     team.playerNumbersList.append(playerData['currentNumber'])
                     break
     
+    def _rebuildTeamRosters(self) -> None:
+        """Rebuild team rosters from player-team relationships after loading from database"""
+        # Get players from player manager
+        playerManager = self.serviceContainer.getService('player_manager')
+        if not playerManager:
+            self.logger.warning("PlayerManager not available, cannot rebuild rosters")
+            return
+        
+        all_players = playerManager.activePlayers
+        self.logger.info(f"Rebuilding rosters from {len(all_players)} active players")
+        
+        # Build a dictionary of team_id -> players
+        team_players = {}
+        players_without_team = 0
+        for player in all_players:
+            # Check if player has a team assignment
+            if hasattr(player, 'team') and player.team is not None:
+                team_id = player.team if isinstance(player.team, int) else player.team.id
+                if team_id not in team_players:
+                    team_players[team_id] = []
+                team_players[team_id].append(player)
+            else:
+                players_without_team += 1
+        
+        self.logger.info(f"Found players assigned to {len(team_players)} teams")
+        self.logger.info(f"DEBUG: {players_without_team} players without team assignment")
+        self.logger.info(f"DEBUG: team_players keys = {list(team_players.keys())}")
+        
+        # Assign players to teams
+        teams_with_rosters = 0
+        for team in self.teams:
+            if team.id in team_players:
+                # Clear existing roster
+                team.rosterDict = {}
+                team.playerCap = 0
+                team.playerNumbersList = []
+                
+                # Track WR count for proper slot assignment (max 2: wr1 and wr2)
+                wr_count = 0
+                
+                # Assign players based on their position
+                # Roster keys are ONLY: qb, rb, wr1, wr2, te, k
+                for player in team_players[team.id]:
+                    # Get position value (handle both enum and int)
+                    if hasattr(player.position, 'value'):
+                        pos_value = player.position.value
+                    else:
+                        pos_value = int(player.position)
+                    
+                    # Map position value to roster key
+                    # Position enum: QB=1, RB=2, WR=3, TE=4, K=5
+                    position_map = {
+                        1: 'qb',   # Quarterback - single slot
+                        2: 'rb',   # Running Back - single slot  
+                        3: 'wr',   # Wide Receiver - has wr1, wr2 slots
+                        4: 'te',   # Tight End - single slot
+                        5: 'k'     # Kicker - single slot
+                    }
+                    
+                    # Skip positions not in the roster
+                    if pos_value not in position_map:
+                        continue
+                    
+                    pos_key = position_map[pos_value]
+                    
+                    # Handle WR positions (wr1, wr2 only)
+                    if pos_key == 'wr':
+                        wr_count += 1
+                        if wr_count <= 2:
+                            roster_key = f"wr{wr_count}"
+                        else:
+                            # Skip additional WRs beyond wr2
+                            continue
+                    else:
+                        # Single slot positions (qb, rb, te, k)
+                        # Only use first player at this position
+                        if pos_key in team.rosterDict:
+                            continue
+                        roster_key = pos_key
+                    
+                    team.rosterDict[roster_key] = player
+                    team.playerCap += player.capHit
+                    team.playerNumbersList.append(player.currentNumber)
+                    
+                    # Update player's team reference to be the Team object
+                    player.team = team
+                
+                teams_with_rosters += 1
+                # Debug: print first team's roster keys
+                if teams_with_rosters == 1:
+                    self.logger.info(f"DEBUG: First team roster keys: {list(team.rosterDict.keys())}")
+                self.logger.debug(f"Rebuilt roster for {team.name}: {len(team.rosterDict)} players")
+        
+        self.logger.info(f"Rebuilt rosters for {teams_with_rosters}/{len(self.teams)} teams")
+    
     def _createTeamsFromConfig(self, config: Dict[str, Any]) -> None:
         """Create new teams from configuration"""
         teamId = 1
@@ -112,6 +314,8 @@ class TeamManager:
             team.city = teamConfig['city']
             team.abbr = teamConfig['abbr']
             team.color = teamConfig['color']
+            team.secondaryColor = teamConfig.get('secondaryColor', teamConfig['color'])
+            team.tertiaryColor = teamConfig.get('tertiaryColor', teamConfig['color'])
             team.id = teamId
             
             self.teams.append(team)
@@ -135,11 +339,118 @@ class TeamManager:
         
         # Call sortDefenses at the end like original initTeams() function
         self.sortDefenses()
+        
+        # Pre-generate team avatars
+        self._pregenerateAvatars()
             
         self.logger.info(f"Initialized {len(self.teams)} teams")
     
+    def _pregenerateAvatars(self) -> None:
+        """Pre-generate avatars for all teams"""
+        try:
+            from avatar_generator import getAvatarGenerator
+            avatarGen = getAvatarGenerator()
+            generated = avatarGen.pregenerateTeamAvatars(self.teams)
+            self.logger.info(f"Avatar pre-generation complete: {generated} new, {len(self.teams) - generated} cached")
+        except Exception as e:
+            self.logger.warning(f"Failed to pre-generate avatars: {e}")
+    
     def _setupAndSaveTeam(self, team: FloosTeam.Team) -> None:
-        """Setup team and save to JSON file"""
+        """Setup team and save to database or JSON file"""
+        team.setupTeam()
+        
+        # Save to database or JSON based on configuration
+        if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
+            self._saveTeamToDatabase(team)
+        else:
+            self._saveTeamToJSON(team)
+    
+    def saveTeamData(self) -> None:
+        """Save all teams to database or JSON"""
+        if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
+            for team in self.teams:
+                self._saveTeamToDatabase(team)
+            self.db_session.commit()
+            self.logger.info(f"Saved {len(self.teams)} teams to database")
+        else:
+            for team in self.teams:
+                self._saveTeamToJSON(team)
+            self.logger.info(f"Saved {len(self.teams)} teams to JSON files")
+    
+    def _saveTeamToDatabase(self, team: FloosTeam.Team) -> None:
+        """Save a single team to database"""
+        try:
+            # Create or update team in database
+            db_team = self.team_repo.get_by_id(team.id)
+            
+            if not db_team:
+                # Create new team
+                from database.models import Team as DBTeam
+                db_team = DBTeam(
+                    id=team.id,
+                    name=team.name,
+                    city=team.city,
+                    abbr=team.abbr,
+                    color=team.color,
+                    secondary_color=getattr(team, 'secondaryColor', team.color),
+                    tertiary_color=getattr(team, 'tertiaryColor', team.color)
+                )
+            else:
+                # Update color fields if they exist
+                db_team.secondary_color = getattr(team, 'secondaryColor', team.color)
+                db_team.tertiary_color = getattr(team, 'tertiaryColor', team.color)
+            
+            # Update team data
+            db_team.offense_rating = team.offenseRating
+            db_team.defense_run_coverage_rating = team.defenseRunCoverageRating
+            db_team.defense_pass_coverage_rating = team.defensePassCoverageRating
+            db_team.defense_pass_rush_rating = team.defensePassRushRating
+            db_team.defense_rating = team.defenseRating
+            db_team.overall_rating = team.overallRating
+            db_team.gm_score = team.gmScore
+            db_team.defense_tier = team.defenseOverallTier
+            db_team.defense_season_performance = team.defenseSeasonPerformanceRating
+            
+            # Historical stats (stored as JSON)
+            db_team.all_time_stats = team.allTimeTeamStats
+            db_team.league_championships = team.leagueChampionships
+            db_team.floosbowl_championships = team.floosbowlChampionships
+            db_team.top_seeds = team.topSeeds
+            db_team.playoff_appearances = team.playoffAppearances
+            
+            # Denormalized all-time stats for efficient querying
+            if team.allTimeTeamStats:
+                db_team.all_time_wins = team.allTimeTeamStats.get('wins', 0)
+                db_team.all_time_losses = team.allTimeTeamStats.get('losses', 0)
+                offense = team.allTimeTeamStats.get('Offense', {})
+                db_team.all_time_points = offense.get('pts', 0)
+                db_team.all_time_yards = offense.get('totalYards', 0)
+                db_team.all_time_touchdowns = offense.get('tds', 0)
+            
+            if hasattr(team, 'rosterHistory'):
+                db_team.roster_history = team.rosterHistory
+            
+            # Handle league assignment - look up league_id from league name if available
+            if hasattr(team, 'league') and team.league:
+                # Team has a league name, look up the league_id
+                if self.league_repo:
+                    db_league = self.league_repo.get_by_name(team.league)
+                    if db_league:
+                        db_team.league_id = db_league.id
+            # If team doesn't have a league but db_team already has league_id, preserve it
+            # (This prevents overwriting league assignments set by LeagueManager)
+            
+            # Roster is managed through Player.team_id foreign keys
+            
+            self.team_repo.save(db_team)
+            self.db_session.commit()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save team {team.name} to database: {e}")
+            self.db_session.rollback()
+    
+    def _saveTeamToJSON(self, team: FloosTeam.Team) -> None:
+        """Save team to JSON file (legacy mode)"""
         team.setupTeam()
         
         teamDict = {
@@ -147,6 +458,8 @@ class TeamManager:
             'city': team.city,
             'abbr': team.abbr,
             'color': team.color,
+            'secondaryColor': getattr(team, 'secondaryColor', team.color),
+            'tertiaryColor': getattr(team, 'tertiaryColor', team.color),
             'id': team.id,
             'offenseRating': team.offenseRating,
             'defenseRunCoverageRating': team.defenseRunCoverageRating,
@@ -157,7 +470,7 @@ class TeamManager:
             'overallRating': team.overallRating,
             'allTimeTeamStats': team.allTimeTeamStats,
             'floosbowlChampionships': team.floosbowlChampionships,
-            'regularSeasonChampions': team.regularSeasonChampions,
+            'topSeeds': team.topSeeds,
             'leagueChampionships': team.leagueChampionships,
             'playoffAppearances': team.playoffAppearances,
             'gmScore': team.gmScore,
@@ -474,14 +787,22 @@ class TeamManager:
                 self.logger.debug(f"Team {team.name}: ELO updated with history regression to {team.elo}")
             else:
                 # For new teams: adjust ELO based on overall rating relative to league mean
-                teamRatingRank = round(team.overallRating / meanRating, 2) if meanRating > 0 else 1.0
-                team.elo = round(team.elo * teamRatingRank)
-                self.logger.debug(f"Team {team.name}: ELO updated for new team to {team.elo} (rank: {teamRatingRank})")
+                if team.overallRating > 0 and meanRating > 0:
+                    teamRatingRank = round(team.overallRating / meanRating, 2)
+                    team.elo = round(team.elo * teamRatingRank)
+                    self.logger.debug(f"Team {team.name}: ELO updated for new team to {team.elo} (rank: {teamRatingRank}, rating: {team.overallRating})")
+                else:
+                    # If rating not calculated yet, keep default 1500
+                    self.logger.warning(f"Team {team.name}: overallRating is {team.overallRating}, keeping default ELO 1500")
+
             
+            # Clamp to reasonable bounds at season reset
+            team.elo = max(800, min(2200, team.elo))
+
             # Ensure ELO is stored in season stats
             if hasattr(team, 'seasonTeamStats'):
                 team.seasonTeamStats['elo'] = team.elo
-        
+
         self.logger.info(f"ELO ratings updated for {len(self.teams)} teams (mean rating: {meanRating})")
     
     def calculateWinProbability(self, homeTeam, awayTeam) -> tuple:
@@ -502,41 +823,46 @@ class TeamManager:
         
         return homeTeamWinProbability, awayTeamWinProbability
     
-    def updateEloAfterGame(self, homeTeam, awayTeam, homeScore: int, awayScore: int, winningTeam, homeWinProb: float = None, awayWinProb: float = None) -> None:
+    def updateEloAfterGame(self, homeTeam, awayTeam, homeScore: int, awayScore: int, winningTeam,
+                           preGameHomeWp: float = None, preGameAwayWp: float = None) -> None:
         """
-        Update ELO ratings for both teams after a game based on the result and margin of victory
-        
+        Update ELO ratings for both teams after a game based on the result and margin of victory.
+
         Args:
-            homeWinProb: Pre-calculated home team win probability (optional)
-            awayWinProb: Pre-calculated away team win probability (optional)
+            preGameHomeWp: Home win probability at kickoff as 0-1 decimal (stored on game object).
+                           Falls back to ELO-derived probability if not provided.
+            preGameAwayWp: Away win probability at kickoff as 0-1 decimal.
         """
         import math
-        
-        k = 35  # K-factor for ELO calculations - controls rating volatility
-        
+
+        k = 20  # K-factor - controls rating volatility
+
         homeTeamElo = getattr(homeTeam, 'elo', 1500)
         awayTeamElo = getattr(awayTeam, 'elo', 1500)
-        
-        # Use provided win probabilities or calculate them
-        if homeWinProb is not None and awayWinProb is not None:
-            homeTeamWinProbability, awayTeamWinProbability = homeWinProb, awayWinProb
+
+        # Use pre-game WP stored at kickoff (0-1 decimal), or fall back to ELO calculation
+        if preGameHomeWp is not None and preGameAwayWp is not None:
+            homeTeamWinProbability = preGameHomeWp
+            awayTeamWinProbability = preGameAwayWp
         else:
-            # Calculate pre-game win probabilities
             homeTeamWinProbability, awayTeamWinProbability = self.calculateWinProbability(homeTeam, awayTeam)
-        
-        # Calculate margin of victory multiplier (accounts for score differential)
+
+        # Margin of victory multiplier (538-style): bigger upsets count more
+        # Clamp denominator to avoid near-zero or negative values for extreme ELO gaps
         scoreDiff = abs(homeScore - awayScore)
-        
+
         if winningTeam == homeTeam:
-            # Home team won
-            marginOfVictoryMultiplier = math.log(scoreDiff + 1) * (2.2 / ((homeTeamElo - awayTeamElo) * 0.001 + 2.2))
+            movDenominator = max(0.3, (homeTeamElo - awayTeamElo) * 0.001 + 2.2)
+            marginOfVictoryMultiplier = math.log(scoreDiff + 1) * (2.2 / movDenominator)
             homeTeam.elo = round(homeTeamElo + (k * marginOfVictoryMultiplier) * (1 - homeTeamWinProbability))
             awayTeam.elo = round(awayTeamElo + (k * marginOfVictoryMultiplier) * (0 - awayTeamWinProbability))
         else:
-            # Away team won  
-            marginOfVictoryMultiplier = math.log(scoreDiff + 1) * (2.2 / ((awayTeamElo - homeTeamElo) * 0.001 + 2.2))
+            movDenominator = max(0.3, (awayTeamElo - homeTeamElo) * 0.001 + 2.2)
+            marginOfVictoryMultiplier = math.log(scoreDiff + 1) * (2.2 / movDenominator)
             homeTeam.elo = round(homeTeamElo + (k * marginOfVictoryMultiplier) * (0 - homeTeamWinProbability))
             awayTeam.elo = round(awayTeamElo + (k * marginOfVictoryMultiplier) * (1 - awayTeamWinProbability))
+        
+        # No in-season clamping - ELO moves freely; bounds applied at season reset in setNewElo()
         
         # Update season stats with new ELO
         if hasattr(homeTeam, 'seasonTeamStats'):
