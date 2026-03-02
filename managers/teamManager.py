@@ -8,9 +8,11 @@ Replaces scattered team management functions from floosball.py
 import json
 import os
 import glob
+import random as _random
 from typing import Dict, List, Any, Optional
 import floosball_team as FloosTeam
 import floosball_player as FloosPlayer
+import floosball_coach as FloosCoach
 from logger_config import getLogger
 import numpy as np
 
@@ -46,14 +48,24 @@ class TeamManager:
             self.logger.info("TeamManager using DATABASE storage")
         else:
             self.logger.info("TeamManager using JSON file storage")
-        
+
+        self._coachNamePool: List[str] = []
+
     def generateTeams(self, config: Dict[str, Any]) -> None:
         """
         Generate teams from config or load from saved data
         Replaces getTeams() function from floosball.py
         """
         self.teams.clear()
-        
+        # Use names not yet assigned to players (playerManager depletes unusedNames first).
+        # Shared reference so removals here also remove from playerManager.unusedNames,
+        # preventing future players from getting a coach's name.
+        playerMgr = getattr(self.serviceContainer, 'playerManager', None)
+        if playerMgr and getattr(playerMgr, 'unusedNames', None):
+            self._coachNamePool = playerMgr.unusedNames
+        else:
+            self._coachNamePool = list(config.get('players', []))
+
         # Try database first if enabled
         if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
             if self._loadTeamsFromDatabase():
@@ -69,8 +81,9 @@ class TeamManager:
         else:
             self._createTeamsFromConfig(config)
             
+        self.assignCoachesToTeams()
         self.logger.info(f"Generated {len(self.teams)} teams")
-    
+
     def _loadTeamsFromDatabase(self) -> bool:
         """Load teams from database"""
         try:
@@ -1111,7 +1124,48 @@ class TeamManager:
             'max': max(pressureValues),
             'range': round(max(pressureValues) - min(pressureValues), 2),
             'teamPressures': [
-                {'team': team.name, 'pressure': getattr(team, 'pressureModifier', 1.0)} 
+                {'team': team.name, 'pressure': getattr(team, 'pressureModifier', 1.0)}
                 for team in self.teams
             ]
         }
+
+    # -------------------------------------------------------------------------
+    # Coach management
+    # -------------------------------------------------------------------------
+
+    def generateCoach(self, seed: int = None) -> FloosCoach.Coach:
+        """Create a new Coach with generated attributes and a unique name from the pool."""
+        coach = FloosCoach.Coach()
+        coach.generateAttributes(seed=seed)
+        if self._coachNamePool:
+            name = _random.choice(self._coachNamePool)
+            self._coachNamePool.remove(name)
+            coach.name = name
+        else:
+            coach.generateName()
+        return coach
+
+    def assignCoachesToTeams(self) -> None:
+        """Assign one generated coach to each team that doesn't already have one."""
+        for team in self.teams:
+            if team.coach is None:
+                team.coach = self.generateCoach()
+                self.logger.debug(f"Assigned coach {team.coach.name} to {team.name}")
+
+    def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach) -> None:
+        """Assign a specific coach to a team."""
+        team.coach = coach
+
+    def fireCoach(self, team: FloosTeam.Team) -> None:
+        """Remove a team's coach (leaves them coachless until next hire)."""
+        team.coach = None
+
+    def handleCoachRetirement(self, season: int) -> None:
+        """Check each team's coach for retirement; replace retiring coaches."""
+        for team in self.teams:
+            if team.coach and team.coach.shouldRetire():
+                self.logger.info(
+                    f"{team.coach.name} retires after {team.coach.seasonsCoached} seasons with {team.name}"
+                )
+                team.coach = self.generateCoach()
+                self.logger.info(f"{team.name} hires new coach {team.coach.name}")

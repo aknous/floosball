@@ -262,7 +262,7 @@ class Player:
         self.gameAttributes.confidenceModifier = round(self.gameAttributes.confidenceModifier + value, 3)
         self.updateInGameRating()
 
-    def offseasonTraining(self):
+    def offseasonTraining(self, coachDevRating: int = 50):
         pass
 
 
@@ -610,8 +610,8 @@ class PlayerQB(Player, CachedRatingMixin):
             self.gameAttributes.overallRating = 100
 
 
-    def offseasonTraining(self):
-        PlayerDevelopment.apply_offseason_training(self, "QB")
+    def offseasonTraining(self, coachDevRating: int = 50):
+        PlayerDevelopment.apply_offseason_training(self, "QB", coachDevRating=coachDevRating)
         self.updateRating()
 
 class PlayerRB(Player):
@@ -649,8 +649,8 @@ class PlayerRB(Player):
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
 
 
-    def offseasonTraining(self):
-        PlayerDevelopment.apply_offseason_training(self, "RB")
+    def offseasonTraining(self, coachDevRating: int = 50):
+        PlayerDevelopment.apply_offseason_training(self, "RB", coachDevRating=coachDevRating)
         self.updateRating()
         
 class PlayerWR(Player):
@@ -688,8 +688,8 @@ class PlayerWR(Player):
         self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
 
 
-    def offseasonTraining(self):
-        PlayerDevelopment.apply_offseason_training(self, "WR")
+    def offseasonTraining(self, coachDevRating: int = 50):
+        PlayerDevelopment.apply_offseason_training(self, "WR", coachDevRating=coachDevRating)
         self.updateRating()
 
 class PlayerTE(Player):
@@ -728,8 +728,8 @@ class PlayerTE(Player):
         self.playerRating = self.attributes.overallRating
 
 
-    def offseasonTraining(self):
-        PlayerDevelopment.apply_offseason_training(self, "TE")
+    def offseasonTraining(self, coachDevRating: int = 50):
+        PlayerDevelopment.apply_offseason_training(self, "TE", coachDevRating=coachDevRating)
         self.updateRating()
 
 class PlayerK(Player):
@@ -765,6 +765,6 @@ class PlayerK(Player):
         self.maxFgDistance = round(70*(self.attributes.legStrength/100))
 
 
-    def offseasonTraining(self):
-        PlayerDevelopment.apply_offseason_training(self, "K")
+    def offseasonTraining(self, coachDevRating: int = 50):
+        PlayerDevelopment.apply_offseason_training(self, "K", coachDevRating=coachDevRating)
         self.updateRating()

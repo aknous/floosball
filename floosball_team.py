@@ -76,6 +76,7 @@ class Team:
         self.defensePassCoverageRating = 0
         self.defensePassRushRating = 0
         self.defensePassRating = 0
+        self.coach = None  # Coach object assigned by TeamManager
         self.elo = 1500
         self._gameDefenseConfidence = randint(-2,2)
         self._gameDefenseDetermination = randint(-2,2)

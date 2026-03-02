@@ -1237,9 +1237,17 @@ class SeasonManager:
         
         # STEP 1: Player offseason training (without resetting performance ratings yet)
         logger.info("Step 1: Player offseason training")
+        # Build a map of player id → coach dev rating for rostered players
+        rosteredDevRating: dict = {}
+        for team in self.teamManager.teams:
+            coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
+            for posGroup in team.rosterDict.values():
+                if posGroup is not None and hasattr(posGroup, 'id'):
+                    rosteredDevRating[posGroup.id] = coachDevRating
         for player in self.playerManager.activePlayers:
             if hasattr(player, 'offseasonTraining'):
-                player.offseasonTraining()
+                devRating = rosteredDevRating.get(getattr(player, 'id', None), 50)
+                player.offseasonTraining(coachDevRating=devRating)
         
         # STEP 1.5: Increment free agent years for existing free agents
         logger.info("Step 1.5: Increment free agent years")

@@ -75,7 +75,8 @@ class Team(Base):
     top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
     playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
-    
+    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -94,6 +95,27 @@ class Team(Base):
 
     def __repr__(self):
         return f"<Team(id={self.id}, name='{self.name}', abbr='{self.abbr}')>"
+
+
+class Coach(Base):
+    """Coach table - represents a team's head coach."""
+    __tablename__ = "coaches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    seasons_coached: Mapped[int] = mapped_column(Integer, default=0)
+    offensive_mind: Mapped[int] = mapped_column(Integer, default=80)
+    defensive_mind: Mapped[int] = mapped_column(Integer, default=80)
+    adaptability: Mapped[int] = mapped_column(Integer, default=80)
+    aggressiveness: Mapped[int] = mapped_column(Integer, default=80)
+    clock_management: Mapped[int] = mapped_column(Integer, default=80)
+    player_development: Mapped[int] = mapped_column(Integer, default=80)
+    overall_rating: Mapped[int] = mapped_column(Integer, default=80)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Coach(id={self.id}, name='{self.name}', overall={self.overall_rating})>"
 
 
 class Player(Base):

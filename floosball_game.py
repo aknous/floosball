@@ -1,5 +1,6 @@
 import enum
 import logging
+import random as _random
 from gettext import find
 from random import randint
 from random_batch import batched_randint, batched_random, batched_choice
@@ -42,6 +43,16 @@ except ImportError:
     TIMING_AVAILABLE = False
     TimingManager = None
     TimingMode = None
+
+try:
+    from gameplan import (generateOffensiveGameplan, generateDefensiveGameplan, getDefensiveScheme,
+                          adjustOffensiveGameplan, adjustDefensiveGameplan)
+    GAMEPLAN_AVAILABLE = True
+except ImportError:
+    GAMEPLAN_AVAILABLE = False
+    generateOffensiveGameplan = None
+    generateDefensiveGameplan = None
+    getDefensiveScheme = None
 
 
 class PlayType(enum.Enum):
@@ -335,6 +346,17 @@ class Game:
         self.away4thDownConv = 0
         self.homeTurnoversTotal = 0
         self.awayTurnoversTotal = 0
+
+        # First-half tracking for halftime gameplan adjustments
+        self.homeHalfRunPlays = 0
+        self.homeHalfRunYards = 0
+        self.homeHalfPassAttempts = 0
+        self.homeHalfPassYards = 0
+        self.awayHalfRunPlays = 0
+        self.awayHalfRunYards = 0
+        self.awayHalfPassAttempts = 0
+        self.awayHalfPassYards = 0
+
         self.isHalftime = False
         self.isOvertime = False
         self.isRegularSeasonGame = None
@@ -374,7 +396,21 @@ class Game:
         self.isTwoPtConv = False
         self.isOnsideKick = False
         self.gamePressure = 0
-    
+
+        # Coaching gameplans (pre-game scouting, generated once per game)
+        if GAMEPLAN_AVAILABLE:
+            self.homeOffGameplan = generateOffensiveGameplan(
+                getattr(homeTeam, 'coach', None), homeTeam, awayTeam)
+            self.awayOffGameplan = generateOffensiveGameplan(
+                getattr(awayTeam, 'coach', None), awayTeam, homeTeam)
+            self.homeDefGameplan = generateDefensiveGameplan(
+                getattr(homeTeam, 'coach', None), homeTeam, awayTeam)
+            self.awayDefGameplan = generateDefensiveGameplan(
+                getattr(awayTeam, 'coach', None), awayTeam, homeTeam)
+        else:
+            self.homeOffGameplan = self.awayOffGameplan = None
+            self.homeDefGameplan = self.awayDefGameplan = None
+
     def getDisplayId(self) -> str:
         """
         Generate a human-readable display ID for logs/UI
@@ -853,6 +889,12 @@ class Game:
         self.gameDict['gameStats'] = gameStatsDict
 
 
+    def _runPassBias(self, gameplan) -> int:
+        """Map runPassRatio (0.25–0.75) to threshold offset (-2 to +2) for batched_randint(1,10)."""
+        if gameplan is None:
+            return 0
+        return round((gameplan.runPassRatio - 0.5) * 8)
+
     def playCaller(self):
         runDefenseFactor = 0.0015 * self.defensiveTeam.defenseRunCoverageRating   # Influences how sharply success drops with distance
         passDefenseFactor = 0.0015 * self.defensiveTeam.defensePassRating 
@@ -1049,8 +1091,10 @@ class Game:
                     self.play.runPlay()
                     return
             else:
-                x = batched_randint(0,1)
-                if x == 1:
+                activeOffGameplan = self.homeOffGameplan if self.offensiveTeam == self.homeTeam else self.awayOffGameplan
+                runBias = self._runPassBias(activeOffGameplan)
+                x = batched_randint(1, 10)
+                if x <= max(1, min(9, 5 + runBias)):
                     self.play.runPlay()
                     return
                 else:
@@ -1122,6 +1166,9 @@ class Game:
             kickerMaxDistance = self.offensiveTeam.rosterDict['k'].maxFgDistance - 17
             inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance
             
+            activeOffGameplan = self.homeOffGameplan if self.offensiveTeam == self.homeTeam else self.awayOffGameplan
+            aggrBias = int(((activeOffGameplan.aggressiveness if activeOffGameplan else 0.5) - 0.5) * 6)
+
             if scoreDiff > 0:
                 # When LEADING, be conservative on 4th down
                 # Late in game with lead, prioritize FGs to extend lead
@@ -1132,15 +1179,15 @@ class Game:
                         return
                     # Not in FG range - consider going for 4th & 1 to run clock
                     if self.yardsToFirstDown <= 1 and self.yardsToSafety > 50:
-                        # Very short yardage past midfield - 40% go for it to run clock
+                        # Very short yardage past midfield - go for it rate shifted by aggressiveness
                         x = batched_randint(1,10)
-                        if x <= 4:
+                        if x <= max(1, min(9, 4 + aggrBias)):
                             self.play.runPlay()
                             return
                     # Otherwise punt to protect lead
                     self.play.playType = PlayType.Punt
                     return
-                
+
                 # Earlier in game with lead - kick FGs, otherwise punt
                 if inFieldGoalRange and self.yardsToEndzone <= 35:
                     # Easy/medium FG range - take the points
@@ -1148,9 +1195,9 @@ class Game:
                     return
                 # Not in FG range - consider 4th & 1 conversion
                 if self.yardsToFirstDown == 1 and self.yardsToSafety > 45:
-                    # 4th & 1 in opponent territory - 30% go for it
+                    # 4th & 1 in opponent territory - go for it rate shifted by aggressiveness
                     x = batched_randint(1,10)
-                    if x <= 3:
+                    if x <= max(1, min(9, 3 + aggrBias)):
                         self.play.runPlay()
                         return
                 # Default when leading: PUNT
@@ -1830,6 +1877,24 @@ class Game:
                     })
                     if self.timingManager:
                         await self.timingManager.waitForHalftime()
+
+                    # Halftime gameplan adjustments
+                    if GAMEPLAN_AVAILABLE:
+                        homeOffStats = {
+                            'runPlays': self.homeHalfRunPlays, 'runYards': self.homeHalfRunYards,
+                            'passAttempts': self.homeHalfPassAttempts, 'passYards': self.homeHalfPassYards,
+                        }
+                        awayOffStats = {
+                            'runPlays': self.awayHalfRunPlays, 'runYards': self.awayHalfRunYards,
+                            'passAttempts': self.awayHalfPassAttempts, 'passYards': self.awayHalfPassYards,
+                        }
+                        homeCoach = getattr(self.homeTeam, 'coach', None)
+                        awayCoach = getattr(self.awayTeam, 'coach', None)
+                        adjustOffensiveGameplan(self.homeOffGameplan, homeCoach, homeOffStats)
+                        adjustDefensiveGameplan(self.homeDefGameplan, homeCoach, awayOffStats)
+                        adjustOffensiveGameplan(self.awayOffGameplan, awayCoach, awayOffStats)
+                        adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats)
+
                     self.isHalftime = False
                     
                     # Switch possession for second half
@@ -3643,9 +3708,41 @@ class Play():
         runnerPressureMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
         
         # STAGE 1: Calculate gap quality (like receiver openness)
-        # Randomly determine designed play (which gap is the call)
-        designedGapType = batched_choice(['A-gap', 'B-gap', 'C-gap'])
-        
+        # Determine designed play gap — weighted by coach's offensive gameplan
+        isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
+        activeOffGameplan = self.game.homeOffGameplan if isHomePossession else self.game.awayOffGameplan
+        if activeOffGameplan is not None:
+            gapDist = dict(activeOffGameplan.gapDistribution)
+            # Short yardage / goal line: power inside
+            if self.game.yardsToFirstDown <= 2 or self.game.yardsToEndzone <= 5:
+                gapDist = {'A-gap': 0.60, 'B-gap': 0.30, 'C-gap': 0.10}
+            designedGapType = _random.choices(
+                list(gapDist.keys()), weights=list(gapDist.values()), k=1
+            )[0]
+        else:
+            designedGapType = batched_choice(['A-gap', 'B-gap', 'C-gap'])
+
+        # Get per-play defensive scheme multipliers
+        defGameplan = self.game.awayDefGameplan if isHomePossession else self.game.homeDefGameplan
+        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+            offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
+                            else self.game.awayScore - self.game.homeScore)
+            scheme = getDefensiveScheme(
+                defGameplan, self.game.down, self.game.yardsToFirstDown,
+                100 - self.game.yardsToEndzone, offScoreDiff,
+                self.game.currentQuarter, self.game.gameClockSeconds
+            )
+        else:
+            scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
+
+        # Track first-half run plays for halftime adjustment
+        if self.game.currentQuarter <= 2:
+            if isHomePossession:
+                self.game.homeHalfRunPlays += 1
+            else:
+                self.game.awayHalfRunPlays += 1
+
         blockerRating = blocker.attributes.blocking if blocker else 50
         gapList = []
         for gapType in ['A-gap', 'B-gap', 'C-gap', 'bounce']:
@@ -3654,7 +3751,7 @@ class Play():
                 self.runner.attributes.power,
                 self.runner.attributes.agility,
                 blockerRating,
-                self.defense.defenseRunCoverageRating
+                effectiveRunDef
             )
             gapList.append({
                 'type': gapType,
@@ -3781,7 +3878,12 @@ class Play():
         self.runner.addCarry(self.game.isRegularSeasonGame)
         self.defense.gameDefenseStats['runYardsAlwd'] += self.yardage
         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
-        
+        if self.game.currentQuarter <= 2:
+            if isHomePossession:
+                self.game.homeHalfRunYards += self.yardage
+            else:
+                self.game.awayHalfRunYards += self.yardage
+
         if self.yardage >= 20:
             self.runner.gameStatsDict['rushing']['20+'] += 1
         if self.yardage > self.runner.gameStatsDict['rushing']['longest']:
@@ -4039,10 +4141,33 @@ class Play():
             if rb is not None:
                 self.blockingModifier += rb.attributes.blockingModifier
 
+        # Get per-play defensive scheme multipliers
+        isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
+        defGameplan = self.game.awayDefGameplan if isHomePossession else self.game.homeDefGameplan
+        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+            offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
+                            else self.game.awayScore - self.game.homeScore)
+            scheme = getDefensiveScheme(
+                defGameplan, self.game.down, self.game.yardsToFirstDown,
+                100 - self.game.yardsToEndzone, offScoreDiff,
+                self.game.currentQuarter, self.game.gameClockSeconds
+            )
+        else:
+            scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        effectivePassRush = self.defense.defensePassRushRating * scheme['passRushMult']
+        effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
+
+        # Track first-half pass attempts for halftime adjustment
+        if self.game.currentQuarter <= 2:
+            if isHomePossession:
+                self.game.homeHalfPassAttempts += 1
+            else:
+                self.game.awayHalfPassAttempts += 1
+
         # Calculate sack probability using probability curve
         qbMobility = round((self.passer.gameAttributes.agility + self.passer.gameAttributes.xFactor) / 2)
         sackProbability = self.calculateSackProbability(
-            self.defense.defensePassRushRating,
+            effectivePassRush,
             qbMobility,
             self.blockingModifier,
             passPlayBook[playKey]['dropback'].value
@@ -4089,7 +4214,7 @@ class Play():
             for key in targets.keys():
                 if targets[key] is not None:
                     receiver = self.offense.rosterDict[key]
-                    openness = self.calculateReceiverOpenness(receiver, self.defense.defensePassCoverageRating)
+                    openness = self.calculateReceiverOpenness(receiver, effectivePassDef)
                     receiverStatusDict = {
                         'receiver': receiver,
                         'openness': openness,
@@ -4214,7 +4339,12 @@ class Play():
                     self.receiver.addYAC(yac, self.game.isRegularSeasonGame)
                     self.defense.gameDefenseStats['passYardsAlwd'] += self.yardage
                     self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
-                    
+                    if self.game.currentQuarter <= 2:
+                        if isHomePossession:
+                            self.game.homeHalfPassYards += self.yardage
+                        else:
+                            self.game.awayHalfPassYards += self.yardage
+
                     # Confidence boosts based on play quality
                     confBoost = 0.005 if throwQuality >= 70 else 0.003
                     self.passer.updateInGameConfidence(confBoost)

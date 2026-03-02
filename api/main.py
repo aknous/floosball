@@ -200,6 +200,24 @@ async def standings_websocket(websocket: WebSocket):
 # REST API - TEAMS
 # ============================================================================
 
+def _buildCoachDict(team) -> Optional[dict]:
+    """Return a coach payload dict for a team, or None if no coach is assigned."""
+    coach = getattr(team, 'coach', None)
+    if coach is None:
+        return None
+    return {
+        'name': coach.name,
+        'overallRating': coach.overallRating,
+        'offensiveMind': coach.offensiveMind,
+        'defensiveMind': coach.defensiveMind,
+        'adaptability': coach.adaptability,
+        'aggressiveness': coach.aggressiveness,
+        'clockManagement': coach.clockManagement,
+        'playerDevelopment': coach.playerDevelopment,
+        'seasonsCoached': coach.seasonsCoached,
+    }
+
+
 @app.get("/api/teams", response_model=List[Dict[str, Any]])
 async def get_teams(league: Optional[str] = None):
     """
@@ -222,13 +240,14 @@ async def get_teams(league: Optional[str] = None):
         team_list = []
         for team in teams:
             team_dict = TeamResponseBuilder.buildBasicTeamDict(team)
-            
+
             # Add standings info
             if team.seasonTeamStats['scoreDiff'] >= 0:
                 team_dict['pointDiff'] = f"+{team.seasonTeamStats['scoreDiff']}"
             else:
                 team_dict['pointDiff'] = str(team.seasonTeamStats['scoreDiff'])
-            
+
+            team_dict['coach'] = _buildCoachDict(team)
             team_list.append(team_dict)
         
         return build_success_response(team_list)
@@ -265,6 +284,7 @@ async def get_team(team_id: int):
         team_dict['floosbowlChampionships'] = team.floosbowlChampionships
         team_dict['allTimeStats'] = team.allTimeTeamStats
         team_dict['history'] = team.statArchive
+        team_dict['coach'] = _buildCoachDict(team)
 
         # Roster
         roster = {}
