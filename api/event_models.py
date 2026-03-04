@@ -29,6 +29,8 @@ class EventType(Enum):
     SEASON_END = "season_end"
     WEEK_START = "week_start"
     WEEK_END = "week_end"
+    DAY_COMPLETE = "day_complete"
+    REGULAR_SEASON_COMPLETE = "regular_season_complete"
     
     # Standings events
     STANDINGS_UPDATE = "standings_update"
@@ -274,6 +276,23 @@ class SeasonEvent:
             'weekNumber': weekNumber,
             'results': results,
             'message': f"Week {weekNumber} complete"
+        }
+
+    @staticmethod
+    def dayComplete(dayNumber: int) -> Dict[str, Any]:
+        """Broadcast after the last round of a regular-season game day"""
+        return {
+            'event': EventType.DAY_COMPLETE.value,
+            'dayNumber': dayNumber,
+            'message': f'Day {dayNumber} complete — Day {dayNumber + 1} begins tomorrow at 11am'
+        }
+
+    @staticmethod
+    def regularSeasonComplete() -> Dict[str, Any]:
+        """Broadcast after round 28 (end of Day 4, regular season done)"""
+        return {
+            'event': EventType.REGULAR_SEASON_COMPLETE.value,
+            'message': 'Regular season complete — Playoffs begin tomorrow'
         }
 
 

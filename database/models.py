@@ -75,7 +75,7 @@ class Team(Base):
     top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
     playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
-    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=True)
+    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id", use_alter=True, name="fk_teams_coach_id"), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -401,6 +401,26 @@ class Game(Base):
     playoff_round: Mapped[Optional[str]] = mapped_column(String(50))
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(20), default='scheduled')
+
+    # Team game stats (populated at game completion; used to rebuild averages on resume)
+    home_rush_yards: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_pass_yards: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_rush_tds:   Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_pass_tds:   Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_fgs:        Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_sacks:      Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_ints:       Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    home_fum_rec:    Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    away_rush_yards: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_pass_yards: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_rush_tds:   Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_pass_tds:   Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_fgs:        Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_sacks:      Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_ints:       Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    away_fum_rec:    Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     home_team: Mapped["Team"] = relationship("Team", foreign_keys=[home_team_id], back_populates="home_games")
@@ -525,6 +545,28 @@ class Record(Base):
 
     def __repr__(self):
         return f"<Record(type='{self.record_type}', value={self.value})>"
+
+
+class User(Base):
+    """User table - stores registered users with auth credentials and preferences."""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    username: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_users_email", "email"),
+        Index("idx_users_favorite_team", "favorite_team_id"),
+    )
+
+    def __repr__(self):
+        return f"<User(id={self.id}, email='{self.email}')>"
 
 
 class UnusedName(Base):

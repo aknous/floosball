@@ -401,7 +401,7 @@ class AvatarGenerator:
             import glob
             files = glob.glob(os.path.join(self.cacheDir, "*.svg"))
             return len(files)
-        except:
+        except Exception:
             return 0
     
     def pregenerateTeamAvatars(self, teams, size: int = 32) -> int:

@@ -41,3 +41,22 @@ STAGE2_SPEED_AGILITY_WEIGHT = 1.2
 
 # Normalization factors for different calculations
 NORMALIZATION_FACTOR = 100
+
+# Game clock
+QUARTER_SECONDS = 900           # 15 minutes per quarter
+KNEEL_DRAIN_SECONDS = 40        # Clock seconds consumed by a kneel play
+SPIKE_CLOCK_THRESHOLD = 15      # Seconds remaining that triggers a spike consideration
+TIMEOUT_CLOCK_THRESHOLD = 120   # Seconds remaining that triggers timeout / end-of-half FG logic
+
+# Field & scoring rules
+FG_SNAP_DISTANCE = 17           # Yards added to line-of-scrimmage for snap + hold on FG attempts
+YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
+CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
+
+# Play selection
+RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage matchup weight delta
+
+# Coach attribute scaling
+COACH_ATTR_NEUTRAL = 80         # Attribute value with zero effect (midpoint of 60-100 range)
+COACH_ATTR_RANGE = 20           # Half-range used to normalise coach attributes to [-1, 1]
+COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matchup weighting

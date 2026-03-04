@@ -1095,27 +1095,27 @@ class RecordManager:
                     if gameKicking.get('longest', 0) > kicking.get('longest', 0):
                         kicking['longest'] = gameKicking['longest']
 
-                    if kicking['fgs'] > 0:
-                        kicking['fgPerc'] = round((kicking['fgs']/kicking['fgAtt'])*100)
-                        kicking['fgAvg'] = round(kicking['fgYards']/kicking['fgs'])
+                    if kicking.get('fgs', 0) > 0:
+                        kicking['fgPerc'] = round((kicking.get('fgs', 0)/kicking.get('fgAtt', 1))*100)
+                        kicking['fgAvg'] = round(kicking.get('fgYards', 0)/kicking.get('fgs', 1))
 
-                        if kicking['fgUnder20att'] > 0:
-                            kicking['fgUnder20perc'] = round((kicking['fgUnder20']/kicking['fgUnder20att'])*100)
+                        if kicking.get('fgUnder20att', 0) > 0:
+                            kicking['fgUnder20perc'] = round((kicking.get('fgUnder20', 0)/kicking.get('fgUnder20att', 1))*100)
                         else:
                             kicking['fgUnder20perc'] = 'N/A'
 
-                        if kicking['fg20to40att'] > 0:
-                            kicking['fg20to40perc'] = round((kicking['fg20to40']/kicking['fg20to40att'])*100)
+                        if kicking.get('fg20to40att', 0) > 0:
+                            kicking['fg20to40perc'] = round((kicking.get('fg20to40', 0)/kicking.get('fg20to40att', 1))*100)
                         else:
                             kicking['fg20to40perc'] = 'N/A'
 
-                        if kicking['fg40to50att'] > 0:
-                            kicking['fg40to50perc'] = round((kicking['fg40to50']/kicking['fg40to50att'])*100)
+                        if kicking.get('fg40to50att', 0) > 0:
+                            kicking['fg40to50perc'] = round((kicking.get('fg40to50', 0)/kicking.get('fg40to50att', 1))*100)
                         else:
                             kicking['fg40to50perc'] = 'N/A'
 
-                        if kicking['fgOver50att'] > 0:
-                            kicking['fgOver50perc'] = round((kicking['fgOver50']/kicking['fgOver50att'])*100)
+                        if kicking.get('fgOver50att', 0) > 0:
+                            kicking['fgOver50perc'] = round((kicking.get('fgOver50', 0)/kicking.get('fgOver50att', 1))*100)
                         else:
                             kicking['fgOver50perc'] = 'N/A'
 

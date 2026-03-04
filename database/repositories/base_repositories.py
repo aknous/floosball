@@ -172,6 +172,19 @@ class GameRepository:
         self.session.add(stats)
         self.session.flush()
 
+    def has_schedule(self, season: int) -> bool:
+        """Return True if any game rows exist for this season (scheduled or final)."""
+        return self.session.query(Game).filter_by(season=season).count() > 0
+
+    def get_by_season_ordered(self, season: int) -> List[Game]:
+        """Get all games for a season ordered by week then insertion order."""
+        return (
+            self.session.query(Game)
+            .filter_by(season=season)
+            .order_by(Game.week, Game.id)
+            .all()
+        )
+
 
 class RecordRepository:
     """Repository for records database operations."""

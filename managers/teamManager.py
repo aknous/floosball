@@ -767,7 +767,37 @@ class TeamManager:
                 team.schedule = []
         
         self.logger.info("Cleared season stats for all teams")
-    
+
+    def loadSeasonTeamStats(self, seasonNumber: int) -> None:
+        """Restore team.seasonTeamStats from DB for a season in progress (used on mid-season resume)."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import TeamSeasonStats as DBTeamSeasonStats
+            for team in self.teams:
+                dbStats = self.db_session.query(DBTeamSeasonStats).filter_by(
+                    team_id=team.id, season=seasonNumber
+                ).first()
+                if dbStats:
+                    team.seasonTeamStats['wins'] = dbStats.wins
+                    team.seasonTeamStats['losses'] = dbStats.losses
+                    team.seasonTeamStats['winPerc'] = dbStats.win_percentage or 0.0
+                    team.seasonTeamStats['streak'] = dbStats.streak or 0
+                    team.seasonTeamStats['scoreDiff'] = dbStats.score_differential or 0
+                    team.seasonTeamStats['elo'] = dbStats.elo or team.seasonTeamStats.get('elo', 1500)
+                    team.seasonTeamStats['madePlayoffs'] = dbStats.made_playoffs
+                    if dbStats.offense_stats:
+                        team.seasonTeamStats['Offense'].update(dbStats.offense_stats)
+                    if dbStats.defense_stats:
+                        team.seasonTeamStats['Defense'].update(dbStats.defense_stats)
+                    self.logger.debug(
+                        f"Restored season stats for {team.name}: "
+                        f"{dbStats.wins}W-{dbStats.losses}L"
+                    )
+            self.logger.info(f"Restored team season stats for season {seasonNumber}")
+        except Exception as e:
+            self.logger.error(f"Failed to restore team season stats: {e}")
+
     def setNewElo(self) -> None:
         """
         Complete ELO Rating System that calculates team ELO based on overall rating and historical performance.
@@ -1145,12 +1175,71 @@ class TeamManager:
             coach.generateName()
         return coach
 
+    def _saveCoachToDatabase(self, team: FloosTeam.Team) -> None:
+        """Persist team.coach to the coaches table and update team.coach_id FK."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session and team.coach):
+            return
+        try:
+            from database.models import Coach as DBCoach
+            dbCoach = self.db_session.get(DBCoach, team.coach.id) if team.coach.id else None
+            if dbCoach is None:
+                dbCoach = DBCoach(team_id=team.id)
+                self.db_session.add(dbCoach)
+            dbCoach.name = team.coach.name
+            dbCoach.team_id = team.id
+            dbCoach.seasons_coached = team.coach.seasonsCoached
+            dbCoach.offensive_mind = team.coach.offensiveMind
+            dbCoach.defensive_mind = team.coach.defensiveMind
+            dbCoach.adaptability = team.coach.adaptability
+            dbCoach.aggressiveness = team.coach.aggressiveness
+            dbCoach.clock_management = team.coach.clockManagement
+            dbCoach.player_development = team.coach.playerDevelopment
+            dbCoach.overall_rating = team.coach.overallRating
+            self.db_session.flush()
+            team.coach.id = dbCoach.id
+            # Link team → coach via coach_id FK
+            dbTeam = self.team_repo.get_by_id(team.id)
+            if dbTeam:
+                dbTeam.coach_id = dbCoach.id
+            self.db_session.commit()
+        except Exception as e:
+            self.logger.error(f"Failed to save coach for {team.name}: {e}")
+            self.db_session.rollback()
+
+    def _loadCoachFromDatabase(self, team: FloosTeam.Team) -> bool:
+        """Try to load a coach from DB for this team. Returns True if found and loaded."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return False
+        try:
+            from database.models import Coach as DBCoach
+            dbCoach = self.db_session.query(DBCoach).filter_by(team_id=team.id).first()
+            if dbCoach is None:
+                return False
+            coach = FloosCoach.Coach()
+            coach.id = dbCoach.id
+            coach.name = dbCoach.name
+            coach.seasonsCoached = dbCoach.seasons_coached
+            coach.offensiveMind = dbCoach.offensive_mind
+            coach.defensiveMind = dbCoach.defensive_mind
+            coach.adaptability = dbCoach.adaptability
+            coach.aggressiveness = dbCoach.aggressiveness
+            coach.clockManagement = dbCoach.clock_management
+            coach.playerDevelopment = dbCoach.player_development
+            team.coach = coach
+            self.logger.debug(f"Loaded coach {coach.name} from DB for {team.name}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to load coach for {team.name}: {e}")
+            return False
+
     def assignCoachesToTeams(self) -> None:
-        """Assign one generated coach to each team that doesn't already have one."""
+        """Assign a coach to each team. Loads from DB if available; generates new one otherwise."""
         for team in self.teams:
             if team.coach is None:
-                team.coach = self.generateCoach()
-                self.logger.debug(f"Assigned coach {team.coach.name} to {team.name}")
+                if not self._loadCoachFromDatabase(team):
+                    team.coach = self.generateCoach()
+                    self._saveCoachToDatabase(team)
+                    self.logger.debug(f"Generated and saved coach {team.coach.name} for {team.name}")
 
     def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach) -> None:
         """Assign a specific coach to a team."""
@@ -1168,4 +1257,5 @@ class TeamManager:
                     f"{team.coach.name} retires after {team.coach.seasonsCoached} seasons with {team.name}"
                 )
                 team.coach = self.generateCoach()
+                self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")

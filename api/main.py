@@ -3,9 +3,11 @@ Modern Floosball REST API
 Uses refactored manager system with clean separation of concerns
 """
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Header, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
 from datetime import datetime
@@ -46,8 +48,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "x-admin-password"],
 )
 
 # Global reference to FloosballApplication (set during startup)
@@ -218,7 +220,7 @@ def _buildCoachDict(team) -> Optional[dict]:
     }
 
 
-@app.get("/api/teams", response_model=List[Dict[str, Any]])
+@app.get("/api/teams", response_model=Dict[str, Any])
 async def get_teams(league: Optional[str] = None):
     """
     Get all teams, optionally filtered by league
@@ -361,7 +363,7 @@ async def avatar_options(team_id: int):
 
 
 @app.get("/api/teams/{team_id}/avatar")
-async def get_team_avatar(team_id: int, size: int = 32):
+async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=256)):
     """
     Generate and return SVG avatar for a team
     Avatars are cached for performance and persisted to disk
@@ -399,7 +401,7 @@ async def get_team_avatar(team_id: int, size: int = 32):
             content=svg,
             media_type="image/svg+xml",
             headers={
-                "Cache-Control": "no-cache, no-store",
+                "Cache-Control": "public, max-age=31536000, immutable",
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, OPTIONS",
                 "Access-Control-Allow-Headers": "*"
@@ -831,7 +833,7 @@ async def get_game_stats(id: int):
 
 
 @app.get("/api/highlights", response_model=List[Dict[str, Any]])
-async def get_highlights(limit: int = 20):
+async def get_highlights(limit: int = Query(default=20, ge=1, le=100)):
     """
     Get recent highlight plays from active games
     
@@ -987,9 +989,30 @@ async def get_standings():
 # REST API - STATS & RECORDS
 # ============================================================================
 
+_VALID_STAT_CATEGORIES = {
+    'fantasy_points', 'passing_yards', 'passing_tds', 'rushing_yards', 'rushing_tds',
+    'receiving_yards', 'receiving_tds', 'receptions', 'fg_made', 'fg_pct',
+}
+_VALID_POSITIONS = {'ALL', 'QB', 'RB', 'WR', 'TE', 'K'}
+
+
 @app.get("/api/stats/leaders", response_model=Dict[str, Any])
-async def get_stat_leaders(category: str = "fantasy_points", position: str = "ALL", limit: int = 10):
+async def get_stat_leaders(
+    category: str = Query(default="fantasy_points"),
+    position: str = Query(default="ALL"),
+    limit: int = Query(default=10, ge=1, le=50),
+):
     """Get statistical leaders filtered by position and category"""
+    if category not in _VALID_STAT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of: {', '.join(sorted(_VALID_STAT_CATEGORIES))}",
+        )
+    if position.upper() not in _VALID_POSITIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid position. Must be one of: {', '.join(sorted(_VALID_POSITIONS))}",
+        )
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
 
@@ -1101,8 +1124,10 @@ async def admin_add_names(payload: Dict[str, Any], x_admin_password: Optional[st
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     names = payload.get("names", [])
-    if not names:
-        raise HTTPException(status_code=400, detail="No names provided")
+    if not isinstance(names, list) or not names:
+        raise HTTPException(status_code=400, detail="'names' must be a non-empty list of strings")
+    if len(names) > 500:
+        raise HTTPException(status_code=400, detail="Too many names; maximum 500 per request")
     pm = floosball_app.playerManager
     pm.unusedNames.extend(names)
     if getattr(pm, 'name_repo', None):
@@ -1186,6 +1211,133 @@ async def get_offseason_info():
             })
     transactions = getattr(sm, '_offseasonTransactions', [])
     return {"isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder, "transactions": transactions}
+
+
+# ============================================================================
+# AUTH & USER ENDPOINTS
+# ============================================================================
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    username: Optional[str] = None
+
+
+@app.post("/auth/register", status_code=201)
+def auth_register(req: RegisterRequest):
+    """Register a new user account."""
+    from api.auth import hashPassword
+    from database.models import User
+    from database.connection import get_session
+
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    session = get_session()
+    try:
+        existing = session.query(User).filter(User.email == req.email.lower()).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+        user = User(
+            email=req.email.lower().strip(),
+            username=req.username.strip() if req.username else None,
+            hashed_password=hashPassword(req.password),
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return {"id": user.id, "email": user.email, "username": user.username}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Registration error: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed")
+    finally:
+        session.close()
+
+
+@app.post("/auth/login")
+def auth_login(form: OAuth2PasswordRequestForm = Depends()):
+    """Login with email + password, returns a JWT bearer token."""
+    from api.auth import verifyPassword, createAccessToken
+    from database.models import User
+    from database.connection import get_session
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.email == form.username.lower()).first()
+        if not user or not verifyPassword(form.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not user.is_active:
+            raise HTTPException(status_code=400, detail="Account is disabled")
+        token = createAccessToken(user.id)
+        return {"access_token": token, "token_type": "bearer"}
+    finally:
+        session.close()
+
+
+from api.auth import getCurrentUser as _getCurrentUser
+from database.models import User as _User, Team as _Team
+
+
+@app.get("/api/users/me")
+def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
+    """Get current user profile. Requires Bearer token."""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "favoriteTeamId": user.favorite_team_id,
+    }
+
+
+@app.get("/api/user/favorite-team")
+def get_favorite_team(user: _User = Depends(_getCurrentUser)):
+    """Get the current user's favorite team."""
+    from database.connection import get_session
+    if user.favorite_team_id is None:
+        return None
+    session = get_session()
+    try:
+        team = session.get(_Team, user.favorite_team_id)
+        if team is None:
+            return None
+        return {"id": team.id, "name": team.name, "city": team.city, "abbr": team.abbr, "color": team.color}
+    finally:
+        session.close()
+
+
+class FavoriteTeamRequest(BaseModel):
+    teamId: int
+
+
+@app.patch("/api/user/favorite-team")
+def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurrentUser)):
+    """Set the current user's favorite team."""
+    from database.connection import get_session
+    session = get_session()
+    try:
+        team = session.get(_Team, req.teamId)
+        if team is None:
+            raise HTTPException(status_code=404, detail="Team not found")
+        dbUser = session.get(_User, user.id)
+        dbUser.favorite_team_id = req.teamId
+        session.commit()
+        return {"favoriteTeamId": req.teamId}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error setting favorite team: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update favorite team")
+    finally:
+        session.close()
 
 
 # ============================================================================

@@ -1,5 +1,6 @@
 {
     "adminPassword": "floosball",
+    "jwtSecret": "floosball-jwt-secret-change-in-production-use-long-random-string",
     "leagueConfig": {
         "cap": 30,
         "totalSeasons": 2,

@@ -209,7 +209,7 @@ class Team:
 
         for game in self.schedule:
             game: Game
-            if game.status is GameStatus.Final:
+            if game.status is GameStatus.Final and game.gameDict.get('gameStats'):
                 if game.homeTeam.name == self.name:
                     offenseStatsDict = game.gameDict['gameStats']['homeTeam']['offense']
                     defenseStatsDict = game.gameDict['gameStats']['homeTeam']['defense']

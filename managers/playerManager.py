@@ -63,7 +63,7 @@ class PlayerManager:
         if self.db_session:
             try:
                 self.db_session.close()
-            except:
+            except Exception:
                 pass
     
     def generatePlayers(self, config: Dict[str, Any], force_fresh: bool = False) -> None:
@@ -456,8 +456,12 @@ class PlayerManager:
             if not hasattr(player, 'team') or player.team is None:
                 continue
                 
-            # player.team is the team_id from database
-            team_id = player.team
+            # player.team may be an integer (freshly loaded from DB) or a Team
+            # object (already resolved in a previous assignPlayersToTeams call).
+            if isinstance(player.team, int):
+                team_id = player.team
+            else:
+                team_id = getattr(player.team, 'id', None)
             team = team_lookup.get(team_id)
             
             if not team:
@@ -485,7 +489,7 @@ class PlayerManager:
                     player.team = team  # Update player's team reference
                     assigned_count += 1
                 else:
-                    logger.warning(f"Team {team.teamName} already has 2 WRs, cannot assign {player.name}")
+                    logger.warning(f"Team {team.name} already has 2 WRs, cannot assign {player.name}")
             elif position == 4:  # TE
                 team.rosterDict['te'] = player
                 player.team = team  # Update player's team reference
@@ -1009,6 +1013,42 @@ class PlayerManager:
             'activeKs': len(self.activeKs)
         }
     
+    def loadCurrentSeasonStats(self, seasonNumber: int) -> None:
+        """Restore player.seasonStatsDict from PlayerSeasonStats DB rows for an in-progress season.
+
+        Called on mid-season resume so the simulation picks up with correct per-player
+        stats (fantasy points, yards, TDs) accumulated in weeks already completed.
+        """
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import PlayerSeasonStats
+            rows = self.db_session.query(PlayerSeasonStats).filter_by(
+                season=seasonNumber
+            ).all()
+            statsByPlayerId = {row.player_id: row for row in rows}
+            restored = 0
+            for player in self.activePlayers:
+                row = statsByPlayerId.get(player.id)
+                if row is None:
+                    continue
+                player.seasonStatsDict = {
+                    'gamesPlayed': row.games_played or 0,
+                    'fantasyPoints': row.fantasy_points or 0,
+                    'passing': row.passing_stats or {},
+                    'rushing': row.rushing_stats or {},
+                    'receiving': row.receiving_stats or {},
+                    'kicking': row.kicking_stats or {},
+                    'defense': row.defense_stats or {},
+                }
+                # Keep StatTracker pointing at the restored dict so stats accumulated
+                # during subsequent games go to the right place.
+                player.stat_tracker.season_stats_dict = player.seasonStatsDict
+                restored += 1
+            logger.info(f"Restored season {seasonNumber} stats for {restored} players")
+        except Exception as e:
+            logger.error(f"Failed to restore player season stats: {e}")
+
     def savePlayerData(self) -> None:
         """Save player data to database or JSON files"""
         # Use database if enabled
@@ -1548,18 +1588,21 @@ class PlayerManager:
         activeQbsWithStats = [qb for qb in self.activeQbs if qb.seasonStatsDict.get('passing', {}).get('yards', 0) > 0]
         
         if activeQbsWithStats:
+            def _pass(qb, key):
+                return qb.seasonStatsDict.get('passing', {}).get(key, 0)
+
             qbStats = {
-                "passComp": [qb.seasonStatsDict['passing']['compPerc'] for qb in activeQbsWithStats],
-                "passYards": [qb.seasonStatsDict['passing']['yards'] for qb in activeQbsWithStats],
-                "tds": [qb.seasonStatsDict['passing']['tds'] for qb in activeQbsWithStats],
-                "ints": [qb.seasonStatsDict['passing']['ints'] for qb in activeQbsWithStats]
+                "passComp":  [_pass(qb, 'compPerc') for qb in activeQbsWithStats],
+                "passYards": [_pass(qb, 'yards')    for qb in activeQbsWithStats],
+                "tds":       [_pass(qb, 'tds')      for qb in activeQbsWithStats],
+                "ints":      [_pass(qb, 'ints')     for qb in activeQbsWithStats],
             }
-            
+
             for qb in activeQbsWithStats:
-                compPerc = qb.seasonStatsDict['passing']['compPerc']
-                passYards = qb.seasonStatsDict['passing']['yards']
-                tds = qb.seasonStatsDict['passing']['tds']
-                ints = qb.seasonStatsDict['passing']['ints']
+                compPerc  = _pass(qb, 'compPerc')
+                passYards = _pass(qb, 'yards')
+                tds       = _pass(qb, 'tds')
+                ints      = _pass(qb, 'ints')
                 
                 passCompPercRating = stats.percentileofscore(qbStats["passComp"], compPerc, 'rank')
                 passYardsRating = stats.percentileofscore(qbStats["passYards"], passYards, 'rank')
@@ -1588,18 +1631,21 @@ class PlayerManager:
         activeRbsWithStats = [rb for rb in self.activeRbs if rb.seasonStatsDict.get('rushing', {}).get('yards', 0) > 0]
         
         if activeRbsWithStats:
+            def _rush(rb, key):
+                return rb.seasonStatsDict.get('rushing', {}).get(key, 0)
+
             rbStats = {
-                "ypc": [rb.seasonStatsDict['rushing']['ypc'] for rb in activeRbsWithStats],
-                "rushYards": [rb.seasonStatsDict['rushing']['yards'] for rb in activeRbsWithStats],
-                "tds": [rb.seasonStatsDict['rushing']['tds'] for rb in activeRbsWithStats],
-                "fumbles": [rb.seasonStatsDict['rushing']['fumblesLost'] for rb in activeRbsWithStats]
+                "ypc":       [_rush(rb, 'ypc')         for rb in activeRbsWithStats],
+                "rushYards": [_rush(rb, 'yards')        for rb in activeRbsWithStats],
+                "tds":       [_rush(rb, 'tds')          for rb in activeRbsWithStats],
+                "fumbles":   [_rush(rb, 'fumblesLost')  for rb in activeRbsWithStats],
             }
-            
+
             for rb in activeRbsWithStats:
-                ypc = rb.seasonStatsDict['rushing']['ypc']
-                rushYards = rb.seasonStatsDict['rushing']['yards']
-                tds = rb.seasonStatsDict['rushing']['tds']
-                fumbles = rb.seasonStatsDict['rushing']['fumblesLost']
+                ypc       = _rush(rb, 'ypc')
+                rushYards = _rush(rb, 'yards')
+                tds       = _rush(rb, 'tds')
+                fumbles   = _rush(rb, 'fumblesLost')
                 
                 ypcRating = stats.percentileofscore(rbStats["ypc"], ypc, 'rank')
                 rushYardsRating = stats.percentileofscore(rbStats["rushYards"], rushYards, 'rank')
@@ -1628,24 +1674,27 @@ class PlayerManager:
         activeWrsWithStats = [wr for wr in self.activeWrs if wr.seasonStatsDict.get('receiving', {}).get('yards', 0) > 0]
         
         if activeWrsWithStats:
+            def _rcv(wr, key):
+                return wr.seasonStatsDict.get('receiving', {}).get(key, 0)
+
             wrStats = {
-                "receptions": [wr.seasonStatsDict['receiving']['receptions'] for wr in activeWrsWithStats],
-                "drops": [wr.seasonStatsDict['receiving']['drops'] for wr in activeWrsWithStats],
-                "rcvPerc": [wr.seasonStatsDict['receiving']['rcvPerc'] for wr in activeWrsWithStats],
-                "rcvYards": [wr.seasonStatsDict['receiving']['yards'] for wr in activeWrsWithStats],
-                "ypr": [wr.seasonStatsDict['receiving']['ypr'] for wr in activeWrsWithStats],
-                "yac": [wr.seasonStatsDict['receiving']['yac'] for wr in activeWrsWithStats],
-                "tds": [wr.seasonStatsDict['receiving']['tds'] for wr in activeWrsWithStats]
+                "receptions": [_rcv(wr, 'receptions') for wr in activeWrsWithStats],
+                "drops":      [_rcv(wr, 'drops')      for wr in activeWrsWithStats],
+                "rcvPerc":    [_rcv(wr, 'rcvPerc')    for wr in activeWrsWithStats],
+                "rcvYards":   [_rcv(wr, 'yards')      for wr in activeWrsWithStats],
+                "ypr":        [_rcv(wr, 'ypr')        for wr in activeWrsWithStats],
+                "yac":        [_rcv(wr, 'yac')        for wr in activeWrsWithStats],
+                "tds":        [_rcv(wr, 'tds')        for wr in activeWrsWithStats],
             }
-            
+
             for wr in activeWrsWithStats:
-                receptions = wr.seasonStatsDict['receiving']['receptions']
-                drops = wr.seasonStatsDict['receiving']['drops']
-                rcvPerc = wr.seasonStatsDict['receiving']['rcvPerc']
-                rcvYards = wr.seasonStatsDict['receiving']['yards']
-                ypr = wr.seasonStatsDict['receiving']['ypr']
-                yac = wr.seasonStatsDict['receiving']['yac']
-                tds = wr.seasonStatsDict['receiving']['tds']
+                receptions = _rcv(wr, 'receptions')
+                drops      = _rcv(wr, 'drops')
+                rcvPerc    = _rcv(wr, 'rcvPerc')
+                rcvYards   = _rcv(wr, 'yards')
+                ypr        = _rcv(wr, 'ypr')
+                yac        = _rcv(wr, 'yac')
+                tds        = _rcv(wr, 'tds')
                 
                 recRating = stats.percentileofscore(wrStats["receptions"], receptions, 'rank')
                 dropsRating = 100 - stats.percentileofscore(wrStats["drops"], drops, 'rank')
@@ -1678,24 +1727,27 @@ class PlayerManager:
         activeTesWithStats = [te for te in self.activeTes if te.seasonStatsDict.get('receiving', {}).get('yards', 0) > 0]
         
         if activeTesWithStats:
+            def _te(te, key):
+                return te.seasonStatsDict.get('receiving', {}).get(key, 0)
+
             teStats = {
-                "receptions": [te.seasonStatsDict['receiving']['receptions'] for te in activeTesWithStats],
-                "drops": [te.seasonStatsDict['receiving']['drops'] for te in activeTesWithStats],
-                "rcvPerc": [te.seasonStatsDict['receiving']['rcvPerc'] for te in activeTesWithStats],
-                "rcvYards": [te.seasonStatsDict['receiving']['yards'] for te in activeTesWithStats],
-                "ypr": [te.seasonStatsDict['receiving']['ypr'] for te in activeTesWithStats],
-                "yac": [te.seasonStatsDict['receiving']['yac'] for te in activeTesWithStats],
-                "tds": [te.seasonStatsDict['receiving']['tds'] for te in activeTesWithStats]
+                "receptions": [_te(te, 'receptions') for te in activeTesWithStats],
+                "drops":      [_te(te, 'drops')      for te in activeTesWithStats],
+                "rcvPerc":    [_te(te, 'rcvPerc')    for te in activeTesWithStats],
+                "rcvYards":   [_te(te, 'yards')      for te in activeTesWithStats],
+                "ypr":        [_te(te, 'ypr')        for te in activeTesWithStats],
+                "yac":        [_te(te, 'yac')        for te in activeTesWithStats],
+                "tds":        [_te(te, 'tds')        for te in activeTesWithStats],
             }
-            
+
             for te in activeTesWithStats:
-                receptions = te.seasonStatsDict['receiving']['receptions']
-                drops = te.seasonStatsDict['receiving']['drops']
-                rcvPerc = te.seasonStatsDict['receiving']['rcvPerc']
-                rcvYards = te.seasonStatsDict['receiving']['yards']
-                ypr = te.seasonStatsDict['receiving']['ypr']
-                yac = te.seasonStatsDict['receiving']['yac']
-                tds = te.seasonStatsDict['receiving']['tds']
+                receptions = _te(te, 'receptions')
+                drops      = _te(te, 'drops')
+                rcvPerc    = _te(te, 'rcvPerc')
+                rcvYards   = _te(te, 'yards')
+                ypr        = _te(te, 'ypr')
+                yac        = _te(te, 'yac')
+                tds        = _te(te, 'tds')
                 
                 recRating = stats.percentileofscore(teStats["receptions"], receptions, 'rank')
                 dropsRating = 100 - stats.percentileofscore(teStats["drops"], drops, 'rank')
@@ -1728,16 +1780,19 @@ class PlayerManager:
         activeKsWithStats = [k for k in self.activeKs if k.seasonStatsDict.get('kicking', {}).get('fgs', 0) > 0]
         
         if activeKsWithStats:
+            def _kick(k, key):
+                return k.seasonStatsDict.get('kicking', {}).get(key, 0)
+
             kStats = {
-                "fgPerc": [k.seasonStatsDict['kicking']['fgPerc'] for k in activeKsWithStats if k.seasonStatsDict['kicking']['fgPerc'] > 0],
-                "fgs": [k.seasonStatsDict['kicking']['fgs'] for k in activeKsWithStats],
-                "fgAvg": [k.seasonStatsDict['kicking'].get('fgAvg', 0) for k in activeKsWithStats if k.seasonStatsDict['kicking'].get('fgAvg', 0) > 0]
+                "fgPerc": [_kick(k, 'fgPerc') for k in activeKsWithStats if _kick(k, 'fgPerc') > 0],
+                "fgs":    [_kick(k, 'fgs')    for k in activeKsWithStats],
+                "fgAvg":  [_kick(k, 'fgAvg') for k in activeKsWithStats if _kick(k, 'fgAvg') > 0],
             }
-            
+
             for k in activeKsWithStats:
-                fgPerc = k.seasonStatsDict['kicking']['fgPerc']
-                fgs = k.seasonStatsDict['kicking']['fgs']
-                fgAvg = k.seasonStatsDict['kicking'].get('fgAvg', 0)
+                fgPerc = _kick(k, 'fgPerc')
+                fgs    = _kick(k, 'fgs')
+                fgAvg  = _kick(k, 'fgAvg')
                 
                 if fgPerc > 0 and fgAvg > 0:
                     fgPercRating = stats.percentileofscore(kStats["fgPerc"], fgPerc, 'rank')

@@ -194,13 +194,15 @@ class FloosballApplication:
             logger.info(f"Resuming simulation from Season {savedState['current_season']}, Week {savedState['current_week']}")
             totalSeasons = savedState['total_seasons']
             seasonsPlayed = savedState['current_season'] - 1  # We'll restart the current season
-            
+            resumeFromWeek = savedState['current_week']  # Skip completed weeks on resume
+
             # Update game state
             gameState.setState('totalSeasons', totalSeasons)
             gameState.setState('seasonsPlayed', seasonsPlayed)
         else:
             totalSeasons = gameState.getState('totalSeasons', 0)
             seasonsPlayed = gameState.getState('seasonsPlayed', 0)
+            resumeFromWeek = 0
             logger.info(f"Starting new simulation - {totalSeasons} seasons")
         
         # Mark simulation as active
@@ -231,11 +233,12 @@ class FloosballApplication:
             await self.seasonManager.startNewSeason()
             
             # Run season simulation (this will update state as it progresses)
-            await self.seasonManager.runSeasonSimulation()
-            
+            await self.seasonManager.runSeasonSimulation(resumeFromWeek=resumeFromWeek)
+            resumeFromWeek = 0  # Only skip weeks for the first (resumed) season
+
             # Handle offseason
             await self.seasonManager.handleOffseason()
-            
+
             # Update season counter
             seasonsPlayed += 1
             gameState = self.serviceContainer.getService('game_state')

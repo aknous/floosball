@@ -56,6 +56,7 @@ class Season:
         self.currentSeason = seasonNumber  # Backward compatibility
         self.currentWeek = 0
         self.currentWeekText = None
+        self.startDate: datetime.datetime = datetime.datetime.utcnow()
         self.activeGames = None
         self.schedule: List[Dict[str, FloosGame.Game]] = []
         self.playoffBracket: List[Dict[str, Any]] = []
@@ -155,20 +156,33 @@ class SeasonManager:
         # Clear previous season data
         self._clearSeasonData()
 
-        # Create new season schedule
-        self.createSchedule()
+        # Create new season schedule — load from DB if resuming, otherwise generate fresh
+        scheduleLoaded = False
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+            if self.game_repo.has_schedule(seasonNumber):
+                logger.info(f"Existing schedule found for season {seasonNumber} — loading from database")
+                scheduleLoaded = self._loadScheduleFromDatabase(seasonNumber)
+                if not scheduleLoaded:
+                    logger.warning("Schedule load from database failed — falling back to fresh generation")
+        if not scheduleLoaded:
+            self.createSchedule()
         
         # Initialize season stats
         self._initializeSeasonStats()
         
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
     
-    async def runSeasonSimulation(self) -> None:
-        """Run full season simulation"""
+    async def runSeasonSimulation(self, resumeFromWeek: int = 0) -> None:
+        """Run full season simulation.
+
+        Args:
+            resumeFromWeek: If > 0, skip regular-season weeks up to and including this week
+                            (they were already completed before a restart).
+        """
         if not self.currentSeason:
             logger.error("No current season to simulate")
             return
-            
+
         logger.info(f"Running simulation for season {self.currentSeason.seasonNumber}")
         
         # Reset game counter for verbose logging
@@ -178,7 +192,7 @@ class SeasonManager:
         self._openGameStatsFile()
         
         # Simulate regular season
-        await self._simulateRegularSeason()
+        await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
         
         # Simulate playoffs
         await self._simulatePlayoffs()
@@ -191,28 +205,45 @@ class SeasonManager:
         
         logger.info(f"Season {self.currentSeason.seasonNumber} simulation complete")
     
-    async def _simulateRegularSeason(self) -> None:
-        """Simulate all regular season games"""
+    async def _simulateRegularSeason(self, resumeFromWeek: int = 0) -> None:
+        """Simulate all regular season games.
+
+        Args:
+            resumeFromWeek: Skip weeks up to and including this number (already completed).
+        """
         strCurrentSeason = 'season{}'.format(self.currentSeason.seasonNumber)
-        # weekFilePath = '{}/games'.format(strCurrentSeason)
-        
-        # Note: Season directory creation disabled - data is in database
-        # if not os.path.isdir(strCurrentSeason):
-        #     os.mkdir(strCurrentSeason)
-        # if not os.path.isdir(weekFilePath):
-        #     os.mkdir(weekFilePath)
-        
+
+        # On mid-season resume, restore accumulated stats from the DB checkpoint
+        # so standings and leaderboards reflect weeks already simulated.
+        if resumeFromWeek > 0:
+            logger.info(f"Restoring season {self.currentSeason.seasonNumber} stats from week {resumeFromWeek} checkpoint")
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                teamManager.loadSeasonTeamStats(self.currentSeason.seasonNumber)
+            playerManager = self.serviceContainer.getService('player_manager')
+            if playerManager:
+                playerManager.loadCurrentSeasonStats(self.currentSeason.seasonNumber)
+
         for week in self.currentSeason.schedule:
-            self.currentSeason.currentWeek = self.currentSeason.schedule.index(week)+1
+            roundIndex = self.currentSeason.schedule.index(week)  # 0-indexed
+            self.currentSeason.currentWeek = roundIndex + 1
+            dayNum = roundIndex // 7 + 1    # 1-indexed day (1–4), used for day-boundary events
             self.currentSeason.currentWeekText = f'Week {self.currentSeason.currentWeek}'
-            logger.info(f"Simulating week {self.currentSeason.currentWeek} in {self.timingManager.getModeString()} mode")
-            
+
+            # Skip weeks that were completed before a restart
+            if self.currentSeason.currentWeek <= resumeFromWeek:
+                logger.info(f"Skipping {self.currentSeason.currentWeekText} — already completed before restart")
+                continue
+
+            logger.info(f"Simulating {self.currentSeason.currentWeekText} in {self.timingManager.getModeString()} mode")
+
             # Broadcast week start event
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                 week_event = SeasonEvent.weekStart(
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=self.currentSeason.currentWeek,
-                    games=[]  # Could populate with game info if needed
+                    games=[],
+                    weekText=self.currentSeason.currentWeekText
                 )
                 broadcaster.broadcast_sync('season', week_event)
             
@@ -314,6 +345,13 @@ class SeasonManager:
                     logger.error(f"Failed to commit week games: {e}")
                     self.db_session.rollback()
 
+            # Checkpoint: save team + player season stats after each week so a restart
+            # can recover mid-season state without losing accumulated stats.
+            self._saveTeamSeasonStatsToDatabase()
+            playerManager = self.serviceContainer.getService('player_manager')
+            if playerManager:
+                playerManager.savePlayerData()
+
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
@@ -322,6 +360,14 @@ class SeasonManager:
 
             # Wait after week completes
             await self.timingManager.waitAfterWeek()
+
+            # Broadcast day-boundary events after the last round of each day
+            isLastRoundOfDay = (roundIndex % 7 == 6)
+            if isLastRoundOfDay and BROADCASTING_AVAILABLE and broadcaster.is_enabled() and SeasonEvent:
+                if dayNum < 4:
+                    await broadcaster.broadcast_season_event(SeasonEvent.dayComplete(dayNum))
+                else:
+                    await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
     
     async def _simulatePlayoffs(self) -> None:
         """Simulate playoff games"""
@@ -410,8 +456,8 @@ class SeasonManager:
                         game.winningTeam.seasonTeamStats['wins'] += 1
                         game.losingTeam.seasonTeamStats['losses'] += 1
                     self._updateTeamRecords(game)
-                except Exception:
-                    pass
+                except Exception as recordErr:
+                    logger.warning(f"Failed to update records after game error recovery: {recordErr}")
 
     def _openGameStatsFile(self) -> None:
         """Open file for game statistics logging"""
@@ -510,9 +556,68 @@ class SeasonManager:
                 playoff_round=playoff_round
             )
     
+    def _applyGameStatsToRow(self, dbRow, gameStatsDict: dict) -> None:
+        """Copy team stat totals from gameDict['gameStats'] into a DB Game row."""
+        if not gameStatsDict:
+            return
+        hOff = gameStatsDict.get('homeTeam', {}).get('offense', {})
+        hDef = gameStatsDict.get('homeTeam', {}).get('defense', {})
+        aOff = gameStatsDict.get('awayTeam', {}).get('offense', {})
+        aDef = gameStatsDict.get('awayTeam', {}).get('defense', {})
+
+        dbRow.home_rush_yards = hOff.get('rushYards')
+        dbRow.home_pass_yards = hOff.get('passYards')
+        dbRow.home_rush_tds   = hOff.get('runTds')
+        dbRow.home_pass_tds   = hOff.get('passTds')
+        dbRow.home_fgs        = hOff.get('fgs')
+        dbRow.home_sacks      = hDef.get('sacks')
+        dbRow.home_ints       = hDef.get('ints')
+        dbRow.home_fum_rec    = hDef.get('fumRec')
+
+        dbRow.away_rush_yards = aOff.get('rushYards')
+        dbRow.away_pass_yards = aOff.get('passYards')
+        dbRow.away_rush_tds   = aOff.get('runTds')
+        dbRow.away_pass_tds   = aOff.get('passTds')
+        dbRow.away_fgs        = aOff.get('fgs')
+        dbRow.away_sacks      = aDef.get('sacks')
+        dbRow.away_ints       = aDef.get('ints')
+        dbRow.away_fum_rec    = aDef.get('fumRec')
+
     def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
         """Save a completed game to the database"""
         try:
+            # If the game was pre-inserted at schedule creation time, update that row
+            if getattr(game, 'dbId', None):
+                db_game = self.db_session.get(DBGame, game.dbId)
+                if db_game:
+                    db_game.home_score = game.homeScore
+                    db_game.away_score = game.awayScore
+                    db_game.status = 'final'
+                    db_game.is_overtime = game.isOvertimeGame if hasattr(game, 'isOvertimeGame') else False
+                    db_game.is_playoff = game.isPlayoff if hasattr(game, 'isPlayoff') else False
+                    db_game.playoff_round = getattr(game, 'playoffRound', None)
+                    db_game.total_plays = game.totalPlays if hasattr(game, 'totalPlays') else None
+                    if hasattr(game, 'homeScoresByQuarter') and game.homeScoresByQuarter:
+                        if len(game.homeScoresByQuarter) > 0: db_game.home_score_q1 = game.homeScoresByQuarter[0]
+                        if len(game.homeScoresByQuarter) > 1: db_game.home_score_q2 = game.homeScoresByQuarter[1]
+                        if len(game.homeScoresByQuarter) > 2: db_game.home_score_q3 = game.homeScoresByQuarter[2]
+                        if len(game.homeScoresByQuarter) > 3: db_game.home_score_q4 = game.homeScoresByQuarter[3]
+                        if len(game.homeScoresByQuarter) > 4: db_game.home_score_ot = sum(game.homeScoresByQuarter[4:])
+                    if hasattr(game, 'awayScoresByQuarter') and game.awayScoresByQuarter:
+                        if len(game.awayScoresByQuarter) > 0: db_game.away_score_q1 = game.awayScoresByQuarter[0]
+                        if len(game.awayScoresByQuarter) > 1: db_game.away_score_q2 = game.awayScoresByQuarter[1]
+                        if len(game.awayScoresByQuarter) > 2: db_game.away_score_q3 = game.awayScoresByQuarter[2]
+                        if len(game.awayScoresByQuarter) > 3: db_game.away_score_q4 = game.awayScoresByQuarter[3]
+                        if len(game.awayScoresByQuarter) > 4: db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
+                    self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
+                    self.db_session.flush()
+                    if hasattr(game, 'playerStats') and game.playerStats:
+                        self._savePlayerGameStats(db_game.id, game.playerStats)
+                    self.db_session.flush()
+                    logger.debug(f"Updated game in database: {game.awayTeam.abbr} @ {game.homeTeam.abbr}, Score: {game.awayScore}-{game.homeScore}")
+                    return
+
+            # No pre-existing row — fall through to INSERT (playoff games and backward compat)
             # Create database game record
             db_game = DBGame(
                 season=self.currentSeason.seasonNumber,
@@ -525,6 +630,7 @@ class SeasonManager:
                 is_playoff=game.isPlayoff if hasattr(game, 'isPlayoff') else False,
                 playoff_round=getattr(game, 'playoffRound', None),
                 total_plays=game.totalPlays if hasattr(game, 'totalPlays') else None,
+                status='final',
             )
             
             # Save quarter scores if available
@@ -552,9 +658,10 @@ class SeasonManager:
                 if len(game.awayScoresByQuarter) > 4:
                     db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
             
+            self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
-            
+
             # Save player stats if available
             if hasattr(game, 'playerStats') and game.playerStats:
                 self._savePlayerGameStats(db_game.id, game.playerStats)
@@ -672,14 +779,147 @@ class SeasonManager:
                     newGame.status = FloosGame.GameStatus.Scheduled
                     newGame.isRegularSeasonGame = True
                     newGame.startTime = weekStartTime
+
+                    # Persist scheduled game to DB immediately so resume can reconstruct the schedule
+                    if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+                        dbRow = DBGame(
+                            season=self.currentSeason.seasonNumber,
+                            week=week + 1,  # store 1-indexed
+                            home_team_id=homeTeam.id,
+                            away_team_id=awayTeam.id,
+                            game_date=weekStartTime,
+                            status='scheduled',
+                        )
+                        self.game_repo.save(dbRow)
+                        self.db_session.flush()
+                        newGame.dbId = dbRow.id
+
                     homeTeam.schedule.append(newGame)
                     awayTeam.schedule.append(newGame)
                     gameList.append(newGame)
                 self.currentSeason.schedule.append({'startTime': weekStartTime, 'games': gameList})
-                
+
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+            try:
+                self.db_session.commit()
+                logger.debug(f"Persisted {numOfWeeks}-week schedule to database")
+            except Exception as e:
+                logger.error(f"Failed to persist schedule to database: {e}")
+                self.db_session.rollback()
 
         logger.info(f"Created {numOfWeeks}-week schedule with {len(self.currentSeason.schedule)} games")
 
+    def _loadScheduleFromDatabase(self, seasonNumber: int) -> bool:
+        """Reconstruct in-memory schedule from persisted DB rows.
+
+        Returns True if the schedule was successfully loaded, False if it should
+        fall back to fresh schedule generation.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo):
+            return False
+
+        rows = self.game_repo.get_by_season_ordered(seasonNumber)
+        if not rows:
+            return False
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            logger.error("TeamManager not available for schedule reconstruction")
+            return False
+
+        teamById = {t.id: t for t in teamManager.teams}
+        now = datetime.datetime.utcnow()
+        weekMap: Dict[int, Dict] = {}  # 1-indexed week → {startTime, games}
+
+        for row in rows:
+            homeTeam = teamById.get(row.home_team_id)
+            awayTeam = teamById.get(row.away_team_id)
+            if not homeTeam or not awayTeam:
+                logger.error(f"Team not found for DB game id={row.id} "
+                             f"(home={row.home_team_id}, away={row.away_team_id}); aborting schedule load")
+                return False
+
+            self._gameIdCounter += 1
+            newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
+                                     timingManager=self.timingManager)
+            newGame.id = self._gameIdCounter
+            newGame.dbId = row.id
+            newGame.seasonNumber = seasonNumber
+            newGame.week = row.week - 1   # 0-indexed (matches original createSchedule convention)
+            newGame.gameType = 'playoff' if row.is_playoff else 'regular'
+            newGame.isRegularSeasonGame = not row.is_playoff
+            newGame.status = (FloosGame.GameStatus.Final if row.status == 'final'
+                              else FloosGame.GameStatus.Scheduled)
+
+            # Use stored game_date if present; otherwise compute from current time
+            weekIdx = row.week - 1
+            startTime = row.game_date if row.game_date else self.getWeekStartTime(now, weekIdx)
+            newGame.startTime = startTime
+
+            # Reconstruct minimal gameDict['gameStats'] from stored columns so
+            # getAverages() can include this game when calculating season averages.
+            if row.status == 'final' and row.home_rush_yards is not None:
+                hRushYds = row.home_rush_yards or 0
+                hPassYds = row.home_pass_yards or 0
+                aRushYds = row.away_rush_yards or 0
+                aPassYds = row.away_pass_yards or 0
+                hRushTds = row.home_rush_tds or 0
+                hPassTds = row.home_pass_tds or 0
+                aRushTds = row.away_rush_tds or 0
+                aPassTds = row.away_pass_tds or 0
+                newGame.gameDict['gameStats'] = {
+                    'homeTeam': {
+                        'offense': {
+                            'rushYards': hRushYds, 'passYards': hPassYds,
+                            'totalYards': hRushYds + hPassYds,
+                            'runTds': hRushTds, 'passTds': hPassTds,
+                            'tds': hRushTds + hPassTds,
+                            'fgs': row.home_fgs or 0,
+                            'score': row.home_score,
+                        },
+                        'defense': {
+                            'sacks': row.home_sacks or 0,
+                            'ints': row.home_ints or 0,
+                            'fumRec': row.home_fum_rec or 0,
+                            'passYardsAlwd': aPassYds, 'runYardsAlwd': aRushYds,
+                            'totalYardsAlwd': aRushYds + aPassYds,
+                            'passTdsAlwd': aPassTds, 'runTdsAlwd': aRushTds,
+                            'tdsAlwd': aRushTds + aPassTds,
+                            'ptsAlwd': row.away_score,
+                        },
+                    },
+                    'awayTeam': {
+                        'offense': {
+                            'rushYards': aRushYds, 'passYards': aPassYds,
+                            'totalYards': aRushYds + aPassYds,
+                            'runTds': aRushTds, 'passTds': aPassTds,
+                            'tds': aRushTds + aPassTds,
+                            'fgs': row.away_fgs or 0,
+                            'score': row.away_score,
+                        },
+                        'defense': {
+                            'sacks': row.away_sacks or 0,
+                            'ints': row.away_ints or 0,
+                            'fumRec': row.away_fum_rec or 0,
+                            'passYardsAlwd': hPassYds, 'runYardsAlwd': hRushYds,
+                            'totalYardsAlwd': hRushYds + hPassYds,
+                            'passTdsAlwd': hPassTds, 'runTdsAlwd': hRushTds,
+                            'tdsAlwd': hRushTds + hPassTds,
+                            'ptsAlwd': row.home_score,
+                        },
+                    },
+                }
+
+            if row.week not in weekMap:
+                weekMap[row.week] = {'startTime': startTime, 'games': []}
+            weekMap[row.week]['games'].append(newGame)
+
+            homeTeam.schedule.append(newGame)
+            awayTeam.schedule.append(newGame)
+
+        self.currentSeason.schedule = [weekMap[w] for w in sorted(weekMap)]
+        logger.info(f"Loaded {len(rows)} games ({len(weekMap)} weeks) from DB for season {seasonNumber}")
+        return True
 
     def getWeekStartTime(self, now:datetime.datetime, week:int):
         dateNow = datetime.datetime.now()
@@ -691,31 +931,16 @@ class SeasonManager:
         elif dateNow.day > dateNowUtc.day:
             utcOffset = dateNowUtc.hour - (dateNow.hour + 24)
 
-        startDay = 4
-        monthDays = 0
         startTimeHoursList = [11, 12, 13, 14, 15, 16, 17]
-
-        if now.month == 1 or now.month == 3 or now.month == 5 or now.month == 7 or now.month == 8 or now.month == 10 or now.month == 12:
-            monthDays = 31
-        elif now.month == 4 or now.month == 6 or now.month == 9 or now.month == 11:
-            monthDays = 30
-        elif now.month == 2:
-            if (now.year % 4) == 0:
-                monthDays = 29
-            else:
-                monthDays = 28
-
-        startTimeHour = startTimeHoursList[week%7]
-
-
-        todayWeekDay = dateNowUtc.isoweekday()
+        startTimeHour = startTimeHoursList[week % 7]
+        adjustedHour = (startTimeHour + utcOffset) % 24
 
         if week > 28:
+            # Playoffs: schedule relative to today (unchanged legacy logic kept intact)
+            startDay = 4
+            todayWeekDay = dateNowUtc.isoweekday()
             if week == 32:
-                if todayWeekDay == startDay + 5:
-                    startDayOffset = 0
-                else:
-                    startDayOffset = (startDay + 5) - todayWeekDay
+                startDayOffset = 0 if todayWeekDay == startDay + 5 else (startDay + 5) - todayWeekDay
             else:
                 if todayWeekDay == startDay + 5:
                     startDayOffset = startDay + 4
@@ -724,26 +949,15 @@ class SeasonManager:
                 else:
                     startDayOffset = (startDay + 4) - todayWeekDay
             dayOffset = startDayOffset
+            targetDate = (now + datetime.timedelta(days=dayOffset)).date()
         else:
-            if todayWeekDay == startDay - 1:
-                startDayOffset = startDay - 1
-            elif todayWeekDay == startDay:
-                startDayOffset = 0
-            else:
-                startDayOffset = startDay + 7 - todayWeekDay
+            # Regular season: 28 rounds across 4 game days (7 rounds/day), anchored to
+            # the season's actual start date instead of "next Thursday"
+            dayNumber = math.floor(week / 7)  # 0–3
+            seasonStart = self.currentSeason.startDate if self.currentSeason else now
+            targetDate = (seasonStart + datetime.timedelta(days=dayNumber)).date()
 
-            dayOffset = math.floor((week)/7) + startDayOffset
-
-
-        adjustedHour = (startTimeHour + utcOffset) % 24
-
-        if (now.day + dayOffset) > monthDays:
-            if now.month + 1 > 12:
-                return datetime.datetime(now.year + 1, 1, dayOffset - (monthDays - now.day), adjustedHour)
-            else:
-                return datetime.datetime(now.year, now.month + 1, dayOffset - (monthDays - now.day), adjustedHour)
-        else:
-            return datetime.datetime(now.year, now.month, now.day + dayOffset, adjustedHour)
+        return datetime.datetime(targetDate.year, targetDate.month, targetDate.day, adjustedHour)
     
     def _generateSchedule(self) -> List[List[tuple]]:
         """Generate full season schedule using original algorithm"""
@@ -772,9 +986,47 @@ class SeasonManager:
         # Combine all games and shuffle (matches original)
         schedule = interleagueGames + intraleagueGames
         random.shuffle(schedule)
-        
+
+        # Post-process: ensure no team plays the same opponent in consecutive weeks.
+        # The double round-robin produces mirror weeks (same pairs, swapped home/away)
+        # that can land adjacent after shuffling.
+        schedule = self._fixBackToBackMatchups(schedule)
+
         return schedule
     
+    def _fixBackToBackMatchups(self, schedule: List[List[tuple]]) -> List[List[tuple]]:
+        """Eliminate consecutive weeks where the same two teams play each other.
+        Uses restart-with-reshuffle to avoid getting stuck in swap cycles."""
+        import random
+
+        def matchupPairs(week):
+            return frozenset((min(h.id, a.id), max(h.id, a.id)) for h, a in week)
+
+        def hasConflicts(sched):
+            return any(matchupPairs(sched[i]) & matchupPairs(sched[i + 1]) for i in range(len(sched) - 1))
+
+        for _attempt in range(50):
+            random.shuffle(schedule)
+            n = len(schedule)
+            for _ in range(50):
+                changed = False
+                for i in range(n - 1):
+                    if matchupPairs(schedule[i]) & matchupPairs(schedule[i + 1]):
+                        candidates = list(range(i + 2, n))
+                        random.shuffle(candidates)
+                        for j in candidates:
+                            schedule[i + 1], schedule[j] = schedule[j], schedule[i + 1]
+                            checkIdxs = sorted({i, i + 1, j - 1, j} & set(range(n - 1)))
+                            if all(not (matchupPairs(schedule[k]) & matchupPairs(schedule[k + 1])) for k in checkIdxs):
+                                changed = True
+                                break
+                            schedule[i + 1], schedule[j] = schedule[j], schedule[i + 1]  # revert
+                if not changed:
+                    break
+            if not hasConflicts(schedule):
+                return schedule  # clean solution found
+        return schedule  # best effort after all restarts
+
     def _generateIntraleagueGames(self, teams: List[FloosTeam.Team]) -> List[List[tuple]]:
         """Generate intra-league games using original round-robin algorithm"""
         n = len(teams)
@@ -1239,7 +1491,8 @@ class SeasonManager:
         logger.info("Step 1: Player offseason training")
         # Build a map of player id → coach dev rating for rostered players
         rosteredDevRating: dict = {}
-        for team in self.teamManager.teams:
+        teamManager = self.serviceContainer.getService('team_manager')
+        for team in teamManager.teams:
             coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
             for posGroup in team.rosterDict.values():
                 if posGroup is not None and hasattr(posGroup, 'id'):

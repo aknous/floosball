@@ -257,13 +257,13 @@ def shutdownServices():
     try:
         ratingCache = getService('rating_cache')
         ratingCache.cleanupExpiredEntries()
-    except:
+    except Exception:
         pass
-    
+
     try:
         randomBatch = getService('random_batch')
         randomBatch.clearLeastUsedRanges(0)
-    except:
+    except Exception:
         pass
     
     # Clear global state
