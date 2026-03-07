@@ -32,8 +32,9 @@ from constants import (
     RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER, FIELD_LENGTH,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
-    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, YARDS_TO_FIRST_DOWN,
-    CLOSE_GAME_SCORE_THRESHOLD, RECEIVER_MATCHUP_SCALE,
+    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_REASONABLE_RATIO, YARDS_TO_FIRST_DOWN,
+    CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
+    RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
 )
 
@@ -243,6 +244,34 @@ extraLongPassList = [
                     'chucks it into the end zone to',
                 ]
 
+# Sideline pass text — args: (passer.name, text, receiver.name, yardage)
+sidelineShortPassList = [
+                    'quick out to',
+                    'short sideline pass to',
+                    'flips it to the boundary for',
+                    'quick hitch to the sideline for',
+                    'fires to the flat for',
+                    'tosses it to the boundary for',
+                ]
+
+sidelineMidPassList = [
+                    'fires to the sideline for',
+                    'throws an out route to',
+                    'hits the comeback route to',
+                    'passes to the boundary for',
+                    'throws to the sideline for',
+                    'dials up the out route to',
+                ]
+
+sidelineLongPassList = [
+                    'throws a deep sideline pass to',
+                    'goes deep down the sideline to',
+                    'launches it to the boundary for',
+                    'airs it out along the sideline to',
+                    'throws deep to the corner for',
+                ]
+
+# Clutch/choke play text suffixes — appended to standard play text
 # Sack text — args: (passer.name, yardage)
 sackList = [
                     '{} sacked for {} yards',
@@ -1125,6 +1154,50 @@ class Game:
         self.gameDict['gameStats'] = gameStatsDict
 
 
+    def _coachClockIQ(self, coach) -> float:
+        """Normalise clockManagement (60–100) to 0.0–1.0 for situational decision gates.
+
+        0.0 = worst (attr 60), 0.5 = neutral (attr 80), 1.0 = best (attr 100).
+        """
+        if coach is None:
+            return 0.5
+        return max(0.0, min(1.0, (coach.clockManagement - 60) / 40))
+
+    def _shouldTargetSideline(self, scoreDiff: int, coach) -> bool:
+        """Decide whether this pass should target the sideline to stop the clock.
+
+        Only fires when trailing/tied in Q2 or Q4. Probability scales with
+        time urgency and coach clock management quality.
+        """
+        if scoreDiff > 0 or self.currentQuarter not in (2, 4):
+            return False
+
+        clockIQ = self._coachClockIQ(coach)
+        secs = self.gameClockSeconds
+
+        # Base probability by time urgency
+        if secs < 120:
+            baseProb = 0.70
+        elif secs < 300:
+            baseProb = 0.40
+        else:
+            baseProb = 0.15
+
+        # Coach quality: bad coaches barely use sideline targeting
+        coachScale = 0.3 + 0.7 * clockIQ
+
+        # Reduce if team has timeouts available and plenty of time
+        isHome = (self.offensiveTeam == self.homeTeam)
+        timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
+        if timeoutsLeft >= 2 and secs > 120:
+            baseProb *= 0.5
+
+        # Large deficits: need chunk plays over clock stops
+        if scoreDiff < -16:
+            baseProb *= 0.7
+
+        return _random.random() < baseProb * coachScale
+
     def _callTimeout(self, isHome: bool):
         """Decrement a timeout, stop the clock, and log the event to the game feed."""
         if isHome:
@@ -1134,6 +1207,48 @@ class Game:
         self.clockRunning = False
         self.gameFeed.insert(0, {'event': {
             'text': f'{self.offensiveTeam.name} calls timeout',
+            'quarter': self.currentQuarter,
+            'timeRemaining': self.formatTime(self.gameClockSeconds),
+        }})
+
+    def _checkDefensiveTimeout(self):
+        """Defense calls timeout to stop the clock when trailing and the offense is milking clock."""
+        if self.currentQuarter not in (2, 4):
+            return
+        if not self.clockRunning:
+            return
+        # Determine if the defensive team is trailing
+        defIsHome = (self.defensiveTeam == self.homeTeam)
+        defScore = self.homeScore if defIsHome else self.awayScore
+        offScore = self.awayScore if defIsHome else self.homeScore
+        if defScore >= offScore:
+            return  # defense is winning or tied — no need
+        deficit = offScore - defScore
+        # Don't waste timeouts in an unwinnable game.
+        # Under 60 sec: max 1 score (8 pts).  60-120 sec: max 2 scores (16 pts).
+        maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
+        if deficit > maxComebackPts:
+            return
+        defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
+        if defTimeouts <= 0:
+            return
+        # Q4: under 2 min; Q2: under 30 sec (less aggressive at end of half)
+        threshold = TIMEOUT_CLOCK_THRESHOLD if self.currentQuarter == 4 else 30
+        if self.gameClockSeconds > threshold:
+            return
+        # Coach quality check — bad defensive coaches may not call timeout (floor 50%)
+        defCoach = getattr(self.defensiveTeam, 'coach', None)
+        defGameIQ = self._coachClockIQ(defCoach)
+        if _random.random() >= 0.5 + 0.5 * defGameIQ:
+            return
+        # Call timeout
+        if defIsHome:
+            self.homeTimeoutsRemaining = max(0, self.homeTimeoutsRemaining - 1)
+        else:
+            self.awayTimeoutsRemaining = max(0, self.awayTimeoutsRemaining - 1)
+        self.clockRunning = False
+        self.gameFeed.insert(0, {'event': {
+            'text': f'{self.defensiveTeam.name} calls timeout',
             'quarter': self.currentQuarter,
             'timeRemaining': self.formatTime(self.gameClockSeconds),
         }})
@@ -1149,7 +1264,9 @@ class Game:
         if self.down == 4:
             kicker = self.offensiveTeam.rosterDict.get('k')
             kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
-            if self.yardsToEndzone <= kickerMaxFg:
+            reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
+            fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+            if self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -1200,13 +1317,28 @@ class Game:
 
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
+        # Set sideline targeting for any pass plays called in this method
+        self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+
+        # Don't punt from own territory if trailing in Q4 under 60 sec — should go for it
+        # Bad coaches may still punt here (floor 50%)
         if self.yardsToSafety <= 35:
-            self.play.playType = PlayType.Punt
-            return
+            isLateGameDesperation = (self.currentQuarter == 4 and scoreDiff < 0
+                                     and self.gameClockSeconds < 60)
+            if not isLateGameDesperation:
+                self.play.playType = PlayType.Punt
+                return
+            gameIQ = self._coachClockIQ(coach)
+            if _random.random() >= 0.5 + 0.5 * gameIQ:
+                # Bad coach punts in desperation — terrible decision
+                self.play.playType = PlayType.Punt
+                return
 
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerMaxDistance = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
-        inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance
+        reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
+        fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+        inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgDistance <= reasonableMax
 
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
         goForItThreshold = max(1, min(9, round(4 + aggrNorm * 3)))
@@ -1236,6 +1368,49 @@ class Game:
             return
 
         elif scoreDiff < 0 and inFieldGoalRange:
+            deficit = abs(scoreDiff)
+            aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+            if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD:
+                gameIQ = self._coachClockIQ(coach)
+                if deficit <= 3:
+                    # FG ties or wins — almost always kick (floor 80%)
+                    if _random.random() < 0.8 + 0.2 * gameIQ:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    # Bad coach blunder: goes for TD instead of easy FG
+                    if self.yardsToFirstDown <= 5:
+                        self.play.passPlay(self._selectPassPlay('short'))
+                    else:
+                        self.play.passPlay(self._selectPassPlay('medium'))
+                    return
+                elif deficit <= 8:
+                    # FG keeps it a one-score game but doesn't tie
+                    # Smart coaches go for TD; lower-rated coaches settle for FG
+                    fgChance = max(1, min(9, round(4 - aggrNorm * 3)))
+                    x = batched_randint(1, 10)
+                    if x <= fgChance:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    # Chose to go for TD instead
+                    if self.yardsToFirstDown <= 5:
+                        self.play.passPlay(self._selectPassPlay('short'))
+                    elif self.yardsToFirstDown <= 10:
+                        self.play.passPlay(self._selectPassPlay('medium'))
+                    else:
+                        self.play.passPlay(self._selectPassPlay('long'))
+                    return
+                else:
+                    # Down 9+: FG is almost meaningless, go for TD
+                    # Only very conservative coaches would kick here
+                    if aggrNorm < -0.5:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    if self.yardsToFirstDown <= 5:
+                        self.play.passPlay(self._selectPassPlay('medium'))
+                    else:
+                        self.play.passPlay(self._selectPassPlay('long'))
+                    return
+            # Outside late Q4: standard FG logic
             if self.yardsToEndzone <= 25:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -1257,6 +1432,16 @@ class Game:
         elif scoreDiff < 0:
             deficit = abs(scoreDiff)
             if self.currentQuarter == 4:
+                # Under 60 sec trailing: should go for it, but bad coaches may punt
+                gameIQ = self._coachClockIQ(coach)
+                if self.gameClockSeconds < 60 and _random.random() < 0.5 + 0.5 * gameIQ:
+                    if self.yardsToFirstDown <= 3:
+                        self.play.passPlay(self._selectPassPlay('short'))
+                    elif self.yardsToFirstDown <= 10:
+                        self.play.passPlay(self._selectPassPlay('medium'))
+                    else:
+                        self.play.passPlay(self._selectPassPlay('long'))
+                    return
                 if deficit <= 8:
                     if self.yardsToFirstDown <= 3:
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -1401,31 +1586,51 @@ class Game:
             else:
                 weights = {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 70.0}
 
-        weights = self._applySituationalMods(weights, scoreDiff)
+        weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
         return weights
 
-    def _applySituationalMods(self, weights: dict, scoreDiff: int) -> dict:
-        """Apply game-state multipliers: quarter, score, clock, field position."""
+    def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
+        """Apply game-state multipliers: quarter, score, clock, field position.
+
+        clockManagement scales how strongly the coach reacts to game situation.
+        A bad clock-management coach (clockIQ~0) applies only ~40% of the optimal
+        situational shift; a great coach (clockIQ~1) applies the full adjustment.
+        """
         q = self.currentQuarter
         secs = self.gameClockSeconds
+        # Scale factor: how much of the situational adjustment applies
+        # clockIQ 0.0 → 0.4 (bad coach barely adjusts), 1.0 → 1.0 (full adjustment)
+        clockIQ = self._coachClockIQ(coach)
+        sit = 0.4 + 0.6 * clockIQ
 
         if q == 4 and scoreDiff < 0:
             if secs < 120:
-                weights['run'] *= 0.1; weights['short'] *= 1.3
-                weights['medium'] *= 1.8; weights['long'] *= 2.5
+                weights['run'] *= 1 + (0.1 - 1) * sit       # optimal: ×0.1
+                weights['short'] *= 1 + (1.3 - 1) * sit     # optimal: ×1.3
+                weights['medium'] *= 1 + (1.8 - 1) * sit    # optimal: ×1.8
+                weights['long'] *= 1 + (2.5 - 1) * sit      # optimal: ×2.5
             elif secs < 300:
-                weights['run'] *= 0.3; weights['medium'] *= 1.5; weights['long'] *= 1.8
+                weights['run'] *= 1 + (0.3 - 1) * sit
+                weights['medium'] *= 1 + (1.5 - 1) * sit
+                weights['long'] *= 1 + (1.8 - 1) * sit
             else:
-                weights['run'] *= 0.6; weights['medium'] *= 1.2; weights['long'] *= 1.3
+                weights['run'] *= 1 + (0.6 - 1) * sit
+                weights['medium'] *= 1 + (1.2 - 1) * sit
+                weights['long'] *= 1 + (1.3 - 1) * sit
 
         if q == 4 and scoreDiff > 0:
-            weights['run'] *= 1.6; weights['long'] *= 0.3; weights['medium'] *= 0.7
+            weights['run'] *= 1 + (1.6 - 1) * sit
+            weights['long'] *= 1 + (0.3 - 1) * sit
+            weights['medium'] *= 1 + (0.7 - 1) * sit
 
         if q == 3 and scoreDiff < -10:
-            weights['run'] *= 0.7; weights['medium'] *= 1.2; weights['long'] *= 1.4
+            weights['run'] *= 1 + (0.7 - 1) * sit
+            weights['medium'] *= 1 + (1.2 - 1) * sit
+            weights['long'] *= 1 + (1.4 - 1) * sit
 
+        # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
             weights['run'] *= 1.3; weights['long'] *= 0.2
         elif self.yardsToEndzone <= 25:
@@ -1511,7 +1716,7 @@ class Game:
 
         return _random.choices(pool, weights=weights, k=1)[0]
 
-    def _executeWeightedPlay(self, weights: dict):
+    def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
         play = _random.choices(
             ['run', 'short', 'medium', 'long'],
@@ -1519,12 +1724,9 @@ class Game:
         )[0]
         if play == 'run':
             self.play.runPlay()
-        elif play == 'short':
-            self.play.passPlay(self._selectPassPlay('short'))
-        elif play == 'medium':
-            self.play.passPlay(self._selectPassPlay('medium'))
         else:
-            self.play.passPlay(self._selectPassPlay('long'))
+            self.play.targetSideline = targetSideline
+            self.play.passPlay(self._selectPassPlay(play))
 
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
@@ -1539,20 +1741,49 @@ class Game:
             if self.currentQuarter == 4 and scoreDiff > 0:
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = 4 - self.down  # 1st→3, 2nd→2, 3rd→1
-                effectiveOppTos = oppTimeouts if scoreDiff <= 8 else 0
-                drainableSeconds = max(0, availableKneels - effectiveOppTos) * KNEEL_DRAIN_SECONDS
+                # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
+                maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
+                effectiveOppTos = oppTimeouts if scoreDiff <= maxComebackPts else 0
+                # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
+                toadKneels = min(effectiveOppTos, availableKneels)
+                freeKneels = availableKneels - toadKneels
+                drainableSeconds = toadKneels * 4 + freeKneels * KNEEL_DRAIN_SECONDS
                 if drainableSeconds >= self.gameClockSeconds:
                     self.play.kneel()
                     return
-            # Spike: Q4 or Q2, clock running, <15 sec, no timeouts, not leading
+            # Coach game-management quality gates all situational decisions below.
+            # Good coaches (IQ~1.0) almost always make the right call.
+            # Bad coaches (IQ~0.0) frequently miss the correct situational play.
+            gameIQ = self._coachClockIQ(coach)
+
+            # Desperation FG: trailing by ≤3, in FG range, very little time — kick NOW
+            if (self.currentQuarter in (2, 4) and -3 <= scoreDiff < 0
+                    and self.gameClockSeconds <= 30):
+                kicker = self.offensiveTeam.rosterDict.get('k')
+                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
+                fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+                if self.yardsToEndzone <= kickerMax:
+                    # Only attempt very long FGs if there's truly no time for another play
+                    if fgDistance > reasonableMax and self.gameClockSeconds > 8:
+                        pass  # Skip — try to get closer first
+                    elif _random.random() < 0.6 + 0.4 * gameIQ:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+            # Spike: Q4 or Q2, clock running, no timeouts, trailing/tied, ≤45 sec
             if (self.currentQuarter in (2, 4) and self.clockRunning
-                    and self.gameClockSeconds <= SPIKE_CLOCK_THRESHOLD and timeoutsLeft == 0 and scoreDiff <= 0):
-                self.play.spike()
-                return
-            # Call timeout: Q4, trailing, clock running, timeouts available, <120 sec
-            if (self.currentQuarter == 4 and scoreDiff < 0 and self.clockRunning
+                    and self.gameClockSeconds <= SPIKE_CLOCK_THRESHOLD
+                    and timeoutsLeft == 0 and scoreDiff <= 0):
+                # Bad coaches may fail to spike and just run a normal play (floor 50%)
+                if _random.random() < 0.5 + 0.5 * gameIQ:
+                    self.play.spike()
+                    return
+            # Call timeout (offense): Q4 or Q2, trailing/tied, clock running, timeouts available
+            if (self.currentQuarter in (2, 4) and scoreDiff <= 0 and self.clockRunning
                     and timeoutsLeft > 0 and self.gameClockSeconds <= TIMEOUT_CLOCK_THRESHOLD):
-                self._callTimeout(isHome)
+                # Bad coaches may forget to call timeout (floor 50%)
+                if _random.random() < 0.5 + 0.5 * gameIQ:
+                    self._callTimeout(isHome)
                 # fall through — still need to call a play
 
         # Overtime
@@ -1564,18 +1795,20 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
 
-        # End-of-half FG attempt
+        # End-of-half FG attempt (only if reasonable distance)
+        reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
         if self.currentQuarter == 2 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
-            if self.yardsToEndzone <= kickerMaxFg:
+            fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+            if self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
                 self.play.playType = PlayType.FieldGoal
                 return
 
-        # End-of-game FG attempt
+        # End-of-game FG attempt (tied, leading by ≤3, or trailing by ≤3)
         if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
-            if scoreDiff >= 0:
-                if scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg:
-                    self.play.playType = PlayType.FieldGoal
-                    return
+            fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+            if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
+                self.play.playType = PlayType.FieldGoal
+                return
 
         # 4th down
         if self.down == 4:
@@ -1584,7 +1817,8 @@ class Game:
 
         # Downs 1–3: weighted probability sampling
         weights = self._computePlayWeights(scoreDiff, coach)
-        self._executeWeightedPlay(weights)
+        targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+        self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
         # OT possession tracking: detect when each team's possession ends
@@ -1608,6 +1842,7 @@ class Game:
 
 
     def formatPlayText(self):
+        self._evaluateClutchChoke()
         text = None
         if self.play.playType is PlayType.Run:
             if self.play.isFumble:
@@ -1634,7 +1869,16 @@ class Game:
                 else:
                     text = choice(sackList).format(self.play.passer.name, self.play.yardage)
             elif self.play.isPassCompletion:
-                if self.play.passType is PassType.short:
+                if self.play.targetSideline:
+                    if self.play.passType is PassType.short:
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, self.play.yardage)
+                    elif self.play.passType is PassType.long:
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineLongPassList), self.play.receiver.name, self.play.yardage)
+                    else:
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineMidPassList), self.play.receiver.name, self.play.yardage)
+                    if not self.play.isInBounds:
+                        text += ', out of bounds'
+                elif self.play.passType is PassType.short:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, self.play.yardage)
                 elif self.play.passType is PassType.long:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, self.play.yardage)
@@ -1678,6 +1922,50 @@ class Game:
             text = f'{qbName} takes a knee'
 
         self.play.playText = text
+
+    def _evaluateClutchChoke(self):
+        """Evaluate whether the current play qualifies as a clutch or choke moment."""
+        play = self.play
+        if play.gamePressure < CLUTCH_PRESSURE_THRESHOLD:
+            return
+
+        # For pass plays, determine key player based on outcome
+        if play.playType == PlayType.Pass:
+            if play.isPassCompletion or play.isTd:
+                # Completion: credit whichever of QB/receiver had larger positive mod
+                if play.rcvPressureMod > play.qbPressureMod and play.rcvPressureMod >= CLUTCH_MODIFIER_THRESHOLD:
+                    play.keyPressureMod = play.rcvPressureMod
+                    play.clutchPlayerName = play.receiver.name if play.receiver else ''
+                else:
+                    play.keyPressureMod = play.qbPressureMod
+                    play.clutchPlayerName = play.passer.name if play.passer else ''
+            elif play.passIsDropped:
+                # Drop: receiver choked
+                play.keyPressureMod = play.rcvPressureMod
+                play.clutchPlayerName = play.receiver.name if play.receiver else ''
+            else:
+                # INT, sack, incomplete: QB responsibility
+                play.keyPressureMod = play.qbPressureMod
+                play.clutchPlayerName = play.passer.name if play.passer else ''
+
+        if abs(play.keyPressureMod) < CLUTCH_MODIFIER_THRESHOLD:
+            return
+
+        isPositiveOutcome = (
+            play.isPassCompletion or play.isTd or play.isFgGood
+            or play.playResult == PlayResult.FirstDown
+        )
+        isNegativeOutcome = (
+            play.isInterception or play.isFumbleLost or play.isSack
+            or play.passIsDropped
+            or (play.playType == PlayType.FieldGoal and not play.isFgGood)
+            or (play.playType == PlayType.Run and play.yardage <= 0)
+        )
+
+        if play.keyPressureMod >= CLUTCH_MODIFIER_THRESHOLD and isPositiveOutcome:
+            play.isClutchPlay = True
+        elif play.keyPressureMod <= -CLUTCH_MODIFIER_THRESHOLD and isNegativeOutcome:
+            play.isChokePlay = True
 
     def _accumulateOffenseStats(self, team, score):
         """Accumulate a team's offensive stats into season totals after a game."""
@@ -1728,6 +2016,26 @@ class Game:
         elif ptsAlwd == 0:
             team.gameDefenseStats['fantasyPoints'] += 10
 
+    def _processPlayerPostgame(self):
+        """Process player stats after game: sync dicts, update confidence/ratings, compute derived stats"""
+        # Sync optimized stat_tracker data to legacy dicts for all players
+        for player in self.homeTeam.rosterDict.values():
+            if player:
+                player.sync_stats_dicts()
+        for player in self.awayTeam.rosterDict.values():
+            if player:
+                player.sync_stats_dicts()
+
+        # Per-player: update confidence/determination, increment gamesPlayed, compute derived stats
+        for player in self.homeTeam.rosterDict.values():
+            if player:
+                player.postgameChanges()
+                self._accumulatePostgameStats(player)
+        for player in self.awayTeam.rosterDict.values():
+            if player:
+                player.postgameChanges()
+                self._accumulatePostgameStats(player)
+
     def postgame(self):
         if self.isRegularSeasonGame:
             self._accumulateOffenseStats(self.homeTeam, self.homeScore)
@@ -1771,179 +2079,103 @@ class Game:
 
         for player in self.homeTeam.rosterDict.values():
             player.postgameChanges()
-
-            player.seasonStatsDict['fantasyPoints'] += player.gameStatsDict['fantasyPoints']
-
-            if player.gameStatsDict['passing']['att'] > 0:
-                if player.gameStatsDict['passing']['comp'] > 0:
-                    player.gameStatsDict['passing']['ypc'] = round(player.gameStatsDict['passing']['yards']/player.gameStatsDict['passing']['comp'], 2)
-                    player.gameStatsDict['passing']['compPerc'] = round((player.gameStatsDict['passing']['comp']/player.gameStatsDict['passing']['att'])*100)
-
-                if self.isRegularSeasonGame: 
-                    player.seasonStatsDict['passing']['20+'] += player.gameStatsDict['passing']['20+']
-
-                    if player.gameStatsDict['passing']['longest'] > player.seasonStatsDict['passing']['longest']:
-                        player.seasonStatsDict['passing']['longest'] = player.gameStatsDict['passing']['longest']
-
-                    if player.seasonStatsDict['passing']['comp'] > 0:
-                        player.seasonStatsDict['passing']['ypc'] = round(player.seasonStatsDict['passing']['yards']/player.seasonStatsDict['passing']['comp'], 2)
-                        player.seasonStatsDict['passing']['compPerc'] = round((player.seasonStatsDict['passing']['comp']/player.seasonStatsDict['passing']['att'])*100)
-
-            if player.gameStatsDict['receiving']['receptions'] > 0:
-                if player.gameStatsDict['receiving']['yards'] > 0:
-                    player.gameStatsDict['receiving']['ypr'] = round(player.gameStatsDict['receiving']['yards']/player.gameStatsDict['receiving']['receptions'],2)
-                    player.gameStatsDict['receiving']['rcvPerc'] = round((player.gameStatsDict['receiving']['receptions']/player.gameStatsDict['receiving']['targets'])*100)
-
-                if self.isRegularSeasonGame:
-                    player.seasonStatsDict['receiving']['20+'] += player.gameStatsDict['receiving']['20+']
-
-                    if player.gameStatsDict['receiving']['longest'] > player.seasonStatsDict['receiving']['longest']:
-                        player.seasonStatsDict['receiving']['longest'] = player.gameStatsDict['receiving']['longest']
-
-                    if player.seasonStatsDict['receiving']['yards'] > 0:
-                        player.seasonStatsDict['receiving']['ypr'] = round(player.seasonStatsDict['receiving']['yards']/player.seasonStatsDict['receiving']['receptions'],2)
-                        player.seasonStatsDict['receiving']['rcvPerc'] = round((player.seasonStatsDict['receiving']['receptions']/player.seasonStatsDict['receiving']['targets'])*100)
-
-            if player.gameStatsDict['rushing']['carries'] > 0:
-
-                player.gameStatsDict['rushing']['ypc'] = round(player.gameStatsDict['rushing']['yards']/player.gameStatsDict['rushing']['carries'],2)
-
-                if self.isRegularSeasonGame:
-                    player.seasonStatsDict['rushing']['20+'] += player.gameStatsDict['rushing']['20+']
-
-                    if player.gameStatsDict['rushing']['longest'] > player.seasonStatsDict['rushing']['longest']:
-                        player.seasonStatsDict['rushing']['longest'] = player.gameStatsDict['rushing']['longest']
-
-                    if player.seasonStatsDict['rushing']['carries'] > 0:
-                        player.seasonStatsDict['rushing']['ypc'] = round(player.seasonStatsDict['rushing']['yards']/player.seasonStatsDict['rushing']['carries'],2)
-
-            if player.gameStatsDict['kicking']['fgAtt'] > 0:
-                if player.gameStatsDict['kicking']['fgs'] > 0:
-                    player.gameStatsDict['kicking']['fgPerc'] = round((player.gameStatsDict['kicking']['fgs']/player.gameStatsDict['kicking']['fgAtt'])*100)
-                else:
-                    player.gameStatsDict['kicking']['fgPerc'] = 0
-
-                if self.isRegularSeasonGame:
-
-                    if player.gameStatsDict['kicking']['longest'] > player.seasonStatsDict['kicking']['longest']:
-                        player.seasonStatsDict['kicking']['longest'] = player.gameStatsDict['kicking']['longest']
-
-                    if player.seasonStatsDict['kicking']['fgs'] > 0:
-                        player.seasonStatsDict['kicking']['fgPerc'] = round((player.seasonStatsDict['kicking']['fgs']/player.seasonStatsDict['kicking']['fgAtt'])*100)
-                        player.seasonStatsDict['kicking']['fgAvg'] = round(player.seasonStatsDict['kicking']['fgYards']/player.seasonStatsDict['kicking']['fgs'])
-
-                        if player.seasonStatsDict['kicking']['fgUnder20att'] > 0:
-                            player.seasonStatsDict['kicking']['fgUnder20perc'] = round((player.seasonStatsDict['kicking']['fgUnder20']/player.seasonStatsDict['kicking']['fgUnder20att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fgUnder20perc'] = 'N/A'
-
-                        if player.seasonStatsDict['kicking']['fg20to40att'] > 0:
-                            player.seasonStatsDict['kicking']['fg20to40perc'] = round((player.seasonStatsDict['kicking']['fg20to40']/player.seasonStatsDict['kicking']['fg20to40att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fg20to40perc'] = 'N/A'
-
-                        if player.seasonStatsDict['kicking']['fg40to50att'] > 0:
-                            player.seasonStatsDict['kicking']['fg40to50perc'] = round((player.seasonStatsDict['kicking']['fg40to50']/player.seasonStatsDict['kicking']['fg40to50att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fg40to50perc'] = 'N/A'
-
-                        if player.seasonStatsDict['kicking']['fgOver50att'] > 0:
-                            player.seasonStatsDict['kicking']['fgOver50perc'] = round((player.seasonStatsDict['kicking']['fgOver50']/player.seasonStatsDict['kicking']['fgOver50att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fgOver50perc'] = 'N/A'
-
-                    else:
-                        player.seasonStatsDict['kicking']['fgPerc'] = 0
+            self._accumulatePostgameStats(player)
 
 
         for player in self.awayTeam.rosterDict.values():
             player.postgameChanges()
-            player.seasonStatsDict['fantasyPoints'] += player.gameStatsDict['fantasyPoints']
+            self._accumulatePostgameStats(player)
 
-            if player.gameStatsDict['passing']['att'] > 0:
+    def _accumulatePostgameStats(self, player):
+        """Accumulate postgame stats for season, career, and compute derived fields"""
+        gd = player.gameStatsDict
+        sd = player.seasonStatsDict
+        cd = player.careerStatsDict
 
-                if player.gameStatsDict['passing']['comp'] > 0:
-                    player.gameStatsDict['passing']['ypc'] = round(player.gameStatsDict['passing']['yards']/player.gameStatsDict['passing']['comp'], 2)
-                    player.gameStatsDict['passing']['compPerc'] = round((player.gameStatsDict['passing']['comp']/player.gameStatsDict['passing']['att'])*100)
+        # Fantasy points: game → season and career (regular season only)
+        if self.isRegularSeasonGame:
+            sd['fantasyPoints'] += gd['fantasyPoints']
+            cd['fantasyPoints'] += gd['fantasyPoints']
+            # Clear game FP after merge so _getPlayerLiveFantasyPoints()
+            # (which sums season + game) doesn't double-count between games
+            gd['fantasyPoints'] = 0
 
-                if self.isRegularSeasonGame:
-                    player.seasonStatsDict['passing']['20+'] += player.gameStatsDict['passing']['20+']
+        # Game-level derived stats (always computed)
+        if gd['passing']['att'] > 0 and gd['passing']['comp'] > 0:
+            gd['passing']['ypc'] = round(gd['passing']['yards'] / gd['passing']['comp'], 2)
+            gd['passing']['compPerc'] = round((gd['passing']['comp'] / gd['passing']['att']) * 100)
 
-                    if player.gameStatsDict['passing']['longest'] > player.seasonStatsDict['passing']['longest']:
-                        player.seasonStatsDict['passing']['longest'] = player.gameStatsDict['passing']['longest']
+        if gd['receiving']['receptions'] > 0 and gd['receiving']['yards'] > 0:
+            gd['receiving']['ypr'] = round(gd['receiving']['yards'] / gd['receiving']['receptions'], 2)
+            gd['receiving']['rcvPerc'] = round((gd['receiving']['receptions'] / gd['receiving']['targets']) * 100)
 
-                    if player.seasonStatsDict['passing']['comp'] > 0:
-                        player.seasonStatsDict['passing']['ypc'] = round(player.seasonStatsDict['passing']['yards']/player.seasonStatsDict['passing']['comp'], 2)
-                        player.seasonStatsDict['passing']['compPerc'] = round((player.seasonStatsDict['passing']['comp']/player.seasonStatsDict['passing']['att'])*100)
+        if gd['rushing']['carries'] > 0:
+            gd['rushing']['ypc'] = round(gd['rushing']['yards'] / gd['rushing']['carries'], 2)
 
-            if player.gameStatsDict['receiving']['receptions'] > 0:
-                if player.gameStatsDict['receiving']['yards'] > 0:
-                    player.gameStatsDict['receiving']['ypr'] = round(player.gameStatsDict['receiving']['yards']/player.gameStatsDict['receiving']['receptions'],2)
-                    player.gameStatsDict['receiving']['rcvPerc'] = round((player.gameStatsDict['receiving']['receptions']/player.gameStatsDict['receiving']['targets'])*100)
+        if gd['kicking']['fgAtt'] > 0:
+            if gd['kicking']['fgs'] > 0:
+                gd['kicking']['fgPerc'] = round((gd['kicking']['fgs'] / gd['kicking']['fgAtt']) * 100)
+            else:
+                gd['kicking']['fgPerc'] = 0
 
-                if self.isRegularSeasonGame:
-                    player.seasonStatsDict['receiving']['20+'] += player.gameStatsDict['receiving']['20+']
+        if not self.isRegularSeasonGame:
+            return
 
-                    if player.gameStatsDict['receiving']['longest'] > player.seasonStatsDict['receiving']['longest']:
-                        player.seasonStatsDict['receiving']['longest'] = player.gameStatsDict['receiving']['longest']
+        # Season-level: accumulate non-tracked fields and compute derived stats
+        for statGroup in ['passing', 'rushing', 'receiving', 'kicking']:
+            if '20+' in gd.get(statGroup, {}) and '20+' in sd.get(statGroup, {}):
+                sd[statGroup]['20+'] += gd[statGroup]['20+']
+            if 'longest' in gd.get(statGroup, {}) and 'longest' in sd.get(statGroup, {}):
+                if gd[statGroup]['longest'] > sd[statGroup]['longest']:
+                    sd[statGroup]['longest'] = gd[statGroup]['longest']
+            # Career longest
+            if 'longest' in gd.get(statGroup, {}) and 'longest' in cd.get(statGroup, {}):
+                if gd[statGroup]['longest'] > cd[statGroup]['longest']:
+                    cd[statGroup]['longest'] = gd[statGroup]['longest']
+            # Career 20+
+            if '20+' in gd.get(statGroup, {}) and '20+' in cd.get(statGroup, {}):
+                cd[statGroup]['20+'] += gd[statGroup]['20+']
 
-                    if player.seasonStatsDict['receiving']['yards'] > 0:
-                        player.seasonStatsDict['receiving']['ypr'] = round(player.seasonStatsDict['receiving']['yards']/player.seasonStatsDict['receiving']['receptions'],2)
-                        player.seasonStatsDict['receiving']['rcvPerc'] = round((player.seasonStatsDict['receiving']['receptions']/player.seasonStatsDict['receiving']['targets'])*100)
+        # Season derived percentages
+        self._computeDerivedStats(sd)
+        # Career derived percentages
+        self._computeDerivedStats(cd)
 
-            if player.gameStatsDict['rushing']['carries'] > 0:
+        # Season/career kicking distance breakdowns
+        for statsDict in [sd, cd]:
+            kicking = statsDict.get('kicking', {})
+            if kicking.get('fgs', 0) > 0:
+                if kicking.get('fgYards', 0) > 0:
+                    kicking['fgAvg'] = round(kicking['fgYards'] / kicking['fgs'])
+                for prefix in ['fgUnder20', 'fg20to40', 'fg40to50', 'fgOver50']:
+                    att = kicking.get(f'{prefix}att', 0)
+                    made = kicking.get(prefix, 0)
+                    kicking[f'{prefix}perc'] = round((made / att) * 100) if att > 0 else 'N/A'
+            elif kicking.get('fgAtt', 0) > 0:
+                kicking['fgPerc'] = 0
 
-                player.gameStatsDict['rushing']['ypc'] = round(player.gameStatsDict['rushing']['yards']/player.gameStatsDict['rushing']['carries'],2)
+    @staticmethod
+    def _computeDerivedStats(statsDict):
+        """Compute percentage and per-unit stats from raw counting stats"""
+        p = statsDict.get('passing', {})
+        if p.get('comp', 0) > 0 and p.get('att', 0) > 0:
+            p['ypc'] = round(p['yards'] / p['comp'], 2)
+            p['compPerc'] = round((p['comp'] / p['att']) * 100)
 
-                if self.isRegularSeasonGame:
-                    player.seasonStatsDict['rushing']['20+'] += player.gameStatsDict['rushing']['20+']
+        r = statsDict.get('receiving', {})
+        if r.get('receptions', 0) > 0 and r.get('targets', 0) > 0:
+            r['ypr'] = round(r['yards'] / r['receptions'], 2)
+            r['rcvPerc'] = round((r['receptions'] / r['targets']) * 100)
 
-                    if player.gameStatsDict['rushing']['longest'] > player.seasonStatsDict['rushing']['longest']:
-                        player.seasonStatsDict['rushing']['longest'] = player.gameStatsDict['rushing']['longest']
+        ru = statsDict.get('rushing', {})
+        if ru.get('carries', 0) > 0:
+            ru['ypc'] = round(ru['yards'] / ru['carries'], 2)
 
-                    if player.seasonStatsDict['rushing']['carries'] > 0:
-                        player.seasonStatsDict['rushing']['ypc'] = round(player.seasonStatsDict['rushing']['yards']/player.seasonStatsDict['rushing']['carries'],2)
-
-            if player.gameStatsDict['kicking']['fgAtt'] > 0:
-                if player.gameStatsDict['kicking']['fgs'] > 0:
-                    player.gameStatsDict['kicking']['fgPerc'] = round((player.gameStatsDict['kicking']['fgs']/player.gameStatsDict['kicking']['fgAtt'])*100)
-                else:
-                    player.gameStatsDict['kicking']['fgPerc'] = 0
-
-                if self.isRegularSeasonGame:
-
-                    if player.gameStatsDict['kicking']['longest'] > player.seasonStatsDict['kicking']['longest']:
-                        player.seasonStatsDict['kicking']['longest'] = player.gameStatsDict['kicking']['longest']
-
-                    if player.seasonStatsDict['kicking']['fgs'] > 0:
-                        player.seasonStatsDict['kicking']['fgPerc'] = round((player.seasonStatsDict['kicking']['fgs']/player.seasonStatsDict['kicking']['fgAtt'])*100)
-                        player.seasonStatsDict['kicking']['fgAvg'] = round(player.seasonStatsDict['kicking']['fgYards']/player.seasonStatsDict['kicking']['fgs'])
-
-                        if player.seasonStatsDict['kicking']['fgUnder20att'] > 0:
-                            player.seasonStatsDict['kicking']['fgUnder20perc'] = round((player.seasonStatsDict['kicking']['fgUnder20']/player.seasonStatsDict['kicking']['fgUnder20att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fgUnder20perc'] = 'N/A'
-
-                        if player.seasonStatsDict['kicking']['fg20to40att'] > 0:
-                            player.seasonStatsDict['kicking']['fg20to40perc'] = round((player.seasonStatsDict['kicking']['fg20to40']/player.seasonStatsDict['kicking']['fg20to40att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fg20to40perc'] = 'N/A'
-
-                        if player.seasonStatsDict['kicking']['fg40to50att'] > 0:
-                            player.seasonStatsDict['kicking']['fg40to50perc'] = round((player.seasonStatsDict['kicking']['fg40to50']/player.seasonStatsDict['kicking']['fg40to50att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fg40to50perc'] = 'N/A'
-
-                        if player.seasonStatsDict['kicking']['fgOver50att'] > 0:
-                            player.seasonStatsDict['kicking']['fgOver50perc'] = round((player.seasonStatsDict['kicking']['fgOver50']/player.seasonStatsDict['kicking']['fgOver50att'])*100)
-                        else:
-                            player.seasonStatsDict['kicking']['fgOver50perc'] = 'N/A'
-
-                    else:
-                        player.seasonStatsDict['kicking']['fgPerc'] = 0
-                    
-            
-
+        k = statsDict.get('kicking', {})
+        if k.get('fgAtt', 0) > 0 and k.get('fgs', 0) > 0:
+            k['fgPerc'] = round((k['fgs'] / k['fgAtt']) * 100)
+        if k.get('xpAtt', 0) > 0 and k.get('xps', 0) > 0:
+            k['xpPerc'] = round((k['xps'] / k['xpAtt']) * 100)
 
     def calculateSimpleEloWinProbability(self):
         """
@@ -2045,7 +2277,7 @@ class Game:
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2282,7 +2514,7 @@ class Game:
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2368,19 +2600,27 @@ class Game:
                         self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
                     self._pendingPossessionChange = False
 
-                # PRE-SNAP: Consume huddle/snap time
-                if self.clockRunning:
-                    preSnapTime = self.calculatePreSnapTime()
-                    self.consumeGameTime(preSnapTime)
-                    self.checkTwoMinuteWarning()
-                    
-                    # Check if clock expired during pre-snap
-                    if self.gameClockSeconds <= 0:
-                        break
+                # POST-PLAY: Defense can call timeout to stop the clock
+                self._checkDefensiveTimeout()
+
+                # Recalculate game pressure before each play
+                self.gamePressure = self.calculateGamePressure()
 
                 # Call and execute play
                 self.playCaller()
+
+                # PRE-SNAP: Consume huddle/snap time AFTER play type is known.
+                # Skip for kneels and spikes — they handle their own clock internally.
+                if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+                    preSnapTime = self.calculatePreSnapTime()
+                    self.consumeGameTime(preSnapTime)
+                    self.checkTwoMinuteWarning()
+
+                    # Check if clock expired during pre-snap
+                    if self.gameClockSeconds <= 0:
+                        break
                 self.totalPlays += 1
+                self.play.playNumber = self.totalPlays
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
                     if self.down == 3:
@@ -2401,8 +2641,9 @@ class Game:
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
                     self.consumeGameTime(playDuration)
+                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
                     self.checkTwoMinuteWarning()
-                    
+
                     if self.play.isFgGood:
                         self._addScore(self.offensiveTeam, 3)
                         self.defensiveTeam.gameDefenseStats['ptsAlwd'] += 3
@@ -2459,6 +2700,7 @@ class Game:
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                     self.consumeGameTime(playDuration)
+                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
                     self.checkTwoMinuteWarning()
                     self.clockRunning = False  # Clock stops after punt
                     
@@ -2479,13 +2721,30 @@ class Game:
                     self.gameFeed.insert(0, {'play': self.play})
                     self.broadcastGameState(includeLastPlay=True)
                     lastPlayFormatted = True
+
+                    # After kneel: defense gets a chance to call timeout before play clock drains
+                    if self.play.playType is PlayType.Kneel:
+                        self._checkDefensiveTimeout()
+                        logging.warning(f"[KNEEL] clockRunning={self.clockRunning}, gameClockSeconds={self.gameClockSeconds}")
+                        if self.clockRunning and self.gameClockSeconds > 0:
+                            # No timeout called — drain the play clock (time between plays)
+                            playClockDrain = min(36, self.gameClockSeconds)
+                            logging.warning(f"[KNEEL] Draining play clock: {playClockDrain}s, clock will be {self.gameClockSeconds - playClockDrain}")
+                            self.consumeGameTime(playClockDrain)
+                            self.checkTwoMinuteWarning()
+                        else:
+                            logging.warning(f"[KNEEL] Play clock drain SKIPPED")
+
                     # Fall through to outcome section so the down is advanced correctly
 
                 # POST-PLAY: Consume play duration time (run/pass only — kneel/spike handle their own clock)
                 if self.play.playType not in (PlayType.Kneel, PlayType.Spike):
                     playDuration = self.calculatePlayDuration(self.play.playType, self.play.isInBounds)
                     self.consumeGameTime(playDuration)
-                
+
+                # Update play's timeRemaining to reflect post-play clock
+                self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
                 
@@ -2500,7 +2759,7 @@ class Game:
                     elif self.offensiveTeam is self.awayTeam:
                         self.awayTurnoversTotal += 1
                     self.formatPlayText()
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2570,7 +2829,7 @@ class Game:
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
                                 self.highlights.insert(0, {'play': self.play})
                                 self.leagueHighlights.insert(0, {'play': self.play})
                             self.gameFeed.insert(0, {'play': self.play})
@@ -2590,7 +2849,7 @@ class Game:
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
                                 self.highlights.insert(0, {'play': self.play})
                                 self.leagueHighlights.insert(0, {'play': self.play})
                             self.gameFeed.insert(0, {'play': self.play})
@@ -2719,7 +2978,7 @@ class Game:
             if self.play.scoreChange:
                 self.formatPlayText()
                 if not alreadyInFeed:
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2800,7 +3059,8 @@ class Game:
                 entry['homeWinProbability'] = finalWp['home']
                 entry['awayWinProbability'] = finalWp['away']
                 break
-        # Note: Post-game stat processing now handled by RecordManager.processPostGameStats()
+        # Player postgame processing: sync stats, update confidence/determination, compute derived stats
+        self._processPlayerPostgame()
         
         # Broadcast final game state with the "Final" event message so the play feed updates live
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -2857,16 +3117,22 @@ class Game:
         else:
             pressure += 5 * self.currentQuarter
 
-        # Score differential pressure (0-30)
+        # Score differential pressure (0-30), scaled by quarter so early-game ties
+        # don't generate clutch/choke moments
         score_diff = abs(self.homeScore - self.awayScore)
+        scorePressure = 0
         if score_diff == 0:
-            pressure += 30  # Tie game
+            scorePressure = 30  # Tie game
         elif score_diff <= 3:
-            pressure += 25  # One field goal difference
+            scorePressure = 25  # One field goal difference
         elif score_diff <= 7:
-            pressure += 20  # One possession game
+            scorePressure = 20  # One possession game
         elif score_diff <= 14:
-            pressure += 10  # Two possession game
+            scorePressure = 10  # Two possession game
+
+        # Scale score pressure by quarter: Q1=25%, Q2=50%, Q3=75%, Q4/OT=100%
+        quarterScale = {1: 0.25, 2: 0.5, 3: 0.75, 4: 1.0, 5: 1.0}
+        pressure += scorePressure * quarterScale.get(self.currentQuarter, 1.0)
 
         # Down and distance pressure (0-20)
         if self.down == 4:
@@ -2940,13 +3206,22 @@ class Game:
                 elif statsKey == 'receiving':
                     recs = stats.get('receptions', 0)
                     stats['ypr'] = round(stats.get('yards', 0) / recs, 1) if recs > 0 else 0.0
+                # Sum TDs across all stat categories for fantasy card calculations
+                totalTds = (
+                    p.gameStatsDict.get('passing', {}).get('tds', 0)
+                    + p.gameStatsDict.get('rushing', {}).get('tds', 0)
+                    + p.gameStatsDict.get('receiving', {}).get('tds', 0)
+                )
                 return {
                     'id': p.id,
                     'name': p.name,
                     'position': p.position.name if hasattr(p, 'position') and p.position else None,
+                    'teamId': p.team.id if hasattr(p, 'team') and hasattr(p.team, 'id') else None,
                     'playerRating': rating,
                     'ratingStars': max(1, min(5, stars)),
                     'fantasyPoints': round(p.gameStatsDict.get('fantasyPoints', 0), 1),
+                    'totalFantasyPoints': round(p.seasonStatsDict.get('fantasyPoints', 0) + p.gameStatsDict.get('fantasyPoints', 0), 1),
+                    'totalTds': totalTds,
                     **stats,
                 }
 
@@ -3003,7 +3278,12 @@ class Game:
         from managers.timingManager import TimingMode
         if self.timingManager and self.timingManager.getMode() == TimingMode.TURBO and not isFinalBroadcast:
             return
-        
+
+        # If game is effectively over (e.g. last scoring play in Q4), ensure
+        # status reflects Final before this broadcast goes out to the frontend
+        if self.status != GameStatus.Final and self.isGameOver():
+            self.status = GameStatus.Final
+
         # Calculate win probabilities
         winProb = self.calculateWinProbability()
         newHomeWp = winProb['home']
@@ -3040,6 +3320,20 @@ class Game:
             # Use event message instead of play data
             lastPlayData = eventMessage
         elif includeLastPlay and hasattr(self, 'play') and self.play:
+            # Store WP data on the Play object so it persists in gameFeed references
+            # (gameFeed stores {'play': self.play} by reference)
+            self.play.homeWinProbability = newHomeWp
+            self.play.awayWinProbability = newAwayWp
+            self.play.homeWpa = round(homeWpa, 2)
+            self.play.awayWpa = round(awayWpa, 2)
+            self.play.isBigPlay = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+
+            # Only keep clutch/choke tags if the play had meaningful WP impact
+            wpImpact = max(abs(homeWpa), abs(awayWpa))
+            if wpImpact < 5.0:
+                self.play.isClutchPlay = False
+                self.play.isChokePlay = False
+
             lastPlayData = {
                 'playNumber': self.totalPlays,
                 'quarter': self.play.quarter if hasattr(self.play, 'quarter') else self.currentQuarter,
@@ -3061,7 +3355,9 @@ class Game:
                 'defensiveTeam': self.play.defense.abbr if hasattr(self.play, 'defense') else self.defensiveTeam.abbr,
                 'homeWpa': round(homeWpa, 2),
                 'awayWpa': round(awayWpa, 2),
-                'isBigPlay': bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+                'isBigPlay': self.play.isBigPlay,
+                'isClutchPlay': getattr(self.play, 'isClutchPlay', False),
+                'isChokePlay': getattr(self.play, 'isChokePlay', False),
             }
         
         # Determine possession team abbreviation and booleans
@@ -3113,6 +3409,8 @@ class Game:
             'isHalftime': getattr(self, 'isHalftime', False),
             'isOvertime': self.currentQuarter > 4 if hasattr(self, 'currentQuarter') else False,
             'isUpsetAlert': isUpsetAlert,
+            'homeTimeouts': self.homeTimeoutsRemaining,
+            'awayTimeouts': self.awayTimeoutsRemaining,
             'gameStats': self._buildGameStatsSnapshot()
         }
         
@@ -3137,7 +3435,9 @@ class Game:
                 self.gameFeed[0]['homeWpa'] = round(homeWpa, 2)
                 self.gameFeed[0]['awayWpa'] = round(awayWpa, 2)
                 self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
-    
+                self.gameFeed[0]['isClutchPlay'] = getattr(self.play, 'isClutchPlay', False)
+                self.gameFeed[0]['isChokePlay'] = getattr(self.play, 'isChokePlay', False)
+
     def calculatePreSnapTime(self) -> int:
         """
         Calculate time consumed before snap (huddle, line up, snap count).
@@ -3196,7 +3496,7 @@ class Game:
             return 3  # Quick spike
         
         elif playType == PlayType.Kneel:
-            return 40  # Maximum time runoff
+            return 4  # Snap to knee-down; play clock drain handled separately
         
         return 5  # Default
 
@@ -3685,6 +3985,15 @@ class Play():
         self.scoreChange = False
         self.passIsDropped = False
         self.isInBounds = True  # Default to in bounds
+        self.targetSideline = False  # True when play caller targets sideline routes
+        self.gamePressure = 0            # Snapshot of game pressure at play time
+        self.keyPressureMod = 0.0        # The key player's pressure modifier
+        self.qbPressureMod = 0.0         # QB-specific pressure modifier (pass plays)
+        self.rcvPressureMod = 0.0        # Receiver-specific pressure modifier (pass plays)
+        self.isClutchPlay = False        # High pressure + positive mod + good outcome
+        self.isChokePlay = False         # High pressure + negative mod + bad outcome
+        self.clutchPlayerName = ''       # Name of the player who clutched/choked
+        self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
 
     def fieldGoalTry(self):
@@ -3706,6 +4015,9 @@ class Play():
         
         # Apply pressure modifier to kicker's effective skill
         pressureModifier = self.kicker.attributes.getPressureModifier(self.game.gamePressure)
+        self.gamePressure = self.game.gamePressure
+        self.keyPressureMod = pressureModifier
+        self.clutchPlayerName = self.kicker.name
         adjustedSkill = normalizedSkill + (pressureModifier / 100)  # Normalize pressure modifier to skill scale
         
         # Final probability: base * skill, then add bonus for short kicks
@@ -3804,12 +4116,15 @@ class Play():
             self.playResult = PlayResult.FourthDown
 
     def kneel(self):
-        """QB kneels to drain the clock. Loses 1 yard, clock runs down ~40 seconds."""
+        """QB kneels to drain the clock. Loses 1 yard, ~4 seconds of game time.
+        The remaining play-clock drain (~36 sec) is handled post-play in the game loop,
+        AFTER the defense gets a chance to call timeout."""
         self.playType = PlayType.Kneel
         self.yardage = -1
         self.game.clockRunning = True
-        clockDrain = min(40, self.game.gameClockSeconds)
-        self.game.gameClockSeconds -= clockDrain
+        # Only drain the actual play time (snap to knee-down)
+        kneelDuration = min(4, self.game.gameClockSeconds)
+        self.game.gameClockSeconds -= kneelDuration
         if self.game.down == 1:
             self.playResult = PlayResult.SecondDown
         elif self.game.down == 2:
@@ -3960,7 +4275,10 @@ class Play():
 
         # Apply pressure modifier to runner's performance
         runnerPressureMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
-        
+        self.gamePressure = self.game.gamePressure
+        self.keyPressureMod = runnerPressureMod
+        self.clutchPlayerName = self.runner.name
+
         # STAGE 1: Calculate gap quality (like receiver openness)
         # Determine designed play gap — weighted by coach's offensive gameplan
         isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
@@ -4490,7 +4808,24 @@ class Play():
                 self.selectedTarget = selectedTarget
                 self.receiver = selectedTarget['receiver']
                 self.passType = selectedTarget['route']
-            
+
+                # QB discipline check: does the QB follow the sideline play call?
+                # Discipline range is 60-100
+                if self.targetSideline:
+                    qbDisc = self.passer.attributes.discipline
+                    if qbDisc >= 85:
+                        pass  # Elite: always follows the call
+                    elif qbDisc >= 75:
+                        if _random.random() > 0.90:
+                            self.targetSideline = False  # 10% chance to freelance
+                    elif qbDisc >= 70:
+                        if _random.random() > 0.80:
+                            self.targetSideline = False  # 20% chance to freelance
+                    else:
+                        # 60-69: lowest discipline tier
+                        if _random.random() > 0.70:
+                            self.targetSideline = False  # 30% chance to freelance
+
             # Handle throw away
             if self.passType == PassType.throwAway:
                 self.yardage = 0
@@ -4499,7 +4834,10 @@ class Play():
                 # Apply pressure modifiers
                 qbPressureMod = self.passer.attributes.getPressureModifier(self.game.gamePressure)
                 receiverPressureMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
-                
+                self.gamePressure = self.game.gamePressure
+                self.qbPressureMod = qbPressureMod
+                self.rcvPressureMod = receiverPressureMod
+
                 # STAGE 3: Calculate throw quality
                 throwQuality = self.calculateThrowQuality(
                     self.passType,
@@ -4509,7 +4847,11 @@ class Play():
                     self.blockingModifier,
                     qbPressureMod
                 )
-                
+
+                # Sideline throws are harder — tighter windows
+                if self.targetSideline:
+                    throwQuality = max(5, throwQuality * 0.90)
+
                 # STAGE 4: Calculate catch probability and outcome
                 catchProbs = self.calculateCatchProbability(
                     throwQuality,
@@ -4518,7 +4860,12 @@ class Play():
                     self.defense.defensePassCoverageRating,
                     receiverPressureMod
                 )
-                
+
+                # QB choking under pressure increases INT risk
+                if qbPressureMod <= -CLUTCH_MODIFIER_THRESHOLD:
+                    chokeIntBoost = abs(qbPressureMod) * 0.5
+                    catchProbs['intProb'] = min(25, catchProbs['intProb'] + chokeIntBoost)
+
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
                 
@@ -4548,8 +4895,26 @@ class Play():
                                            self.receiver.gameAttributes.speed + 
                                            self.receiver.gameAttributes.playMakingAbility) / 3
                         
-                        # YAC potential based on field position
-                        yacMaxYards = min(15, self.yardsToEndzone - passYards)
+                        # YAC potential based on field position and sideline targeting
+                        # Receiver discipline affects YAC cap on sideline routes
+                        if self.targetSideline:
+                            rcvDisc = self.receiver.attributes.discipline
+                            if rcvDisc >= 85:
+                                yacCap = 5        # Elite: gets out ASAP
+                                decayMult = 2.0   # Very steep — minimal YAC
+                            elif rcvDisc >= 75:
+                                yacCap = 8        # Good: balances getting out with some YAC
+                                decayMult = 1.6
+                            elif rcvDisc >= 70:
+                                yacCap = 10       # Average: tries a bit more
+                                decayMult = 1.3
+                            else:
+                                yacCap = 12       # 60-69: tries to stretch it
+                                decayMult = 1.1
+                        else:
+                            yacCap = 15
+                            decayMult = 1.0
+                        yacMaxYards = min(yacCap, self.yardsToEndzone - passYards)
                         
                         if yacMaxYards > 0:
                             yacYardages = np.arange(0, yacMaxYards + 1)
@@ -4560,7 +4925,8 @@ class Play():
                             offenseContribution = (2.0 * yacOffense) / 100  # was 1.5
                             defenseContribution = 0.2 * yacDefense / 100    # was 0.3
                             yacDecayRate = round(0.08 + 0.1 * (np.exp(defenseContribution) - offenseContribution), 3)  # was 0.12
-                            
+                            yacDecayRate *= decayMult
+
                             # Exponential decay curve for YAC
                             yacCurve = np.exp(-yacDecayRate * yacYardages)
                             yacCurve /= np.sum(yacCurve)
@@ -4573,16 +4939,37 @@ class Play():
                         self.yardage = self.yardsToEndzone
                     
                     # Determine if receiver went out of bounds (for clock management)
-                    # Longer passes and sideline routes more likely to go OOB
-                    if self.passType == PassType.short:
-                        oobChance = 10
-                    elif self.passType == PassType.medium:
-                        oobChance = 20
-                    elif self.passType == PassType.long:
-                        oobChance = 30  # Deep sideline shots
+                    if self.targetSideline:
+                        # Sideline route: high OOB base rates
+                        if self.passType == PassType.short:
+                            oobChance = 75
+                        elif self.passType == PassType.medium:
+                            oobChance = 85
+                        elif self.passType == PassType.long:
+                            oobChance = 90
+                        else:
+                            oobChance = 15
+                        # Receiver discipline modifier (60-100 range)
+                        rcvDisc = self.receiver.attributes.discipline
+                        if rcvDisc >= 85:
+                            oobChance += 5    # Elite: gets out immediately
+                        elif rcvDisc >= 75:
+                            pass              # Good: uses base rates
+                        elif rcvDisc >= 70:
+                            oobChance -= 5    # Average: slightly more likely to stay in
+                        else:
+                            oobChance -= 15   # 60-69: tries to extend the play
                     else:
-                        oobChance = 15
-                    
+                        # Over the middle: low OOB chance
+                        if self.passType == PassType.short:
+                            oobChance = 10
+                        elif self.passType == PassType.medium:
+                            oobChance = 20
+                        elif self.passType == PassType.long:
+                            oobChance = 30
+                        else:
+                            oobChance = 15
+
                     self.isInBounds = batched_randint(1, 100) > oobChance
                     
                     # Update stats

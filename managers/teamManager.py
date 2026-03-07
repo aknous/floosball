@@ -761,11 +761,20 @@ class TeamManager:
                 # Restore preserved values
                 team.seasonTeamStats['elo'] = current_elo
                 team.seasonTeamStats['overallRating'] = current_rating
-                team.seasonTeamStats['season'] = getattr(self.serviceContainer.getService('season_manager'), 'currentSeasonNumber', 1) if self.serviceContainer.getService('season_manager') else 1
+                sm = self.serviceContainer.getService('season_manager')
+                team.seasonTeamStats['season'] = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
                 
-                # Clear schedule for new season
+                # Clear schedule and season-specific flags for new season
                 team.schedule = []
-        
+
+            # Reset season-specific flags (must happen even if seasonTeamStats missing)
+            team.eliminated = False
+            team.clinchedPlayoffs = False
+            team.clinchedTopSeed = False
+            team.leagueChampion = False
+            team.floosbowlChampion = False
+            team.winningStreak = False
+
         self.logger.info("Cleared season stats for all teams")
 
     def loadSeasonTeamStats(self, seasonNumber: int) -> None:

@@ -178,6 +178,7 @@ class Player:
         self.freeAgentYears = 0
         self.serviceTime = PlayerServiceTime.Rookie
         self.leagueChampionships = []
+        self.mvpAwards = []
 
         # Use optimized stats instead of deep copying
         self.gameStats = get_optimized_stats()
@@ -188,7 +189,8 @@ class Player:
         self.gameStatsDict = self.gameStats.to_legacy_dict()
         self.seasonStatsDict = self.seasonStats.to_legacy_dict()
         self.careerStatsDict = self.careerStats.to_legacy_dict()
-        
+        self.seasonStatsArchive = []
+
         # Initialize StatTracker with the stats dictionaries
         self.stat_tracker = StatTracker(
             self.gameStatsDict, 
@@ -211,15 +213,16 @@ class Player:
         # Update stat_tracker reference to the new dict
         self.stat_tracker.game_stats_dict = self.gameStatsDict
 
-        self.seasonStatsArchive = []
-
     def postgameChanges(self):
         self.attributes.confidenceModifier = round((self.attributes.confidenceModifier + self.gameAttributes.confidenceModifier)/2, 3)
         self.attributes.determinationModifier = round((self.attributes.determinationModifier + self.gameAttributes.determinationModifier)/2, 3)
         self.gamesPlayed += 1
-        # Update optimized stats and sync back to legacy dict
-        self.seasonStats.gp = self.gamesPlayed
+        # Sync stat_tracker data to optimized objects, then update gp in both
         self.sync_stats_dicts()
+        self.seasonStats.gp = self.gamesPlayed
+        self.seasonStatsDict['gp'] = self.gamesPlayed
+        self.careerStats.gp += 1
+        self.careerStatsDict['gp'] = self.careerStatsDict.get('gp', 0) + 1
         if isinstance(self.team,Team):
             if self.team.winningStreak:
                 self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(0,25)/100), 3)

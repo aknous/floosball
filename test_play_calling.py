@@ -38,11 +38,12 @@ from floosball_game import PlayType
 # Minimal stubs — only the attributes playCaller() and the weight pipeline need
 # ─────────────────────────────────────────────────────────────────────────────
 
-def makeCoach(aggressiveness=80, offensiveMind=80, adaptability=80):
+def makeCoach(aggressiveness=80, offensiveMind=80, adaptability=80, clockManagement=80):
     return SimpleNamespace(
         aggressiveness=aggressiveness,
         offensiveMind=offensiveMind,
         adaptability=adaptability,
+        clockManagement=clockManagement,
     )
 
 def makeTeam(name='TEAM', coach=None, defRunRating=75, defPassRating=75):
@@ -58,6 +59,7 @@ def makeTeam(name='TEAM', coach=None, defRunRating=75, defPassRating=75):
         rosterDict={'k': SimpleNamespace(maxFgDistance=52)},
         defenseRunCoverageRating=defRunRating,
         defensePassRating=defPassRating,
+        defensePassCoverageRating=defPassRating,
         elo=1500,
     )
 
@@ -364,9 +366,9 @@ def runAnalysis():
 # Part 2 — Clock management triggers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SHORT_PLAYS  = {'Play8', 'Play10', 'Play11', 'Play12'}
-_MEDIUM_PLAYS = {'Play3', 'Play6', 'Play7', 'Play13'}
-_LONG_PLAYS   = {'Play1', 'Play2', 'Play4', 'Play5'}
+_SHORT_PLAYS  = {'Play8', 'Play10', 'Play11', 'Play12', 'Play14'}
+_MEDIUM_PLAYS = {'Play3', 'Play6', 'Play7', 'Play13', 'Play15', 'Play16', 'Play17'}
+_LONG_PLAYS   = {'Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'}
 
 
 class MockPlay:
@@ -496,20 +498,25 @@ def runClockManagementTests():
     # Convention for spike tests: offIsHome=False (away team on offense).
     # For away team to be TRAILING: homeScore > awayScore.
     # timeoutsLeft = awayTimeoutsRemaining (the offensive team's TOs).
+    # Use a high-IQ coach for "should spike" tests so the random gate reliably passes
+    smartCoach = makeCoach(aggressiveness=100, offensiveMind=100, adaptability=100, clockManagement=100)
+
     print("\n  Spike:")
 
     # Q4, trailing, 0:10 left, no TOs, clock running → SPIKE
     clockTest("Q4  trailing  0:10  no TOs  running   → SPIKE",
               makeGame(down=2, ytg=15, quarter=4, clock=10,
                        homeScore=14, awayScore=7, offIsHome=False,
-                       clockRunning=True, homeTOs=3, awayTOs=0),
+                       clockRunning=True, homeTOs=3, awayTOs=0,
+                       offCoach=smartCoach),
               expectType=PlayType.Spike)
 
     # Q2, trailing, 0:12 left, no TOs, clock running → SPIKE
     clockTest("Q2  trailing  0:12  no TOs  running   → SPIKE",
               makeGame(down=1, ytg=10, quarter=2, clock=12,
                        homeScore=14, awayScore=7, offIsHome=False,
-                       clockRunning=True, homeTOs=3, awayTOs=0),
+                       clockRunning=True, homeTOs=3, awayTOs=0,
+                       offCoach=smartCoach),
               expectType=PlayType.Spike)
 
     # Trailing but has 1 TO — spike requires timeoutsLeft==0, so no spike
@@ -580,23 +587,29 @@ def runTimeoutTests():
     # Away team is TRAILING when homeScore > awayScore.
     # Offensive TOs = awayTimeoutsRemaining.
 
+    # Use a high-IQ coach for "should" tests so the random gate reliably passes
+    smartCoach = makeCoach(aggressiveness=100, offensiveMind=100, adaptability=100, clockManagement=100)
+
     print("\n  Should call timeout:")
     timeoutTest("Q4  trailing -7   1:30  2 TOs  running      → TO",
                 makeGame(down=2, ytg=10, quarter=4, clock=90,
                          homeScore=14, awayScore=7, offIsHome=False,
-                         clockRunning=True, homeTOs=3, awayTOs=2),
+                         clockRunning=True, homeTOs=3, awayTOs=2,
+                         offCoach=smartCoach),
                 expectTimeout=True)
 
     timeoutTest("Q4  trailing -3   0:45  1 TO   running      → TO",
                 makeGame(down=1, ytg=10, quarter=4, clock=45,
                          homeScore=10, awayScore=7, offIsHome=False,
-                         clockRunning=True, homeTOs=3, awayTOs=1),
+                         clockRunning=True, homeTOs=3, awayTOs=1,
+                         offCoach=smartCoach),
                 expectTimeout=True)
 
     timeoutTest("Q4  trailing -14  2:00  3 TOs  running      → TO",
                 makeGame(down=3, ytg=8, quarter=4, clock=120,
                          homeScore=21, awayScore=7, offIsHome=False,
-                         clockRunning=True, homeTOs=3, awayTOs=3),
+                         clockRunning=True, homeTOs=3, awayTOs=3,
+                         offCoach=smartCoach),
                 expectTimeout=True)
 
     print("\n  Should NOT call timeout:")

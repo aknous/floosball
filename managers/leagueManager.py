@@ -51,11 +51,12 @@ class League:
                 'team': team,
                 'wins': team.seasonTeamStats.get('wins', 0) if hasattr(team, 'seasonTeamStats') else 0,
                 'losses': team.seasonTeamStats.get('losses', 0) if hasattr(team, 'seasonTeamStats') else 0,
-                'winPct': self._calculateWinPercentage(team)
+                'winPct': self._calculateWinPercentage(team),
+                'scoreDiff': team.seasonTeamStats.get('scoreDiff', 0) if hasattr(team, 'seasonTeamStats') else 0
             })
-        
-        # Sort by win percentage (descending), then by wins (descending)
-        standings.sort(key=lambda x: (x['winPct'], x['wins']), reverse=True)
+
+        # Sort by win percentage (descending), then by score differential (descending)
+        standings.sort(key=lambda x: (x['winPct'], x['scoreDiff']), reverse=True)
         self.standings = standings
         return standings
         

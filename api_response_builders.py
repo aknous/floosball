@@ -88,16 +88,18 @@ class PlayerResponseBuilder(ResponseBuilder):
     @staticmethod
     def buildBasicPlayerDict(player) -> Dict[str, Any]:
         """Build basic player information dictionary"""
+        team = player.team
+        hasTeamObj = team and not isinstance(team, str)
         return {
             'name': player.name,
             'id': player.id,
             'position': player.position.name,
-            'team': player.team.name if player.team else None,
-            'teamCity': player.team.city if player.team else None,
-            'teamColor': player.team.color if player.team else None,
-            'teamSecondaryColor': player.team.secondaryColor if player.team else None,
-            'teamId': player.team.id if player.team else None,
-            'teamAbbr': player.team.abbr if player.team else None,
+            'team': team.name if hasTeamObj else (team if isinstance(team, str) else None),
+            'teamCity': team.city if hasTeamObj else None,
+            'teamColor': team.color if hasTeamObj else None,
+            'teamSecondaryColor': team.secondaryColor if hasTeamObj else None,
+            'teamId': team.id if hasTeamObj else None,
+            'teamAbbr': team.abbr if hasTeamObj else None,
             'seasonsPlayed': player.seasonsPlayed,
             'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
             'playerRating': player.playerRating

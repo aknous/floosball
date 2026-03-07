@@ -10,11 +10,15 @@ from database.models import (
     Player,
     PlayerAttributes,
     PlayerCareerStats,
+    PlayerSeasonStats,
     TeamSeasonStats,
     Game,
     GamePlayerStats,
     Record,
     UnusedName,
+    User,
+    FantasyRoster,
+    FantasyRosterPlayer,
 )
 
 

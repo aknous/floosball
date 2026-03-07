@@ -884,7 +884,7 @@ class PlayerManager:
         
         # Update player status
         player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
-        player.team = None
+        player.team = 'Retired'
         
         # Add to retirement lists
         self.retiredPlayers.append(player)
@@ -1825,7 +1825,95 @@ class PlayerManager:
         self.activeKs.sort(key=lambda player: getattr(player, 'seasonPerformanceRating', 0), reverse=True)
         
         logger.info(f"Performance ratings calculated for week {currentWeek}")
-    
+
+    def _computeMvpCandidates(self, minGamesPlayed: int = 10) -> List[Dict[str, Any]]:
+        """Compute MVP scores using pooled-std z-scores of performance rating.
+
+        Each position uses its own mean (comparing within peers) but all
+        positions share a pooled standard deviation.  This prevents small
+        position groups (TE, K) from producing inflated z-scores due to
+        tight within-group variance, while staying position-neutral
+        (no FP-based weighting that would favour scoring-formula advantages).
+
+        Returns all eligible candidates sorted by zScore descending.
+        """
+        import numpy as np
+        from api_response_builders import PlayerResponseBuilder
+
+        positionGroups = {
+            'QB': self.activeQbs,
+            'RB': self.activeRbs,
+            'WR': self.activeWrs,
+            'TE': self.activeTes,
+            'K': self.activeKs,
+        }
+
+        # First pass: collect eligible players and per-position means
+        positionData = {}  # position -> (eligible, mean)
+        allRatings = []
+
+        for position, players in positionGroups.items():
+            eligible = [p for p in players
+                        if getattr(p, 'seasonPerformanceRating', 0) > 0
+                        and getattr(p, 'gamesPlayed', 0) >= minGamesPlayed]
+            if len(eligible) < 2:
+                continue
+            ratings = [p.seasonPerformanceRating for p in eligible]
+            positionData[position] = (eligible, float(np.mean(ratings)))
+            allRatings.extend(ratings)
+
+        if not allRatings:
+            return []
+
+        # Pooled std across all positions — same yardstick for everyone
+        pooledStd = float(np.std(allRatings))
+        if pooledStd == 0:
+            return []
+
+        candidates = []
+        for position, (eligible, posMean) in positionData.items():
+            for player in eligible:
+                zScore = (player.seasonPerformanceRating - posMean) / pooledStd
+                hasTeamObj = hasattr(player.team, 'name')
+                candidates.append({
+                    'player': player,
+                    'name': player.name,
+                    'id': player.id,
+                    'position': position,
+                    'team': player.team.name if hasTeamObj else (player.team if isinstance(player.team, str) else 'FA'),
+                    'teamAbbr': getattr(player.team, 'abbr', '') if hasTeamObj else '',
+                    'teamColor': getattr(player.team, 'color', '#334155') if hasTeamObj else '#334155',
+                    'teamId': player.team.id if hasTeamObj else None,
+                    'seasonPerformanceRating': player.seasonPerformanceRating,
+                    'zScore': round(zScore, 3),
+                    'gamesPlayed': getattr(player, 'gamesPlayed', 0),
+                    'fantasyPoints': player.seasonStatsDict.get('fantasyPoints', 0),
+                    'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
+                })
+
+        candidates.sort(key=lambda x: x['zScore'], reverse=True)
+        return candidates
+
+    def selectMVP(self, minGamesPlayed: int = 10) -> Optional[Dict[str, Any]]:
+        """Select the MVP — the candidate with the highest z-score."""
+        candidates = self._computeMvpCandidates(minGamesPlayed)
+        if not candidates:
+            return None
+        mvp = dict(candidates[0])
+        mvp.pop('player', None)
+        return mvp
+
+    def getMvpRankings(self, limit: int = 10, minGamesPlayed: int = 1) -> List[Dict[str, Any]]:
+        """Get top MVP candidates ranked by z-score for the dashboard."""
+        candidates = self._computeMvpCandidates(minGamesPlayed)
+        results = []
+        for rank, c in enumerate(candidates[:limit], 1):
+            entry = dict(c)
+            entry.pop('player', None)
+            entry['rank'] = rank
+            results.append(entry)
+        return results
+
     def conductFreeAgencySimulation(self, freeAgencyOrder: List, currentSeason: int, leagueHighlights: List = None, eventLog: List = None) -> Dict[str, Any]:
         """
         Complete Free Agency Simulation System - replaces original free agency logic from offseason() function

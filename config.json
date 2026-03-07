@@ -1,9 +1,9 @@
 {
     "adminPassword": "floosball",
-    "jwtSecret": "floosball-jwt-secret-change-in-production-use-long-random-string",
+    "clerkJwksUrl": "https://capable-dragon-13.clerk.accounts.dev/.well-known/jwks.json",
     "leagueConfig": {
         "cap": 30,
-        "totalSeasons": 2,
+        "totalSeasons": 10,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
         "lastSeason": 0,
@@ -109,7 +109,7 @@
         {
             "city": "Colorado",
             "name": "Leg Warmers",
-            "abbr": "DEN",
+            "abbr": "COL",
             "color": "#F06292",
             "secondaryColor": "#536DFE",
             "tertiaryColor": "#F48FB1"

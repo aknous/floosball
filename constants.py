@@ -45,13 +45,18 @@ NORMALIZATION_FACTOR = 100
 # Game clock
 QUARTER_SECONDS = 900           # 15 minutes per quarter
 KNEEL_DRAIN_SECONDS = 40        # Clock seconds consumed by a kneel play
-SPIKE_CLOCK_THRESHOLD = 15      # Seconds remaining that triggers a spike consideration
+SPIKE_CLOCK_THRESHOLD = 45      # Seconds remaining that triggers a spike consideration
 TIMEOUT_CLOCK_THRESHOLD = 120   # Seconds remaining that triggers timeout / end-of-half FG logic
 
 # Field & scoring rules
 FG_SNAP_DISTANCE = 17           # Yards added to line-of-scrimmage for snap + hold on FG attempts
+FG_REASONABLE_RATIO = 0.85      # Fraction of kicker's maxFgDistance coaches will attempt (e.g., 0.85 * 70 = 59 for elite kicker)
 YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
+
+# Clutch/Choke thresholds
+CLUTCH_PRESSURE_THRESHOLD = 60   # Min gamePressure (0-100) for clutch/choke consideration
+CLUTCH_MODIFIER_THRESHOLD = 3.0  # Min abs(keyPressureMod) for clutch/choke indicator
 
 # Play selection
 RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage matchup weight delta
