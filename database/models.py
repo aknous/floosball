@@ -552,12 +552,20 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    clerk_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     username: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    pending_favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    favorite_team_locked_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    fantasy_rosters: Mapped[list["FantasyRoster"]] = relationship("FantasyRoster", back_populates="user")
+    user_cards: Mapped[list["UserCard"]] = relationship("UserCard", back_populates="user")
+    currency: Mapped[Optional["UserCurrency"]] = relationship("UserCurrency", back_populates="user", uselist=False)
 
     # Indexes
     __table_args__ = (
@@ -567,6 +575,59 @@ class User(Base):
 
     def __repr__(self):
         return f"<User(id={self.id}, email='{self.email}')>"
+
+
+class FantasyRoster(Base):
+    """Fantasy roster table - stores a user's fantasy roster for a season."""
+    __tablename__ = "fantasy_rosters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    total_points: Mapped[float] = mapped_column(Float, default=0.0)
+    card_bonus_points: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="fantasy_rosters")
+    players: Mapped[list["FantasyRosterPlayer"]] = relationship("FantasyRosterPlayer", back_populates="roster", cascade="all, delete-orphan")
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", name="uq_fantasy_roster_user_season"),
+        Index("idx_fantasy_roster_season", "season"),
+        Index("idx_fantasy_roster_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<FantasyRoster(id={self.id}, user_id={self.user_id}, season={self.season}, locked={self.is_locked})>"
+
+
+class FantasyRosterPlayer(Base):
+    """Fantasy roster player table - stores a player slot in a fantasy roster."""
+    __tablename__ = "fantasy_roster_players"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    roster_id: Mapped[int] = mapped_column(Integer, ForeignKey("fantasy_rosters.id"), nullable=False)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    slot: Mapped[str] = mapped_column(String(10), nullable=False)  # QB, RB, WR1, WR2, TE, K
+    points_at_lock: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Relationships
+    roster: Mapped["FantasyRoster"] = relationship("FantasyRoster", back_populates="players")
+    player: Mapped["Player"] = relationship("Player")
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint("roster_id", "slot", name="uq_fantasy_roster_slot"),
+        Index("idx_fantasy_player_roster", "roster_id"),
+    )
+
+    def __repr__(self):
+        return f"<FantasyRosterPlayer(roster_id={self.roster_id}, slot='{self.slot}', player_id={self.player_id})>"
 
 
 class UnusedName(Base):
@@ -596,3 +657,217 @@ class SimulationState(Base):
 
     def __repr__(self):
         return f"<SimulationState(season={self.current_season}, week={self.current_week}, playoffs={self.in_playoffs})>"
+
+
+# ─── Trading Card System ───────────────────────────────────────────────────────
+
+
+class CardTemplate(Base):
+    """Card template table - blueprint for every card (one per player/edition/season)."""
+    __tablename__ = "card_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    edition: Mapped[str] = mapped_column(String(20), nullable=False)  # base, holographic, prismatic, gold, chrome, diamond
+    season_created: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Snapshot of player at creation time
+    player_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    player_rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)  # QB=1, RB=2, WR=3, TE=4, K=5
+
+    # Effect configuration (JSON)
+    effect_config: Mapped[dict] = mapped_column(JSON, nullable=False)
+    rarity_weight: Mapped[int] = mapped_column(Integer, nullable=False)
+    sell_value: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    player: Mapped["Player"] = relationship("Player")
+    team: Mapped[Optional["Team"]] = relationship("Team")
+    user_cards: Mapped[list["UserCard"]] = relationship("UserCard", back_populates="card_template")
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "edition", "season_created", name="uq_card_template"),
+        Index("idx_card_template_season", "season_created"),
+        Index("idx_card_template_edition", "edition"),
+        Index("idx_card_template_player", "player_id"),
+    )
+
+    def __repr__(self):
+        return f"<CardTemplate(id={self.id}, player='{self.player_name}', edition='{self.edition}', S{self.season_created})>"
+
+
+class UserCard(Base):
+    """User card table - a card instance in a user's collection."""
+    __tablename__ = "user_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    card_template_id: Mapped[int] = mapped_column(Integer, ForeignKey("card_templates.id"), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    acquired_via: Mapped[str] = mapped_column(String(20), nullable=False)  # pack_standard, pack_premium, pack_elite, starter
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="user_cards")
+    card_template: Mapped["CardTemplate"] = relationship("CardTemplate", back_populates="user_cards")
+
+    __table_args__ = (
+        Index("idx_user_cards_user", "user_id"),
+        Index("idx_user_cards_template", "card_template_id"),
+    )
+
+    def __repr__(self):
+        return f"<UserCard(id={self.id}, user_id={self.user_id}, template_id={self.card_template_id})>"
+
+
+class EquippedCard(Base):
+    """Equipped card table - cards in play for a given week (max 5 per user)."""
+    __tablename__ = "equipped_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1–5
+    user_card_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_cards.id"), nullable=False)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    streak_count: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    user_card: Mapped["UserCard"] = relationship("UserCard")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "week", "slot_number", name="uq_equipped_card_slot"),
+        Index("idx_equipped_cards_user_week", "user_id", "season", "week"),
+    )
+
+    def __repr__(self):
+        return f"<EquippedCard(user_id={self.user_id}, S{self.season}W{self.week}, slot={self.slot_number})>"
+
+
+class WeeklyCardBonus(Base):
+    """Stores per-week card bonus FP for each roster, enabling weekly leaderboard breakdown."""
+    __tablename__ = "weekly_card_bonuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    roster_id: Mapped[int] = mapped_column(Integer, ForeignKey("fantasy_rosters.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    bonus_fp: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("roster_id", "week", name="uq_weekly_card_bonus_roster_week"),
+        Index("idx_weekly_card_bonus_season_week", "season", "week"),
+    )
+
+    def __repr__(self):
+        return f"<WeeklyCardBonus(user_id={self.user_id}, S{self.season}W{self.week}, fp={self.bonus_fp})>"
+
+
+class UserCurrency(Base):
+    """User currency table - tracks Floobit balance per user."""
+    __tablename__ = "user_currency"
+
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), primary_key=True)
+    balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lifetime_earned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lifetime_spent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="currency")
+
+    def __repr__(self):
+        return f"<UserCurrency(user_id={self.user_id}, balance={self.balance})>"
+
+
+class CurrencyTransaction(Base):
+    """Currency transaction table - audit log for all Floobit changes."""
+    __tablename__ = "currency_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # positive = earned, negative = spent
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    transaction_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_currency_tx_user", "user_id"),
+        Index("idx_currency_tx_user_season", "user_id", "season"),
+        Index("idx_currency_tx_type", "transaction_type"),
+    )
+
+    def __repr__(self):
+        return f"<CurrencyTransaction(user_id={self.user_id}, amount={self.amount}, type='{self.transaction_type}')>"
+
+
+class PackType(Base):
+    """Pack type table - static configuration for available card packs."""
+    __tablename__ = "pack_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)  # standard, premium, elite
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    cards_per_pack: Mapped[int] = mapped_column(Integer, nullable=False)
+    guaranteed_rarity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    rarity_weights: Mapped[dict] = mapped_column(JSON, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+    def __repr__(self):
+        return f"<PackType(name='{self.name}', cost={self.cost})>"
+
+
+class PackOpening(Base):
+    """Pack opening table - records every pack purchase/opening."""
+    __tablename__ = "pack_openings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    pack_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("pack_types.id"), nullable=False)
+    cards_received: Mapped[list] = mapped_column(JSON, nullable=False)
+    cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    pack_type: Mapped["PackType"] = relationship("PackType")
+
+    __table_args__ = (
+        Index("idx_pack_openings_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<PackOpening(user_id={self.user_id}, pack='{self.pack_type_id}')>"
+
+
+class FeaturedShopCard(Base):
+    """Featured shop card — persisted per-user selection of cards for sale each season."""
+    __tablename__ = "featured_shop_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    card_template_id: Mapped[int] = mapped_column(Integer, ForeignKey("card_templates.id"), nullable=False)
+    purchased: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    card_template: Mapped["CardTemplate"] = relationship("CardTemplate")
+
+    __table_args__ = (
+        Index("idx_featured_shop_user_season", "user_id", "season"),
+    )

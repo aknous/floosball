@@ -35,8 +35,14 @@ class EventType(Enum):
     # Standings events
     STANDINGS_UPDATE = "standings_update"
 
+    # Fantasy events
+    LEADERBOARD_UPDATE = "leaderboard_update"
+
     # League news (clinches, eliminations, championships)
     LEAGUE_NEWS = "league_news"
+
+    # Awards
+    MVP_ANNOUNCEMENT = "mvp_announcement"
     
     # Player events
     PLAYER_STAT_UPDATE = "player_stat_update"
@@ -293,6 +299,16 @@ class SeasonEvent:
         return {
             'event': EventType.REGULAR_SEASON_COMPLETE.value,
             'message': 'Regular season complete — Playoffs begin tomorrow'
+        }
+
+    @staticmethod
+    def mvpAnnouncement(mvpData: Dict[str, Any], seasonNumber: int) -> Dict[str, Any]:
+        """Broadcast MVP announcement after regular season"""
+        return {
+            'event': EventType.MVP_ANNOUNCEMENT.value,
+            'seasonNumber': seasonNumber,
+            'mvp': mvpData,
+            'message': f"Season {seasonNumber} MVP: {mvpData['name']} ({mvpData['position']}, {mvpData['team']})"
         }
 
 

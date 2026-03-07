@@ -67,6 +67,7 @@ class Season:
         self.nonPlayoffTeams: Dict[str, List[FloosTeam.Team]] = {}
         self.leagueHighlights: List[Dict[str, Any]] = []
         self.freeAgencyOrder: List[FloosTeam.Team] = []
+        self.mvp: Optional[Dict[str, Any]] = None
 
 class SeasonManager:
     """Manages season simulation, scheduling, and progression"""
@@ -169,7 +170,10 @@ class SeasonManager:
         
         # Initialize season stats
         self._initializeSeasonStats()
-        
+
+        # Generate card templates for the new season
+        self._generateCardTemplates(seasonNumber)
+
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
     
     async def runSeasonSimulation(self, resumeFromWeek: int = 0) -> None:
@@ -193,7 +197,10 @@ class SeasonManager:
         
         # Simulate regular season
         await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
-        
+
+        # Select MVP based on regular season performance
+        await self._selectSeasonMVP()
+
         # Simulate playoffs
         await self._simulatePlayoffs()
         
@@ -246,7 +253,20 @@ class SeasonManager:
                     weekText=self.currentSeason.currentWeekText
                 )
                 broadcaster.broadcast_sync('season', week_event)
-            
+
+            # Lock equipped cards for this week
+            try:
+                from database.connection import get_session as _getSession
+                from database.repositories.card_repositories import EquippedCardRepository
+                lockSession = _getSession()
+                EquippedCardRepository(lockSession).lockWeek(
+                    self.currentSeason.seasonNumber, self.currentSeason.currentWeek
+                )
+                lockSession.commit()
+                lockSession.close()
+            except Exception as e:
+                logger.error(f"Failed to lock equipped cards for week {self.currentSeason.currentWeek}: {e}")
+
             weekStartTime = week['startTime']
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
             self.currentSeason.activeGames = week['games']
@@ -279,9 +299,19 @@ class SeasonManager:
             # Create tasks for all games in the week to run concurrently
             gameTasks = [self._simulateGame(game) for game in weekGames]
 
+            # Start periodic leaderboard broadcast during games
+            leaderboardTask = asyncio.ensure_future(self._broadcastLeaderboardPeriodically())
+
             # Wait for all games in the week to complete concurrently
             await asyncio.gather(*gameTasks)
-            
+
+            # Stop periodic leaderboard broadcast
+            leaderboardTask.cancel()
+            try:
+                await leaderboardTask
+            except asyncio.CancelledError:
+                pass
+
             # Notify about week completion (for state saving)
             await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
 
@@ -390,15 +420,19 @@ class SeasonManager:
             # Simulate the game
             await gameInstance.playGame()
             
+            # Save game to database BEFORE postgame processing zeroes gameStatsDict.fantasyPoints
+            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+                self._saveGameToDatabase(gameInstance)
+
             # Update team records
             self._updateTeamRecords(gameInstance)
-            
+
             # Process post-game statistics (replaces original postgame() method)
             self.recordsManager.processPostGameStats(gameInstance)
-            
+
             # Log detailed game stats
             self._logGameStats(gameInstance)
-            
+
             # Update ELO ratings based on game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
@@ -425,10 +459,6 @@ class SeasonManager:
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
-
-            # Save game to database if enabled
-            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
-                self._saveGameToDatabase(gameInstance)
 
         except Exception as e:
             logger.error(
@@ -546,8 +576,31 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Error logging game stats: {e}")
     
+    async def _broadcastLeaderboardPeriodically(self, interval: int = 10):
+        """Broadcast leaderboard data every `interval` seconds while games are active."""
+        while True:
+            await asyncio.sleep(interval)
+            self._broadcastLeaderboardUpdate()
+
+    def _broadcastLeaderboardUpdate(self):
+        """Compute and broadcast current leaderboard via WebSocket."""
+        if not BROADCASTING_AVAILABLE or not broadcaster.is_enabled():
+            return
+        try:
+            from api.main import _computeLeaderboardData
+            data = _computeLeaderboardData()
+            event = {
+                'event': 'leaderboard_update',
+                'leaderboard': data.get('leaderboard', []),
+                'season': data.get('season'),
+                'week': self.currentSeason.currentWeek if self.currentSeason else 0,
+            }
+            broadcaster.broadcast_sync('season', event)
+        except Exception as e:
+            logger.warning(f"Leaderboard broadcast failed: {e}")
+
     async def _onWeekComplete(self, week: int, in_playoffs: bool, playoff_round: Optional[str] = None) -> None:
-        """Called after each week completes - triggers state save"""
+        """Called after each week completes - triggers state save and card effect processing"""
         if self.stateUpdateCallback:
             await self.stateUpdateCallback(
                 current_season=self.currentSeason.seasonNumber,
@@ -555,7 +608,233 @@ class SeasonManager:
                 in_playoffs=in_playoffs,
                 playoff_round=playoff_round
             )
-    
+
+        # Process card effects for this week (persists bonuses to DB)
+        self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
+
+        # Unlock equipped cards now that week is over
+        try:
+            from database.connection import get_session as _getSession
+            from database.repositories.card_repositories import EquippedCardRepository
+            unlockSession = _getSession()
+            EquippedCardRepository(unlockSession).unlockWeek(
+                self.currentSeason.seasonNumber, week
+            )
+            unlockSession.commit()
+            unlockSession.close()
+            logger.info(f"Unlocked equipped cards for week {week}")
+        except Exception as e:
+            logger.error(f"Failed to unlock equipped cards for week {week}: {e}")
+
+        # Broadcast week_end event so frontend can refresh card state
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            weekEndEvent = SeasonEvent.weekEnd(
+                seasonNumber=self.currentSeason.seasonNumber,
+                weekNumber=week,
+                results=[]
+            )
+            broadcaster.broadcast_sync('season', weekEndEvent)
+
+        # Broadcast final leaderboard with persisted card bonuses
+        self._broadcastLeaderboardUpdate()
+
+    def _processWeekCardEffects(self, season: int, week: int) -> None:
+        """Calculate and persist card effect bonuses for all users after a week completes."""
+        try:
+            from database.connection import get_session as _getSession
+            from database.models import FantasyRoster, Game, GamePlayerStats, Player, User, WeeklyCardBonus
+            from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
+            from managers.cardEffectCalculator import (
+                calculateWeekCardBonuses, CardCalcContext, _playerStars, _countPlayerTds
+            )
+
+            session = _getSession()
+            try:
+                equippedRepo = EquippedCardRepository(session)
+                currencyRepo = CurrencyRepository(session)
+
+                # Get all locked equipped cards for this week
+                allEquipped = equippedRepo.getAllForWeek(season, week)
+                if not allEquipped:
+                    session.close()
+                    return
+
+                # Group by user_id
+                byUser = {}
+                for eq in allEquipped:
+                    if not eq.locked:
+                        continue
+                    byUser.setdefault(eq.user_id, []).append(eq)
+
+                # Get all game player stats for this week
+                gameStats = (
+                    session.query(GamePlayerStats)
+                    .join(Game, GamePlayerStats.game_id == Game.id)
+                    .filter(Game.season == season, Game.week == week)
+                    .all()
+                )
+
+                # Build per-player stats dict
+                weekPlayerStats = {}
+                for gps in gameStats:
+                    weekPlayerStats[gps.player_id] = {
+                        "fantasyPoints": gps.fantasy_points or 0,
+                        "passing_stats": gps.passing_stats or {},
+                        "rushing_stats": gps.rushing_stats or {},
+                        "receiving_stats": gps.receiving_stats or {},
+                        "kicking_stats": gps.kicking_stats or {},
+                    }
+
+                # ─── Build shared context data ───────────────────────────────
+                # Winning team IDs (for win_bonus)
+                weekGames = session.query(Game).filter_by(season=season, week=week).all()
+                winningTeamIds = set()
+                for g in weekGames:
+                    if g.home_score > g.away_score:
+                        winningTeamIds.add(g.home_team_id)
+                    elif g.away_score > g.home_score:
+                        winningTeamIds.add(g.away_team_id)
+
+                # Player ratings (for roster_stars / underdog)
+                allPlayerIds = set()
+                for userId, userEquipped in byUser.items():
+                    roster = session.query(FantasyRoster).filter_by(
+                        user_id=userId, season=season, is_locked=True
+                    ).first()
+                    if roster:
+                        allPlayerIds.update(rp.player_id for rp in roster.players)
+
+                playerRatingsMap = {}
+                if allPlayerIds:
+                    playerRows = session.query(Player.id, Player.player_rating).filter(
+                        Player.id.in_(allPlayerIds)
+                    ).all()
+                    playerRatingsMap = {pid: (rating or 60) for pid, rating in playerRows}
+
+                # Position average FP (for outperform) — group by position
+                playerPositionMap = {}
+                if allPlayerIds:
+                    posRows = session.query(Player.id, Player.position).filter(
+                        Player.id.in_(set(weekPlayerStats.keys()))
+                    ).all()
+                    playerPositionMap = {pid: pos for pid, pos in posRows}
+
+                # Compute average FP per position from all players who played this week
+                positionFPSums = {}
+                positionFPCounts = {}
+                for pid, stats in weekPlayerStats.items():
+                    pos = playerPositionMap.get(pid)
+                    if pos is not None:
+                        fp = stats.get("fantasyPoints", 0)
+                        positionFPSums[pos] = positionFPSums.get(pos, 0) + fp
+                        positionFPCounts[pos] = positionFPCounts.get(pos, 0) + 1
+
+                # Map player_id → their position's average FP
+                positionAverageFP = {}
+                for pid in weekPlayerStats:
+                    pos = playerPositionMap.get(pid)
+                    if pos is not None and positionFPCounts.get(pos, 0) > 0:
+                        positionAverageFP[pid] = positionFPSums[pos] / positionFPCounts[pos]
+
+                # ─── Process each user ───────────────────────────────────────
+                for userId, userEquipped in byUser.items():
+                    # Get user's locked roster
+                    roster = session.query(FantasyRoster).filter_by(
+                        user_id=userId, season=season, is_locked=True
+                    ).first()
+                    if not roster:
+                        continue
+
+                    rosterPlayerIds = {rp.player_id for rp in roster.players}
+
+                    # Compute user's raw weekly FP from roster players
+                    weekRawFP = 0.0
+                    rosterTotalTds = 0
+                    for rp in roster.players:
+                        pStats = weekPlayerStats.get(rp.player_id, {})
+                        weekRawFP += pStats.get("fantasyPoints", 0)
+                        rosterTotalTds += _countPlayerTds(pStats)
+
+                    # Roster player ratings
+                    rosterPlayerRatings = {
+                        pid: playerRatingsMap.get(pid, 60) for pid in rosterPlayerIds
+                    }
+
+                    # Streak counts from equipped cards
+                    streakCounts = {eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped}
+
+                    # All equipped editions (for edition_diversity)
+                    allEquippedEditions = {
+                        eq.user_card.card_template.edition for eq in userEquipped
+                    }
+
+                    # Count matched cards
+                    matchedCardCount = sum(
+                        1 for eq in userEquipped
+                        if eq.user_card.card_template.player_id in rosterPlayerIds
+                    )
+
+                    # User's favorite team (for win_bonus)
+                    userRow = session.get(User, userId)
+                    userFavoriteTeamId = userRow.favorite_team_id if userRow else None
+
+                    # Build context
+                    calcCtx = CardCalcContext(
+                        rosterPlayerIds=rosterPlayerIds,
+                        weekPlayerStats=weekPlayerStats,
+                        weekRawFP=weekRawFP,
+                        rosterPlayerRatings=rosterPlayerRatings,
+                        winningTeamIds=winningTeamIds,
+                        rosterTotalTds=rosterTotalTds,
+                        positionAverageFP=positionAverageFP,
+                        streakCounts=streakCounts,
+                        allEquippedEditions=allEquippedEditions,
+                        matchedCardCount=matchedCardCount,
+                        userFavoriteTeamId=userFavoriteTeamId,
+                    )
+
+                    # Calculate card bonuses
+                    result = calculateWeekCardBonuses(userEquipped, calcCtx)
+
+                    # Persist FP bonus (cumulative + per-week)
+                    if result.totalBonusFP > 0:
+                        roster.card_bonus_points = (roster.card_bonus_points or 0) + result.totalBonusFP
+                        # Store per-week breakdown for weekly leaderboard
+                        weekBonus = WeeklyCardBonus(
+                            roster_id=roster.id,
+                            user_id=userId,
+                            season=season,
+                            week=week,
+                            bonus_fp=result.totalBonusFP,
+                        )
+                        session.add(weekBonus)
+                        logger.info(
+                            f"Card bonus for user {userId} week {week}: "
+                            f"+{result.totalBonusFP:.2f} FP (total: {roster.card_bonus_points:.2f})"
+                        )
+
+                    # Credit Floobits from cards
+                    if result.floobitsEarned > 0:
+                        cardEditions = ", ".join(b.edition for b in result.cardBreakdowns if b.floobitsEarned > 0)
+                        currencyRepo.addFunds(
+                            userId, result.floobitsEarned, "card_effect",
+                            description=f"Week {week} card earnings ({cardEditions})",
+                            season=season, week=week,
+                        )
+                        logger.info(
+                            f"Card Floobits for user {userId} week {week}: "
+                            f"+{result.floobitsEarned} Floobits"
+                        )
+
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error processing week card effects: {e}")
+            finally:
+                session.close()
+        except ImportError as e:
+            logger.warning(f"Card effect processing unavailable: {e}")
+
     def _applyGameStatsToRow(self, dbRow, gameStatsDict: dict) -> None:
         """Copy team stat totals from gameDict['gameStats'] into a DB Game row."""
         if not gameStatsDict:
@@ -611,8 +890,9 @@ class SeasonManager:
                         if len(game.awayScoresByQuarter) > 4: db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
                     self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
                     self.db_session.flush()
-                    if hasattr(game, 'playerStats') and game.playerStats:
-                        self._savePlayerGameStats(db_game.id, game.playerStats)
+                    playerStats = self._extractPlayerStatsFromGame(game)
+                    if playerStats:
+                        self._savePlayerGameStats(db_game.id, playerStats)
                     self.db_session.flush()
                     logger.debug(f"Updated game in database: {game.awayTeam.abbr} @ {game.homeTeam.abbr}, Score: {game.awayScore}-{game.homeScore}")
                     return
@@ -662,9 +942,10 @@ class SeasonManager:
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 
-            # Save player stats if available
-            if hasattr(game, 'playerStats') and game.playerStats:
-                self._savePlayerGameStats(db_game.id, game.playerStats)
+            # Save player stats from game rosters
+            playerStats = self._extractPlayerStatsFromGame(game)
+            if playerStats:
+                self._savePlayerGameStats(db_game.id, playerStats)
             
             # Don't commit yet - will batch commit at end of week
             self.db_session.flush()  # Flush to get IDs but don't commit
@@ -674,6 +955,36 @@ class SeasonManager:
             logger.error(f"Failed to save game to database: {e}")
             self.db_session.rollback()
     
+    def _extractPlayerStatsFromGame(self, game) -> Dict:
+        """Extract per-player game stats from a Game object's team rosters."""
+        playerStats = {}
+        for team in [game.homeTeam, game.awayTeam]:
+            if not hasattr(team, 'rosterDict'):
+                continue
+            for player in team.rosterDict.values():
+                if not player or not hasattr(player, 'gameStatsDict'):
+                    continue
+                gd = player.gameStatsDict
+                # Only include players who actually participated
+                hasStats = (
+                    gd.get('passing', {}).get('att', 0) > 0
+                    or gd.get('rushing', {}).get('carries', 0) > 0
+                    or gd.get('receiving', {}).get('targets', 0) > 0
+                    or gd.get('kicking', {}).get('fgAtt', 0) > 0
+                    or gd.get('kicking', {}).get('xpAtt', 0) > 0
+                    or gd.get('fantasyPoints', 0) != 0
+                )
+                if hasStats:
+                    playerStats[player.id] = {
+                        'teamId': team.id,
+                        'fantasyPoints': gd.get('fantasyPoints', 0),
+                        'passing': gd.get('passing'),
+                        'rushing': gd.get('rushing'),
+                        'receiving': gd.get('receiving'),
+                        'kicking': gd.get('kicking'),
+                    }
+        return playerStats
+
     def _savePlayerGameStats(self, game_id: int, player_stats: Dict) -> None:
         """Save player game statistics to database"""
         try:
@@ -682,6 +993,7 @@ class SeasonManager:
                     db_stats = DBGamePlayerStats(
                         game_id=game_id,
                         player_id=player_id,
+                        team_id=stats.get('teamId', 0),
                         fantasy_points=stats.get('fantasyPoints', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
@@ -1293,6 +1605,19 @@ class SeasonManager:
                     weekText=self.currentWeekText
                 ))
 
+            # Lock equipped cards for playoff week
+            try:
+                from database.connection import get_session as _getSession
+                from database.repositories.card_repositories import EquippedCardRepository
+                lockSession = _getSession()
+                EquippedCardRepository(lockSession).lockWeek(
+                    self.currentSeason.seasonNumber, 28 + currentRound
+                )
+                lockSession.commit()
+                lockSession.close()
+            except Exception as e:
+                logger.error(f"Failed to lock equipped cards for playoff round {currentRound}: {e}")
+
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
 
             #await asyncio.sleep(30)
@@ -1300,7 +1625,18 @@ class SeasonManager:
             #     await asyncio.sleep(30)
                 
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeekText)}})
+
+            # Start periodic leaderboard broadcast during playoff games
+            playoffLeaderboardTask = asyncio.ensure_future(self._broadcastLeaderboardPeriodically())
+
             await asyncio.gather(*playoffGamesTasks)
+
+            # Stop periodic leaderboard broadcast
+            playoffLeaderboardTask.cancel()
+            try:
+                await playoffLeaderboardTask
+            except asyncio.CancelledError:
+                pass
 
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
@@ -1405,13 +1741,16 @@ class SeasonManager:
             # Determine winner
             winner = game.homeTeam if gameInstance.homeScore > gameInstance.awayScore else game.awayTeam
             
+            # Save game to database BEFORE postgame processing zeroes gameStatsDict.fantasyPoints
+            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+                self._saveGameToDatabase(gameInstance)
+
             # Update team records
             self._updateTeamRecords(gameInstance)
-            
+
             # Process post-game statistics (replaces original postgame() method)
             self.recordsManager.processPostGameStats(gameInstance)
-            
-            # Update ELO ratings based on playoff game result
+
             # Update ELO ratings based on playoff game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
@@ -1424,14 +1763,10 @@ class SeasonManager:
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
                 )
-            
+
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
-            
-            # Save playoff game to database if enabled
-            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
-                self._saveGameToDatabase(gameInstance)
             
         except Exception as e:
             logger.error(f"Error simulating playoff game: {e}")
@@ -1540,9 +1875,98 @@ class SeasonManager:
         
         # STEP 8: Save unused names
         self.playerManager.saveUnusedNames()
-        
+
+        # STEP 9: User season transitions (pending favorites, fantasy roster finalization)
+        logger.info("Step 9: Processing user season transitions")
+        self._processUserSeasonTransitions()
+
+        # STEP 10: Generate card templates for newly drafted rookies
+        logger.info("Step 10: Generating rookie card templates")
+        nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
+        self._generateRookieCardTemplates(nextSeason)
+
         logger.info("Offseason activities complete")
     
+    def _generateCardTemplates(self, seasonNumber: int) -> None:
+        """Generate card templates for all active players for a season.
+
+        Uses a dedicated session to avoid holding a write lock on the shared
+        simulation session (which would block API endpoints on SQLite).
+        """
+        try:
+            from managers.cardManager import CardManager
+            from database.connection import get_session
+            session = get_session()
+            cardManager = CardManager(self.serviceContainer)
+            count = cardManager.generateSeasonTemplates(session, seasonNumber)
+            session.commit()
+            session.close()
+            logger.info(f"Card template generation complete: {count} templates for season {seasonNumber}")
+        except Exception as e:
+            logger.warning(f"Card template generation failed: {e}")
+
+    def _generateRookieCardTemplates(self, seasonNumber: int) -> None:
+        """Generate card templates for newly drafted rookies.
+
+        Uses a dedicated session to avoid holding a write lock on the shared
+        simulation session.
+        """
+        try:
+            from managers.cardManager import CardManager
+            from database.connection import get_session
+            session = get_session()
+            cardManager = CardManager(self.serviceContainer)
+            count = cardManager.generateRookieTemplates(session, seasonNumber)
+            session.commit()
+            session.close()
+            logger.info(f"Rookie card template generation complete: {count} templates for season {seasonNumber}")
+        except Exception as e:
+            logger.warning(f"Rookie card template generation failed: {e}")
+
+    def _processUserSeasonTransitions(self) -> None:
+        """Apply pending favorite team changes and finalize fantasy roster scores."""
+        from database.connection import get_session
+        from database.models import User, FantasyRoster, PlayerSeasonStats
+
+        completedSeason = self.currentSeason.seasonNumber if self.currentSeason else None
+        if completedSeason is None:
+            return
+
+        session = get_session()
+        try:
+            # Promote pending favorite teams
+            pendingUsers = session.query(User).filter(
+                User.pending_favorite_team_id.isnot(None)
+            ).all()
+            for u in pendingUsers:
+                logger.info(f"User {u.id}: promoting pending favorite team {u.pending_favorite_team_id}")
+                u.favorite_team_id = u.pending_favorite_team_id
+                u.pending_favorite_team_id = None
+                u.favorite_team_locked_season = None
+
+            # Finalize fantasy roster scores from DB season stats
+            lockedRosters = session.query(FantasyRoster).filter_by(
+                season=completedSeason, is_locked=True
+            ).all()
+            for roster in lockedRosters:
+                totalPoints = 0.0
+                for rp in roster.players:
+                    seasonStat = session.query(PlayerSeasonStats).filter_by(
+                        player_id=rp.player_id, season=completedSeason
+                    ).first()
+                    finalFp = seasonStat.fantasy_points if seasonStat else 0
+                    earned = max(0, finalFp - rp.points_at_lock)
+                    totalPoints += earned
+                roster.total_points = totalPoints
+                logger.info(f"Fantasy roster {roster.id} (user {roster.user_id}): finalized at {totalPoints:.1f} pts")
+
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error processing user season transitions: {e}")
+        finally:
+            session.close()
+
     async def _processFreeAgency(self) -> None:
         """Process free agency period using comprehensive simulation"""
         logger.info("Processing free agency")
@@ -1933,20 +2357,24 @@ class SeasonManager:
             
             # Archive season stats
             if hasattr(player, 'seasonStatsDict') and hasattr(player, 'seasonStatsArchive'):
-                player.seasonStatsArchive.append(player.seasonStatsDict.copy())
-            
+                import copy
+                archivedStats = copy.deepcopy(player.seasonStatsDict)
+                # Ensure season number and metadata are present
+                archivedStats['season'] = self.currentSeason.seasonNumber if self.currentSeason else 0
+                archivedStats['gp'] = player.gamesPlayed
+                archivedStats['team'] = player.team.name if hasattr(player.team, 'name') else (player.team if isinstance(player.team, str) else 'FA')
+                archivedStats['color'] = getattr(player.team, 'color', '#94a3b8') if hasattr(player.team, 'name') else '#94a3b8'
+                player.seasonStatsArchive.append(archivedStats)
+
             # Reset season stats for next year
             if hasattr(player, 'seasonStatsDict'):
-                # Reset to default structure
-                player.seasonStatsDict = {
-                    'passing': {'att': 0, 'comp': 0, 'yards': 0, 'tds': 0, 'ints': 0},
-                    'rushing': {'carries': 0, 'yards': 0, 'tds': 0, 'fumblesLost': 0},
-                    'receiving': {'targets': 0, 'receptions': 0, 'yards': 0, 'tds': 0},
-                    'kicking': {'fgAtt': 0, 'fgs': 0, 'xpAtt': 0, 'xps': 0, 'fgYards': 0},
-                    'defense': {'tackles': 0, 'sacks': 0, 'interceptions': 0, 'fumbleRecoveries': 0},
-                    'fantasyPoints': 0,
-                    'team': player.team.name if hasattr(player.team, 'name') else str(player.team)
-                }
+                import copy as _copy
+                player.seasonStatsDict = _copy.deepcopy(FloosPlayer.playerStatsDict)
+                player.seasonStatsDict['team'] = player.team.name if hasattr(player.team, 'name') else (player.team if isinstance(player.team, str) else None)
+                player.gamesPlayed = 0
+                # Update stat_tracker reference to new season dict
+                if hasattr(player, 'stat_tracker'):
+                    player.stat_tracker.season_stats_dict = player.seasonStatsDict
     
     def _clearSeasonData(self) -> None:
         """Clear season-specific data for new season"""
@@ -2074,6 +2502,37 @@ class SeasonManager:
         """Update player performance ratings for the given week (matches original getPerformanceRating call)"""
         self.playerManager.calculatePerformanceRatings(week)
         logger.debug(f"Updated player performance ratings for week {week}")
+
+    async def _selectSeasonMVP(self) -> None:
+        """Select the season MVP using z-score analysis of performance ratings across positions"""
+        candidates = self.playerManager._computeMvpCandidates()
+        if not candidates:
+            logger.warning("Could not determine MVP — not enough eligible players")
+            return
+
+        winner = candidates[0]
+        mvpPlayer = winner['player']
+
+        # Award MVP to the player
+        if not hasattr(mvpPlayer, 'mvpAwards'):
+            mvpPlayer.mvpAwards = []
+        mvpPlayer.mvpAwards.append({
+            'Season': self.currentSeason.seasonNumber,
+            'team': winner.get('teamAbbr', ''),
+            'teamColor': winner.get('teamColor', '#334155')
+        })
+
+        # Store broadcast-safe version (no player object)
+        mvpResult = dict(winner)
+        mvpResult.pop('player', None)
+        self.currentSeason.mvp = mvpResult
+        logger.info(f"Season {self.currentSeason.seasonNumber} MVP: {mvpResult['name']} ({mvpResult['position']}, {mvpResult['team']}) — z-score: {mvpResult['zScore']}")
+
+        # Broadcast MVP announcement
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and SeasonEvent:
+            await broadcaster.broadcast_season_event(
+                SeasonEvent.mvpAnnouncement(mvpResult, self.currentSeason.seasonNumber)
+            )
     
     def _updateStandings(self) -> None:
         """Update league standings"""

@@ -1,85 +1,218 @@
-"""JWT authentication helpers and FastAPI dependency for current user."""
+"""Clerk JWT verification for FastAPI."""
 
-from datetime import datetime, timedelta
+import os
+import random as _random
 from typing import Optional
 
-import bcrypt as _bcrypt
-from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt as pyjwt
+from jwt import PyJWKClient
 
 from database.connection import get_session
-from database.models import User
+from database.models import User, UserCurrency, UserCard, CardTemplate, CurrencyTransaction
+from database.repositories.card_repositories import CurrencyRepository
+from logger_config import get_logger
+
+logger = get_logger("floosball.auth")
+
+_bearerScheme = HTTPBearer()
 
 # ---------------------------------------------------------------------------
-# Config (loaded lazily so config_manager is available at import time)
+# Random username generation
 # ---------------------------------------------------------------------------
 
-_SECRET: Optional[str] = None
+_USERNAME_FIRSTS = [
+    "Bootleg", "Moist", "Cornbread", "Squids", "Gootsy", "Frunk", "Chud",
+    "Schmorby", "Quasi", "Stove", "Flakey", "Ovaltine", "Pickled", "Socks",
+    "Reverend", "Professor", "Laserdisc", "Powershell", "Discount", "Turbo",
+    "Wombat", "Pretzel", "Biscuit", "Waffle", "Pudding", "Gravy", "Noodle",
+    "Spork", "Tugboat", "Gazebo", "Dumpster", "Forklift", "Trebuchet",
+    "Pamphlet", "Kazoo", "Sweatpants", "Toaster", "Blunderbuss", "Firmware",
+    "Lowercase", "Crispy", "Lukewarm", "Adequate", "Suspicious", "Bogus",
+    "Rogue", "Sentient", "Forbidden", "Haunted", "Certified",
+]
 
-def _getSecret() -> str:
-    global _SECRET
-    if _SECRET is None:
+_USERNAME_LASTS = [
+    "Gutpunch", "Flashmob", "Dreamcast", "Wigglesworth", "Dribbleston",
+    "Bumpington", "Lagume", "Nightshift", "Perkinshire", "Pumpernick",
+    "McElroy", "Trolleyproblem", "Vinaigrette", "Mouthfeel", "Supertoe",
+    "Porkins", "Brutale", "Buckets", "Dangerfield", "Thunderpants",
+    "Waffleton", "Crumpet", "Jalopy", "Kazooie", "Shenanigans",
+    "Hooligan", "Rascal", "Fiasco", "Debacle", "Kerfuffle",
+    "Brouhaha", "Bamboozle", "Hullabaloo", "Rigmarole", "Cahoots",
+    "Tomfoolery", "Sheepdog", "Crabcakes", "Megabyte", "Malarkey",
+]
+
+
+def _generateRandomUsername(session) -> str:
+    """Generate a unique random username like 'ThunderFalcon42'."""
+    for _ in range(50):
+        name = (
+            _random.choice(_USERNAME_FIRSTS)
+            + _random.choice(_USERNAME_LASTS)
+            + str(_random.randint(1, 99))
+        )
+        existing = session.query(User).filter(User.username == name).first()
+        if not existing:
+            return name
+    # Extremely unlikely fallback
+    return "Player" + str(_random.randint(10000, 99999))
+
+
+STARTER_FLOOBITS = 100
+STARTER_CARD_COUNT = 5
+
+
+def _provisionStarterPack(session, user):
+    """Give a new user starter Floobits and 5 random base cards."""
+    try:
+        # Create currency record
+        currency = UserCurrency(
+            user_id=user.id,
+            balance=STARTER_FLOOBITS,
+            lifetime_earned=STARTER_FLOOBITS,
+            lifetime_spent=0,
+        )
+        session.add(currency)
+
+        # Log the starter bonus transaction
+        tx = CurrencyTransaction(
+            user_id=user.id,
+            amount=STARTER_FLOOBITS,
+            balance_after=STARTER_FLOOBITS,
+            transaction_type='starter_bonus',
+            description='Welcome bonus',
+        )
+        session.add(tx)
+
+        # Give 5 base cards — one random card per position (QB, RB, WR, TE, K)
+        baseTemplates = (
+            session.query(CardTemplate)
+            .filter_by(edition='base')
+            .order_by(CardTemplate.season_created.desc())
+            .all()
+        )
+        if baseTemplates:
+            # Filter to only the latest season
+            latestSeason = baseTemplates[0].season_created
+            latestTemplates = [t for t in baseTemplates if t.season_created == latestSeason]
+
+            # Group by position and pick one random card from each
+            byPosition: dict[int, list] = {}
+            for t in latestTemplates:
+                byPosition.setdefault(t.position, []).append(t)
+
+            picked = []
+            for pos in range(1, 6):  # QB=1, RB=2, WR=3, TE=4, K=5
+                candidates = byPosition.get(pos, [])
+                if candidates:
+                    picked.append(_random.choice(candidates))
+
+            for template in picked:
+                card = UserCard(
+                    user_id=user.id,
+                    card_template_id=template.id,
+                    acquired_via='starter',
+                )
+                session.add(card)
+
+        session.flush()
+        logger.info(f"Provisioned starter pack for user {user.id}: {STARTER_FLOOBITS} Floobits + cards")
+    except Exception as e:
+        logger.warning(f"Failed to provision starter pack for user {user.id}: {e}")
+        # Don't fail user creation if starter pack fails
+
+
+# ---------------------------------------------------------------------------
+# JWKS client (caches Clerk's public keys)
+# ---------------------------------------------------------------------------
+
+_jwksClient: Optional[PyJWKClient] = None
+
+
+def _getJwksClient() -> PyJWKClient:
+    global _jwksClient
+    if _jwksClient is None:
         try:
             from config_manager import get_config
-            _SECRET = get_config().get('jwtSecret', 'floosball-default-secret')
+            jwksUrl = get_config().get('clerkJwksUrl', '')
         except Exception:
-            _SECRET = 'floosball-default-secret'
-    return _SECRET
-
-
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 7
-
-# ---------------------------------------------------------------------------
-# Password hashing (using bcrypt directly — passlib 1.x is incompatible with bcrypt 4+)
-# ---------------------------------------------------------------------------
-
-def verifyPassword(plainPassword: str, hashedPassword: str) -> bool:
-    return _bcrypt.checkpw(plainPassword.encode(), hashedPassword.encode())
-
-
-def hashPassword(password: str) -> str:
-    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
-
-
-# ---------------------------------------------------------------------------
-# JWT
-# ---------------------------------------------------------------------------
-
-def createAccessToken(userId: int) -> str:
-    expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    payload = {"sub": str(userId), "exp": expire}
-    return jwt.encode(payload, _getSecret(), algorithm=ALGORITHM)
+            jwksUrl = ''
+        if not jwksUrl:
+            jwksUrl = os.environ.get('CLERK_JWKS_URL', '')
+        if not jwksUrl:
+            raise RuntimeError("clerkJwksUrl not configured in config.json or CLERK_JWKS_URL env var")
+        _jwksClient = PyJWKClient(jwksUrl)
+    return _jwksClient
 
 
 # ---------------------------------------------------------------------------
 # FastAPI dependency
 # ---------------------------------------------------------------------------
 
-oauth2Scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
-
-def getCurrentUser(token: str = Depends(oauth2Scheme)) -> User:
+def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme)) -> User:
+    """Verify Clerk JWT and return (or auto-create) the local User record."""
     credentialsException = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, _getSecret(), algorithms=[ALGORITHM])
-        userId: Optional[str] = payload.get("sub")
-        if userId is None:
+        signingKey = _getJwksClient().get_signing_key_from_jwt(creds.credentials)
+        payload = pyjwt.decode(
+            creds.credentials,
+            signingKey.key,
+            algorithms=["RS256"],
+            options={"verify_aud": False},
+        )
+        clerkUserId = payload.get("sub")
+        if not clerkUserId:
             raise credentialsException
-    except JWTError:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"JWT verification failed: {e}")
         raise credentialsException
 
+    # Look up or auto-provision local user
     session = get_session()
     try:
-        user = session.get(User, int(userId))
+        user = session.query(User).filter(User.clerk_id == clerkUserId).first()
+        if user is None:
+            # Auto-provision: create local user record on first API call
+            # Try to extract email from Clerk JWT claims
+            email = payload.get("email", "")
+            if not email:
+                # Clerk sometimes nests email in different claim structures
+                emailAddresses = payload.get("email_addresses", [])
+                if emailAddresses and isinstance(emailAddresses, list):
+                    email = emailAddresses[0].get("email_address", "")
+            if not email:
+                email = f"{clerkUserId}@clerk.user"
+
+            username = _generateRandomUsername(session)
+            user = User(
+                clerk_id=clerkUserId,
+                email=email,
+                username=username,
+                hashed_password="",
+            )
+            session.add(user)
+            session.flush()  # Get user.id without committing yet
+
+            # Provision starter currency (100 Floobits)
+            _provisionStarterPack(session, user)
+
+            session.commit()
+            session.refresh(user)
+            logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email}, username={username}")
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"User lookup/creation failed: {e}")
+        raise credentialsException
     finally:
         session.close()
-
-    if user is None or not user.is_active:
-        raise credentialsException
-    return user

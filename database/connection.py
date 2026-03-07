@@ -44,6 +44,7 @@ SessionLocal = sessionmaker(
 def init_db():
     """Initialize the database by creating all tables."""
     Base.metadata.create_all(bind=engine)
+    _seedPackTypes()
     print(f"Database initialized at {DB_PATH}")
 
 
@@ -51,7 +52,22 @@ def clear_db():
     """Clear all data from the database by dropping and recreating all tables."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    _seedPackTypes()
     print(f"Database cleared and reinitialized at {DB_PATH}")
+
+
+def _seedPackTypes():
+    """Seed default pack types if they don't exist."""
+    from database.repositories.card_repositories import PackTypeRepository
+    session = SessionLocal()
+    try:
+        repo = PackTypeRepository(session)
+        repo.seedDefaults()
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def get_session() -> Session:
