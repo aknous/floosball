@@ -1,9 +1,9 @@
 """Card Manager - handles card template generation and card operations."""
 
-import math
 import random
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
+from managers.cardEffects import buildEffectConfig as _buildEffectConfig
 
 logger = get_logger("floosball.cardManager")
 
@@ -41,364 +41,6 @@ EDITION_SELL_VALUES = {
 
 EXPIRED_SELL_MULTIPLIER = 0.2  # Expired cards sell for 20%
 
-# ─── Effect Pools by Edition ────────────────────────────────────────────────
-# Each edition draws randomly from its pool of possible effects.
-# Weights control how often each effect type appears within that edition.
-
-EDITION_EFFECT_POOLS = {
-    'base': [
-        # (type_key, weight)
-        ('flat', 3),
-        ('win_bonus', 2),
-        ('td_bonus', 2),
-    ],
-    'chrome': [
-        ('roster_stars', 2),
-        ('underdog', 2),
-        ('outperform', 2),
-        ('streak', 2),
-    ],
-    'holographic': [
-        ('multiplier', 3),
-        ('top_performer', 3),
-        ('base_amplifier', 1),
-    ],
-    'gold': [
-        ('currency', 3),
-        ('td_currency', 2),
-        ('hot_roster_currency', 2),
-        ('threshold_currency', 2),
-    ],
-    'prismatic': [
-        ('amplifier', 2),
-        ('double_match', 1),
-        ('easy_threshold', 1),
-        ('floobits_amplifier', 1),
-        ('edition_diversity', 2),
-    ],
-    'diamond': [
-        ('scaling_currency', 2),
-        ('mirror', 2),
-        ('scaling_roster', 2),
-    ],
-}
-
-# Position value mapping for conditional bonuses
-POSITION_CONDITIONALS = {
-    1: [  # QB
-        {"stat": "passYards", "threshold": 300, "bonus": 5, "label": "300+ pass yards"},
-        {"stat": "passTds", "threshold": 3, "bonus": 8, "label": "3+ pass TDs"},
-    ],
-    2: [  # RB
-        {"stat": "rushYards", "threshold": 100, "bonus": 5, "label": "100+ rush yards"},
-        {"stat": "rushTds", "threshold": 2, "bonus": 8, "label": "2+ rush TDs"},
-    ],
-    3: [  # WR
-        {"stat": "recYards", "threshold": 100, "bonus": 5, "label": "100+ rec yards"},
-        {"stat": "recTds", "threshold": 2, "bonus": 8, "label": "2+ rec TDs"},
-    ],
-    4: [  # TE
-        {"stat": "recYards", "threshold": 75, "bonus": 4, "label": "75+ rec yards"},
-        {"stat": "recTds", "threshold": 1, "bonus": 5, "label": "1+ rec TD"},
-    ],
-    5: [  # K
-        {"stat": "fgMade", "threshold": 3, "bonus": 4, "label": "3+ FGs made"},
-        {"stat": "longFg", "threshold": 50, "bonus": 5, "label": "50+ yard FG"},
-    ],
-}
-
-
-def buildEffectConfig(edition: str, playerRating: int, position: int) -> dict:
-    """Build the effect_config JSON for a card template based on edition and player rating."""
-    ratingNorm = playerRating - 60  # Normalize: 60-rated → 0, 95-rated → 35
-
-    # Pick one conditional for the position
-    conditionals = POSITION_CONDITIONALS.get(position, [])
-    conditional = conditionals[0] if conditionals else None
-
-    if edition == 'base':
-        return {
-            "type": "flat",
-            "baseFP": round(2 + ratingNorm * 0.075, 2),
-            "conditional": conditional,
-        }
-
-    elif edition == 'holographic':
-        return {
-            "type": "multiplier",
-            "percent": round((playerRating / 100) * 0.05, 4),
-            "conditional": conditional,
-        }
-
-    elif edition == 'prismatic':
-        return {
-            "type": "scaling",
-            "factor": round((playerRating / 100) * 0.08, 4),
-            "conditional": conditional,
-        }
-
-    elif edition == 'gold':
-        return {
-            "type": "currency",
-            "floobitsPerWeek": int(round(5 + ratingNorm * 0.3)),
-            "conditional": conditional,
-        }
-
-    elif edition == 'chrome':
-        return {
-            "type": "floor",
-            "guaranteedFP": round(3 + ratingNorm * 0.15, 2),
-            "conditional": conditional,
-        }
-
-    elif edition == 'diamond':
-        holoPercent = round((playerRating / 100) * 0.05, 4)
-        goldFloobits = int(round(5 + ratingNorm * 0.3))
-        return {
-            "type": "dual",
-            "multiplierPercent": round(holoPercent * 0.6, 4),
-            "floobitsPerWeek": int(round(goldFloobits * 0.6)),
-            "conditional": conditional,
-        }
-
-    return {"type": "flat", "baseFP": 2, "conditional": conditional}
-
-
-def buildEffectConfigFromPool(
-    edition: str, playerRating: int, position: int, teamId: int | None
-) -> dict:
-    """Build effect_config by randomly selecting from the edition's effect pool.
-
-    Each edition has multiple possible effect types with weighted selection.
-    This replaces the old 1:1 edition→effect mapping for newly generated cards.
-    """
-    ratingNorm = playerRating - 60  # 60-rated → 0, 95-rated → 35
-
-    # Pick a conditional for position-aware effects
-    conditionals = POSITION_CONDITIONALS.get(position, [])
-    conditional = conditionals[0] if conditionals else None
-
-    # Select effect type from pool
-    pool = EDITION_EFFECT_POOLS.get(edition)
-    if not pool:
-        return {"type": "flat", "baseFP": 2, "conditional": conditional}
-
-    types, weights = zip(*pool)
-    effectType = random.choices(types, weights=weights, k=1)[0]
-
-    # ─── Base edition ────────────────────────────────────────────────────
-    if effectType == 'flat':
-        baseFP = round(2 + ratingNorm * 0.075, 1)
-        return {
-            "type": "flat",
-            "baseFP": baseFP,
-            "conditional": conditional,
-            "description": f"+{baseFP} FP per week",
-        }
-
-    if effectType == 'win_bonus':
-        bonusFP = round(4 + ratingNorm * 0.15, 1)
-        return {
-            "type": "win_bonus",
-            "bonusFP": bonusFP,
-            "conditional": conditional,
-            "description": f"+{bonusFP} FP when your team wins",
-        }
-
-    if effectType == 'td_bonus':
-        perTdFP = round(0.8 + ratingNorm * 0.03, 1)
-        return {
-            "type": "td_bonus",
-            "perTdFP": perTdFP,
-            "conditional": conditional,
-            "description": f"+{perTdFP} FP per roster TD",
-        }
-
-    # ─── Chrome edition ──────────────────────────────────────────────────
-    if effectType == 'roster_stars':
-        perStarPlayerFP = round(0.6 + ratingNorm * 0.025, 1)
-        return {
-            "type": "roster_stars",
-            "perStarPlayerFP": perStarPlayerFP,
-            "minStars": 3,
-            "conditional": conditional,
-            "description": f"+{perStarPlayerFP} FP per 3★+ roster player",
-        }
-
-    if effectType == 'underdog':
-        perUnderdogFP = round(1.5 + ratingNorm * 0.04, 1)
-        return {
-            "type": "underdog",
-            "perUnderdogFP": perUnderdogFP,
-            "maxStars": 2,
-            "conditional": conditional,
-            "description": f"+{perUnderdogFP} FP per 2★ or below roster player",
-        }
-
-    if effectType == 'outperform':
-        bonusFP = round(3.0 + ratingNorm * 0.1, 1)
-        return {
-            "type": "outperform",
-            "bonusFP": bonusFP,
-            "conditional": conditional,
-            "description": f"+{bonusFP} FP if player beats the league avg for their position",
-        }
-
-    if effectType == 'streak':
-        baseFP = round(1.0 + ratingNorm * 0.04, 1)
-        growthPerWeek = round(0.3 + ratingNorm * 0.01, 1)
-        return {
-            "type": "streak",
-            "baseFP": baseFP,
-            "growthPerWeek": growthPerWeek,
-            "conditional": conditional,
-            "description": f"+{baseFP} FP, +{growthPerWeek} per consecutive week",
-        }
-
-    # ─── Holographic edition ─────────────────────────────────────────────
-    if effectType == 'multiplier':
-        percent = round((playerRating / 100) * 0.05, 3)
-        return {
-            "type": "multiplier",
-            "percent": percent,
-            "conditional": conditional,
-            "description": f"+{round(percent * 100, 1)}% of roster's weekly FP",
-        }
-
-    if effectType == 'top_performer':
-        percent = round((playerRating / 100) * 0.20, 3)
-        return {
-            "type": "top_performer",
-            "percent": percent,
-            "conditional": conditional,
-            "description": f"+{round(percent * 100, 1)}% of top roster player's FP",
-        }
-
-    if effectType == 'base_amplifier':
-        return {
-            "type": "base_amplifier",
-            "amplifyFactor": 2.0,
-            "conditional": conditional,
-            "description": "Doubles FP from your Base cards",
-        }
-
-    # ─── Gold edition ────────────────────────────────────────────────────
-    if effectType == 'currency':
-        floobitsPerWeek = int(round(5 + ratingNorm * 0.3))
-        return {
-            "type": "currency",
-            "floobitsPerWeek": floobitsPerWeek,
-            "conditional": conditional,
-            "description": f"+{floobitsPerWeek} Floobits per week",
-        }
-
-    if effectType == 'td_currency':
-        floobitsPerTd = int(round(3 + ratingNorm * 0.15))
-        return {
-            "type": "td_currency",
-            "floobitsPerTd": floobitsPerTd,
-            "conditional": conditional,
-            "description": f"+{floobitsPerTd} Floobits per player TD",
-        }
-
-    if effectType == 'hot_roster_currency':
-        floobitsPerHotPlayer = int(round(2 + ratingNorm * 0.1))
-        return {
-            "type": "hot_roster_currency",
-            "floobitsPerHotPlayer": floobitsPerHotPlayer,
-            "fpThreshold": 10,
-            "conditional": conditional,
-            "description": f"+{floobitsPerHotPlayer} Floobits per roster player with 10+ FP",
-        }
-
-    if effectType == 'threshold_currency':
-        floobits = int(round(15 + ratingNorm * 0.5))
-        return {
-            "type": "threshold_currency",
-            "floobits": floobits,
-            "conditional": conditional,
-            "description": f"+{floobits} Floobits if conditional met",
-        }
-
-    # ─── Prismatic edition ───────────────────────────────────────────────
-    if effectType == 'amplifier':
-        amplifyPercent = round(15 + max(0, ratingNorm - 25) * 1.0, 1)
-        return {
-            "type": "amplifier",
-            "amplifyPercent": amplifyPercent,
-            "conditional": conditional,
-            "description": f"+{round(amplifyPercent)}% to all other card bonuses",
-        }
-
-    if effectType == 'double_match':
-        return {
-            "type": "double_match",
-            "newMatchMultiplier": 3.0,
-            "conditional": conditional,
-            "description": "Match bonus 3.0x for all cards",
-        }
-
-    if effectType == 'easy_threshold':
-        return {
-            "type": "easy_threshold",
-            "thresholdDivisor": 2.0,
-            "conditional": conditional,
-            "description": "Conditional thresholds halved",
-        }
-
-    if effectType == 'floobits_amplifier':
-        amplifyPercent = round(30 + max(0, ratingNorm - 25) * 1.5, 1)
-        return {
-            "type": "floobits_amplifier",
-            "amplifyPercent": amplifyPercent,
-            "conditional": conditional,
-            "description": f"+{round(amplifyPercent)}% to all Floobits earnings",
-        }
-
-    if effectType == 'edition_diversity':
-        perEditionFP = round(2.0 + max(0, ratingNorm - 25) * 0.15, 1)
-        return {
-            "type": "edition_diversity",
-            "perEditionFP": perEditionFP,
-            "conditional": conditional,
-            "description": f"+{perEditionFP} FP per unique edition equipped",
-        }
-
-    # ─── Diamond edition ─────────────────────────────────────────────────
-    if effectType == 'scaling_currency':
-        scalingPercent = round((playerRating / 100) * 0.04, 3)
-        baseFloobits = int(round(8 + max(0, ratingNorm - 30) * 0.5))
-        return {
-            "type": "scaling_currency",
-            "scalingPercent": scalingPercent,
-            "baseFloobits": baseFloobits,
-            "conditional": conditional,
-            "description": f"+{round(scalingPercent * 100, 1)}% of player's FP + {baseFloobits} Floobits",
-        }
-
-    if effectType == 'mirror':
-        factor = round((playerRating / 100) * 0.06, 3)
-        return {
-            "type": "mirror",
-            "factor": factor,
-            "conditional": conditional,
-            "description": f"+{round(factor * 100, 1)}% of player's FP as FP and Floobits",
-        }
-
-    if effectType == 'scaling_roster':
-        basePercent = round((playerRating / 100) * 0.05, 3)
-        matchedBonus = 0.01
-        return {
-            "type": "scaling_roster",
-            "basePercent": basePercent,
-            "matchedBonus": matchedBonus,
-            "conditional": conditional,
-            "description": f"+{round(basePercent * 100, 1)}% of player's FP (+{round(matchedBonus * 100)}% per matched card)",
-        }
-
-    # Fallback
-    return {"type": "flat", "baseFP": 2, "conditional": conditional}
-
 
 def computeRarityWeight(edition: str, playerRating: int) -> int:
     """Compute rarity weight for pack drops. Higher-rated players are rarer."""
@@ -415,17 +57,56 @@ def getSellValue(edition: str, isActive: bool = True) -> int:
     return baseValue
 
 
+def _buildClassification(
+    playerId: int,
+    isRookie: bool,
+    mvpPlayerId: Optional[int],
+    championPlayerIds: set,
+    allProPlayerIds: set,
+) -> Optional[str]:
+    """Build classification string for a player's card templates.
+
+    Classifications are underscore-joined tags (e.g., "mvp_champion", "all_pro_champion").
+    Rookie cannot stack with other classifications (rookies didn't play previous season).
+    """
+    if isRookie:
+        return "rookie"
+
+    tags = []
+    if mvpPlayerId is not None and playerId == mvpPlayerId:
+        tags.append("mvp")
+    if playerId in allProPlayerIds:
+        tags.append("all_pro")
+    if playerId in championPlayerIds:
+        tags.append("champion")
+
+    return "_".join(tags) if tags else None
+
+
 class CardManager:
     """Manages card template generation and card operations."""
 
     def __init__(self, serviceContainer):
         self.serviceContainer = serviceContainer
 
-    def generateSeasonTemplates(self, session, seasonNumber: int) -> int:
+    def generateSeasonTemplates(
+        self, session, seasonNumber: int,
+        mvpPlayerId: Optional[int] = None,
+        championPlayerIds: Optional[set] = None,
+        allProPlayerIds: Optional[set] = None,
+    ) -> int:
         """Generate card templates for all active players for a season.
 
         Called at the start of each new season. Creates one template per
-        eligible (player, edition) pair.
+        eligible (player, edition) pair. Assigns classifications based on
+        previous season awards.
+
+        Args:
+            session: DB session
+            seasonNumber: The season to generate templates for
+            mvpPlayerId: Player ID of previous season's MVP
+            championPlayerIds: Set of player IDs on previous Floosbowl-winning team
+            allProPlayerIds: Set of player IDs who were top at their position
 
         Returns the count of templates created.
         """
@@ -441,6 +122,9 @@ class CardManager:
             logger.info(f"Card templates already exist for season {seasonNumber} ({existingCount} templates), skipping generation")
             return 0
 
+        champIds = championPlayerIds or set()
+        apIds = allProPlayerIds or set()
+
         templates: List[CardTemplate] = []
 
         for player in playerManager.activePlayers:
@@ -450,6 +134,15 @@ class CardManager:
 
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
             isRookie = getattr(player, 'seasonsPlayed', 1) == 0
+
+            # Determine classification
+            classification = _buildClassification(
+                playerId=player.id,
+                isRookie=isRookie,
+                mvpPlayerId=mvpPlayerId,
+                championPlayerIds=champIds,
+                allProPlayerIds=apIds,
+            )
 
             # Determine team info
             teamObj = getattr(player, 'team', None)
@@ -461,7 +154,7 @@ class CardManager:
                 if rating < threshold:
                     continue
 
-                effectConfig = buildEffectConfigFromPool(edition, rating, positionValue, teamId)
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
@@ -477,12 +170,14 @@ class CardManager:
                     effect_config=effectConfig,
                     rarity_weight=rarityWeight,
                     sell_value=sellValue,
+                    classification=classification,
                 )
                 templates.append(template)
 
         if templates:
             templateRepo.saveBatch(templates)
-            logger.info(f"Generated {len(templates)} card templates for season {seasonNumber}")
+            classifiedCount = sum(1 for t in templates if t.classification)
+            logger.info(f"Generated {len(templates)} card templates for season {seasonNumber} ({classifiedCount} classified)")
         else:
             logger.warning(f"No card templates generated for season {seasonNumber} — no active players?")
 
@@ -529,7 +224,7 @@ class CardManager:
                 if rating < threshold:
                     continue
 
-                effectConfig = buildEffectConfigFromPool(edition, rating, positionValue, teamId)
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
@@ -545,6 +240,7 @@ class CardManager:
                     effect_config=effectConfig,
                     rarity_weight=rarityWeight,
                     sell_value=sellValue,
+                    classification="rookie",
                 )
                 templates.append(template)
 
@@ -560,6 +256,13 @@ class CardManager:
         isActive = template.season_created == currentSeason
         sellValue = getSellValue(template.edition, isActive=isActive)
 
+        effectConfig = template.effect_config or {}
+        classification = template.classification
+
+        # Rookie classification doubles sell value
+        if classification and "rookie" in classification:
+            sellValue *= 2
+
         return {
             "id": userCard.id,
             "templateId": template.id,
@@ -571,7 +274,14 @@ class CardManager:
             "edition": template.edition,
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
-            "effectConfig": template.effect_config,
+            "classification": classification,
+            "effectConfig": effectConfig,
+            "effectName": effectConfig.get("effectName"),
+            "displayName": effectConfig.get("displayName"),
+            "category": effectConfig.get("category"),
+            "tagline": effectConfig.get("tagline"),
+            "tooltip": effectConfig.get("tooltip"),
+            "detail": effectConfig.get("detail"),
             "sellValue": sellValue,
             "isActive": isActive,
             "acquiredAt": userCard.acquired_at.isoformat() if userCard.acquired_at else None,
@@ -609,11 +319,15 @@ class CardManager:
         if equippedIds:
             raise ValueError(f"Cannot sell equipped cards: {list(equippedIds)}")
 
-        # Calculate total and sell
+        # Calculate total and sell (Rookie classification = 2x sell value)
         totalFloobits = 0
         for card in cards:
             isActive = card.card_template.season_created == currentSeason
-            totalFloobits += getSellValue(card.card_template.edition, isActive=isActive)
+            cardValue = getSellValue(card.card_template.edition, isActive=isActive)
+            classification = card.card_template.classification or ""
+            if "rookie" in classification:
+                cardValue *= 2
+            totalFloobits += cardValue
 
         currencyRepo.addFunds(
             userId, totalFloobits,

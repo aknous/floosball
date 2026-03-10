@@ -148,17 +148,50 @@ class EquippedCardRepository:
         self.session.flush()
 
     def lockWeek(self, season: int, week: int):
-        """Lock equipped cards for users who have all 5 slots filled."""
+        """Lock equipped cards for users who have all slots filled.
+
+        Base is 5 slots; users with an MVP-classified card get 6.
+        """
         from sqlalchemy import func
-        # Find users who have all 5 cards equipped this week
-        fullUsers = (
-            self.session.query(EquippedCard.user_id)
+
+        # Find each user's card count for this week
+        userCounts = (
+            self.session.query(
+                EquippedCard.user_id,
+                func.count(EquippedCard.id).label("cnt"),
+            )
             .filter_by(season=season, week=week)
             .group_by(EquippedCard.user_id)
             .having(func.count(EquippedCard.id) >= 5)
             .all()
         )
-        fullUserIds = {row[0] for row in fullUsers}
+
+        # Check which of these users have an MVP card equipped this week
+        mvpUserIds = set()
+        if userCounts:
+            candidateIds = {row[0] for row in userCounts}
+            mvpRows = (
+                self.session.query(EquippedCard.user_id)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(
+                    EquippedCard.season == season,
+                    EquippedCard.week == week,
+                    EquippedCard.user_id.in_(candidateIds),
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("mvp"),
+                )
+                .distinct()
+                .all()
+            )
+            mvpUserIds = {row[0] for row in mvpRows}
+
+        fullUserIds = set()
+        for userId, cnt in userCounts:
+            requiredSlots = 6 if userId in mvpUserIds else 5
+            if cnt >= requiredSlots:
+                fullUserIds.add(userId)
+
         if fullUserIds:
             self.session.query(EquippedCard).filter(
                 EquippedCard.season == season,

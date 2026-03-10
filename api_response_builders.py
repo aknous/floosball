@@ -10,10 +10,14 @@ class ResponseBuilder:
     """Base class for building API responses consistently"""
     
     @staticmethod
-    def calculateStarRating(rating: int, minRating: int = RATING_SCALE_MIN, 
+    def calculateStarRating(rating: int, minRating: int = RATING_SCALE_MIN,
                              ratingRange: int = RATING_RANGE) -> int:
-        """Calculate star rating from numeric rating"""
-        return round((((rating - minRating) / ratingRange) * STARS_MAX) + 1)
+        """Calculate star rating from numeric rating.
+
+        Equal-width bands across the 60-100 range:
+          1★: 60-67  |  2★: 68-75  |  3★: 76-83  |  4★: 84-91  |  5★: 92-100
+        """
+        return min(5, max(1, (rating - minRating) // 8 + 1))
     
     @staticmethod
     def calculateWinPercentage(wins: int, losses: int) -> str:
@@ -401,7 +405,8 @@ class GameResponseBuilder(ResponseBuilder):
             'isComplete': game.status.name == 'Final' if hasattr(game.status, 'name') else False,
             'winningTeam': game.winningTeam.name if game.winningTeam else None,
             'isUpsetAlert': getattr(game, 'isUpsetAlert', False),
-            'isFeatured': getattr(game, 'isFeatured', False)
+            'isFeatured': getattr(game, 'isFeatured', False),
+            'gameStats': game._buildGameStatsSnapshot() if hasattr(game, '_buildGameStatsSnapshot') else None,
         }
 
     @staticmethod

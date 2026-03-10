@@ -73,16 +73,40 @@ class AvatarGenerator:
         """Get file path for cached avatar"""
         return os.path.join(self.cacheDir, f"{cacheKey}.svg")
     
+    def getPng(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str, size: int = 256, teamId: int = None) -> bytes:
+        """Generate or return cached PNG avatar for a team."""
+        cacheKey = self._getCacheKey(teamName, primaryColor, secondaryColor, tertiaryColor, size)
+        pngPath = os.path.join(self.cacheDir, f"{cacheKey}.png")
+
+        # Check disk cache
+        if os.path.exists(pngPath):
+            with open(pngPath, 'rb') as f:
+                return f.read()
+
+        # Generate SVG first, then convert
+        svg = self.generateTeamAvatar(teamName, primaryColor, secondaryColor, tertiaryColor, size, teamId)
+        import cairosvg
+        pngBytes = cairosvg.svg2png(bytestring=svg.encode('utf-8'), output_width=size, output_height=size)
+
+        # Cache to disk
+        try:
+            with open(pngPath, 'wb') as f:
+                f.write(pngBytes)
+        except Exception as e:
+            logger.error(f"Failed to save PNG to disk: {e}")
+
+        return pngBytes
+
     def clearCache(self):
         """Clear both memory and disk cache"""
         # Clear memory cache
         self.cache.clear()
         logger.info("Cleared avatar memory cache")
-        
+
         # Clear disk cache
         if os.path.exists(self.cacheDir):
             for file in os.listdir(self.cacheDir):
-                if file.endswith('.svg'):
+                if file.endswith('.svg') or file.endswith('.png'):
                     filePath = os.path.join(self.cacheDir, file)
                     os.remove(filePath)
             logger.info(f"Cleared avatar disk cache in {self.cacheDir}")

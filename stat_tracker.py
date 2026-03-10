@@ -15,10 +15,12 @@ class StatType(Enum):
 class StatTracker:
     """Base class for tracking player statistics across game, season, and career"""
     
-    def __init__(self, game_stats_dict, season_stats_dict, career_stats_dict):
+    def __init__(self, game_stats_dict, season_stats_dict, career_stats_dict,
+                 on_fantasy_points=None):
         self.game_stats_dict = game_stats_dict
         self.season_stats_dict = season_stats_dict
         self.career_stats_dict = career_stats_dict
+        self._on_fantasy_points = on_fantasy_points
     
     def add_stat(self, category: StatCategory, subcategory: str, value: int = 1, is_regular_season: bool = True):
         """Generic method to add stats across all stat dictionaries"""
@@ -37,9 +39,17 @@ class StatTracker:
                 self.career_stats_dict[category_name][subcategory] += value
     
     def add_fantasy_points(self, points: int):
-        """Add fantasy points to game stats"""
-        if 'fantasyPoints' in self.game_stats_dict:
-            self.game_stats_dict['fantasyPoints'] += points
+        """Add fantasy points — routes through callback if set.
+
+        When callback is set (during games with fantasy tracker), delegates to
+        FantasyTracker which updates both _weekFP and gameStatsDict.
+        When not set, falls back to direct dict update (tests, non-fantasy contexts).
+        """
+        if self._on_fantasy_points:
+            self._on_fantasy_points(points)
+        else:
+            if 'fantasyPoints' in self.game_stats_dict:
+                self.game_stats_dict['fantasyPoints'] += points
     
     def calculate_fantasy_points_for_yards(self, current_yards: int, additional_yards: int, points_per_interval: int, interval_size: int) -> int:
         """Calculate fantasy points based on yard intervals"""

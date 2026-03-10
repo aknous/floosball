@@ -560,6 +560,7 @@ class User(Base):
     favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     pending_favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     favorite_team_locked_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    auto_fill_roster: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -588,12 +589,14 @@ class FantasyRoster(Base):
     locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     total_points: Mapped[float] = mapped_column(Float, default=0.0)
     card_bonus_points: Mapped[float] = mapped_column(Float, default=0.0)
+    swaps_available: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="fantasy_rosters")
     players: Mapped[list["FantasyRosterPlayer"]] = relationship("FantasyRosterPlayer", back_populates="roster", cascade="all, delete-orphan")
+    swaps: Mapped[list["FantasyRosterSwap"]] = relationship("FantasyRosterSwap", back_populates="roster", cascade="all, delete-orphan")
 
     # Constraints
     __table_args__ = (
@@ -628,6 +631,33 @@ class FantasyRosterPlayer(Base):
 
     def __repr__(self):
         return f"<FantasyRosterPlayer(roster_id={self.roster_id}, slot='{self.slot}', player_id={self.player_id})>"
+
+
+class FantasyRosterSwap(Base):
+    """Fantasy roster swap table - tracks player swaps within a locked roster."""
+    __tablename__ = "fantasy_roster_swaps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    roster_id: Mapped[int] = mapped_column(Integer, ForeignKey("fantasy_rosters.id"), nullable=False)
+    slot: Mapped[str] = mapped_column(String(10), nullable=False)
+    old_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    new_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    swap_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    banked_fp: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    roster: Mapped["FantasyRoster"] = relationship("FantasyRoster", back_populates="swaps")
+    old_player: Mapped["Player"] = relationship("Player", foreign_keys=[old_player_id])
+    new_player: Mapped["Player"] = relationship("Player", foreign_keys=[new_player_id])
+
+    # Constraints
+    __table_args__ = (
+        Index("idx_fantasy_swap_roster", "roster_id"),
+    )
+
+    def __repr__(self):
+        return f"<FantasyRosterSwap(roster_id={self.roster_id}, slot='{self.slot}', old={self.old_player_id}, new={self.new_player_id})>"
 
 
 class UnusedName(Base):
@@ -671,6 +701,7 @@ class CardTemplate(Base):
     edition: Mapped[str] = mapped_column(String(20), nullable=False)  # base, holographic, prismatic, gold, chrome, diamond
     season_created: Mapped[int] = mapped_column(Integer, nullable=False)
     is_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+    classification: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # rookie, mvp, champion, all_pro, or compound e.g. mvp_champion
 
     # Snapshot of player at creation time
     player_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -710,6 +741,7 @@ class UserCard(Base):
     card_template_id: Mapped[int] = mapped_column(Integer, ForeignKey("card_templates.id"), nullable=False)
     acquired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     acquired_via: Mapped[str] = mapped_column(String(20), nullable=False)  # pack_standard, pack_premium, pack_elite, starter
+    last_swap_grant_cycle: Mapped[int] = mapped_column(Integer, default=0)  # Tracks All-Pro swap bonus exhaustion per cycle
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")
@@ -735,7 +767,9 @@ class EquippedCard(Base):
     slot_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1–5
     user_card_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_cards.id"), nullable=False)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    card_bonus_at_lock: Mapped[float] = mapped_column(Float, default=0.0)  # Card bonus snapshot at lock time
     streak_count: Mapped[int] = mapped_column(Integer, default=1)
+    swap_bonus_active: Mapped[bool] = mapped_column(Boolean, default=False)  # All-Pro swap bonus tracking
 
     # Relationships
     user: Mapped["User"] = relationship("User")
@@ -760,6 +794,7 @@ class WeeklyCardBonus(Base):
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     week: Mapped[int] = mapped_column(Integer, nullable=False)
     bonus_fp: Mapped[float] = mapped_column(Float, default=0.0)
+    breakdowns_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("roster_id", "week", name="uq_weekly_card_bonus_roster_week"),
@@ -768,6 +803,46 @@ class WeeklyCardBonus(Base):
 
     def __repr__(self):
         return f"<WeeklyCardBonus(user_id={self.user_id}, S{self.season}W{self.week}, fp={self.bonus_fp})>"
+
+
+class WeeklyModifier(Base):
+    """Tracks the active weekly modifier for each season/week."""
+    __tablename__ = "weekly_modifiers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    modifier: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("season", "week", name="uq_weekly_modifier_season_week"),
+    )
+
+    def __repr__(self):
+        return f"<WeeklyModifier(S{self.season}W{self.week}, modifier='{self.modifier}')>"
+
+
+class WeeklyPlayerFP(Base):
+    """Stores per-week per-player fantasy points, banked by FantasyTracker at week end.
+
+    This is the source of truth for fantasy roster FP — completely decoupled from
+    the player stat dict lifecycle (gameStatsDict zeroing, seasonStatsDict accumulation).
+    """
+    __tablename__ = "weekly_player_fp"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    fantasy_points: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", "week", name="uq_weekly_player_fp"),
+        Index("idx_weekly_player_fp_season", "season"),
+    )
+
+    def __repr__(self):
+        return f"<WeeklyPlayerFP(player_id={self.player_id}, S{self.season}W{self.week}, fp={self.fantasy_points})>"
 
 
 class UserCurrency(Base):

@@ -1266,7 +1266,8 @@ class Game:
             kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
             reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
             fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
-            if self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
+            # Only kick FG in OT if it ties or wins (down ≤3); trailing by more, a FG still loses
+            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -1310,10 +1311,33 @@ class Game:
                     self.play.passPlay(self._selectPassPlay('long'))
                     return
 
-        # Downs 1–3 in OT: use weighted sampling
+        # Downs 1–3 in OT
         coach = getattr(self.offensiveTeam, 'coach', None)
+        targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+
+        # Tied and in FG range: consider kicking now or playing conservatively
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        reasonableFg = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
+        fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
+        inFgRange = self.yardsToEndzone <= kickerMaxFg and fgDist <= reasonableFg
+        if scoreDiff == 0 and inFgRange:
+            # How easy is this FG? 1.0 = chip shot, 0.0 = at max range
+            fgEase = max(0.0, (reasonableFg - fgDist) / reasonableFg) if reasonableFg > 0 else 0.0
+            clockIQ = self._coachClockIQ(coach)
+            # Chance to kick FG now — scales with proximity, down, and coach IQ
+            downBase = {1: 0.05, 2: 0.15, 3: 0.40}.get(self.down, 0.05)
+            fgChance = fgEase * (downBase + clockIQ * 0.25)
+            if _random.random() < fgChance:
+                self.play.playType = PlayType.FieldGoal
+                return
+            # Otherwise play conservatively — runs and short passes to protect the ball
+            weights = {'run': 55.0, 'short': 30.0, 'medium': 15.0, 'long': 0.0}
+            self._executeWeightedPlay(weights, targetSideline=targetSideline)
+            return
+
         weights = self._computePlayWeights(scoreDiff, coach)
-        self._executeWeightedPlay(weights)
+        self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
@@ -1384,14 +1408,18 @@ class Game:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     return
                 elif deficit <= 8:
-                    # FG keeps it a one-score game but doesn't tie
-                    # Smart coaches go for TD; lower-rated coaches settle for FG
-                    fgChance = max(1, min(9, round(4 - aggrNorm * 3)))
-                    x = batched_randint(1, 10)
-                    if x <= fgChance:
-                        self.play.playType = PlayType.FieldGoal
-                        return
-                    # Chose to go for TD instead
+                    # Down 4-8: FG doesn't tie — need a TD eventually
+                    # With more time, bad coaches may still settle for FG to "stay close"
+                    # As time dwindles, FG becomes pointless — below 45 sec, no one kicks
+                    secs = self.gameClockSeconds
+                    if secs >= 45:
+                        timeFactor = (secs - 45) / (TIMEOUT_CLOCK_THRESHOLD - 45)
+                        # Bad coaches (low IQ) more likely to settle; good coaches go for TD
+                        fgChance = timeFactor * max(0.0, 0.35 - 0.3 * gameIQ)
+                        if _random.random() < fgChance:
+                            self.play.playType = PlayType.FieldGoal
+                            return
+                    # Go for TD
                     if self.yardsToFirstDown <= 5:
                         self.play.passPlay(self._selectPassPlay('short'))
                     elif self.yardsToFirstDown <= 10:
@@ -2094,6 +2122,9 @@ class Game:
 
         # Fantasy points: game → season and career (regular season only)
         if self.isRegularSeasonGame:
+            # Preserve game FP for DB persistence (_saveGameToDatabase reads this
+            # after playGame() returns, by which time gameStatsDict is zeroed)
+            player._lastGameFantasyPoints = gd['fantasyPoints']
             sd['fantasyPoints'] += gd['fantasyPoints']
             cd['fantasyPoints'] += gd['fantasyPoints']
             # Clear game FP after merge so _getPlayerLiveFantasyPoints()
@@ -3194,7 +3225,7 @@ class Game:
                 if not p:
                     return None
                 rating = getattr(p, 'playerRating', 0) or 0
-                stars = round(((rating - 60) / 40) * 4 + 1) if rating >= 60 else 1
+                stars = min(5, max(1, (rating - 60) // 8 + 1))
                 stats = dict(p.gameStatsDict[statsKey])
                 # Compute per-unit averages live (stored values only update end-of-game)
                 if statsKey == 'rushing':
@@ -3219,8 +3250,8 @@ class Game:
                     'teamId': p.team.id if hasattr(p, 'team') and hasattr(p.team, 'id') else None,
                     'playerRating': rating,
                     'ratingStars': max(1, min(5, stars)),
-                    'fantasyPoints': round(p.gameStatsDict.get('fantasyPoints', 0), 1),
-                    'totalFantasyPoints': round(p.seasonStatsDict.get('fantasyPoints', 0) + p.gameStatsDict.get('fantasyPoints', 0), 1),
+                    'fantasyPoints': p.gameStatsDict.get('fantasyPoints', 0),
+                    'totalFantasyPoints': p.seasonStatsDict.get('fantasyPoints', 0) + p.gameStatsDict.get('fantasyPoints', 0),
                     'totalTds': totalTds,
                     **stats,
                 }
@@ -3809,15 +3840,68 @@ class Game:
         homeWinProb = eloWeight * eloHomeWp + (1 - eloWeight) * scoreWp
         awayWinProb = 100 - homeWinProb
 
-        # Overtime: if tied with possession, slight advantage based on field position
+        # Overtime win probability — replaces generic formula above
         if self.currentQuarter >= 5:
-            if scoreDiff == 0:
-                if self.offensiveTeam == self.homeTeam:
-                    homeWinProb = 52 + (expectedPoints * 2)
+            isSuddenDeath = self.otSecondPossComplete
+            homeHasBall = self.offensiveTeam == self.homeTeam
+
+            if isSuddenDeath and scoreDiff != 0:
+                # Sudden death + someone is leading → game ends on next score or turnover on downs.
+                # Leading team is overwhelmingly likely to win (they can kneel it out or score).
+                leadBonus = min(40, abs(scoreDiff) * 10)  # wider lead = more certain
+                if scoreDiff > 0:
+                    # Home leads
+                    homeWinProb = 85 + leadBonus * 0.3
+                    if homeHasBall:
+                        homeWinProb += 5  # has possession too
                 else:
-                    awayWinProb = 52 + (expectedPoints * 2)
-                homeWinProb = min(100, max(0, homeWinProb))
-                awayWinProb = 100 - homeWinProb
+                    # Away leads
+                    homeWinProb = 15 - leadBonus * 0.3
+                    if not homeHasBall:
+                        homeWinProb -= 5  # away has possession too
+            elif scoreDiff == 0:
+                # Tied in OT — next score wins (or will win after both possess).
+                # In FG range, WP should reflect the near-certainty of a made kick.
+                yte = self.yardsToEndzone
+                fgDist = yte + 17
+                # Estimate FG make probability using same formula as fieldGoalTry
+                baseFgProb = 1 / (1 + math.exp(0.12 * (fgDist - 52)))
+                kicker = self.offensiveTeam.rosterDict.get('k')
+                if kicker:
+                    normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
+                    fgProb = baseFgProb * (0.4 + normalizedSkill * 1.5)
+                    if fgDist < 30:
+                        fgProb = min(1.0, fgProb + 0.15)
+                    fgProb = max(0.05, min(1.0, fgProb))
+                else:
+                    fgProb = baseFgProb
+                # Approximate scoring probability for this drive based on field position
+                if yte <= 40:
+                    # In FG range: scoring prob ≈ FG make prob (they'll kick)
+                    scoringProb = fgProb * 100
+                elif yte <= 60:
+                    # Approaching FG range: decent chance of getting there + scoring
+                    scoringProb = fgProb * 100 * 0.6
+                else:
+                    # Deep in own territory: lower but still have possession edge
+                    scoringProb = 25 + expectedPoints * 3
+
+                if isSuddenDeath:
+                    # Next score wins outright — scoring prob maps directly to WP
+                    offenseWp = max(52, scoringProb)
+                else:
+                    # First/second possession — other team gets a turn, dampen
+                    offenseWp = 50 + (scoringProb - 50) * 0.5
+
+                if homeHasBall:
+                    homeWinProb = offenseWp
+                else:
+                    homeWinProb = 100 - offenseWp
+            # else: non-sudden-death with score diff — first possession scored,
+            # second team still gets a chance. Use the generic formula from above.
+
+            homeWinProb = max(0.1, min(99.9, homeWinProb))
+            awayWinProb = 100 - homeWinProb
 
         # Clamp to 0.1% - 99.9% (never show 0% or 100% unless game is actually over)
         if not self.isGameOver():

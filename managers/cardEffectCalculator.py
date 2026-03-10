@@ -2,21 +2,24 @@
 Card Effect Calculator — computes weekly card bonuses for equipped cards.
 
 Used by seasonManager._processWeekCardEffects() at week end for authoritative
-persistence, and mirrored by frontend useFantasyLivePoints for live display.
+persistence, and mirrored by fantasyTracker for live display.
 
-Supports a two-pass system where modifier cards (amplifier, double_match, etc.)
-affect other cards' bonuses rather than producing FP directly.
+Single-pass system: each card's named effect is computed via cardEffects.computeEffect(),
+then match bonus and secondary effects are applied.
 """
 
 import logging
-import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
+from managers.cardEffects import (
+    computeEffect, checkStreakCondition, EffectResult,
+    EDITION_SECONDARY, POSITION_CONDITIONALS,
+)
+
 logger = logging.getLogger(__name__)
 
-# Maps conditional stat keys (from card effect_config) to
-# (GamePlayerStats JSON column, sub-key within that JSON)
+# Maps conditional stat keys to (GamePlayerStats JSON column, sub-key)
 CONDITIONAL_STAT_MAP = {
     "passYards": ("passing_stats", "passYards"),
     "passTds":   ("passing_stats", "tds"),
@@ -30,66 +33,151 @@ CONDITIONAL_STAT_MAP = {
 
 DEFAULT_MATCH_MULTIPLIER = 1.5
 
-# Effect types that are modifiers (modify other cards, don't produce FP themselves)
-MODIFIER_TYPES = {'amplifier', 'double_match', 'easy_threshold', 'base_amplifier', 'floobits_amplifier'}
-
 
 @dataclass
 class CardCalcContext:
     """Full context needed to compute card bonuses for one user for one week."""
-    rosterPlayerIds: Set[int]
-    weekPlayerStats: Dict[int, dict]
-    weekRawFP: float
+    # Core roster data
+    rosterPlayerIds: Set[int] = field(default_factory=set)
+    weekPlayerStats: Dict[int, dict] = field(default_factory=dict)
+    weekRawFP: float = 0.0
     rosterPlayerRatings: Dict[int, int] = field(default_factory=dict)
-    winningTeamIds: Set[int] = field(default_factory=set)
     rosterTotalTds: int = 0
-    positionAverageFP: Dict[int, float] = field(default_factory=dict)
-    streakCounts: Dict[int, int] = field(default_factory=dict)  # keyed by equipped card id
-    allEquippedEditions: Set[str] = field(default_factory=set)
-    matchedCardCount: int = 0
+    rosterPlayerPositions: Dict[int, int] = field(default_factory=dict)
+    streakCounts: Dict[int, int] = field(default_factory=dict)
+
+    # Favorite team data
     userFavoriteTeamId: Optional[int] = None
+    favoriteTeamElo: float = 1500.0
+    favoriteTeamStreak: int = 0  # Positive = win streak, negative = loss streak
+    favoriteTeamSeasonLosses: int = 0
+    favoriteTeamInPlayoffs: bool = False
+    favoriteTeamWonThisWeek: bool = False
+    favoriteTeamOpponentElo: float = 1500.0
+    favoriteTeamBigPlays: int = 0
+    favoriteTeamGameFinal: bool = False
+    favoriteTeamSeasonUpsetWins: int = 0
+
+    # Roster tracking
+    rosterUnchangedWeeks: int = 0
+
+    # Cross-team data
+    leagueAverageElo: float = 1500.0
+    teamResults: Dict[int, bool] = field(default_factory=dict)  # teamId → won
+    playerPerformanceRatings: Dict[int, float] = field(default_factory=dict)
+
+    # Weekly modifier
+    activeModifier: str = ""  # e.g. "amplify", "grounded", ""
+
+    # Swap data (for Stockpiler effect)
+    unusedSwaps: int = 0
+
+    # Internal — set by computeEffect dispatcher, not by caller
+    _currentEffectName: str = ""
 
 
 @dataclass
 class CardBreakdown:
-    slotNumber: int
-    edition: str
-    playerId: int
-    playerName: str
-    effectType: str
-    baseFP: float
-    matchMultiplied: bool
-    conditionalBonus: float
-    conditionalLabel: Optional[str]
-    totalFP: float
-    floobitsEarned: int
+    """Per-card breakdown for display and persistence."""
+    slotNumber: int = 0
+    edition: str = ""
+    playerId: int = 0
+    playerName: str = ""
+
+    # Effect identity
+    effectName: str = ""
+    displayName: str = ""
+    detail: str = ""          # Human-readable effect description (e.g. "+2.5 FP per week")
+    category: str = ""
+    outputType: str = "fp"  # "fp", "mult", "xmult", "floobits"
+
+    # Primary effect
+    primaryFP: float = 0.0
+    primaryFloobits: int = 0
+    primaryMult: float = 0.0   # +FPx value
+    primaryXMult: float = 0.0  # xFPx value (>1 when active)
+
+    # Match bonus
+    matchMultiplied: bool = False
+    matchMultiplier: float = DEFAULT_MATCH_MULTIPLIER
+    preMatchFP: float = 0.0
+    preMatchFloobits: int = 0
+    preMatchMult: float = 0.0
+    preMatchXMult: float = 0.0
+
+    # Position conditional
+    conditionalBonus: float = 0.0
+    conditionalLabel: Optional[str] = None
+
+    # Secondary effect (from edition)
+    secondaryFP: float = 0.0
+    secondaryFloobits: int = 0
+    secondaryMult: float = 0.0   # +FPx from edition (e.g. holo)
+    secondaryXMult: float = 0.0  # xFPx from edition (e.g. prismatic)
+
+    # Totals
+    totalFP: float = 0.0
+    floobitsEarned: int = 0
+
+    # Card player stat line (for card-player-specific effects)
+    playerStatLine: str = ""
+
+    # Human-readable equation showing how primary output was derived
+    equation: str = ""
 
 
 @dataclass
 class CardBonusResult:
     totalBonusFP: float = 0.0
+    totalMultBonus: float = 0.0    # Sum of +FPx values
+    xMultFactors: List[float] = field(default_factory=list)  # Individual xFPx values (>1)
     floobitsEarned: int = 0
     cardBreakdowns: List[CardBreakdown] = field(default_factory=list)
 
 
-def _playerStars(rating: int) -> int:
-    """Convert a player rating to a 1-5 star rating."""
-    return max(1, min(5, round(((rating - 60) / 35) * 5 + 1)))
+# Effects that use the card player's individual stats
+_CARD_PLAYER_EFFECTS = {
+    "main_character", "hype_man", "cha_ching", "ace_up_the_sleeve",
+    "showoff", "glow_up", "spotlight_moment", "schadenfreude", "hot_hand",
+}
 
 
-def _countPlayerTds(playerStats: dict) -> int:
-    """Count total TDs from a player's weekly game stats."""
-    tds = 0
-    passingStats = playerStats.get("passing_stats")
-    if isinstance(passingStats, dict):
-        tds += passingStats.get("tds", 0)
-    rushingStats = playerStats.get("rushing_stats")
-    if isinstance(rushingStats, dict):
-        tds += rushingStats.get("runTds", 0)
-    receivingStats = playerStats.get("receiving_stats")
-    if isinstance(receivingStats, dict):
-        tds += receivingStats.get("rcvTds", 0)
-    return tds
+def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
+    """Build a short stat summary for card-player-specific effects."""
+    if effectName not in _CARD_PLAYER_EFFECTS:
+        return ""
+
+    stats = ctx.weekPlayerStats.get(cardPlayerId, {})
+    if not stats:
+        return ""
+
+    fp = stats.get("fantasyPoints", 0)
+    passing = stats.get("passing_stats", {})
+    rushing = stats.get("rushing_stats", {})
+    receiving = stats.get("receiving_stats", {})
+    kicking = stats.get("kicking_stats", {})
+
+    # Count TDs across all stat groups
+    tds = (passing.get("tds", 0)
+           + rushing.get("runTds", 0)
+           + receiving.get("rcvTds", 0))
+
+    # Build position-appropriate stat line
+    parts = []
+    if fp:
+        parts.append(f"{int(fp)} FP")
+    if tds:
+        parts.append(f"{tds} TD")
+    if passing.get("passYards", 0):
+        parts.append(f"{passing['passYards']} pass yds")
+    if rushing.get("runYards", 0):
+        parts.append(f"{rushing['runYards']} rush yds")
+    if receiving.get("rcvYards", 0):
+        parts.append(f"{receiving['rcvYards']} rec yds")
+    if kicking.get("fgs", 0):
+        parts.append(f"{kicking['fgs']} FG")
+
+    return ", ".join(parts)
 
 
 def _getPlayerStat(playerStats: dict, statKey: str) -> float:
@@ -104,154 +192,8 @@ def _getPlayerStat(playerStats: dict, statKey: str) -> float:
     return statsJson.get(subKey, 0)
 
 
-def _computeCardEffect(
-    effectConfig: dict,
-    ctx: CardCalcContext,
-    cardPlayerWeekFP: float,
-    cardPlayerId: int,
-    equippedCardId: int,
-    cardEdition: str,
-) -> tuple:
-    """Compute base FP bonus and Floobits for a single card's effect.
-
-    Returns (fpBonus: float, floobits: int)
-    """
-    effectType = effectConfig.get("type", "flat")
-
-    # ─── Legacy types (backward compat) ──────────────────────────────────
-    if effectType == "flat":
-        return (effectConfig.get("baseFP", 0), 0)
-
-    if effectType == "floor":
-        return (effectConfig.get("guaranteedFP", 0), 0)
-
-    if effectType == "multiplier":
-        percent = effectConfig.get("percent", 0)
-        return (ctx.weekRawFP * percent, 0)
-
-    if effectType == "scaling":
-        factor = effectConfig.get("factor", 0)
-        return (cardPlayerWeekFP * factor, 0)
-
-    if effectType == "currency":
-        floobits = effectConfig.get("floobitsPerWeek", 0)
-        return (0, int(floobits))
-
-    if effectType == "dual":
-        multiplierPercent = effectConfig.get("multiplierPercent", 0)
-        floobits = effectConfig.get("floobitsPerWeek", 0)
-        return (ctx.weekRawFP * multiplierPercent, int(floobits))
-
-    # ─── New Base types ──────────────────────────────────────────────────
-    if effectType == "win_bonus":
-        if ctx.userFavoriteTeamId is not None and ctx.userFavoriteTeamId in ctx.winningTeamIds:
-            return (effectConfig.get("bonusFP", 0), 0)
-        return (0, 0)
-
-    if effectType == "td_bonus":
-        perTdFP = effectConfig.get("perTdFP", 0)
-        return (perTdFP * ctx.rosterTotalTds, 0)
-
-    # ─── New Chrome types ────────────────────────────────────────────────
-    if effectType == "roster_stars":
-        perStarPlayerFP = effectConfig.get("perStarPlayerFP", 0)
-        minStars = effectConfig.get("minStars", 3)
-        count = sum(
-            1 for pid in ctx.rosterPlayerIds
-            if _playerStars(ctx.rosterPlayerRatings.get(pid, 60)) >= minStars
-        )
-        return (perStarPlayerFP * count, 0)
-
-    if effectType == "underdog":
-        perUnderdogFP = effectConfig.get("perUnderdogFP", 0)
-        maxStars = effectConfig.get("maxStars", 2)
-        count = sum(
-            1 for pid in ctx.rosterPlayerIds
-            if _playerStars(ctx.rosterPlayerRatings.get(pid, 60)) <= maxStars
-        )
-        return (perUnderdogFP * count, 0)
-
-    if effectType == "outperform":
-        bonusFP = effectConfig.get("bonusFP", 0)
-        # Check if card player outperformed the position average
-        posAvg = ctx.positionAverageFP.get(cardPlayerId, 0)
-        if cardPlayerWeekFP > posAvg > 0:
-            return (bonusFP, 0)
-        return (0, 0)
-
-    if effectType == "streak":
-        baseFP = effectConfig.get("baseFP", 0)
-        growthPerWeek = effectConfig.get("growthPerWeek", 0)
-        streakCount = ctx.streakCounts.get(equippedCardId, 1)
-        # FP = baseFP + growthPerWeek * (streakCount - 1)
-        return (baseFP + growthPerWeek * (streakCount - 1), 0)
-
-    # ─── New Holo types ──────────────────────────────────────────────────
-    if effectType == "top_performer":
-        percent = effectConfig.get("percent", 0)
-        # Find the best roster player's FP this week
-        bestFP = 0
-        for pid in ctx.rosterPlayerIds:
-            pStats = ctx.weekPlayerStats.get(pid, {})
-            pFP = pStats.get("fantasyPoints", 0)
-            if pFP > bestFP:
-                bestFP = pFP
-        return (bestFP * percent, 0)
-
-    # ─── New Gold types ──────────────────────────────────────────────────
-    if effectType == "td_currency":
-        floobitsPerTd = effectConfig.get("floobitsPerTd", 0)
-        cardPlayerTds = _countPlayerTds(ctx.weekPlayerStats.get(cardPlayerId, {}))
-        return (0, int(floobitsPerTd * cardPlayerTds))
-
-    if effectType == "hot_roster_currency":
-        floobitsPerHotPlayer = effectConfig.get("floobitsPerHotPlayer", 0)
-        fpThreshold = effectConfig.get("fpThreshold", 10)
-        count = sum(
-            1 for pid in ctx.rosterPlayerIds
-            if ctx.weekPlayerStats.get(pid, {}).get("fantasyPoints", 0) >= fpThreshold
-        )
-        return (0, int(floobitsPerHotPlayer * count))
-
-    if effectType == "threshold_currency":
-        # Floobits if card player hits their conditional
-        # (conditional check handled separately, just return the floobits amount)
-        return (0, 0)  # Floobits awarded via conditional check path
-
-    # ─── New Prismatic types (non-modifier) ──────────────────────────────
-    if effectType == "edition_diversity":
-        perEditionFP = effectConfig.get("perEditionFP", 0)
-        uniqueEditions = len(ctx.allEquippedEditions)
-        return (perEditionFP * uniqueEditions, 0)
-
-    # ─── New Diamond types ───────────────────────────────────────────────
-    if effectType == "scaling_currency":
-        scalingPercent = effectConfig.get("scalingPercent", 0)
-        baseFloobits = effectConfig.get("baseFloobits", 0)
-        fpBonus = cardPlayerWeekFP * scalingPercent
-        return (fpBonus, int(baseFloobits))
-
-    if effectType == "mirror":
-        factor = effectConfig.get("factor", 0)
-        fpBonus = cardPlayerWeekFP * factor
-        floobits = int(cardPlayerWeekFP * factor)
-        return (fpBonus, floobits)
-
-    if effectType == "scaling_roster":
-        basePercent = effectConfig.get("basePercent", 0)
-        matchedBonus = effectConfig.get("matchedBonus", 0)
-        effectivePercent = basePercent + matchedBonus * ctx.matchedCardCount
-        return (cardPlayerWeekFP * effectivePercent, 0)
-
-    return (0, 0)
-
-
-def _checkConditional(
-    conditional: Optional[dict],
-    playerStats: dict,
-    thresholdDivisor: float = 1.0,
-) -> tuple:
-    """Check if a conditional bonus is triggered.
+def _checkConditional(conditional: Optional[dict], playerStats: dict) -> tuple:
+    """Check if a position conditional bonus is triggered.
 
     Returns (bonusFP: float, label: str or None)
     """
@@ -266,37 +208,11 @@ def _checkConditional(
     if not statKey:
         return (0, None)
 
-    # Apply threshold divisor (from easy_threshold modifier)
-    effectiveThreshold = threshold / thresholdDivisor if thresholdDivisor > 0 else threshold
-
     actualValue = _getPlayerStat(playerStats, statKey)
-    if actualValue >= effectiveThreshold:
+    if actualValue >= threshold:
         return (bonus, label)
 
     return (0, None)
-
-
-def _checkThresholdCurrency(
-    conditional: Optional[dict],
-    playerStats: dict,
-    floobitsAmount: int,
-    thresholdDivisor: float = 1.0,
-) -> int:
-    """Check if threshold_currency conditional is met, return Floobits if so."""
-    if not conditional:
-        return 0
-
-    statKey = conditional.get("stat")
-    threshold = conditional.get("threshold", 0)
-
-    if not statKey:
-        return 0
-
-    effectiveThreshold = threshold / thresholdDivisor if thresholdDivisor > 0 else threshold
-    actualValue = _getPlayerStat(playerStats, statKey)
-    if actualValue >= effectiveThreshold:
-        return floobitsAmount
-    return 0
 
 
 def calculateWeekCardBonuses(
@@ -305,174 +221,196 @@ def calculateWeekCardBonuses(
 ) -> CardBonusResult:
     """Calculate card bonuses for one user's equipped cards for a week.
 
-    Uses a two-pass system:
-    1. Detect modifiers → extract effective match multiplier, threshold divisor, etc.
-    2. Pass 1: Compute all non-modifier cards using effective modifiers
-    3. Pass 2: Apply amplifier/base_amplifier bonuses to pass-1 results
-    4. Sum everything
+    Single-pass flow:
+    1. Compute primary effect via cardEffects.computeEffect()
+    2. Apply match bonus (1.5x) to primary FP and floobits only
+    3. For multiplier effects: accumulate mult bonus
+    4. Add secondary effects (static, from edition, no match bonus)
+    5. Check position conditional if matched
+    6. Build breakdown, sum totals
 
     Args:
         equippedCards: list of EquippedCard ORM objects (with user_card.card_template loaded)
         ctx: CardCalcContext with all necessary context for computation
 
     Returns:
-        CardBonusResult with total bonus FP, Floobits earned, and per-card breakdowns
+        CardBonusResult with total bonus FP, mult bonus, Floobits earned, and per-card breakdowns
     """
     result = CardBonusResult()
 
     if not equippedCards:
         return result
 
-    # ─── Detect modifiers ────────────────────────────────────────────────
-    effectiveMatchMultiplier = DEFAULT_MATCH_MULTIPLIER
-    thresholdDivisor = 1.0
-    amplifierPercent = 0.0
-    baseAmplifierFactor = 0.0
-    floobitsAmplifierPercent = 0.0
-
-    modifierCards = []
-    regularCards = []
-
     for eq in equippedCards:
         template = eq.user_card.card_template
         effectConfig = template.effect_config or {}
-        effectType = effectConfig.get("type", "flat")
-
-        if effectType in MODIFIER_TYPES:
-            modifierCards.append(eq)
-            if effectType == "double_match":
-                effectiveMatchMultiplier = effectConfig.get("newMatchMultiplier", 3.0)
-            elif effectType == "easy_threshold":
-                thresholdDivisor = effectConfig.get("thresholdDivisor", 2.0)
-            elif effectType == "amplifier":
-                amplifierPercent += effectConfig.get("amplifyPercent", 0) / 100.0
-            elif effectType == "base_amplifier":
-                baseAmplifierFactor = max(baseAmplifierFactor, effectConfig.get("amplifyFactor", 2.0))
-            elif effectType == "floobits_amplifier":
-                floobitsAmplifierPercent += effectConfig.get("amplifyPercent", 0) / 100.0
-        else:
-            regularCards.append(eq)
-
-    # ─── Pass 1: Compute all non-modifier cards ─────────────────────────
-    pass1Results = []  # (eq, baseFP, floobits, conditionalBonus, conditionalLabel, isMatch, effectType, edition)
-
-    for eq in regularCards:
-        template = eq.user_card.card_template
-        effectConfig = template.effect_config or {}
-        effectType = effectConfig.get("type", "flat")
         cardPlayerId = template.player_id
         cardEdition = template.edition
+        position = template.position
 
-        # Get card player's weekly stats
-        cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
-        cardPlayerWeekFP = cardPlayerStats.get("fantasyPoints", 0)
+        effectName = effectConfig.get("effectName", "")
+        displayName = effectConfig.get("displayName", "")
+        detail = effectConfig.get("detail", "")
+        category = effectConfig.get("category", "")
 
-        # Compute base effect
-        baseFP, floobits = _computeCardEffect(
-            effectConfig, ctx, cardPlayerWeekFP, cardPlayerId, eq.id, cardEdition
-        )
+        # 1. Compute primary effect
+        primary = computeEffect(effectConfig, ctx, cardPlayerId, eq.id)
 
-        # Check roster match
+        # 2. Apply match bonus and weekly modifier
         isMatch = cardPlayerId in ctx.rosterPlayerIds
-        conditionalBonus = 0.0
-        conditionalLabel = None
+        mod = ctx.activeModifier
+
+        # Wildcard modifier: force all cards to be matched
+        if mod == "wildcard":
+            isMatch = True
+
+        preMatchFP = primary.fpBonus
+        preMatchFloobits = primary.floobits
+        preMatchMult = primary.multBonus
+        preMatchXMult = primary.xMultBonus
+        matchedFP = primary.fpBonus
+        matchedFloobits = primary.floobits
+        matchedMult = primary.multBonus
+        matchedXMult = primary.xMultBonus
+
+        # Overdrive: match multiplier is 2.5x instead of 1.5x
+        matchMult = 2.5 if mod == "overdrive" else DEFAULT_MATCH_MULTIPLIER
 
         if isMatch:
-            # Amplify FP bonus with effective match multiplier
-            baseFP *= effectiveMatchMultiplier
-            floobits = int(floobits * effectiveMatchMultiplier)
+            matchedFP *= matchMult
+            matchedFloobits = int(matchedFloobits * matchMult)
+            matchedMult *= matchMult
+            # xFPx match bonus: scale the bonus portion above 1
+            if matchedXMult > 0:
+                bonusPortion = (matchedXMult - 1) * matchMult
+                matchedXMult = 1 + bonusPortion
 
-            # Check conditional
-            conditional = effectConfig.get("conditional")
-            conditionalBonus, conditionalLabel = _checkConditional(
-                conditional, cardPlayerStats, thresholdDivisor
-            )
+        # Apply modifier effects to primary values
+        if mod == "amplify":
+            matchedMult *= 2  # Double +FPx
+        elif mod == "cascade":
+            # Double xFPx bonus portion
+            if matchedXMult > 1:
+                matchedXMult = 1 + (matchedXMult - 1) * 2
+        elif mod == "frenzy":
+            matchedFP *= 2  # Double +FP
+        elif mod == "grounded":
+            matchedMult = 0  # Disable all mult effects
+            matchedXMult = 0
+        elif mod == "payday":
+            matchedFloobits *= 3  # Triple Floobits
+        elif mod == "spotlight":
+            if effectName in _CARD_PLAYER_EFFECTS:
+                matchedFP *= 1.5  # +50% FP for card-player-specific effects
 
-        # Handle threshold_currency special case (Floobits from conditional)
-        if effectType == "threshold_currency":
-            conditional = effectConfig.get("conditional")
-            thresholdFloobits = effectConfig.get("floobits", 0)
-            if isMatch:
-                thresholdFloobits = int(thresholdFloobits * effectiveMatchMultiplier)
-            floobits += _checkThresholdCurrency(
-                conditional, cardPlayerStats, thresholdFloobits, thresholdDivisor
-            )
+        # 3. Check position conditional if matched
+        conditionalBonus = 0.0
+        conditionalLabel = None
+        if isMatch:
+            conditionals = POSITION_CONDITIONALS.get(position, [])
+            cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
+            for cond in conditionals:
+                # Longshot modifier: halve conditional thresholds
+                checkCond = cond
+                if mod == "longshot" and cond:
+                    checkCond = dict(cond)
+                    checkCond["threshold"] = checkCond.get("threshold", 0) / 2
+                bonus, label = _checkConditional(checkCond, cardPlayerStats)
+                if bonus > 0:
+                    conditionalBonus += bonus
+                    conditionalLabel = label
+                    break  # Only apply the first triggered conditional
 
-        pass1Results.append((eq, baseFP, floobits, conditionalBonus, conditionalLabel, isMatch, effectType, cardEdition))
+        # 4. Add secondary effects (static, from edition, no match bonus)
+        secondary = EDITION_SECONDARY.get(cardEdition)
+        if secondary is None and cardEdition == 'diamond':
+            # Diamond generates random secondary at equip time — check effect_config
+            secondary = effectConfig.get("secondary")
+        secondaryFP = 0.0
+        secondaryFloobits = 0
+        secondaryMult = 0.0   # +FPx from edition
+        secondaryXMult = 0.0  # xFPx from edition
+        if secondary:
+            secondaryFP = secondary.get("flatFP", 0)
+            secondaryFloobits = secondary.get("floobits", 0)
+            secondaryMult = secondary.get("mult", 0)
+            secondaryXMult = secondary.get("xMult", 0)
+            # Grounded disables ALL multiplier effects, including edition bonuses
+            if mod == "grounded":
+                secondaryMult = 0.0
+                secondaryXMult = 0.0
 
-    # ─── Pass 2: Apply amplifiers ────────────────────────────────────────
-    for eq, baseFP, floobits, conditionalBonus, conditionalLabel, isMatch, effectType, cardEdition in pass1Results:
-        template = eq.user_card.card_template
-        finalFP = baseFP
+        # 5. Total up
+        totalCardFP = matchedFP + conditionalBonus + secondaryFP
+        totalCardFloobits = matchedFloobits + secondaryFloobits
 
-        # Apply base_amplifier (doubles base-edition card FP)
-        if baseAmplifierFactor > 0 and cardEdition == 'base':
-            finalFP *= baseAmplifierFactor
+        # Determine primary output type
+        if primary.xMultBonus > 0:
+            outputType = "xmult"
+        elif primary.multBonus > 0:
+            outputType = "mult"
+        elif primary.floobits > 0:
+            outputType = "floobits"
+        else:
+            outputType = "fp"
+        # When primary result is all zeros, infer from config
+        if outputType == "fp" and primary.fpBonus == 0:
+            _XMULT_KEYS = {"xMultValue", "fpShareScale", "baseXMult", "eloPer100", "perSwapXMult"}
+            _MULT_KEYS = {"perTdMult", "perPlayerMult", "perLossMult", "baseMult", "multPercent"}
+            _FLOOBITS_KEYS = {"floobits", "perTdFloobits", "fpPercent", "perMissFloobits",
+                              "perPlayerFloobits", "perStreakFloobits"}
+            rewardType = effectConfig.get("rewardType")
+            if rewardType in ("xmult", "mult", "floobits"):
+                outputType = rewardType
+            elif any(k in effectConfig for k in _XMULT_KEYS):
+                outputType = "xmult"
+            elif any(k in effectConfig for k in _MULT_KEYS):
+                outputType = "mult"
+            elif category == "floobits" or any(k in effectConfig for k in _FLOOBITS_KEYS):
+                outputType = "floobits"
 
-        # Apply general amplifier
-        if amplifierPercent > 0:
-            finalFP *= (1 + amplifierPercent)
-
-        totalFP = finalFP + conditionalBonus
-
-        # Apply floobits amplifier
-        finalFloobits = floobits
-        if floobitsAmplifierPercent > 0 and floobits > 0:
-            finalFloobits = int(floobits * (1 + floobitsAmplifierPercent))
-
+        # Build breakdown
         breakdown = CardBreakdown(
             slotNumber=eq.slot_number,
             edition=cardEdition,
-            playerId=template.player_id,
-            playerName=template.player_name,
-            effectType=effectType,
-            baseFP=round(finalFP, 2),
-            matchMultiplied=isMatch,
-            conditionalBonus=conditionalBonus,
-            conditionalLabel=conditionalLabel,
-            totalFP=round(totalFP, 2),
-            floobitsEarned=finalFloobits,
-        )
-
-        result.totalBonusFP += totalFP
-        result.floobitsEarned += finalFloobits
-        result.cardBreakdowns.append(breakdown)
-
-    # ─── Add modifier card breakdowns (they produce 0 FP but show in UI) ─
-    for eq in modifierCards:
-        template = eq.user_card.card_template
-        effectConfig = template.effect_config or {}
-        effectType = effectConfig.get("type", "flat")
-        cardPlayerId = template.player_id
-
-        # Modifiers can still have conditionals if matched
-        isMatch = cardPlayerId in ctx.rosterPlayerIds
-        conditionalBonus = 0.0
-        conditionalLabel = None
-
-        if isMatch:
-            conditional = effectConfig.get("conditional")
-            cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
-            conditionalBonus, conditionalLabel = _checkConditional(
-                conditional, cardPlayerStats, thresholdDivisor
-            )
-
-        breakdown = CardBreakdown(
-            slotNumber=eq.slot_number,
-            edition=template.edition,
             playerId=cardPlayerId,
             playerName=template.player_name,
-            effectType=effectType,
-            baseFP=0,
+            effectName=effectName,
+            displayName=displayName,
+            detail=detail,
+            category=category,
+            outputType=outputType,
+            primaryFP=round(matchedFP, 2),
+            primaryFloobits=matchedFloobits,
+            primaryMult=round(matchedMult, 1),
+            primaryXMult=round(matchedXMult, 1),
             matchMultiplied=isMatch,
+            matchMultiplier=matchMult,
+            preMatchFP=round(preMatchFP, 2),
+            preMatchFloobits=preMatchFloobits,
+            preMatchMult=round(preMatchMult, 1),
+            preMatchXMult=round(preMatchXMult, 1),
             conditionalBonus=conditionalBonus,
             conditionalLabel=conditionalLabel,
-            totalFP=round(conditionalBonus, 2),
-            floobitsEarned=0,
+            secondaryFP=secondaryFP,
+            secondaryFloobits=secondaryFloobits,
+            secondaryMult=secondaryMult,
+            secondaryXMult=secondaryXMult,
+            totalFP=round(totalCardFP, 2),
+            floobitsEarned=totalCardFloobits,
+            playerStatLine=_buildPlayerStatLine(effectName, cardPlayerId, ctx),
+            equation=primary.equation,
         )
 
-        result.totalBonusFP += conditionalBonus
+        result.totalBonusFP += totalCardFP
+        result.totalMultBonus += matchedMult + secondaryMult  # Primary +FPx + edition +FPx
+        if matchedXMult > 1:
+            result.xMultFactors.append(round(matchedXMult, 1))
+        if secondaryXMult > 1:
+            result.xMultFactors.append(round(secondaryXMult, 1))
+        result.floobitsEarned += totalCardFloobits
         result.cardBreakdowns.append(breakdown)
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
+    result.totalMultBonus = round(result.totalMultBonus, 1)
     return result

@@ -349,9 +349,9 @@ class Player:
 
     def addMissedFg(self, yards, isRegularSeason):
         if yards >= 40 and yards < 50:
-            self.gameStatsDict['fantasyPoints'] += -1
+            self.stat_tracker.add_fantasy_points(-1)
         elif yards < 40:
-            self.gameStatsDict['fantasyPoints'] += -2
+            self.stat_tracker.add_fantasy_points(-2)
 
         if isRegularSeason:
             if yards < 50 and yards > 39:
@@ -369,10 +369,10 @@ class Player:
 
 
     def addExtraPoint(self):
-        self.gameStatsDict['fantasyPoints'] += 1
+        self.stat_tracker.add_fantasy_points(1)
 
     def addMissedExtraPoint(self):
-        self.gameStatsDict['fantasyPoints'] += -3
+        self.stat_tracker.add_fantasy_points(-3)
 
 
 class PlayerAttributes:

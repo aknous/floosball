@@ -260,10 +260,10 @@ class SeasonEvent:
         }
     
     @staticmethod
-    def weekStart(seasonNumber: int, weekNumber: int, games: List[Dict], weekText: str = None) -> Dict[str, Any]:
+    def weekStart(seasonNumber: int, weekNumber: int, games: List[Dict], weekText: str = None, modifier: str = None) -> Dict[str, Any]:
         """Create a week start event"""
         text = weekText or f'Week {weekNumber}'
-        return {
+        event = {
             'event': EventType.WEEK_START.value,
             'seasonNumber': seasonNumber,
             'weekNumber': weekNumber,
@@ -272,6 +272,9 @@ class SeasonEvent:
             'games': games,
             'message': f"{text} begins"
         }
+        if modifier:
+            event['modifier'] = modifier
+        return event
     
     @staticmethod
     def weekEnd(seasonNumber: int, weekNumber: int, results: List[Dict]) -> Dict[str, Any]:

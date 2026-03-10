@@ -603,22 +603,23 @@ class LeagueManager:
         now = datetime.datetime.utcnow()
         return now + datetime.timedelta(days=week)
     
-    def checkPlayoffClinching(self, currentWeek: int, leagueHighlights: List = None) -> List[str]:
+    def checkPlayoffClinching(self, currentWeek: int, leagueHighlights: List = None) -> List[dict]:
         """
         Check for playoff clinching and elimination during regular season.
-        Returns a list of new event texts that were triggered this week.
+        Returns a list of event dicts: {'text': str, 'type': str, 'teamId': int}.
+        type values: 'clinch_playoff', 'clinch_topseed', 'eliminated'
         """
         import floosball_methods as FloosMethods
 
         if leagueHighlights is None:
             leagueHighlights = []
 
-        newEvents: List[str] = []
+        newEvents: List[dict] = []
         remaining = 28 - currentWeek
 
-        def _emit(text: str) -> None:
+        def _emit(text: str, eventType: str, teamId: int) -> None:
             leagueHighlights.insert(0, {'event': {'text': text}})
-            newEvents.append(text)
+            newEvents.append({'text': text, 'type': eventType, 'teamId': teamId})
 
         for league in self.leagues:
             standings = league.getStandings()
@@ -654,7 +655,7 @@ class LeagueManager:
                             remaining
                         ) or currentWeek == 28:
                             team1.clinchedTopSeed = True
-                            _emit(f'{team1.city} {team1.name} have clinched the #1 seed')
+                            _emit(f'{team1.city} {team1.name} have clinched the #1 seed', 'clinch_topseed', team1.id)
 
                 # --- Playoff berth clinches ---
                 if lastTeamIn and firstTeamOut:
@@ -667,7 +668,7 @@ class LeagueManager:
                                 remaining
                             ) or currentWeek == 28:
                                 team.clinchedPlayoffs = True
-                                _emit(f'{team.city} {team.name} have clinched a playoff berth')
+                                _emit(f'{team.city} {team.name} have clinched a playoff berth', 'clinch_playoff', team.id)
 
                     # --- Eliminations ---
                     for standing in nonPlayoffTeamsList:
@@ -683,7 +684,7 @@ class LeagueManager:
                                 remaining
                             ) or currentWeek == 28:
                                 team.eliminated = True
-                                _emit(f'{team.city} {team.name} have faded from playoff contention')
+                                _emit(f'{team.city} {team.name} have faded from playoff contention', 'eliminated', team.id)
                                 team.pressureModifier = 0.7
                             else:
                                 # On the brink of elimination

@@ -572,14 +572,15 @@ class PlayerManager:
         """Generate players distributed across positions"""
         import numpy as np
         from random import randint
-        
-        # Generate player skill seeds like original code
+
+        # Generate dual seeds (physical + mental) from normal distribution
         meanPlayerSkill = 80
         stdDevPlayerSkill = 7
-        playerAverages = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
-        playerAverages = np.clip(playerAverages, 60, 100)
-        playerAverages = playerAverages.tolist()
-        
+        physicalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
+        physicalSeeds = np.clip(physicalSeeds, 60, 100).tolist()
+        mentalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
+        mentalSeeds = np.clip(mentalSeeds, 60, 100).tolist()
+
         # Position distribution (matches original pattern: y = x%6)
         playerId = 1
         for x in range(totalPlayers):
@@ -595,10 +596,12 @@ class PlayerManager:
                 position = FloosPlayer.Position.TE
             elif y == 5:
                 position = FloosPlayer.Position.K
-            
-            if position and playerAverages:
-                seed = int(playerAverages.pop(randint(0, len(playerAverages) - 1)))
-                player = self.createPlayer(position, seed)
+
+            if position and physicalSeeds:
+                physSeed = int(physicalSeeds.pop(randint(0, len(physicalSeeds) - 1)))
+                mentIdx = randint(0, len(mentalSeeds) - 1)
+                mentSeed = int(mentalSeeds.pop(mentIdx))
+                player = self.createPlayer(position, physSeed, mentSeed)
                 if player:
                     player.id = playerId
                     playerId += 1
@@ -1625,7 +1628,8 @@ class PlayerManager:
                 for i, player in enumerate(activeQbsWithStats):
                     percentileDifference = qbPerformancePercentiles[i] - qbBaseSkillPercentiles[i]
                     adjustment = effectiveAdjustment * percentileDifference
-                    player.playerRating = round(player.attributes.skillRating + adjustment)
+                    # seasonPerformanceRating stored for MVP/analysis only;
+                    # playerRating stays fixed for the season
         
         # RB Performance Rating System
         activeRbsWithStats = [rb for rb in self.activeRbs if rb.seasonStatsDict.get('rushing', {}).get('yards', 0) > 0]
@@ -1668,7 +1672,8 @@ class PlayerManager:
                 for i, player in enumerate(activeRbsWithStats):
                     percentileDifference = rbPerformancePercentiles[i] - rbBaseSkillPercentiles[i]
                     adjustment = effectiveAdjustment * percentileDifference
-                    player.playerRating = round(player.attributes.skillRating + adjustment)
+                    # seasonPerformanceRating stored for MVP/analysis only;
+                    # playerRating stays fixed for the season
         
         # WR Performance Rating System
         activeWrsWithStats = [wr for wr in self.activeWrs if wr.seasonStatsDict.get('receiving', {}).get('yards', 0) > 0]
@@ -1721,7 +1726,8 @@ class PlayerManager:
                 for i, player in enumerate(activeWrsWithStats):
                     percentileDifference = wrPerformancePercentiles[i] - wrBaseSkillPercentiles[i]
                     adjustment = effectiveAdjustment * percentileDifference
-                    player.playerRating = round(player.attributes.skillRating + adjustment)
+                    # seasonPerformanceRating stored for MVP/analysis only;
+                    # playerRating stays fixed for the season
         
         # TE Performance Rating System (Same as WR but separate calculations)
         activeTesWithStats = [te for te in self.activeTes if te.seasonStatsDict.get('receiving', {}).get('yards', 0) > 0]
@@ -1774,7 +1780,8 @@ class PlayerManager:
                 for i, player in enumerate(activeTesWithStats):
                     percentileDifference = tePerformancePercentiles[i] - teBaseSkillPercentiles[i]
                     adjustment = effectiveAdjustment * percentileDifference
-                    player.playerRating = round(player.attributes.skillRating + adjustment)
+                    # seasonPerformanceRating stored for MVP/analysis only;
+                    # playerRating stays fixed for the season
         
         # K (Kicker) Performance Rating System
         activeKsWithStats = [k for k in self.activeKs if k.seasonStatsDict.get('kicking', {}).get('fgs', 0) > 0]
@@ -1815,7 +1822,8 @@ class PlayerManager:
                 for i, player in enumerate(activeKsWithStats):
                     percentileDifference = kPerformancePercentiles[i] - kBaseSkillPercentiles[i]
                     adjustment = effectiveAdjustment * percentileDifference
-                    player.playerRating = round(player.attributes.skillRating + adjustment)
+                    # seasonPerformanceRating stored for MVP/analysis only;
+                    # playerRating stays fixed for the season
         
         # Sort players by performance ratings
         self.activeQbs.sort(key=lambda player: getattr(player, 'seasonPerformanceRating', 0), reverse=True)

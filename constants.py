@@ -55,8 +55,8 @@ YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 
 # Clutch/Choke thresholds
-CLUTCH_PRESSURE_THRESHOLD = 60   # Min gamePressure (0-100) for clutch/choke consideration
-CLUTCH_MODIFIER_THRESHOLD = 3.0  # Min abs(keyPressureMod) for clutch/choke indicator
+CLUTCH_PRESSURE_THRESHOLD = 50   # Min gamePressure (0-100) for clutch/choke consideration
+CLUTCH_MODIFIER_THRESHOLD = 2.0  # Min abs(keyPressureMod) for clutch/choke indicator
 
 # Play selection
 RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage matchup weight delta
@@ -65,3 +65,18 @@ RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage ma
 COACH_ATTR_NEUTRAL = 80         # Attribute value with zero effect (midpoint of 60-100 range)
 COACH_ATTR_RANGE = 20           # Half-range used to normalise coach attributes to [-1, 1]
 COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matchup weighting
+
+# Floobits Economy — earning amounts
+CLINCH_PLAYOFF_REWARD = 25
+CLINCH_TOPSEED_REWARD = 50
+FLOOSBOWL_WIN_REWARD = 150
+
+WEEKLY_LEADERBOARD_PRIZES = {1: 30, 2: 20, 3: 15}
+WEEKLY_LEADERBOARD_TOP_PCT_PRIZE = 5
+WEEKLY_LEADERBOARD_TOP_PCT = 0.25
+
+SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
+SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
+SEASON_LEADERBOARD_TOP_PCT = 0.25
+
+SEASON_FP_PAYOUT_DIVISOR = 25  # 1 Floobit per N FP

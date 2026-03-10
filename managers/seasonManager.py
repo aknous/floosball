@@ -68,6 +68,7 @@ class Season:
         self.leagueHighlights: List[Dict[str, Any]] = []
         self.freeAgencyOrder: List[FloosTeam.Team] = []
         self.mvp: Optional[Dict[str, Any]] = None
+        self.allProPlayerIds: set = set()
 
 class SeasonManager:
     """Manages season simulation, scheduling, and progression"""
@@ -198,8 +199,12 @@ class SeasonManager:
         # Simulate regular season
         await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
 
-        # Select MVP based on regular season performance
+        # Select MVP and All-Pro based on regular season performance
         await self._selectSeasonMVP()
+        self._selectSeasonAllPro()
+
+        # End-of-regular-season cleanup (unequip cards, etc.)
+        self._processEndOfRegularSeason()
 
         # Simulate playoffs
         await self._simulatePlayoffs()
@@ -244,13 +249,21 @@ class SeasonManager:
 
             logger.info(f"Simulating {self.currentSeason.currentWeekText} in {self.timingManager.getModeString()} mode")
 
+            # Select weekly modifier
+            weeklyModifier = self._selectWeeklyModifier(
+                self.currentSeason.seasonNumber, self.currentSeason.currentWeek
+            )
+
+
+
             # Broadcast week start event
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                 week_event = SeasonEvent.weekStart(
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=self.currentSeason.currentWeek,
                     games=[],
-                    weekText=self.currentSeason.currentWeekText
+                    weekText=self.currentSeason.currentWeekText,
+                    modifier=weeklyModifier,
                 )
                 broadcaster.broadcast_sync('season', week_event)
 
@@ -344,10 +357,21 @@ class SeasonManager:
             self.updatePlayoffPicture()
             newClinchEvents = self.checkForClinches()
 
-            # Broadcast any new clinch/elimination events
-            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                for text in newClinchEvents:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(text))
+            # Broadcast clinch/elimination events and award Floobits for team achievements
+            from constants import CLINCH_PLAYOFF_REWARD, CLINCH_TOPSEED_REWARD
+            for event in newClinchEvents:
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(event['text']))
+                if event['type'] == 'clinch_playoff':
+                    self._awardFavoriteTeamBonus(
+                        event['teamId'], CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
+                        description=f'Favorite team clinched playoffs (Week {self.currentSeason.currentWeek})',
+                        season=self.currentSeason.seasonNumber, week=self.currentSeason.currentWeek)
+                elif event['type'] == 'clinch_topseed':
+                    self._awardFavoriteTeamBonus(
+                        event['teamId'], CLINCH_TOPSEED_REWARD, 'team_clinch_topseed',
+                        description=f'Favorite team clinched #1 seed (Week {self.currentSeason.currentWeek})',
+                        season=self.currentSeason.seasonNumber, week=self.currentSeason.currentWeek)
 
             # Broadcast standings with updated clinch/elimination flags
             # Use await directly (we're in an async method) so it fires immediately, not as a deferred task
@@ -409,25 +433,46 @@ class SeasonManager:
 
     async def _simulateGame(self, game: FloosGame.Game) -> None:
         """Simulate a single game"""
-        
+
         try:
             # Create game instance with timing manager
             gameInstance = game
-            
+
             # Track games simulated this season
             self.games_simulated_this_season += 1
-            
+
+            # Wire fantasy tracker callback for each player so FP generation
+            # flows through FantasyTracker (updates both _weekFP and gameStatsDict)
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if fantasyTracker:
+                for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
+                    for player in team.rosterDict.values():
+                        if player:
+                            pid = player.id
+                            player.stat_tracker._on_fantasy_points = (
+                                lambda pts, _pid=pid: fantasyTracker.addPlayerPoints(_pid, pts)
+                            )
+
             # Simulate the game
             await gameInstance.playGame()
-            
-            # Save game to database BEFORE postgame processing zeroes gameStatsDict.fantasyPoints
+
+            # Clear fantasy tracker callbacks after game
+            if fantasyTracker:
+                for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
+                    for player in team.rosterDict.values():
+                        if player:
+                            player.stat_tracker._on_fantasy_points = None
+
+            # Save game to database. Note: gameStatsDict['fantasyPoints'] is already
+            # zeroed by _accumulatePostgameStats inside playGame(), but each player's
+            # _lastGameFantasyPoints preserves the value for DB persistence.
             if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
                 self._saveGameToDatabase(gameInstance)
 
             # Update team records
             self._updateTeamRecords(gameInstance)
 
-            # Process post-game statistics (replaces original postgame() method)
+            # Process post-game statistics (record-checking, team stat accumulation)
             self.recordsManager.processPostGameStats(gameInstance)
 
             # Log detailed game stats
@@ -598,6 +643,8 @@ class SeasonManager:
             broadcaster.broadcast_sync('season', event)
         except Exception as e:
             logger.warning(f"Leaderboard broadcast failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
     async def _onWeekComplete(self, week: int, in_playoffs: bool, playoff_round: Optional[str] = None) -> None:
         """Called after each week completes - triggers state save and card effect processing"""
@@ -609,8 +656,21 @@ class SeasonManager:
                 playoff_round=playoff_round
             )
 
+        # Bank FP from in-memory accumulator to WeeklyPlayerFP DB table
+        fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+        if fantasyTracker:
+            fantasyTracker.bankWeek(self.currentSeason.seasonNumber, week)
+
+        # Grant roster swap every 7 weeks (regular season only)
+        if not in_playoffs and week % 7 == 0:
+            self._grantRosterSwaps(self.currentSeason.seasonNumber)
+
         # Process card effects for this week (persists bonuses to DB)
         self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
+
+        # Award weekly leaderboard prizes (after card effects are finalized)
+        if not in_playoffs:
+            self._awardWeeklyLeaderboardPrizes(self.currentSeason.seasonNumber, week)
 
         # Unlock equipped cards now that week is over
         try:
@@ -638,15 +698,51 @@ class SeasonManager:
         # Broadcast final leaderboard with persisted card bonuses
         self._broadcastLeaderboardUpdate()
 
+    def _grantRosterSwaps(self, season: int) -> None:
+        """Grant 1 swap to all locked rosters.
+        Cap is 1 normally, 2 if user has a Champion-classified card equipped."""
+        try:
+            from database.connection import get_session as _getSession
+            from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
+            swapSession = _getSession()
+            rosters = swapSession.query(FantasyRoster).filter_by(
+                season=season, is_locked=True
+            ).all()
+            updated = 0
+            for roster in rosters:
+                # Check if user has a Champion card equipped
+                hasChampion = swapSession.query(EquippedCard).join(
+                    UserCard, EquippedCard.user_card_id == UserCard.id
+                ).join(
+                    CardTemplate, UserCard.card_template_id == CardTemplate.id
+                ).filter(
+                    EquippedCard.user_id == roster.user_id,
+                    EquippedCard.season == season,
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("champion")
+                ).first() is not None
+                maxSwaps = 2 if hasChampion else 1
+                if roster.swaps_available < maxSwaps:
+                    roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
+                    updated += 1
+            swapSession.commit()
+            swapSession.close()
+            if updated > 0:
+                logger.info(f"Granted roster swap to {updated} users for season {season}")
+        except Exception as e:
+            logger.error(f"Failed to grant roster swaps: {e}")
+
     def _processWeekCardEffects(self, season: int, week: int) -> None:
         """Calculate and persist card effect bonuses for all users after a week completes."""
         try:
             from database.connection import get_session as _getSession
-            from database.models import FantasyRoster, Game, GamePlayerStats, Player, User, WeeklyCardBonus
-            from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
-            from managers.cardEffectCalculator import (
-                calculateWeekCardBonuses, CardCalcContext, _playerStars, _countPlayerTds
+            from database.models import (
+                FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+                Player, User, WeeklyCardBonus, WeeklyPlayerFP
             )
+            from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
+            from managers.cardEffectCalculator import calculateWeekCardBonuses, CardCalcContext
+            from managers.cardEffects import _countPlayerTds, checkStreakCondition
 
             session = _getSession()
             try:
@@ -666,7 +762,13 @@ class SeasonManager:
                         continue
                     byUser.setdefault(eq.user_id, []).append(eq)
 
-                # Get all game player stats for this week
+                # Get FP from WeeklyPlayerFP (banked by FantasyTracker)
+                weekFPRows = session.query(WeeklyPlayerFP).filter_by(
+                    season=season, week=week
+                ).all()
+                weekFPByPlayer = {row.player_id: row.fantasy_points for row in weekFPRows}
+
+                # Get sub-stats from GamePlayerStats (for card conditionals)
                 gameStats = (
                     session.query(GamePlayerStats)
                     .join(Game, GamePlayerStats.game_id == Game.id)
@@ -674,28 +776,44 @@ class SeasonManager:
                     .all()
                 )
 
-                # Build per-player stats dict
+                # Build per-player stats dict (convert raw DB format to card-calc format)
+                from managers.fantasyTracker import _dbStatsToCardFormat
                 weekPlayerStats = {}
                 for gps in gameStats:
-                    weekPlayerStats[gps.player_id] = {
-                        "fantasyPoints": gps.fantasy_points or 0,
-                        "passing_stats": gps.passing_stats or {},
-                        "rushing_stats": gps.rushing_stats or {},
-                        "receiving_stats": gps.receiving_stats or {},
-                        "kicking_stats": gps.kicking_stats or {},
-                    }
+                    weekPlayerStats[gps.player_id] = _dbStatsToCardFormat(
+                        gps.passing_stats, gps.rushing_stats,
+                        gps.receiving_stats, gps.kicking_stats,
+                        weekFPByPlayer.get(gps.player_id, 0),
+                    )
+                for pid, fp in weekFPByPlayer.items():
+                    if pid not in weekPlayerStats:
+                        weekPlayerStats[pid] = _dbStatsToCardFormat(
+                            {}, {}, {}, {}, fp,
+                        )
 
                 # ─── Build shared context data ───────────────────────────────
-                # Winning team IDs (for win_bonus)
+
+                # Team results from DB games (teamId → won)
                 weekGames = session.query(Game).filter_by(season=season, week=week).all()
-                winningTeamIds = set()
+                teamResults = {}
                 for g in weekGames:
                     if g.home_score > g.away_score:
-                        winningTeamIds.add(g.home_team_id)
+                        teamResults[g.home_team_id] = True
+                        teamResults[g.away_team_id] = False
                     elif g.away_score > g.home_score:
-                        winningTeamIds.add(g.away_team_id)
+                        teamResults[g.away_team_id] = True
+                        teamResults[g.home_team_id] = False
+                    else:  # Tie
+                        teamResults[g.home_team_id] = False
+                        teamResults[g.away_team_id] = False
 
-                # Player ratings (for roster_stars / underdog)
+                # Build game lookup by team for opponent ELO
+                teamGameMap = {}  # teamId → Game row
+                for g in weekGames:
+                    teamGameMap[g.home_team_id] = g
+                    teamGameMap[g.away_team_id] = g
+
+                # Player ratings and positions
                 allPlayerIds = set()
                 for userId, userEquipped in byUser.items():
                     roster = session.query(FantasyRoster).filter_by(
@@ -705,40 +823,60 @@ class SeasonManager:
                         allPlayerIds.update(rp.player_id for rp in roster.players)
 
                 playerRatingsMap = {}
-                if allPlayerIds:
-                    playerRows = session.query(Player.id, Player.player_rating).filter(
-                        Player.id.in_(allPlayerIds)
-                    ).all()
-                    playerRatingsMap = {pid: (rating or 60) for pid, rating in playerRows}
-
-                # Position average FP (for outperform) — group by position
                 playerPositionMap = {}
                 if allPlayerIds:
-                    posRows = session.query(Player.id, Player.position).filter(
-                        Player.id.in_(set(weekPlayerStats.keys()))
-                    ).all()
-                    playerPositionMap = {pid: pos for pid, pos in posRows}
+                    playerRows = session.query(
+                        Player.id, Player.player_rating, Player.position
+                    ).filter(Player.id.in_(allPlayerIds)).all()
+                    for pid, rating, pos in playerRows:
+                        playerRatingsMap[pid] = rating or 60
+                        playerPositionMap[pid] = pos
 
-                # Compute average FP per position from all players who played this week
-                positionFPSums = {}
-                positionFPCounts = {}
-                for pid, stats in weekPlayerStats.items():
-                    pos = playerPositionMap.get(pid)
-                    if pos is not None:
-                        fp = stats.get("fantasyPoints", 0)
-                        positionFPSums[pos] = positionFPSums.get(pos, 0) + fp
-                        positionFPCounts[pos] = positionFPCounts.get(pos, 0) + 1
+                # Player performance ratings from live objects
+                playerPerfRatings = {}
+                if self.playerManager:
+                    for p in self.playerManager.activePlayers:
+                        perfRating = getattr(p, 'seasonPerformanceRating', 0)
+                        if perfRating > 0:
+                            playerPerfRatings[p.id] = perfRating
 
-                # Map player_id → their position's average FP
-                positionAverageFP = {}
-                for pid in weekPlayerStats:
-                    pos = playerPositionMap.get(pid)
-                    if pos is not None and positionFPCounts.get(pos, 0) > 0:
-                        positionAverageFP[pid] = positionFPSums[pos] / positionFPCounts[pos]
+                # Team data from live objects (ELO, streaks, losses, playoff status)
+                teamManager = self.serviceContainer.getService('team_manager')
+
+                # Count big plays from in-memory game objects per team
+                bigPlaysByTeam = {}
+                if self.currentSeason and self.currentSeason.activeGames:
+                    for game in self.currentSeason.activeGames:
+                        homeId = getattr(game, 'homeTeam', {})
+                        awayId = getattr(game, 'awayTeam', {})
+                        if hasattr(homeId, 'id'):
+                            homeId = homeId.id
+                        if hasattr(awayId, 'id'):
+                            awayId = awayId.id
+                        homeCount = 0
+                        awayCount = 0
+                        for entry in getattr(game, 'gameFeed', []):
+                            if entry.get('isBigPlay'):
+                                # Count for both teams since we can't easily tell which
+                                homeCount += 1
+                                awayCount += 1
+                        bigPlaysByTeam[homeId] = bigPlaysByTeam.get(homeId, 0) + homeCount
+                        bigPlaysByTeam[awayId] = bigPlaysByTeam.get(awayId, 0) + awayCount
+
+                # ─── Get weekly modifier ──────────────────────────────────────
+                activeModifier = ""
+                try:
+                    from database.models import WeeklyModifier
+                    modRow = session.query(WeeklyModifier).filter_by(
+                        season=season, week=week
+                    ).first()
+                    if modRow:
+                        activeModifier = modRow.modifier
+                except Exception:
+                    pass
 
                 # ─── Process each user ───────────────────────────────────────
                 for userId, userEquipped in byUser.items():
-                    # Get user's locked roster
                     roster = session.query(FantasyRoster).filter_by(
                         user_id=userId, season=season, is_locked=True
                     ).first()
@@ -747,7 +885,7 @@ class SeasonManager:
 
                     rosterPlayerIds = {rp.player_id for rp in roster.players}
 
-                    # Compute user's raw weekly FP from roster players
+                    # Compute user's raw weekly FP and TDs
                     weekRawFP = 0.0
                     rosterTotalTds = 0
                     for rp in roster.players:
@@ -755,28 +893,77 @@ class SeasonManager:
                         weekRawFP += pStats.get("fantasyPoints", 0)
                         rosterTotalTds += _countPlayerTds(pStats)
 
-                    # Roster player ratings
                     rosterPlayerRatings = {
                         pid: playerRatingsMap.get(pid, 60) for pid in rosterPlayerIds
                     }
-
-                    # Streak counts from equipped cards
-                    streakCounts = {eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped}
-
-                    # All equipped editions (for edition_diversity)
-                    allEquippedEditions = {
-                        eq.user_card.card_template.edition for eq in userEquipped
+                    rosterPlayerPositions = {
+                        pid: playerPositionMap.get(pid, 0) for pid in rosterPlayerIds
                     }
 
-                    # Count matched cards
-                    matchedCardCount = sum(
-                        1 for eq in userEquipped
-                        if eq.user_card.card_template.player_id in rosterPlayerIds
-                    )
+                    streakCounts = {
+                        eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
+                    }
 
-                    # User's favorite team (for win_bonus)
+                    # User's favorite team data
                     userRow = session.get(User, userId)
                     userFavoriteTeamId = userRow.favorite_team_id if userRow else None
+
+                    favoriteTeamElo = 1500.0
+                    favoriteTeamStreak = 0
+                    favoriteTeamSeasonLosses = 0
+                    favoriteTeamInPlayoffs = False
+                    favoriteTeamWonThisWeek = False
+                    favoriteTeamOpponentElo = 1500.0
+                    favoriteTeamBigPlays = 0
+                    favoriteTeamGameFinal = False
+
+                    if userFavoriteTeamId and teamManager:
+                        favTeam = teamManager.getTeamById(userFavoriteTeamId)
+                        if favTeam:
+                            favoriteTeamElo = getattr(favTeam, 'elo', 1500.0)
+                            favStats = getattr(favTeam, 'seasonTeamStats', {})
+                            favoriteTeamStreak = favStats.get('streak', 0)
+                            favoriteTeamSeasonLosses = favStats.get('losses', 0)
+                            favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
+                            favoriteTeamBigPlays = bigPlaysByTeam.get(userFavoriteTeamId, 0)
+
+                            # Playoff status: check if team is in top 6 of its league
+                            if self.leagueManager:
+                                teamLeague = self.leagueManager.getTeamLeague(favTeam)
+                                if teamLeague:
+                                    standings = teamLeague.getStandings()
+                                    for idx, entry in enumerate(standings):
+                                        if entry['team'] == favTeam:
+                                            favoriteTeamInPlayoffs = idx < 6
+                                            break
+
+                            # Opponent ELO from this week's game
+                            favGame = teamGameMap.get(userFavoriteTeamId)
+                            if favGame:
+                                if favGame.home_team_id == userFavoriteTeamId:
+                                    oppTeam = teamManager.getTeamById(favGame.away_team_id)
+                                else:
+                                    oppTeam = teamManager.getTeamById(favGame.home_team_id)
+                                if oppTeam:
+                                    favoriteTeamOpponentElo = getattr(oppTeam, 'elo', 1500.0)
+                                # Week is complete — all games are final
+                                favoriteTeamGameFinal = True
+
+                    # League average ELO
+                    leagueAverageElo = 1500.0
+                    if teamManager:
+                        allTeams = teamManager.teams
+                        if allTeams:
+                            leagueAverageElo = sum(getattr(t, 'elo', 1500.0) for t in allTeams) / len(allTeams)
+
+                    # Roster unchanged weeks (from swap history)
+                    lastSwap = (
+                        session.query(FantasyRosterSwap.swap_week)
+                        .filter_by(roster_id=roster.id)
+                        .order_by(FantasyRosterSwap.swap_week.desc())
+                        .first()
+                    )
+                    rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
 
                     # Build context
                     calcCtx = CardCalcContext(
@@ -784,41 +971,110 @@ class SeasonManager:
                         weekPlayerStats=weekPlayerStats,
                         weekRawFP=weekRawFP,
                         rosterPlayerRatings=rosterPlayerRatings,
-                        winningTeamIds=winningTeamIds,
                         rosterTotalTds=rosterTotalTds,
-                        positionAverageFP=positionAverageFP,
+                        rosterPlayerPositions=rosterPlayerPositions,
                         streakCounts=streakCounts,
-                        allEquippedEditions=allEquippedEditions,
-                        matchedCardCount=matchedCardCount,
                         userFavoriteTeamId=userFavoriteTeamId,
+                        favoriteTeamElo=favoriteTeamElo,
+                        leagueAverageElo=leagueAverageElo,
+                        favoriteTeamStreak=favoriteTeamStreak,
+                        favoriteTeamSeasonLosses=favoriteTeamSeasonLosses,
+                        favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
+                        favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
+                        favoriteTeamOpponentElo=favoriteTeamOpponentElo,
+                        favoriteTeamBigPlays=favoriteTeamBigPlays,
+                        favoriteTeamGameFinal=favoriteTeamGameFinal,
+                        rosterUnchangedWeeks=rosterUnchangedWeeks,
+                        teamResults=teamResults,
+                        playerPerformanceRatings=playerPerfRatings,
+                        activeModifier=activeModifier,
+                        unusedSwaps=roster.swaps_available or 0,
                     )
 
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Persist FP bonus (cumulative + per-week)
-                    if result.totalBonusFP > 0:
-                        roster.card_bonus_points = (roster.card_bonus_points or 0) + result.totalBonusFP
-                        # Store per-week breakdown for weekly leaderboard
+                    # New formula: (rosterFP + Σ+FP) × (1 + Σ+FPx) × xFPx₁ × xFPx₂ × ...
+                    baseFP = weekRawFP + result.totalBonusFP
+                    addMultPool = 1 + result.totalMultBonus  # +FPx pool
+                    xMultProduct = 1.0
+                    for xm in result.xMultFactors:
+                        xMultProduct *= xm
+                    totalFP = round(baseFP * addMultPool * xMultProduct, 2)
+                    # Subtract raw FP so we store only the card bonus portion
+                    totalFP = round(totalFP - weekRawFP, 2)
+                    # Subtract pre-lock card bonus (if cards were locked mid-game)
+                    bonusAtLock = getattr(userEquipped[0], 'card_bonus_at_lock', 0) or 0
+                    if bonusAtLock > 0:
+                        totalFP = round(totalFP - bonusAtLock, 2)
+                    if totalFP < 0:
+                        totalFP = 0.0
+
+                    # Persist FP bonus
+                    if totalFP > 0 or result.floobitsEarned > 0:
+                        if totalFP > 0:
+                            roster.card_bonus_points = (roster.card_bonus_points or 0) + totalFP
+                        import json as _json
+                        breakdownDicts = [{
+                            "slotNumber": b.slotNumber,
+                            "edition": b.edition,
+                            "playerId": b.playerId,
+                            "playerName": b.playerName,
+                            "effectName": b.effectName,
+                            "displayName": b.displayName,
+                            "detail": b.detail,
+                            "category": b.category,
+                            "outputType": b.outputType,
+                            "primaryFP": b.primaryFP,
+                            "primaryMult": b.primaryMult,
+                            "primaryXMult": b.primaryXMult,
+                            "primaryFloobits": b.primaryFloobits,
+                            "matchMultiplied": b.matchMultiplied,
+                            "matchMultiplier": b.matchMultiplier,
+                            "preMatchFP": b.preMatchFP,
+                            "preMatchFloobits": b.preMatchFloobits,
+                            "conditionalBonus": b.conditionalBonus,
+                            "conditionalLabel": b.conditionalLabel,
+                            "secondaryFP": b.secondaryFP,
+                            "secondaryFloobits": b.secondaryFloobits,
+                            "secondaryMult": b.secondaryMult,
+                            "secondaryXMult": b.secondaryXMult,
+                            "totalFP": b.totalFP,
+                            "floobitsEarned": b.floobitsEarned,
+                            "playerStatLine": b.playerStatLine,
+                            "equation": b.equation,
+                        } for b in result.cardBreakdowns]
+                        storedJson = _json.dumps({
+                            "breakdowns": breakdownDicts,
+                            "equationSummary": {
+                                "weekRawFP": round(weekRawFP, 1),
+                                "totalBonusFP": round(result.totalBonusFP, 2),
+                                "totalMultBonus": round(result.totalMultBonus, 2),
+                                "xMultFactors": [round(x, 2) for x in result.xMultFactors],
+                            },
+                        })
                         weekBonus = WeeklyCardBonus(
                             roster_id=roster.id,
                             user_id=userId,
                             season=season,
                             week=week,
-                            bonus_fp=result.totalBonusFP,
+                            bonus_fp=totalFP,
+                            breakdowns_json=storedJson,
                         )
                         session.add(weekBonus)
                         logger.info(
                             f"Card bonus for user {userId} week {week}: "
-                            f"+{result.totalBonusFP:.2f} FP (total: {roster.card_bonus_points:.2f})"
+                            f"+{totalFP:.2f} FP (total: {roster.card_bonus_points:.2f})"
                         )
 
                     # Credit Floobits from cards
                     if result.floobitsEarned > 0:
-                        cardEditions = ", ".join(b.edition for b in result.cardBreakdowns if b.floobitsEarned > 0)
+                        cardNames = ", ".join(
+                            b.displayName for b in result.cardBreakdowns if b.floobitsEarned > 0
+                        )
                         currencyRepo.addFunds(
                             userId, result.floobitsEarned, "card_effect",
-                            description=f"Week {week} card earnings ({cardEditions})",
+                            description=f"Week {week} card earnings ({cardNames})",
                             season=season, week=week,
                         )
                         logger.info(
@@ -826,10 +1082,33 @@ class SeasonManager:
                             f"+{result.floobitsEarned} Floobits"
                         )
 
+                    # ─── Streak management ──────────────────────────────────
+                    for eq in userEquipped:
+                        effectConfig = eq.user_card.card_template.effect_config or {}
+                        effectName = effectConfig.get("effectName", "")
+                        category = effectConfig.get("category", "")
+
+                        if category == "streak":
+                            from managers.cardEffects import STREAK_CONFIGS
+                            # Ironclad modifier: streaks can't reset this week
+                            if activeModifier == "ironclad":
+                                conditionMet = True
+                            else:
+                                conditionMet = checkStreakCondition(
+                                    effectName, calcCtx, eq.user_card.card_template.player_id
+                                )
+                            if conditionMet:
+                                eq.streak_count = getattr(eq, 'streak_count', 0) + 1
+                            elif not STREAK_CONFIGS.get(effectName, {}).get("noReset", False):
+                                eq.streak_count = 0
+                            # If noReset=True and condition not met, streak stays unchanged
+
                 session.commit()
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error processing week card effects: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
             finally:
                 session.close()
         except ImportError as e:
@@ -975,9 +1254,15 @@ class SeasonManager:
                     or gd.get('fantasyPoints', 0) != 0
                 )
                 if hasStats:
+                    # _accumulatePostgameStats zeroes gd['fantasyPoints'] inside
+                    # playGame(), so by the time we get here it's 0.  Use the
+                    # preserved value stashed on the player object instead.
+                    gameFP = getattr(player, '_lastGameFantasyPoints', None)
+                    if gameFP is None:
+                        gameFP = gd.get('fantasyPoints', 0)
                     playerStats[player.id] = {
                         'teamId': team.id,
-                        'fantasyPoints': gd.get('fantasyPoints', 0),
+                        'fantasyPoints': gameFP,
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -1447,9 +1732,16 @@ class SeasonManager:
             list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
+            # Award top seed Floobits if not already clinched mid-season
+            if not getattr(playoffsByeTeamList[0], 'clinchedTopSeed', False):
+                from constants import CLINCH_TOPSEED_REWARD
+                self._awardFavoriteTeamBonus(
+                    playoffsByeTeamList[0].id, CLINCH_TOPSEED_REWARD, 'team_clinch_topseed',
+                    description='Favorite team clinched #1 seed',
+                    season=self.currentSeason.seasonNumber)
             playoffsByeTeamList[0].clinchedTopSeed = True
             playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
-            
+
             # Mark top seed in their league
             topSeed = playoffsByeTeamList[0]
             season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
@@ -1468,6 +1760,12 @@ class SeasonManager:
                 team: FloosTeam.Team
                 team.playoffAppearances += 1
                 team.seasonTeamStats['madePlayoffs'] = True
+                if not team.clinchedPlayoffs:
+                    from constants import CLINCH_PLAYOFF_REWARD
+                    self._awardFavoriteTeamBonus(
+                        team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
+                        description='Favorite team clinched playoffs',
+                        season=self.currentSeason.seasonNumber)
                 team.clinchedPlayoffs = True
                 team.winningStreak = False
             for team in playoffsNonByeTeamList:
@@ -1478,6 +1776,11 @@ class SeasonManager:
                 if not team.clinchedPlayoffs:
                     team.clinchedPlayoffs = True
                     team.eliminated = False
+                    from constants import CLINCH_PLAYOFF_REWARD
+                    self._awardFavoriteTeamBonus(
+                        team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
+                        description='Favorite team clinched playoffs',
+                        season=self.currentSeason.seasonNumber)
                     _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
@@ -1680,6 +1983,13 @@ class SeasonManager:
                         player.leagueChampionships.append({'Season': self.currentSeason.seasonNumber, 'team': team_abbr, 'teamColor': team_color})
 
                 self.recordsManager.updateChampionshipHistory(self.currentSeason.seasonNumber, self.currentSeason.champion, runnerUp)
+
+                # Award Floobits to users whose favorite team won the Floosbowl
+                from constants import FLOOSBOWL_WIN_REWARD
+                self._awardFavoriteTeamBonus(
+                    self.currentSeason.champion.id, FLOOSBOWL_WIN_REWARD, 'team_floosbowl_win',
+                    description='Favorite team won the Floos Bowl!',
+                    season=self.currentSeason.seasonNumber)
             else:
                 for league in self.leagueManager.leagues:
                     for game in playoffGamesDict[league.name]:
@@ -1726,29 +2036,47 @@ class SeasonManager:
     
     async def _simulatePlayoffGame(self, game: FloosGame.Game) -> None:
         """Simulate a single playoff game"""
-        
+
         try:
             # Create game instance with timing manager
             gameInstance = game
-            
+
             # Set game type (playoff games)
             gameInstance.isRegularSeasonGame = False
             gameInstance.isPlayoff = True
-            
+
+            # Wire fantasy tracker callback for each player
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if fantasyTracker:
+                for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
+                    for player in team.rosterDict.values():
+                        if player:
+                            pid = player.id
+                            player.stat_tracker._on_fantasy_points = (
+                                lambda pts, _pid=pid: fantasyTracker.addPlayerPoints(_pid, pts)
+                            )
+
             # Simulate the game
             await gameInstance.playGame()
+
+            # Clear fantasy tracker callbacks after game
+            if fantasyTracker:
+                for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
+                    for player in team.rosterDict.values():
+                        if player:
+                            player.stat_tracker._on_fantasy_points = None
             
             # Determine winner
             winner = game.homeTeam if gameInstance.homeScore > gameInstance.awayScore else game.awayTeam
             
-            # Save game to database BEFORE postgame processing zeroes gameStatsDict.fantasyPoints
+            # Save game to database (player._lastGameFantasyPoints preserves FP after zeroing)
             if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
                 self._saveGameToDatabase(gameInstance)
 
             # Update team records
             self._updateTeamRecords(gameInstance)
 
-            # Process post-game statistics (replaces original postgame() method)
+            # Process post-game statistics (record-checking, team stat accumulation)
             self.recordsManager.processPostGameStats(gameInstance)
 
             # Update ELO ratings based on playoff game result using pre-game win probability
@@ -1857,7 +2185,24 @@ class SeasonManager:
         # Performance ratings from previous season are used to evaluate cuts
         logger.info("Step 4: Free agency simulation")
         await self._processFreeAgency()
-        
+
+        # STEP 4.5: Handle retired players on fantasy rosters
+        # Must run before Step 7 (HoF) which clears newlyRetiredPlayers
+        retiredPlayerIds = {
+            p.id for p in self.playerManager.newlyRetiredPlayers
+            if hasattr(p, 'id')
+        }
+        # Also include players retired in Step 2 (rostered contract retirements)
+        # that were already moved to retiredPlayers list
+        retiredPlayerIds.update(
+            p.id for p in self.playerManager.retiredPlayers
+            if hasattr(p, 'id')
+        )
+        if retiredPlayerIds:
+            nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
+            logger.info(f"Step 4.5: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
+            self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
+
         # STEP 5: Reset season performance ratings AFTER free agency
         # This allows performance ratings to be used in cut decisions
         logger.info("Step 5: Reset season performance ratings")
@@ -1880,6 +2225,10 @@ class SeasonManager:
         logger.info("Step 9: Processing user season transitions")
         self._processUserSeasonTransitions()
 
+        # STEP 9.5: Season-end economy payouts (leaderboard prizes + FP-to-Floobits)
+        logger.info("Step 9.5: Awarding season-end prizes")
+        self._awardSeasonEndPrizes(self.currentSeason.seasonNumber)
+
         # STEP 10: Generate card templates for newly drafted rookies
         logger.info("Step 10: Generating rookie card templates")
         nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
@@ -1892,18 +2241,48 @@ class SeasonManager:
 
         Uses a dedicated session to avoid holding a write lock on the shared
         simulation session (which would block API endpoints on SQLite).
+        Passes previous season's MVP, Champion, and All-Pro data for classification.
         """
         try:
             from managers.cardManager import CardManager
             from database.connection import get_session
+
+            # Extract classification data from previous season
+            mvpPlayerId = None
+            championPlayerIds = set()
+            allProPlayerIds = set()
+
+            if self.currentSeason:
+                # MVP player ID
+                mvpData = getattr(self.currentSeason, 'mvp', None)
+                if mvpData and isinstance(mvpData, dict):
+                    mvpPlayerId = mvpData.get('id')
+
+                # Champion team's player IDs (all 6 roster players)
+                champion = getattr(self.currentSeason, 'champion', None)
+                if champion and hasattr(champion, 'rosterDict'):
+                    for player in champion.rosterDict.values():
+                        if player and hasattr(player, 'id'):
+                            championPlayerIds.add(player.id)
+
+                # All-Pro player IDs (top performer per position)
+                allProPlayerIds = getattr(self.currentSeason, 'allProPlayerIds', set())
+
             session = get_session()
             cardManager = CardManager(self.serviceContainer)
-            count = cardManager.generateSeasonTemplates(session, seasonNumber)
+            count = cardManager.generateSeasonTemplates(
+                session, seasonNumber,
+                mvpPlayerId=mvpPlayerId,
+                championPlayerIds=championPlayerIds,
+                allProPlayerIds=allProPlayerIds,
+            )
             session.commit()
             session.close()
             logger.info(f"Card template generation complete: {count} templates for season {seasonNumber}")
         except Exception as e:
             logger.warning(f"Card template generation failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
     def _generateRookieCardTemplates(self, seasonNumber: int) -> None:
         """Generate card templates for newly drafted rookies.
@@ -1924,14 +2303,17 @@ class SeasonManager:
             logger.warning(f"Rookie card template generation failed: {e}")
 
     def _processUserSeasonTransitions(self) -> None:
-        """Apply pending favorite team changes and finalize fantasy roster scores."""
+        """Apply pending favorite team changes, finalize scores, and carry rosters forward."""
         from database.connection import get_session
-        from database.models import User, FantasyRoster, PlayerSeasonStats
+        from database.models import (
+            User, FantasyRoster, FantasyRosterPlayer, PlayerSeasonStats, Player,
+        )
 
         completedSeason = self.currentSeason.seasonNumber if self.currentSeason else None
         if completedSeason is None:
             return
 
+        nextSeason = completedSeason + 1
         session = get_session()
         try:
             # Promote pending favorite teams
@@ -1960,10 +2342,55 @@ class SeasonManager:
                 roster.total_points = totalPoints
                 logger.info(f"Fantasy roster {roster.id} (user {roster.user_id}): finalized at {totalPoints:.1f} pts")
 
+            # Carry rosters forward: clone locked rosters into new season
+            # Only carry forward players who are still active (not retired)
+            activePlayerIds = {
+                p.id for p in session.query(Player.id).filter_by(is_active=True).all()
+            }
+
+            carriedCount = 0
+            for oldRoster in lockedRosters:
+                # Check if new season roster already exists (idempotent)
+                existingNew = session.query(FantasyRoster).filter_by(
+                    user_id=oldRoster.user_id, season=nextSeason
+                ).first()
+                if existingNew:
+                    continue
+
+                newRoster = FantasyRoster(
+                    user_id=oldRoster.user_id,
+                    season=nextSeason,
+                    is_locked=False,
+                    total_points=0.0,
+                    card_bonus_points=0.0,
+                    swaps_available=0,
+                )
+                session.add(newRoster)
+                session.flush()  # Get newRoster.id
+
+                for rp in oldRoster.players:
+                    if rp.player_id not in activePlayerIds:
+                        continue  # Skip retired players
+                    newRp = FantasyRosterPlayer(
+                        roster_id=newRoster.id,
+                        player_id=rp.player_id,
+                        slot=rp.slot,
+                        points_at_lock=0.0,
+                    )
+                    session.add(newRp)
+
+                carriedCount += 1
+                logger.info(f"Carried forward roster for user {oldRoster.user_id} to season {nextSeason}")
+
+            if carriedCount:
+                logger.info(f"Carried {carriedCount} rosters forward to season {nextSeason}")
+
             session.commit()
         except Exception as e:
             session.rollback()
             logger.error(f"Error processing user season transitions: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
         finally:
             session.close()
 
@@ -2533,6 +2960,429 @@ class SeasonManager:
             await broadcaster.broadcast_season_event(
                 SeasonEvent.mvpAnnouncement(mvpResult, self.currentSeason.seasonNumber)
             )
+
+    # ─── Season Transition ──────────────────────────────────────────────────────
+
+    def _processEndOfRegularSeason(self) -> None:
+        """Clean up fantasy state at end of regular season (before playoffs).
+
+        - Unequip all cards (deletes EquippedCard rows for the season)
+        - Streak counts are on EquippedCard, so they're reset by deletion
+        - Cards stay in user collections (UserCard untouched)
+        """
+        if not self.currentSeason:
+            return
+
+        seasonNum = self.currentSeason.seasonNumber
+        try:
+            from database.connection import get_session
+            from database.models import EquippedCard
+
+            session = get_session()
+            try:
+                deleted = session.query(EquippedCard).filter_by(season=seasonNum).delete()
+                session.commit()
+                logger.info(f"End of regular season S{seasonNum}: unequipped {deleted} cards")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error during end-of-regular-season cleanup: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _handleRetiredPlayerRosters(self, retiredPlayerIds: set, nextSeason: int) -> None:
+        """Remove retired players from fantasy rosters and auto-fill if enabled.
+
+        Called during offseason after retirements are processed.
+        """
+        if not retiredPlayerIds:
+            return
+
+        try:
+            from database.connection import get_session
+            from database.models import FantasyRoster, FantasyRosterPlayer, Player, User
+
+            session = get_session()
+            try:
+                # Find all roster slots containing retired players (from the most recent season)
+                completedSeason = nextSeason - 1
+                affectedSlots = (
+                    session.query(FantasyRosterPlayer)
+                    .join(FantasyRoster)
+                    .filter(
+                        FantasyRoster.season == completedSeason,
+                        FantasyRosterPlayer.player_id.in_(retiredPlayerIds),
+                    )
+                    .all()
+                )
+
+                if not affectedSlots:
+                    return
+
+                # Group by roster for auto-fill processing
+                rosterSlots: dict = {}  # rosterId → list of (slot, position)
+                for rp in affectedSlots:
+                    rosterSlots.setdefault(rp.roster_id, []).append(rp)
+
+                # Get all rostered player IDs (to exclude from auto-fill candidates)
+                allRosteredIds = {
+                    rp.player_id
+                    for rp in session.query(FantasyRosterPlayer.player_id)
+                    .join(FantasyRoster)
+                    .filter(FantasyRoster.season == completedSeason)
+                    .all()
+                }
+
+                # Position mapping for slot names
+                slotPositionMap = {"QB": 1, "RB": 2, "WR1": 3, "WR2": 3, "TE": 4, "K": 5}
+
+                for rosterId, retiredSlots in rosterSlots.items():
+                    roster = session.get(FantasyRoster, rosterId)
+                    if not roster:
+                        continue
+
+                    user = session.get(User, roster.user_id)
+                    autoFill = user.auto_fill_roster if user else True
+
+                    for rp in retiredSlots:
+                        retiredName = rp.player_id  # For logging
+                        slot = rp.slot
+                        session.delete(rp)
+                        logger.info(f"Removed retired player {retiredName} from roster {rosterId} slot {slot}")
+
+                        if autoFill:
+                            posValue = slotPositionMap.get(slot)
+                            if posValue is not None:
+                                # Find best available player at this position
+                                bestPlayer = (
+                                    session.query(Player)
+                                    .filter(
+                                        Player.position == posValue,
+                                        Player.is_active == True,
+                                        ~Player.id.in_(allRosteredIds),
+                                    )
+                                    .order_by(Player.player_rating.desc())
+                                    .first()
+                                )
+                                if bestPlayer:
+                                    newRp = FantasyRosterPlayer(
+                                        roster_id=rosterId,
+                                        player_id=bestPlayer.id,
+                                        slot=slot,
+                                        points_at_lock=0.0,
+                                    )
+                                    session.add(newRp)
+                                    allRosteredIds.add(bestPlayer.id)
+                                    logger.info(f"Auto-filled {slot} with {bestPlayer.id} (rating {bestPlayer.player_rating})")
+
+                session.commit()
+                logger.info(f"Processed {len(affectedSlots)} retired player roster removals")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error handling retired player rosters: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    # ─── Weekly Modifier Selection ────────────────────────────────────────────
+
+    MODIFIER_WEIGHTS = {
+        "amplify": 10, "cascade": 8, "ironclad": 10, "overdrive": 10,
+        "payday": 10, "grounded": 5, "wildcard": 8, "spotlight": 8,
+        "longshot": 10, "frenzy": 10, "steady": 10,
+    }
+
+    MODIFIER_DISPLAY = {
+        "amplify": "Amplify", "cascade": "Cascade", "ironclad": "Ironclad",
+        "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
+        "wildcard": "Wildcard", "spotlight": "Spotlight", "longshot": "Longshot",
+        "frenzy": "Frenzy", "steady": "Steady",
+    }
+
+    MODIFIER_DESCRIPTIONS = {
+        "amplify": "+FPx values are doubled",
+        "cascade": "xFPx bonus portions are doubled",
+        "ironclad": "K-slot cards that grow over time won't reset this week",
+        "overdrive": "Match bonus is 2.5x instead of 1.5x",
+        "payday": "Floobits earned are tripled",
+        "grounded": "All mult effects disabled (+FPx and xFPx)",
+        "wildcard": "All cards treated as matched",
+        "spotlight": "Card-player-specific effects get +50% FP",
+        "longshot": "Conditional thresholds halved",
+        "frenzy": "+FP values are doubled",
+        "steady": "No special effect — all normal rules apply",
+    }
+
+    def _selectWeeklyModifier(self, season: int, week: int) -> str:
+        """Select a weekly modifier for the given season/week.
+
+        Avoids repeats within the last 3 weeks. Stores the result in DB.
+        Returns the modifier slug (e.g., "amplify").
+        """
+        import random as _random
+        try:
+            from database.connection import get_session
+            from database.models import WeeklyModifier
+
+            session = get_session()
+            try:
+                # Check if already selected (for resumability)
+                existing = session.query(WeeklyModifier).filter_by(
+                    season=season, week=week
+                ).first()
+                if existing:
+                    logger.info(f"Weekly modifier already set for S{season}W{week}: {existing.modifier}")
+                    return existing.modifier
+
+                # Get recent modifiers to avoid repeats
+                recentMods = (
+                    session.query(WeeklyModifier.modifier)
+                    .filter_by(season=season)
+                    .filter(WeeklyModifier.week >= max(1, week - 3))
+                    .filter(WeeklyModifier.week < week)
+                    .all()
+                )
+                recentSet = {r[0] for r in recentMods}
+
+                # Build weighted pool excluding recent
+                pool = []
+                weights = []
+                for mod, weight in self.MODIFIER_WEIGHTS.items():
+                    if mod not in recentSet:
+                        pool.append(mod)
+                        weights.append(weight)
+
+                # If all modifiers are excluded (shouldn't happen with 11 mods and 3-week window), use full pool
+                if not pool:
+                    pool = list(self.MODIFIER_WEIGHTS.keys())
+                    weights = list(self.MODIFIER_WEIGHTS.values())
+
+                selected = _random.choices(pool, weights=weights, k=1)[0]
+
+                # Persist
+                session.add(WeeklyModifier(season=season, week=week, modifier=selected))
+                session.commit()
+                logger.info(f"Weekly modifier for S{season}W{week}: {self.MODIFIER_DISPLAY.get(selected, selected)}")
+                return selected
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error selecting weekly modifier: {e}")
+                return "steady"  # Default to no effect
+            finally:
+                session.close()
+        except ImportError:
+            return "steady"
+
+    # ─── Floobits Economy ─────────────────────────────────────────────────────
+
+    def _awardFavoriteTeamBonus(self, teamId: int, amount: int, transactionType: str,
+                                 description: str, season: int, week: int = None) -> int:
+        """Award Floobits to all users whose favorite_team_id matches teamId.
+        Returns the number of users rewarded."""
+        try:
+            from database.connection import get_session
+            from database.models import User
+            from database.repositories.card_repositories import CurrencyRepository
+
+            session = get_session()
+            try:
+                users = session.query(User).filter_by(
+                    favorite_team_id=teamId, is_active=True
+                ).all()
+                if not users:
+                    session.close()
+                    return 0
+                currencyRepo = CurrencyRepository(session)
+                count = 0
+                for user in users:
+                    currencyRepo.addFunds(
+                        user.id, amount, transactionType,
+                        description=description,
+                        season=season, week=week,
+                    )
+                    count += 1
+                session.commit()
+                logger.info(f"Awarded {amount} Floobits ({transactionType}) to {count} users for team {teamId}")
+                return count
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error awarding favorite team bonus: {e}")
+                return 0
+            finally:
+                session.close()
+        except ImportError:
+            return 0
+
+    def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
+        """Award Floobits to top leaderboard performers for the week."""
+        from constants import (
+            WEEKLY_LEADERBOARD_PRIZES, WEEKLY_LEADERBOARD_TOP_PCT_PRIZE,
+            WEEKLY_LEADERBOARD_TOP_PCT,
+        )
+
+        fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+        if not fantasyTracker:
+            return
+
+        try:
+            snapshot = fantasyTracker.getSnapshot(season)
+        except Exception as e:
+            logger.error(f"Error getting snapshot for weekly leaderboard: {e}")
+            return
+
+        entries = snapshot.get('entries', [])
+        if not entries:
+            return
+
+        # Sort by weekTotal descending for weekly ranking
+        weekRanked = sorted(entries, key=lambda e: e['weekTotal'], reverse=True)
+
+        totalEntries = len(weekRanked)
+        top25Cutoff = max(3, int(totalEntries * WEEKLY_LEADERBOARD_TOP_PCT))
+
+        try:
+            from database.connection import get_session
+            from database.repositories.card_repositories import CurrencyRepository
+
+            session = get_session()
+            try:
+                currencyRepo = CurrencyRepository(session)
+                awarded = 0
+                for i, entry in enumerate(weekRanked):
+                    userId = entry['userId']
+                    weekRank = i + 1
+
+                    if entry['weekTotal'] <= 0:
+                        continue  # No prize for zero participation
+
+                    prize = WEEKLY_LEADERBOARD_PRIZES.get(weekRank)
+                    if prize is None and weekRank <= top25Cutoff and totalEntries >= 4:
+                        prize = WEEKLY_LEADERBOARD_TOP_PCT_PRIZE
+
+                    if not prize:
+                        continue
+
+                    currencyRepo.addFunds(
+                        userId, prize, 'leaderboard_weekly',
+                        description=f'Week {week} leaderboard #{weekRank}',
+                        season=season, week=week,
+                    )
+                    awarded += 1
+                    logger.info(f"Weekly leaderboard prize: user {userId} #{weekRank} = {prize} Floobits")
+
+                session.commit()
+                if awarded:
+                    logger.info(f"Awarded weekly leaderboard prizes to {awarded} users for week {week}")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error awarding weekly leaderboard prizes: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _awardSeasonEndPrizes(self, completedSeason: int) -> None:
+        """Award season-end leaderboard prizes and FP-to-Floobits conversion."""
+        import math
+        from constants import (
+            SEASON_LEADERBOARD_PRIZES, SEASON_LEADERBOARD_TOP_PCT_PRIZE,
+            SEASON_LEADERBOARD_TOP_PCT, SEASON_FP_PAYOUT_DIVISOR,
+        )
+
+        fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+        if not fantasyTracker:
+            return
+
+        try:
+            snapshot = fantasyTracker.getSnapshot(completedSeason)
+        except Exception as e:
+            logger.error(f"Error getting snapshot for season-end prizes: {e}")
+            return
+
+        entries = snapshot.get('entries', [])
+        if not entries:
+            return
+
+        # Entries are already sorted by seasonTotal descending from getSnapshot()
+        totalEntries = len(entries)
+        top25Cutoff = max(3, int(totalEntries * SEASON_LEADERBOARD_TOP_PCT))
+
+        try:
+            from database.connection import get_session
+            from database.repositories.card_repositories import CurrencyRepository
+
+            session = get_session()
+            try:
+                currencyRepo = CurrencyRepository(session)
+
+                for i, entry in enumerate(entries):
+                    userId = entry['userId']
+                    seasonRank = i + 1
+                    seasonTotal = entry['seasonTotal']
+
+                    # --- Leaderboard prize ---
+                    prize = SEASON_LEADERBOARD_PRIZES.get(seasonRank)
+                    if prize is None and seasonRank <= top25Cutoff and totalEntries >= 4:
+                        prize = SEASON_LEADERBOARD_TOP_PCT_PRIZE
+
+                    if prize:
+                        currencyRepo.addFunds(
+                            userId, prize, 'leaderboard_season',
+                            description=f'Season {completedSeason} leaderboard #{seasonRank}',
+                            season=completedSeason,
+                        )
+                        logger.info(
+                            f"Season leaderboard prize: user {userId} #{seasonRank} = {prize} Floobits"
+                        )
+
+                    # --- FP-to-Floobits conversion ---
+                    fpPayout = math.floor(seasonTotal / SEASON_FP_PAYOUT_DIVISOR) if seasonTotal > 0 else 0
+                    if fpPayout > 0:
+                        currencyRepo.addFunds(
+                            userId, fpPayout, 'season_fp_payout',
+                            description=f'Season {completedSeason} FP payout ({seasonTotal:.0f} FP)',
+                            season=completedSeason,
+                        )
+                        logger.info(
+                            f"Season FP payout: user {userId} = {fpPayout} Floobits "
+                            f"({seasonTotal:.0f} FP / {SEASON_FP_PAYOUT_DIVISOR})"
+                        )
+
+                session.commit()
+                logger.info(f"Season-end prizes awarded for season {completedSeason}")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error awarding season-end prizes: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    # ─── Awards ────────────────────────────────────────────────────────────────
+
+    def _selectSeasonAllPro(self) -> None:
+        """Select All-Pro players — top performer at each position from the current season."""
+        candidates = self.playerManager._computeMvpCandidates()
+        if not candidates:
+            logger.warning("Could not determine All-Pro — not enough eligible players")
+            return
+
+        # Group by position, take the top candidate per position
+        bestByPosition: dict = {}
+        for c in candidates:
+            pos = c['position']
+            if pos not in bestByPosition:
+                bestByPosition[pos] = c
+
+        allProIds = {c['id'] for c in bestByPosition.values()}
+        allProNames = [f"{c['name']} ({c['position']})" for c in bestByPosition.values()]
+
+        self.currentSeason.allProPlayerIds = allProIds
+        logger.info(f"Season {self.currentSeason.seasonNumber} All-Pro: {', '.join(allProNames)}")
     
     def _updateStandings(self) -> None:
         """Update league standings"""

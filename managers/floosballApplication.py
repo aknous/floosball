@@ -15,6 +15,7 @@ from managers.teamManager import TeamManager
 from managers.leagueManager import LeagueManager
 from managers.seasonManager import SeasonManager
 from managers.recordManager import RecordManager
+from managers.fantasyTracker import FantasyTracker
 
 logger = get_logger("floosball.application")
 
@@ -68,6 +69,9 @@ class FloosballApplication:
             from database import repositories
             self.seasonManager.game_repo = repositories.GameRepository(self.shared_db_session)
         
+        # FantasyTracker reads from DB + live data; no shared session needed
+        self.fantasyTracker = FantasyTracker(serviceContainer)
+
         # Register managers with service container for cross-dependencies
         self._registerManagersWithServices()
         
@@ -83,6 +87,7 @@ class FloosballApplication:
         self.serviceContainer.registerService('league_manager', self.leagueManager)
         self.serviceContainer.registerService('season_manager', self.seasonManager)
         self.serviceContainer.registerService('records_manager', self.recordsManager)
+        self.serviceContainer.registerService('fantasy_tracker', self.fantasyTracker)
         
         logger.info("Registered all managers with service container")
     
