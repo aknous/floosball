@@ -1834,6 +1834,177 @@ class PlayerManager:
         
         logger.info(f"Performance ratings calculated for week {currentWeek}")
 
+    def calculateGamePerformanceRatings(self, gamePlayerStatsList) -> Dict[int, float]:
+        """Calculate per-game performance ratings using the same weighted formulas
+        as calculatePerformanceRatings, but from single-game stats (GamePlayerStats rows).
+
+        Args:
+            gamePlayerStatsList: list of GamePlayerStats ORM rows for the current week
+
+        Returns:
+            Dict mapping playerId → gamePerformanceRating (0–100 scale)
+        """
+        import numpy as np
+        from scipy import stats as scipyStats
+        import floosball_methods as FloosMethods
+
+        # Build position lookup from active players
+        positionMap = {}
+        for p in self.activePlayers:
+            positionMap[p.id] = getattr(p, 'positionId', 0)
+
+        # Group per-game stats by position
+        qbRows = []
+        rbRows = []
+        wrRows = []
+        teRows = []
+        kRows = []
+
+        for gps in gamePlayerStatsList:
+            posId = positionMap.get(gps.player_id, 0)
+            if posId == 1:
+                qbRows.append(gps)
+            elif posId == 2:
+                rbRows.append(gps)
+            elif posId == 3:
+                wrRows.append(gps)
+            elif posId == 4:
+                teRows.append(gps)
+            elif posId == 5:
+                kRows.append(gps)
+
+        ratings = {}
+
+        # QB game ratings
+        qbWithStats = [r for r in qbRows if (r.passing_stats or {}).get('yards', 0) > 0]
+        if qbWithStats:
+            compPercs = [(r.passing_stats or {}).get('compPerc', 0) for r in qbWithStats]
+            passYards = [(r.passing_stats or {}).get('yards', 0) for r in qbWithStats]
+            tds = [(r.passing_stats or {}).get('tds', 0) for r in qbWithStats]
+            ints = [(r.passing_stats or {}).get('ints', 0) for r in qbWithStats]
+
+            for r in qbWithStats:
+                cp = (r.passing_stats or {}).get('compPerc', 0)
+                py = (r.passing_stats or {}).get('yards', 0)
+                td = (r.passing_stats or {}).get('tds', 0)
+                intVal = (r.passing_stats or {}).get('ints', 0)
+
+                cpR = scipyStats.percentileofscore(compPercs, cp, 'rank')
+                pyR = scipyStats.percentileofscore(passYards, py, 'rank')
+                tdR = scipyStats.percentileofscore(tds, td, 'rank')
+                intR = 100 - scipyStats.percentileofscore(ints, intVal, 'rank')
+
+                weightedScore = round(((cpR * 1.2) + (pyR * 1.0) + (tdR * 1.0) + (intR * 0.8)) / 4)
+                ratings[r.player_id] = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+        # RB game ratings
+        rbWithStats = [r for r in rbRows if (r.rushing_stats or {}).get('yards', 0) > 0]
+        if rbWithStats:
+            ypcs = [(r.rushing_stats or {}).get('ypc', 0) for r in rbWithStats]
+            rushYards = [(r.rushing_stats or {}).get('yards', 0) for r in rbWithStats]
+            tds = [(r.rushing_stats or {}).get('tds', 0) for r in rbWithStats]
+            fumbles = [(r.rushing_stats or {}).get('fumblesLost', 0) for r in rbWithStats]
+
+            for r in rbWithStats:
+                ypc = (r.rushing_stats or {}).get('ypc', 0)
+                ry = (r.rushing_stats or {}).get('yards', 0)
+                td = (r.rushing_stats or {}).get('tds', 0)
+                fum = (r.rushing_stats or {}).get('fumblesLost', 0)
+
+                ypcR = scipyStats.percentileofscore(ypcs, ypc, 'rank')
+                ryR = scipyStats.percentileofscore(rushYards, ry, 'rank')
+                tdR = scipyStats.percentileofscore(tds, td, 'rank')
+                fumR = 100 - scipyStats.percentileofscore(fumbles, fum, 'rank')
+
+                weightedScore = ((ypcR * 1.2) + (ryR * 1.2) + (tdR * 1.0) + (fumR * 0.6)) / 4
+                ratings[r.player_id] = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+        # WR game ratings
+        wrWithStats = [r for r in wrRows if (r.receiving_stats or {}).get('yards', 0) > 0]
+        if wrWithStats:
+            recs = [(r.receiving_stats or {}).get('receptions', 0) for r in wrWithStats]
+            drops = [(r.receiving_stats or {}).get('drops', 0) for r in wrWithStats]
+            rcvPercs = [(r.receiving_stats or {}).get('rcvPerc', 0) for r in wrWithStats]
+            rcvYards = [(r.receiving_stats or {}).get('yards', 0) for r in wrWithStats]
+            yprs = [(r.receiving_stats or {}).get('ypr', 0) for r in wrWithStats]
+            yacs = [(r.receiving_stats or {}).get('yac', 0) for r in wrWithStats]
+            tds = [(r.receiving_stats or {}).get('tds', 0) for r in wrWithStats]
+
+            for r in wrWithStats:
+                rec = (r.receiving_stats or {}).get('receptions', 0)
+                drp = (r.receiving_stats or {}).get('drops', 0)
+                rcp = (r.receiving_stats or {}).get('rcvPerc', 0)
+                ry = (r.receiving_stats or {}).get('yards', 0)
+                ypr = (r.receiving_stats or {}).get('ypr', 0)
+                yac = (r.receiving_stats or {}).get('yac', 0)
+                td = (r.receiving_stats or {}).get('tds', 0)
+
+                recR = scipyStats.percentileofscore(recs, rec, 'rank')
+                drpR = 100 - scipyStats.percentileofscore(drops, drp, 'rank')
+                rcpR = scipyStats.percentileofscore(rcvPercs, rcp, 'rank')
+                ryR = scipyStats.percentileofscore(rcvYards, ry, 'rank')
+                yprR = scipyStats.percentileofscore(yprs, ypr, 'rank')
+                yacR = scipyStats.percentileofscore(yacs, yac, 'rank')
+                tdR = scipyStats.percentileofscore(tds, td, 'rank')
+
+                weightedScore = ((recR * 0.8) + (drpR * 1.2) + (rcpR * 1.4) +
+                                 (ryR * 1.0) + (yprR * 1.0) + (yacR * 1.0) + (tdR * 0.6)) / 7
+                ratings[r.player_id] = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+        # TE game ratings (same formula as WR)
+        teWithStats = [r for r in teRows if (r.receiving_stats or {}).get('yards', 0) > 0]
+        if teWithStats:
+            recs = [(r.receiving_stats or {}).get('receptions', 0) for r in teWithStats]
+            drops = [(r.receiving_stats or {}).get('drops', 0) for r in teWithStats]
+            rcvPercs = [(r.receiving_stats or {}).get('rcvPerc', 0) for r in teWithStats]
+            rcvYards = [(r.receiving_stats or {}).get('yards', 0) for r in teWithStats]
+            yprs = [(r.receiving_stats or {}).get('ypr', 0) for r in teWithStats]
+            yacs = [(r.receiving_stats or {}).get('yac', 0) for r in teWithStats]
+            tds = [(r.receiving_stats or {}).get('tds', 0) for r in teWithStats]
+
+            for r in teWithStats:
+                rec = (r.receiving_stats or {}).get('receptions', 0)
+                drp = (r.receiving_stats or {}).get('drops', 0)
+                rcp = (r.receiving_stats or {}).get('rcvPerc', 0)
+                ry = (r.receiving_stats or {}).get('yards', 0)
+                ypr = (r.receiving_stats or {}).get('ypr', 0)
+                yac = (r.receiving_stats or {}).get('yac', 0)
+                td = (r.receiving_stats or {}).get('tds', 0)
+
+                recR = scipyStats.percentileofscore(recs, rec, 'rank')
+                drpR = 100 - scipyStats.percentileofscore(drops, drp, 'rank')
+                rcpR = scipyStats.percentileofscore(rcvPercs, rcp, 'rank')
+                ryR = scipyStats.percentileofscore(rcvYards, ry, 'rank')
+                yprR = scipyStats.percentileofscore(yprs, ypr, 'rank')
+                yacR = scipyStats.percentileofscore(yacs, yac, 'rank')
+                tdR = scipyStats.percentileofscore(tds, td, 'rank')
+
+                weightedScore = ((recR * 0.8) + (drpR * 1.2) + (rcpR * 1.4) +
+                                 (ryR * 1.0) + (yprR * 1.0) + (yacR * 1.0) + (tdR * 0.6)) / 7
+                ratings[r.player_id] = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+        # K game ratings
+        kWithStats = [r for r in kRows if (r.kicking_stats or {}).get('fgs', 0) > 0]
+        if kWithStats:
+            fgPercs = [(r.kicking_stats or {}).get('fgPerc', 0) for r in kWithStats if (r.kicking_stats or {}).get('fgPerc', 0) > 0]
+            fgCounts = [(r.kicking_stats or {}).get('fgs', 0) for r in kWithStats]
+            fgAvgs = [(r.kicking_stats or {}).get('fgAvg', 0) for r in kWithStats if (r.kicking_stats or {}).get('fgAvg', 0) > 0]
+
+            for r in kWithStats:
+                fgPerc = (r.kicking_stats or {}).get('fgPerc', 0)
+                fgs = (r.kicking_stats or {}).get('fgs', 0)
+                fgAvg = (r.kicking_stats or {}).get('fgAvg', 0)
+
+                if fgPerc > 0 and fgAvg > 0 and fgPercs and fgAvgs:
+                    fgPercR = scipyStats.percentileofscore(fgPercs, fgPerc, 'rank')
+                    fgsR = scipyStats.percentileofscore(fgCounts, fgs, 'rank')
+                    fgAvgR = scipyStats.percentileofscore(fgAvgs, fgAvg, 'rank')
+
+                    weightedScore = ((fgPercR * 1.3) + (fgsR * 0.7) + (fgAvgR * 1.0)) / 3
+                    ratings[r.player_id] = round(FloosMethods.scaleValue(weightedScore, 60, 100, 0, 100))
+
+        return ratings
+
     def _computeMvpCandidates(self, minGamesPlayed: int = 10) -> List[Dict[str, Any]]:
         """Compute MVP scores using pooled-std z-scores of performance rating.
 

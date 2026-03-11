@@ -55,6 +55,24 @@ app.add_middleware(
 floosball_app = None
 
 
+def _areGamesStarted() -> bool:
+    """True only when at least one game is Active or Final (not just Scheduled).
+
+    Multiple endpoints use this to determine whether roster swaps and card
+    equips should be locked.  ``bool(currentSeason.activeGames)`` returns
+    True as soon as Scheduled games are created (at week setup), which is
+    too early — users should still be able to make changes until the first
+    game actually kicks off.
+    """
+    sm = floosball_app.seasonManager if floosball_app else None
+    if not sm or not sm.currentSeason or not sm.currentSeason.activeGames:
+        return False
+    return any(
+        getattr(g, 'status', None) in (FloosGame.GameStatus.Active, FloosGame.GameStatus.Final)
+        for g in sm.currentSeason.activeGames
+    )
+
+
 # ============================================================================
 # STARTUP & SHUTDOWN
 # ============================================================================
@@ -284,7 +302,14 @@ async def get_team(team_id: int):
         team_dict['regularSeasonChampions'] = getattr(team, 'regularSeasonChampions', [])
         team_dict['floosbowlChampionships'] = team.floosbowlChampionships
         team_dict['allTimeStats'] = team.allTimeTeamStats
-        team_dict['history'] = team.statArchive
+        # Build history: current season stats + archived past seasons
+        import copy as _copy
+        currentStats = _copy.deepcopy(team.seasonTeamStats)
+        # Ensure current season number is set (defaults to 0 in teamStatsDict)
+        if currentStats.get('season', 0) == 0:
+            sm = floosball_app.seasonManager if floosball_app else None
+            currentStats['season'] = sm.currentSeason.seasonNumber if sm and hasattr(sm, 'currentSeason') and sm.currentSeason else 1
+        team_dict['history'] = [currentStats] + (team.statArchive or [])
         team_dict['coach'] = _buildCoachDict(team)
 
         # Roster
@@ -408,6 +433,25 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
         raise
     except Exception as e:
         logger.error(f"Error generating avatar for team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/logo")
+async def get_league_logo(size: int = Query(default=256, ge=16, le=1024), format: str = Query(default="svg", regex="^(svg|png)$")):
+    """Return the Floosball league logo as SVG or PNG."""
+    try:
+        avatarGen = getAvatarGenerator()
+        cacheHeaders = {
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Access-Control-Allow-Origin": "*",
+        }
+        if format == "png":
+            pngBytes = avatarGen.getLeagueLogoPng(size)
+            return Response(content=pngBytes, media_type="image/png", headers=cacheHeaders)
+        svg = avatarGen.generateLeagueLogo(size)
+        return Response(content=svg, media_type="image/svg+xml", headers=cacheHeaders)
+    except Exception as e:
+        logger.error(f"Error generating league logo: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -595,7 +639,15 @@ async def get_current_games():
         season_mgr = floosball_app.seasonManager
         current_season = season_mgr.currentSeason
         
-        if current_season is None or not hasattr(current_season, 'activeGames') or current_season.activeGames is None:
+        if current_season is None or not hasattr(current_season, 'activeGames'):
+            return []
+
+        # Use activeGames if available, otherwise fall back to completed games
+        # so finished games remain visible until the next week starts
+        displayGames = current_season.activeGames
+        if not displayGames:
+            displayGames = getattr(current_season, 'completedWeekGames', None)
+        if not displayGames:
             return []
         
         # Compute isFeatured for each game: elite matchup (both ELO >= 1570)
@@ -616,7 +668,7 @@ async def get_current_games():
                 teamLeaguePos[team.id] = pos
                 teamLeagueName[team.id] = league.name
 
-        for game in current_season.activeGames:
+        for game in displayGames:
             homeElo = getattr(game, 'homeTeamElo', getattr(game.homeTeam, 'elo', 1500))
             awayElo = getattr(game, 'awayTeamElo', getattr(game.awayTeam, 'elo', 1500))
             homePos = teamLeaguePos.get(game.homeTeam.id, 99)
@@ -632,7 +684,7 @@ async def get_current_games():
             game.isFeatured = eliteMatchup or bubbleBattle
 
         game_list = []
-        for game in current_season.activeGames:
+        for game in displayGames:
             game_dict = GameResponseBuilder.buildGameWithProbabilities(game)
             
             # Add current game state fields
@@ -770,6 +822,7 @@ async def get_game_by_id(game_id: int):
                                 'isBigPlay': getattr(play_data, 'isBigPlay', False),
                                 'isClutchPlay': getattr(play_data, 'isClutchPlay', False),
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
+                                'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
@@ -946,6 +999,14 @@ async def get_season_info():
                         # Scheduled games count as active for display purposes
                         activeGameIds.append(game.id)
         
+        # Include next game start time when between weeks
+        nextGameStartTime = None
+        gamesActive = bool(current_season.activeGames)
+        if not gamesActive and not current_season.isComplete:
+            nextStart = season_mgr.getNextGameStartTime(current_season.currentWeek)
+            if nextStart:
+                nextGameStartTime = nextStart.isoformat() + 'Z'
+
         return build_success_response({
             'season_number': current_season.seasonNumber,
             'current_week': current_season.currentWeek,
@@ -954,7 +1015,8 @@ async def get_season_info():
             'active_games': activeGameIds,
             'completed_games': completedGameIds,
             'champion': TeamResponseBuilder.buildBasicTeamDict(current_season.champion) if current_season.champion else None,
-            'mvp': current_season.mvp if hasattr(current_season, 'mvp') and current_season.mvp else None
+            'mvp': current_season.mvp if hasattr(current_season, 'mvp') and current_season.mvp else None,
+            'next_game_start_time': nextGameStartTime,
         })
     
     except Exception as e:
@@ -1205,6 +1267,92 @@ async def admin_create_player(payload: Dict[str, Any], x_admin_password: Optiona
     return {"created": created, "unusedNamesRemaining": len(pm.unusedNames)}
 
 
+@app.get("/api/admin/beta/allowlist")
+async def admin_get_beta_allowlist(x_admin_password: Optional[str] = Header(default=None)):
+    """List all emails on the beta allowlist."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import BetaAllowlist
+    session = get_session()
+    try:
+        entries = session.query(BetaAllowlist).order_by(BetaAllowlist.added_at.desc()).all()
+        return {
+            "emails": [
+                {
+                    "email": e.email,
+                    "addedAt": e.added_at.isoformat() if e.added_at else None,
+                }
+                for e in entries
+            ]
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/admin/beta/allowlist")
+async def admin_add_beta_emails(payload: Dict[str, Any], x_admin_password: Optional[str] = Header(default=None)):
+    """Add email(s) to beta allowlist."""
+    _check_admin_password(x_admin_password)
+    rawEmails = payload.get("emails", [])
+    if isinstance(rawEmails, str):
+        rawEmails = [e.strip() for e in rawEmails.split(",") if e.strip()]
+    if not rawEmails:
+        raise HTTPException(status_code=400, detail="No emails provided")
+
+    from database.connection import get_session
+    from database.models import BetaAllowlist
+
+    session = get_session()
+    added = []
+    try:
+        for email in rawEmails:
+            email = email.lower().strip()
+            existing = session.query(BetaAllowlist).filter_by(email=email).first()
+            if existing:
+                continue
+
+            entry = BetaAllowlist(email=email)
+            session.add(entry)
+            added.append(email)
+
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+    return {"added": added, "count": len(added)}
+
+
+@app.delete("/api/admin/beta/allowlist/{email}")
+async def admin_remove_beta_email(email: str, x_admin_password: Optional[str] = Header(default=None)):
+    """Remove an email from beta allowlist."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import BetaAllowlist
+
+    email = email.lower().strip()
+
+    session = get_session()
+    try:
+        entry = session.query(BetaAllowlist).filter_by(email=email).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Email not found in allowlist")
+
+        session.delete(entry)
+        session.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+    return {"removed": email}
+
+
 @app.get("/api/offseason")
 async def get_offseason_info():
     """Offseason state: free agents, draft order"""
@@ -1264,7 +1412,44 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "pendingFavoriteTeamId": user.pending_favorite_team_id,
             "favoriteTeamLockedSeason": user.favorite_team_locked_season,
             "floobits": currency.balance if currency else 0,
+            "hasCompletedOnboarding": user.has_completed_onboarding,
+            "emailOptOut": user.email_opt_out,
         }
+    finally:
+        session.close()
+
+
+@app.post("/api/users/me/onboarding-complete")
+def complete_onboarding(user: _User = Depends(_getCurrentUser)):
+    """Mark the current user as having completed onboarding."""
+    from database.connection import get_session
+    session = get_session()
+    try:
+        dbUser = session.get(_User, user.id)
+        dbUser.has_completed_onboarding = True
+        session.commit()
+        return {"ok": True}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.patch("/api/users/me/preferences")
+def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Update user preferences (email opt-out, etc.)."""
+    from database.connection import get_session
+    session = get_session()
+    try:
+        dbUser = session.get(_User, user.id)
+        if "emailOptOut" in payload:
+            dbUser.email_opt_out = bool(payload["emailOptOut"])
+        session.commit()
+        return {"ok": True, "emailOptOut": dbUser.email_opt_out}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
 
@@ -1365,6 +1550,77 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
 
 
 # ============================================================================
+# NOTIFICATION ENDPOINTS
+# ============================================================================
+
+@app.get("/api/notifications")
+def get_notifications(user: _User = Depends(_getCurrentUser)):
+    """Get recent notifications for the current user."""
+    import json as _json
+    from database.connection import get_session
+    from database.repositories.notification_repository import NotificationRepository
+    session = get_session()
+    try:
+        repo = NotificationRepository(session)
+        notifs = repo.getRecent(user.id, limit=20)
+        return {
+            "notifications": [
+                {
+                    "id": n.id,
+                    "type": n.type,
+                    "title": n.title,
+                    "message": n.message,
+                    "data": _json.loads(n.data) if n.data else None,
+                    "isRead": n.is_read,
+                    "createdAt": n.created_at.isoformat() if n.created_at else None,
+                }
+                for n in notifs
+            ]
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/notifications/count")
+def get_notification_count(user: _User = Depends(_getCurrentUser)):
+    """Get unread notification count for polling."""
+    from database.connection import get_session
+    from database.repositories.notification_repository import NotificationRepository
+    session = get_session()
+    try:
+        repo = NotificationRepository(session)
+        return {"unread": repo.getUnreadCount(user.id)}
+    finally:
+        session.close()
+
+
+@app.post("/api/notifications/read")
+def mark_notifications_read(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Mark notification(s) as read. Send {id: N} for one, or {all: true} for all."""
+    from database.connection import get_session
+    from database.repositories.notification_repository import NotificationRepository
+    session = get_session()
+    try:
+        repo = NotificationRepository(session)
+        if payload.get("all"):
+            count = repo.markAllRead(user.id)
+        elif payload.get("id"):
+            repo.markRead(user.id, payload["id"])
+            count = 1
+        else:
+            raise HTTPException(status_code=400, detail="Provide 'id' or 'all: true'")
+        session.commit()
+        return {"marked": count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+# ============================================================================
 # FANTASY ROSTER ENDPOINTS
 # ============================================================================
 
@@ -1452,10 +1708,8 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 "bankedFP": round(swap.banked_fp, 1),
             })
 
-        # Check if games are active
-        gamesActive = False
-        if floosball_app and floosball_app.seasonManager.currentSeason:
-            gamesActive = bool(floosball_app.seasonManager.currentSeason.activeGames)
+        # Check if games are actually running (Active/Final, not just Scheduled)
+        gamesActive = _areGamesStarted()
 
         cardBonus = roster.card_bonus_points or 0.0
         return build_success_response({
@@ -1625,11 +1879,19 @@ def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
         # Snapshot each player's tracked FP at lock time (banked weeks + current week).
         # Uses the same data source as the snapshot so earned FP = seasonFP - points_at_lock
         # correctly excludes all FP gained before the roster was locked.
+        import json as _json
         fantasyTracker = floosball_app.fantasyTracker
+        gamesActive = _areGamesStarted()
         for rp in roster.players:
             rp.points_at_lock = fantasyTracker.getPlayerSeasonFP(
                 rp.player_id, currentSeasonNum
             ) if fantasyTracker else 0
+            # Capture live game stats at lock time so card effects can compute
+            # post-lock deltas (TDs, yards, etc.) instead of using full-week stats
+            if gamesActive:
+                playerObj = floosball_app.playerManager.getPlayerById(rp.player_id)
+                if playerObj and playerObj.gameStatsDict:
+                    rp.stats_at_lock = _json.dumps(playerObj.gameStatsDict)
 
         roster.is_locked = True
         roster.locked_at = datetime.utcnow()
@@ -1737,11 +1999,18 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         ))
 
         # Update the roster player — new player starts at 0 earned FP
+        import json as _json
         newPlayerSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
             player_id=req.newPlayerId, season=currentSeasonNum
         ).scalar()
         rosterPlayer.player_id = req.newPlayerId
         rosterPlayer.points_at_lock = float(newPlayerSeasonFP)
+        # Capture new player's current game stats for card delta calculations
+        newPlayerObj = floosball_app.playerManager.getPlayerById(req.newPlayerId) if floosball_app else None
+        if newPlayerObj and newPlayerObj.gameStatsDict:
+            rosterPlayer.stats_at_lock = _json.dumps(newPlayerObj.gameStatsDict)
+        else:
+            rosterPlayer.stats_at_lock = None
 
         roster.swaps_available -= 1
         session.commit()
@@ -1900,7 +2169,7 @@ def get_fantasy_weekly_leaderboard(season: Optional[int] = Query(default=None)):
     sm = floosball_app.seasonManager if floosball_app else None
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     isCurrentSeason = seasonNum == (sm.currentSeason.seasonNumber if sm and sm.currentSeason else -1)
-    gamesActive = isCurrentSeason and bool(sm and sm.currentSeason and sm.currentSeason.activeGames)
+    gamesActive = isCurrentSeason and _areGamesStarted()
 
     session = get_session()
     try:
@@ -2154,8 +2423,13 @@ def getCardCollection(
 
     session = get_session()
     try:
+        from database.repositories.card_repositories import EquippedCardRepository
         cardRepo = UserCardRepository(session)
+        equippedRepo = EquippedCardRepository(session)
         cards = cardRepo.getByUser(user.id)
+
+        # Get equipped card IDs so we can tag them
+        equippedCardIds = equippedRepo.getEquippedCardIds(user.id)
 
         result = []
         for card in cards:
@@ -2166,7 +2440,9 @@ def getCardCollection(
                 continue
             if activeOnly and tpl.season_created != currentSeason:
                 continue
-            result.append(cardManager.serializeCard(card, currentSeason))
+            data = cardManager.serializeCard(card, currentSeason)
+            data["isEquipped"] = card.id in equippedCardIds
+            result.append(data)
 
         return build_success_response({"cards": result, "currentSeason": currentSeason})
     finally:
@@ -2233,7 +2509,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         # Auto-carry forward: if no cards equipped this week, copy from previous week
         if not equipped and currentWeek > 1:
             # If games are active, lockWeek() already ran — auto-carried cards must also be locked
-            gamesActive = bool(sm and sm.currentSeason and sm.currentSeason.activeGames)
+            gamesActive = _areGamesStarted()
             prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek - 1)
             for prev in prevEquipped:
                 # Verify card still exists and is active season
@@ -2281,12 +2557,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 "templatePosition": template.position,
             })
 
-        gamesActive = bool(sm and sm.currentSeason and sm.currentSeason.activeGames)
         return build_success_response({
             "equippedCards": result,
             "season": currentSeason,
             "week": currentWeek,
-            "gamesActive": gamesActive,
+            "gamesActive": _areGamesStarted(),
         })
     finally:
         session.close()
@@ -2359,8 +2634,8 @@ def setEquippedCards(
 
         equippedRepo = EquippedCardRepository(session)
 
-        # Check if games are active — require confirmation to equip (will be locked immediately)
-        gamesActive = bool(sm and sm.currentSeason and sm.currentSeason.activeGames)
+        # Check if games are actually running — require confirmation to equip (will be locked immediately)
+        gamesActive = _areGamesStarted()
         if gamesActive:
             # If cards are already locked, no changes allowed at all
             existing = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)

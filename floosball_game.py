@@ -36,6 +36,13 @@ from constants import (
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
+    MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
+    MOMENTUM_CASCADE_STEP, MOMENTUM_MAX_CASCADE, MOMENTUM_MAX_STREAK,
+    MOMENTUM_EFFECT_BASE, MOMENTUM_EFFECT_CAP, MOMENTUM_NEUTRAL_ZONE,
+    MOMENTUM_SHIFT_THRESHOLD, MOMENTUM_CROSS_ZERO_THRESHOLD, MOMENTUM_DISPLAY_THRESHOLD,
+    MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
+    MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
+    MOMENTUM_PUNT,
 )
 
 # Import TimingManager for game-level timing control
@@ -661,6 +668,11 @@ class Game:
         self.isTwoPtConv = False
         self.isOnsideKick = False
         self.gamePressure = 0
+
+        # Momentum
+        self.momentum = 0.0              # -100 to +100 (positive = home, negative = away)
+        self.momentumStreak = 0          # consecutive events for same side, capped ±MAX_STREAK
+        self.lastMomentumTeam = None     # team that last gained momentum
 
         # Coaching gameplans (pre-game scouting, generated once per game)
         if GAMEPLAN_AVAILABLE:
@@ -1397,11 +1409,15 @@ class Game:
             if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD:
                 gameIQ = self._coachClockIQ(coach)
                 if deficit <= 3:
-                    # FG ties or wins — almost always kick (floor 80%)
-                    if _random.random() < 0.8 + 0.2 * gameIQ:
+                    # FG ties or wins — chip shots are automatic, longer FGs nearly so
+                    if self.yardsToEndzone <= 10:
+                        # Inside the 10: always kick the chip shot
                         self.play.playType = PlayType.FieldGoal
                         return
-                    # Bad coach blunder: goes for TD instead of easy FG
+                    if _random.random() < 0.9 + 0.1 * gameIQ:
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    # Bad coach blunder: goes for TD instead of makeable FG
                     if self.yardsToFirstDown <= 5:
                         self.play.passPlay(self._selectPassPlay('short'))
                     else:
@@ -2308,7 +2324,7 @@ class Game:
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2361,8 +2377,14 @@ class Game:
                         adjustOffensiveGameplan(self.awayOffGameplan, awayCoach, awayOffStats)
                         adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats)
 
+                    # Halftime dampens momentum toward neutral
+                    self.momentum *= 0.5
+                    self.momentumStreak = 0
+                    if abs(self.momentum) < 0.5:
+                        self.momentum = 0.0
+
                     self.isHalftime = False
-                    
+
                     # Switch possession for second half
                     self.turnover(coinFlipWinner, coinFlipLoser, possReset)
                     self.down = 1
@@ -2545,7 +2567,7 @@ class Game:
                     self.formatPlayText()
                     if self.play.isSack:
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2637,6 +2659,10 @@ class Game:
                 # Recalculate game pressure before each play
                 self.gamePressure = self.calculateGamePressure()
 
+                # Momentum: decay toward neutral and apply gameplay effect
+                self._decayMomentum()
+                self._applyMomentumEffect()
+
                 # Call and execute play
                 self.playCaller()
 
@@ -2677,6 +2703,7 @@ class Game:
 
                     if self.play.isFgGood:
                         self._addScore(self.offensiveTeam, 3)
+                        self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
                         self.defensiveTeam.gameDefenseStats['ptsAlwd'] += 3
                         self.play.playResult = PlayResult.FieldGoalGood
                         self.play.scoreChange = True
@@ -2705,6 +2732,7 @@ class Game:
                         break
                     else:
                         self.play.playResult = PlayResult.FieldGoalNoGood
+                        self._applyMomentumEvent(MOMENTUM_FG_MISSED, self.defensiveTeam)
                         self.clockRunning = False  # Clock stops after turnover
                         self.formatPlayText()
                         self.gameFeed.insert(0, {'play': self.play})
@@ -2716,6 +2744,7 @@ class Game:
 
                 if self.play.playType is PlayType.Punt:
                     self.play.playResult = PlayResult.Punt
+                    self._applyMomentumEvent(MOMENTUM_PUNT, self.defensiveTeam)
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
                         logging.error(f"Team {self.offensiveTeam.name} has no kicker - using default punt distance")
@@ -2781,16 +2810,21 @@ class Game:
                 
                 # Check for two-minute warning
                 self.checkTwoMinuteWarning()
-                
+
+                # Momentum: sack (only if not also a fumble — fumbles get turnover momentum)
+                if self.play.isSack and not self.play.isFumbleLost:
+                    self._applyMomentumEvent(MOMENTUM_SACK, self.defensiveTeam)
+
                 # Handle turnovers
                 if self.play.isFumbleLost or self.play.isInterception:
+                    self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
                     self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
                     if self.offensiveTeam is self.homeTeam:
                         self.homeTurnoversTotal += 1
                     elif self.offensiveTeam is self.awayTeam:
                         self.awayTurnoversTotal += 1
                     self.formatPlayText()
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
+                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
@@ -2800,6 +2834,7 @@ class Game:
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         self._addScore(self.defensiveTeam, 6)
+                        self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
                         if self._shouldGoForTwo(self.defensiveTeam):
                             self.play.playResult = PlayResult.Touchdown
@@ -2852,6 +2887,7 @@ class Game:
                         self.play.defense.gameDefenseStats['ptsAlwd'] += 6
 
                         self._addScore(self.offensiveTeam, 6)
+                        self._applyMomentumEvent(MOMENTUM_TD, self.offensiveTeam)
 
                         if self._shouldGoForTwo(self.offensiveTeam):
                             # Broadcast TD first, then simulate 2-pt as a separate play
@@ -2860,7 +2896,7 @@ class Game:
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
                                 self.highlights.insert(0, {'play': self.play})
                                 self.leagueHighlights.insert(0, {'play': self.play})
                             self.gameFeed.insert(0, {'play': self.play})
@@ -2880,7 +2916,7 @@ class Game:
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
                                 self.highlights.insert(0, {'play': self.play})
                                 self.leagueHighlights.insert(0, {'play': self.play})
                             self.gameFeed.insert(0, {'play': self.play})
@@ -2917,6 +2953,7 @@ class Game:
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         if self.play.isFumbleLost:
                             self._addScore(self.defensiveTeam, 6)
+                            self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
                             if self._shouldGoForTwo(self.defensiveTeam):
                                 self.play.playResult = PlayResult.Touchdown
@@ -2954,6 +2991,7 @@ class Game:
                             break
                         else:
                             self._addScore(self.defensiveTeam, 2)
+                            self._applyMomentumEvent(MOMENTUM_SAFETY, self.defensiveTeam)
 
                             self.play.defense.gameDefenseStats['safeties'] += 1
 
@@ -2998,24 +3036,30 @@ class Game:
                             continue
                         else:
                             self.play.playResult = PlayResult.TurnoverOnDowns
+                            self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
                             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                             break
         
-        # Game over - show final play if it was a score or big play.
-        # In OT, the scoring play may have already been added to gameFeed
-        # and broadcast inside the loop before checkOvertimeEnd() broke out.
+        # Game over - ensure the final play is formatted, in gameFeed, and broadcast.
+        # Scoring plays and special plays (FG, punt, TD) are typically formatted and
+        # added to gameFeed inside the loop. Non-scoring plays (kneels, normal runs/passes
+        # at clock expiration) are normally formatted at the TOP of the next loop iteration,
+        # which never runs when the game ends. Handle all cases here.
         alreadyInFeed = (self.gameFeed and self.gameFeed[0].get('play') is self.play)
         if self.totalPlays > 0 and self.play:
-            if self.play.scoreChange:
-                self.formatPlayText()
-                if not alreadyInFeed:
-                    if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay:
-                        self.highlights.insert(0, {'play': self.play})
-                        self.leagueHighlights.insert(0, {'play': self.play})
-                    self.gameFeed.insert(0, {'play': self.play})
+            playActuallyRan = getattr(self.play, 'playResult', None) is not None
+            if playActuallyRan and not alreadyInFeed:
+                if not getattr(self.play, 'playText', None):
+                    self.formatPlayText()
+                if self.play.isSack:
+                    self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 1
+                if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
+                    self.highlights.insert(0, {'play': self.play})
+                    self.leagueHighlights.insert(0, {'play': self.play})
+                self.gameFeed.insert(0, {'play': self.play})
 
-                    # Broadcast final game state (only if not already broadcast in the loop)
-                    self.broadcastGameState(includeLastPlay=True)
+                # Broadcast final play state (before the game-end event below)
+                self.broadcastGameState(includeLastPlay=True)
 
         # Determine winner
         if self.awayScore > self.homeScore:
@@ -3183,6 +3227,125 @@ class Game:
         pressure = pressure * self.offensiveTeam.pressureModifier
 
         return min(100, pressure)  # Cap at 100
+
+    # ─── Momentum System ────────────────────────────────────────────────────
+
+    def _decayMomentum(self):
+        """Decay momentum toward neutral each play."""
+        scoreDiff = abs(self.homeScore - self.awayScore)
+        if scoreDiff > 21:
+            decayRate = MOMENTUM_BLOWOUT_DECAY_RATE
+        elif scoreDiff > 14:
+            decayRate = MOMENTUM_MIDGAP_DECAY_RATE
+        else:
+            decayRate = MOMENTUM_DECAY_RATE
+        self.momentum *= (1.0 - decayRate)
+        if abs(self.momentum) < 0.5:
+            self.momentum = 0.0
+
+    def _scoreGapDampener(self):
+        """Reduce momentum gains in blowouts. Returns 0.2-1.0."""
+        scoreDiff = abs(self.homeScore - self.awayScore)
+        if scoreDiff <= 14:
+            return 1.0
+        elif scoreDiff <= 21:
+            return 0.7
+        elif scoreDiff <= 28:
+            return 0.4
+        return 0.2
+
+    def _mentalResistance(self, resistingTeam):
+        """High mental stats on the resisting team reduce incoming momentum.
+        Returns 0.7-1.0 (lower = more resistance)."""
+        players = [p for p in resistingTeam.rosterDict.values() if p is not None]
+        if not players:
+            return 1.0
+        avgMental = sum(
+            (getattr(p.attributes, 'resilience', 70) +
+             getattr(p.attributes, 'attitude', 70) +
+             getattr(p.attributes, 'discipline', 70)) / 3.0
+            for p in players
+        ) / len(players)
+        resistance = 1.0 - 0.3 * ((avgMental - 60) / 40.0)
+        return max(0.7, min(1.0, resistance))
+
+    def _updateMomentumStreak(self, benefitingTeam):
+        """Track consecutive momentum events for the same team."""
+        if benefitingTeam is self.lastMomentumTeam:
+            if benefitingTeam is self.homeTeam:
+                self.momentumStreak = min(self.momentumStreak + 1, MOMENTUM_MAX_STREAK)
+            else:
+                self.momentumStreak = max(self.momentumStreak - 1, -MOMENTUM_MAX_STREAK)
+        else:
+            self.momentumStreak = 1 if benefitingTeam is self.homeTeam else -1
+            self.lastMomentumTeam = benefitingTeam
+
+    def _isMomentumShift(self, previousMomentum, newMomentum):
+        """Check if a momentum change qualifies as a highlight."""
+        delta = abs(newMomentum - previousMomentum)
+        crossedZero = (previousMomentum > 0 and newMomentum < 0) or \
+                      (previousMomentum < 0 and newMomentum > 0)
+        if delta >= MOMENTUM_SHIFT_THRESHOLD:
+            return True
+        if crossedZero and delta >= MOMENTUM_CROSS_ZERO_THRESHOLD:
+            return True
+        return False
+
+    def _applyMomentumEvent(self, rawDelta, benefitingTeam):
+        """Process a momentum event after a play outcome."""
+        previousMomentum = self.momentum
+        resistingTeam = self.awayTeam if benefitingTeam is self.homeTeam else self.homeTeam
+
+        # Cascade multiplier
+        self._updateMomentumStreak(benefitingTeam)
+        cascadeMultiplier = 1.0 + MOMENTUM_CASCADE_STEP * (abs(self.momentumStreak) - 1)
+        cascadeMultiplier = min(MOMENTUM_MAX_CASCADE, cascadeMultiplier)
+
+        # Dampening
+        gapDamp = self._scoreGapDampener()
+        mentalResist = self._mentalResistance(resistingTeam)
+
+        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist
+
+        if benefitingTeam is self.homeTeam:
+            self.momentum += finalDelta
+        else:
+            self.momentum -= finalDelta
+        self.momentum = max(-100.0, min(100.0, self.momentum))
+
+        # Mark momentum shift highlight
+        if self.play and self._isMomentumShift(previousMomentum, self.momentum):
+            self.play.isMomentumShift = True
+
+    def _applyMomentumEffect(self):
+        """Apply small per-play confidence/determination nudges based on momentum."""
+        if abs(self.momentum) < MOMENTUM_NEUTRAL_ZONE:
+            return
+
+        effectMagnitude = MOMENTUM_EFFECT_BASE * (abs(self.momentum) / 50.0)
+        effectMagnitude = min(effectMagnitude, MOMENTUM_EFFECT_CAP)
+
+        if self.momentum > 0:
+            benefiting = self.homeTeam
+            suffering = self.awayTeam
+        else:
+            benefiting = self.awayTeam
+            suffering = self.homeTeam
+
+        # Boost benefiting team
+        for player in benefiting.rosterDict.values():
+            if player is not None:
+                player.updateInGameConfidence(effectMagnitude * 0.6)
+                player.updateInGameDetermination(effectMagnitude * 0.4)
+
+        # Slight drag on suffering team
+        dragMagnitude = effectMagnitude * 0.5
+        for player in suffering.rosterDict.values():
+            if player is not None:
+                player.updateInGameConfidence(-dragMagnitude * 0.6)
+                player.updateInGameDetermination(-dragMagnitude * 0.4)
+
+    # ─── End Momentum System ────────────────────────────────────────────────
 
     def formatTime(self, seconds: int) -> str:
         """Format seconds into MM:SS display format"""
@@ -3359,6 +3522,11 @@ class Game:
             self.play.awayWpa = round(awayWpa, 2)
             self.play.isBigPlay = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
 
+            # Momentum: big play bonus (team that benefited from WPA swing)
+            if self.play.isBigPlay:
+                benefitingTeam = self.homeTeam if homeWpa > 0 else self.awayTeam
+                self._applyMomentumEvent(MOMENTUM_BIG_PLAY_BONUS, benefitingTeam)
+
             # Only keep clutch/choke tags if the play had meaningful WP impact
             wpImpact = max(abs(homeWpa), abs(awayWpa))
             if wpImpact < 5.0:
@@ -3389,6 +3557,7 @@ class Game:
                 'isBigPlay': self.play.isBigPlay,
                 'isClutchPlay': getattr(self.play, 'isClutchPlay', False),
                 'isChokePlay': getattr(self.play, 'isChokePlay', False),
+                'isMomentumShift': getattr(self.play, 'isMomentumShift', False),
             }
         
         # Determine possession team abbreviation and booleans
@@ -3442,6 +3611,10 @@ class Game:
             'isUpsetAlert': isUpsetAlert,
             'homeTimeouts': self.homeTimeoutsRemaining,
             'awayTimeouts': self.awayTimeoutsRemaining,
+            'momentum': round(getattr(self, 'momentum', 0.0), 1),
+            'momentumTeam': (self.homeTeam.abbr if self.momentum > MOMENTUM_DISPLAY_THRESHOLD
+                             else self.awayTeam.abbr if self.momentum < -MOMENTUM_DISPLAY_THRESHOLD
+                             else None) if hasattr(self, 'momentum') else None,
             'gameStats': self._buildGameStatsSnapshot()
         }
         
@@ -3468,6 +3641,7 @@ class Game:
                 self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
                 self.gameFeed[0]['isClutchPlay'] = getattr(self.play, 'isClutchPlay', False)
                 self.gameFeed[0]['isChokePlay'] = getattr(self.play, 'isChokePlay', False)
+                self.gameFeed[0]['isMomentumShift'] = getattr(self.play, 'isMomentumShift', False)
 
     def calculatePreSnapTime(self) -> int:
         """
@@ -4077,6 +4251,7 @@ class Play():
         self.isClutchPlay = False        # High pressure + positive mod + good outcome
         self.isChokePlay = False         # High pressure + negative mod + bad outcome
         self.clutchPlayerName = ''       # Name of the player who clutched/choked
+        self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
 

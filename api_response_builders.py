@@ -322,14 +322,11 @@ class GameResponseBuilder(ResponseBuilder):
         down = getattr(game, 'down', None)
         yardsToFirstDown = getattr(game, 'yardsToFirstDown', None)
         yardLine = getattr(game, 'yardLine', None)
-        possession = getattr(game, 'possession', None)
-        
-        # Determine possession team ID
-        possessionTeamId = None
-        if possession == 'home':
-            possessionTeamId = str(game.homeTeam.id)
-        elif possession == 'away':
-            possessionTeamId = str(game.awayTeam.id)
+        # Get possession from offensiveTeam (the actual game attribute)
+        possessionAbbr = None
+        if hasattr(game, 'offensiveTeam') and game.offensiveTeam:
+            possessionAbbr = game.offensiveTeam.abbr if hasattr(game.offensiveTeam, 'abbr') else None
+        yardsToEndzone = getattr(game, 'yardsToEndzone', None)
         
         # Format down text
         downText = None
@@ -394,10 +391,13 @@ class GameResponseBuilder(ResponseBuilder):
             },
             'quarter': quarter,
             'timeRemaining': timeRemaining,
-            'possession': possessionTeamId,
+            'possession': possessionAbbr,
+            'homeTeamPoss': (hasattr(game, 'offensiveTeam') and game.offensiveTeam == game.homeTeam) if hasattr(game, 'homeTeam') else False,
+            'awayTeamPoss': (hasattr(game, 'offensiveTeam') and game.offensiveTeam == game.awayTeam) if hasattr(game, 'awayTeam') else False,
             'down': down,
             'yardsToFirstDown': yardsToFirstDown,
             'yardLine': yardLine,
+            'yardsToEndzone': yardsToEndzone,
             'downText': downText,
             'homeWinProbability': GameResponseBuilder.finalWinProbability(game, 'home'),
             'awayWinProbability': GameResponseBuilder.finalWinProbability(game, 'away'),

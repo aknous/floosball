@@ -45,6 +45,7 @@ def init_db():
     """Initialize the database by creating all tables."""
     Base.metadata.create_all(bind=engine)
     _seedPackTypes()
+    _seedBetaAllowlist()
     print(f"Database initialized at {DB_PATH}")
 
 
@@ -53,6 +54,7 @@ def clear_db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     _seedPackTypes()
+    _seedBetaAllowlist()
     print(f"Database cleared and reinitialized at {DB_PATH}")
 
 
@@ -63,6 +65,33 @@ def _seedPackTypes():
     try:
         repo = PackTypeRepository(session)
         repo.seedDefaults()
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+
+
+def _seedBetaAllowlist():
+    """Seed beta allowlist emails from config if they don't already exist."""
+    from database.models import BetaAllowlist
+    from sqlalchemy import func
+    try:
+        from config_manager import get_config
+        emails = get_config().get("betaAllowlist", [])
+    except Exception:
+        return
+    if not emails:
+        return
+    session = SessionLocal()
+    try:
+        for email in emails:
+            normalizedEmail = email.lower().strip()
+            exists = session.query(BetaAllowlist).filter(
+                func.lower(BetaAllowlist.email) == normalizedEmail
+            ).first()
+            if not exists:
+                session.add(BetaAllowlist(email=normalizedEmail))
         session.commit()
     except Exception:
         session.rollback()

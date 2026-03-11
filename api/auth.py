@@ -10,7 +10,7 @@ import jwt as pyjwt
 from jwt import PyJWKClient
 
 from database.connection import get_session
-from database.models import User, UserCurrency, UserCard, CardTemplate, CurrencyTransaction
+from database.models import User, UserCurrency, UserCard, CardTemplate, CurrencyTransaction, BetaAllowlist
 from database.repositories.card_repositories import CurrencyRepository
 from logger_config import get_logger
 
@@ -23,6 +23,7 @@ _bearerScheme = HTTPBearer()
 # ---------------------------------------------------------------------------
 
 _USERNAME_FIRSTS = [
+    # Original
     "Bootleg", "Moist", "Cornbread", "Squids", "Gootsy", "Frunk", "Chud",
     "Schmorby", "Quasi", "Stove", "Flakey", "Ovaltine", "Pickled", "Socks",
     "Reverend", "Professor", "Laserdisc", "Powershell", "Discount", "Turbo",
@@ -31,9 +32,17 @@ _USERNAME_FIRSTS = [
     "Pamphlet", "Kazoo", "Sweatpants", "Toaster", "Blunderbuss", "Firmware",
     "Lowercase", "Crispy", "Lukewarm", "Adequate", "Suspicious", "Bogus",
     "Rogue", "Sentient", "Forbidden", "Haunted", "Certified",
+    # Expanded
+    "Unlicensed", "Feral", "Tandem", "Benched", "Surplus", "Vintage",
+    "Bargain", "Wholesale", "Squishy", "Marinated", "Unsanctioned",
+    "Contraband", "Backup", "Defrosted", "Inflatable", "Offbrand",
+    "Leftover", "Recalled", "Overtime", "Scrambled", "Knockoff",
+    "Secondhand", "Unhinged", "Bedazzled", "Municipal", "Decoy",
+    "Tactical", "Offshore", "Bootcamp", "Clearance",
 ]
 
 _USERNAME_LASTS = [
+    # Original
     "Gutpunch", "Flashmob", "Dreamcast", "Wigglesworth", "Dribbleston",
     "Bumpington", "Lagume", "Nightshift", "Perkinshire", "Pumpernick",
     "McElroy", "Trolleyproblem", "Vinaigrette", "Mouthfeel", "Supertoe",
@@ -42,6 +51,17 @@ _USERNAME_LASTS = [
     "Hooligan", "Rascal", "Fiasco", "Debacle", "Kerfuffle",
     "Brouhaha", "Bamboozle", "Hullabaloo", "Rigmarole", "Cahoots",
     "Tomfoolery", "Sheepdog", "Crabcakes", "Megabyte", "Malarkey",
+    # Expanded
+    "Humperdink", "Flapjacks", "Thundersocks", "Wigglebottom",
+    "Bananahands", "Cheddarworth", "Dingleberry", "Fiddlesticks",
+    "Goosebumps", "Hornswoggle", "Jibberjabber", "Lampshade",
+    "Mumblecrust", "Nincompoop", "Pantaloons", "Quagmire",
+    "Rumpelstilt", "Sassafras", "Tumbleweed", "Underbelly",
+    "Whippersnap", "Clutterbuck", "Doodlebug", "Flotsam",
+    "Gobsmacker", "Hoodwink", "Jellyroll", "Kettledrum",
+    "Lollygag", "Monkeyshine", "Noodleberg", "Fumblerooski",
+    "Puddinpop", "Scuttlebutt", "Slapstick", "Butterfumble",
+    "Trampoline", "Collywobble", "Boondoggle", "Whodunnit",
 ]
 
 
@@ -190,6 +210,8 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                     email = emailAddresses[0].get("email_address", "")
             if not email:
                 email = f"{clerkUserId}@clerk.user"
+            else:
+                email = email.lower().strip()
 
             username = _generateRandomUsername(session)
             user = User(
@@ -207,6 +229,39 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
             session.commit()
             session.refresh(user)
             logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email}, username={username}")
+        else:
+            # Existing user — update email if JWT now provides a real one
+            jwtEmail = payload.get("email", "")
+            if not jwtEmail:
+                emailAddresses = payload.get("email_addresses", [])
+                if emailAddresses and isinstance(emailAddresses, list):
+                    jwtEmail = emailAddresses[0].get("email_address", "")
+            if jwtEmail:
+                jwtEmail = jwtEmail.lower().strip()
+                if user.email != jwtEmail:
+                    logger.info(f"Updating user email: {user.email} -> {jwtEmail}")
+                    user.email = jwtEmail
+                    session.commit()
+
+        # Beta gate: if enabled, verify user's email is on the allowlist
+        try:
+            from config_manager import get_config
+            betaEnabled = get_config().get("betaEnabled", False)
+        except Exception:
+            betaEnabled = False
+        if betaEnabled:
+            from sqlalchemy import func
+            userEmail = user.email.lower().strip() if user.email else ""
+            allowed = session.query(BetaAllowlist).filter(
+                func.lower(BetaAllowlist.email) == userEmail
+            ).first()
+            if not allowed:
+                logger.warning(f"Beta gate blocked user: email={user.email}, clerk_id={user.clerk_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Floosball is in closed beta. Your email is not on the allowlist.",
+                )
+
         return user
     except HTTPException:
         raise

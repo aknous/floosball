@@ -1,6 +1,12 @@
 {
     "adminPassword": "floosball",
     "clerkJwksUrl": "https://capable-dragon-13.clerk.accounts.dev/.well-known/jwks.json",
+    "betaEnabled": true,
+    "betaAllowlist": [
+        "andrewknous@gmail.com"
+    ],
+    "resendApiKey": "",
+    "emailFrom": "Floosball <noreply@floosball.com>",
     "leagueConfig": {
         "cap": 30,
         "totalSeasons": 10,

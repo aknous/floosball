@@ -275,5 +275,5 @@ curl http://localhost:8000/api/ws/stats
 
 ---
 
-**Version**: 2.0.0  
-**Last Updated**: February 19, 2026
+**Version**: 2.0.0
+**Last Updated**: March 10, 2026

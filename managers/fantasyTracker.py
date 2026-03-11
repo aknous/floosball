@@ -11,13 +11,14 @@ This completely decouples fantasy from the gameStatsDict zeroing that happens
 inside _accumulatePostgameStats(). Fantasy never reads from game/season stat dicts.
 """
 
+import json as _json
 import logging
 from typing import Dict, Set
 
 logger = logging.getLogger(__name__)
 
 
-def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
+def _liveStatsToDbFormat(gameStatsDict: dict, teamId: int = 0) -> dict:
     """Translate a live gameStatsDict to card-calc weekPlayerStats format.
 
     Used to build CardCalcContext from live game data during active games.
@@ -27,6 +28,7 @@ def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
     receiving = gameStatsDict.get("receiving", {})
     kicking = gameStatsDict.get("kicking", {})
     return {
+        "teamId": teamId,
         "fantasyPoints": gameStatsDict.get("fantasyPoints", 0),
         "passing_stats": {
             "passYards": passing.get("yards", 0),
@@ -49,13 +51,14 @@ def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
 
 def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
                          receivingStats: dict, kickingStats: dict,
-                         fantasyPoints: float = 0) -> dict:
+                         fantasyPoints: float = 0, teamId: int = 0) -> dict:
     """Convert raw DB GamePlayerStats JSON to card-calc weekPlayerStats format.
 
     DB stores raw gameStatsDict sub-dicts (e.g. passing_stats = {"yards": 100, "tds": 2}).
     Card effects expect the converted format (e.g. passing_stats = {"passYards": 100, "tds": 2}).
     """
     return {
+        "teamId": teamId,
         "fantasyPoints": fantasyPoints,
         "passing_stats": {
             "passYards": (passingStats or {}).get("yards", 0),
@@ -73,6 +76,36 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
             "fgs": (kickingStats or {}).get("fgs", 0),
             "longest": (kickingStats or {}).get("longest", 0),
         },
+    }
+
+
+def _subtractLockStats(currentStats: dict, lockStats: dict) -> dict:
+    """Subtract lock-time stats from current stats to get post-lock deltas.
+
+    Used when a roster is locked mid-game so card effects only count
+    post-lock performance (TDs, yards, FP, etc.).
+    """
+    def _subDict(cur: dict, lock: dict) -> dict:
+        return {k: cur.get(k, 0) - lock.get(k, 0) for k in cur}
+
+    return {
+        "fantasyPoints": max(0, currentStats.get("fantasyPoints", 0) - lockStats.get("fantasyPoints", 0)),
+        "passing_stats": _subDict(
+            currentStats.get("passing_stats", {}),
+            lockStats.get("passing_stats", {}),
+        ),
+        "rushing_stats": _subDict(
+            currentStats.get("rushing_stats", {}),
+            lockStats.get("rushing_stats", {}),
+        ),
+        "receiving_stats": _subDict(
+            currentStats.get("receiving_stats", {}),
+            lockStats.get("receiving_stats", {}),
+        ),
+        "kicking_stats": _subDict(
+            currentStats.get("kicking_stats", {}),
+            lockStats.get("kicking_stats", {}),
+        ),
     }
 
 
@@ -124,6 +157,39 @@ class FantasyTracker:
             session.close()
         # Add current week's in-memory FP (not yet banked)
         return bankedTotal + self._weekFP.get(playerId, 0)
+
+    def restoreWeekFP(self, season: int, week: int):
+        """Reconstruct _weekFP from GamePlayerStats for a partially-completed week.
+
+        Called on mid-season resume so the in-memory accumulator reflects
+        FP from games already saved to the database before the restart.
+        """
+        from database.connection import get_session
+        from database.models import Game, GamePlayerStats
+
+        session = get_session()
+        try:
+            rows = (
+                session.query(
+                    GamePlayerStats.player_id,
+                    GamePlayerStats.fantasy_points,
+                )
+                .join(Game, GamePlayerStats.game_id == Game.id)
+                .filter(Game.season == season, Game.week == week)
+                .all()
+            )
+            if not rows:
+                return
+            restored = {}
+            for playerId, fp in rows:
+                if fp:
+                    restored[playerId] = restored.get(playerId, 0) + fp
+            self._weekFP = restored
+            logger.info(
+                f"Restored week {week} FP for {len(restored)} players from GamePlayerStats"
+            )
+        finally:
+            session.close()
 
     def bankWeek(self, season: int, week: int):
         """Persist current week's FP to DB and reset accumulator.
@@ -183,8 +249,8 @@ class FantasyTracker:
         """
         from database.connection import get_session
         from database.models import (
-            FantasyRoster, FantasyRosterSwap, Player, User,
-            WeeklyCardBonus, WeeklyPlayerFP, WeeklyModifier
+            FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+            Player, User, WeeklyCardBonus, WeeklyPlayerFP, WeeklyModifier
         )
         from database.repositories.card_repositories import EquippedCardRepository
         from managers.cardEffectCalculator import calculateWeekCardBonuses
@@ -273,7 +339,60 @@ class FantasyTracker:
                     session, seasonNum, currentWeek
                 )
 
-            # ── 9. Assemble entries ──
+            # ── 9a. Week games + team results (shared across entries) ──
+            teamManager = self.serviceContainer.getService('team_manager')
+            weekFinalGames = session.query(Game).filter_by(
+                season=seasonNum, week=currentWeek, status='final'
+            ).all() if isCurrentSeason else []
+            weekTeamResults = {}   # teamId → True (won) / False (lost)
+            weekTeamGameMap = {}   # teamId → Game
+            for g in weekFinalGames:
+                weekTeamGameMap[g.home_team_id] = g
+                weekTeamGameMap[g.away_team_id] = g
+                if g.home_score > g.away_score:
+                    weekTeamResults[g.home_team_id] = True
+                    weekTeamResults[g.away_team_id] = False
+                elif g.away_score > g.home_score:
+                    weekTeamResults[g.away_team_id] = True
+                    weekTeamResults[g.home_team_id] = False
+
+            # ── 9b. Raw player game stats for display (full stats, no lock offsets) ──
+            allPlayerRawStats = {}  # playerId → {passing:{}, rushing:{}, ...}
+            if isCurrentSeason:
+                if gamesActive:
+                    pm = self._playerManager
+                    if pm:
+                        for pid in allRosterPlayerIds:
+                            pObj = pm.getPlayerById(pid)
+                            if pObj and pObj.gameStatsDict:
+                                rawStats = pObj.gameStatsDict
+                                allPlayerRawStats[pid] = {
+                                    "passing": dict(rawStats.get("passing", {})),
+                                    "rushing": dict(rawStats.get("rushing", {})),
+                                    "receiving": dict(rawStats.get("receiving", {})),
+                                    "kicking": dict(rawStats.get("kicking", {})),
+                                    "fantasyPoints": rawStats.get("fantasyPoints", 0),
+                                }
+                else:
+                    # From DB: query GamePlayerStats for this week
+                    weekGameRows = session.query(Game.id).filter_by(
+                        season=seasonNum, week=currentWeek
+                    ).all()
+                    weekGameIds = [r[0] for r in weekGameRows]
+                    if weekGameIds:
+                        gpsRows = session.query(GamePlayerStats).filter(
+                            GamePlayerStats.game_id.in_(weekGameIds)
+                        ).all()
+                        for gps in gpsRows:
+                            allPlayerRawStats[gps.player_id] = {
+                                "passing": dict(gps.passing_stats or {}),
+                                "rushing": dict(gps.rushing_stats or {}),
+                                "receiving": dict(gps.receiving_stats or {}),
+                                "kicking": dict(gps.kicking_stats or {}),
+                                "fantasyPoints": gps.fantasy_points or 0,
+                            }
+
+            # ── 10. Assemble entries ──
             entries = []
             for roster in rosters:
                 userId = roster.user_id
@@ -291,6 +410,8 @@ class FantasyTracker:
                 rosterPlayers = []
                 seasonEarnedFP = 0.0
                 currentWeekPlayerFP = 0.0
+                playerLockOffsets = {}   # playerId -> FP offset for current week
+                playerStatsAtLock = {}   # playerId -> parsed gameStatsDict at lock time
                 for rp in roster.players:
                     pObj = self._playerManager.getPlayerById(rp.player_id)
                     playerWeeks = perPlayerWeekFP.get(rp.player_id, {})
@@ -299,7 +420,24 @@ class FantasyTracker:
                     # Only count FP earned after locking (offset by points_at_lock)
                     playerEarnedFP = max(0, playerSeasonFP - rp.points_at_lock)
                     seasonEarnedFP += playerEarnedFP
-                    currentWeekPlayerFP += playerWeekFP
+                    # Adjust weekly FP for mid-week lock: subtract the portion
+                    # of points_at_lock that falls within the current week
+                    priorWeeksFP = sum(
+                        fp for w, fp in playerWeeks.items() if w < currentWeek
+                    )
+                    lockWeekOffset = max(0, rp.points_at_lock - priorWeeksFP)
+                    adjustedWeekFP = max(0, playerWeekFP - lockWeekOffset)
+                    currentWeekPlayerFP += adjustedWeekFP
+                    playerLockOffsets[rp.player_id] = lockWeekOffset
+                    # Only apply stats_at_lock during the lock week (lockWeekOffset > 0
+                    # means points_at_lock falls within the current week)
+                    if rp.stats_at_lock and lockWeekOffset > 0:
+                        try:
+                            playerStatsAtLock[rp.player_id] = _json.loads(
+                                rp.stats_at_lock
+                            )
+                        except Exception:
+                            pass
 
                     rosterPlayers.append({
                         "slot": rp.slot,
@@ -316,7 +454,7 @@ class FantasyTracker:
                             else ""
                         ),
                         "earnedPoints": round(playerEarnedFP, 1),
-                        "weekFP": round(playerWeekFP, 1),
+                        "weekFP": round(adjustedWeekFP, 1),
                     })
 
                 # ── Previous players (swapped out) ──
@@ -336,6 +474,59 @@ class FantasyTracker:
                         "weekFP": 0,
                     })
 
+                # ── Favorite team data ──
+                favoriteTeamData = None
+                userFavTeamId = getattr(rosterUser, 'favorite_team_id', None) if rosterUser else None
+                if userFavTeamId and teamManager:
+                    favTeam = teamManager.getTeamById(userFavTeamId)
+                    if favTeam:
+                        favStats = getattr(favTeam, 'seasonTeamStats', {})
+                        wins = favStats.get('wins', 0)
+                        losses = favStats.get('losses', 0)
+                        streak = favStats.get('streak', 0)
+                        wonThisWeek = weekTeamResults.get(userFavTeamId)
+
+                        # Game score
+                        gameScore = None
+                        favGame = weekTeamGameMap.get(userFavTeamId)
+                        if favGame:
+                            isHome = favGame.home_team_id == userFavTeamId
+                            teamScore = favGame.home_score if isHome else favGame.away_score
+                            oppScore = favGame.away_score if isHome else favGame.home_score
+                            result = "W" if wonThisWeek else ("L" if wonThisWeek is False else "T")
+                            gameScore = f"{result} {teamScore}-{oppScore}"
+
+                        # Playoff status (top 6 in league)
+                        inPlayoffs = False
+                        if sm and hasattr(sm, 'leagueManager') and sm.leagueManager:
+                            teamLeague = sm.leagueManager.getTeamLeague(favTeam)
+                            if teamLeague:
+                                standings = teamLeague.getStandings()
+                                for idx, sEntry in enumerate(standings):
+                                    if sEntry['team'] == favTeam:
+                                        inPlayoffs = idx < 6
+                                        break
+
+                        favoriteTeamData = {
+                            "teamId": userFavTeamId,
+                            "teamName": getattr(favTeam, 'name', ''),
+                            "teamAbbr": getattr(favTeam, 'abbr', ''),
+                            "teamColor": getattr(favTeam, 'color', '#666'),
+                            "elo": round(getattr(favTeam, 'elo', 1500.0), 1),
+                            "record": f"{wins}-{losses}",
+                            "streak": streak,
+                            "inPlayoffs": inPlayoffs,
+                            "wonThisWeek": wonThisWeek,
+                            "gameScore": gameScore,
+                        }
+
+                # ── Player game stats for display ──
+                playerGameStats = {}
+                for rp in roster.players:
+                    rawStats = allPlayerRawStats.get(rp.player_id)
+                    if rawStats:
+                        playerGameStats[rp.player_id] = rawStats
+
                 # ── Card bonuses ──
                 userWeekBonuses = weekCardBonusMap.get(userId, {})
                 storedSeasonCardBonus = sum(
@@ -354,19 +545,29 @@ class FantasyTracker:
                     weekRawFP = 0.0
                     rosterTotalTds = 0
                     rosterPlayerRatings = {}
+                    hasStatsAtLock = bool(playerStatsAtLock)
 
                     if gamesActive:
                         # Build from live game data
                         for rp in roster.players:
                             pObj = self._playerManager.getPlayerById(rp.player_id)
                             if pObj:
-                                stats = _liveStatsToDbFormat(pObj.gameStatsDict)
+                                pTeamId = getattr(pObj.team, 'id', 0) if hasattr(pObj, 'team') else 0
+                                stats = _liveStatsToDbFormat(pObj.gameStatsDict, teamId=pTeamId)
+                                # Use post-lock delta stats when available
+                                lockStats = playerStatsAtLock.get(rp.player_id)
+                                if lockStats:
+                                    lockConverted = _liveStatsToDbFormat(lockStats, teamId=pTeamId)
+                                    stats = _subtractLockStats(stats, lockConverted)
+                                # Use post-lock FP (adjusted for lock offset)
+                                offset = playerLockOffsets.get(rp.player_id, 0)
                                 effectiveFP = perPlayerWeekFP.get(
                                     rp.player_id, {}
                                 ).get(currentWeek, 0)
-                                stats["fantasyPoints"] = effectiveFP
+                                adjustedFP = max(0, effectiveFP - offset)
+                                stats["fantasyPoints"] = adjustedFP
                                 cardCalcStats[rp.player_id] = stats
-                                weekRawFP += effectiveFP
+                                weekRawFP += adjustedFP
                                 rosterTotalTds += _countPlayerTds(stats)
                                 rosterPlayerRatings[rp.player_id] = (
                                     getattr(pObj, 'playerRating', 60) or 60
@@ -378,6 +579,16 @@ class FantasyTracker:
                                 rp.player_id, {}
                             )
                             if pStats:
+                                # Use post-lock delta stats when available
+                                lockStats = playerStatsAtLock.get(rp.player_id)
+                                if lockStats:
+                                    lockConverted = _liveStatsToDbFormat(lockStats)
+                                    pStats = _subtractLockStats(pStats, lockConverted)
+                                # Adjust FP for lock offset
+                                offset = playerLockOffsets.get(rp.player_id, 0)
+                                pStats["fantasyPoints"] = max(
+                                    0, pStats.get("fantasyPoints", 0) - offset
+                                )
                                 cardCalcStats[rp.player_id] = pStats
                                 weekRawFP += pStats.get("fantasyPoints", 0)
                                 rosterTotalTds += _countPlayerTds(pStats)
@@ -385,7 +596,7 @@ class FantasyTracker:
                                 playerRatingsMap.get(rp.player_id, 60)
                             )
 
-                    # Add card player stats if not already in cardCalcStats
+                    # Add depicted player stats if not already in cardCalcStats
                     for eq in userEquipped:
                         cardPlayerId = eq.user_card.card_template.player_id
                         if cardPlayerId not in cardCalcStats:
@@ -419,10 +630,12 @@ class FantasyTracker:
                     for xm in calcResult.xMultFactors:
                         xMultProduct *= xm
                     weekCardBonus = round(baseFP * addMultPool * xMultProduct - weekRawFP, 2)
-                    # Subtract pre-lock card bonus (if cards were locked mid-game)
-                    bonusAtLock = getattr(userEquipped[0], 'card_bonus_at_lock', 0) or 0
-                    if bonusAtLock > 0:
-                        weekCardBonus = round(weekCardBonus - bonusAtLock, 2)
+                    # Fall back to card_bonus_at_lock offset only when
+                    # stats_at_lock isn't available (legacy data)
+                    if not hasStatsAtLock:
+                        bonusAtLock = getattr(userEquipped[0], 'card_bonus_at_lock', 0) or 0
+                        if bonusAtLock > 0:
+                            weekCardBonus = round(weekCardBonus - bonusAtLock, 2)
                     if weekCardBonus < 0:
                         weekCardBonus = 0.0
                     cardBreakdowns = [
@@ -469,6 +682,8 @@ class FantasyTracker:
                     "players": rosterPlayers,
                     "cardBreakdowns": cardBreakdowns,
                     "equationSummary": eqSummary,
+                    "favoriteTeamData": favoriteTeamData,
+                    "playerGameStats": playerGameStats,
                 })
 
             # Sort and rank by season total
@@ -530,7 +745,6 @@ class FantasyTracker:
     ) -> Dict[int, Dict[int, dict]]:
         """Query WeeklyCardBonus → {userId: {week: {fp, breakdowns}}} for the season."""
         from database.models import WeeklyCardBonus
-        import json as _json
 
         rows = session.query(WeeklyCardBonus).filter_by(season=seasonNum).all()
         result = {}
@@ -584,6 +798,7 @@ class FantasyTracker:
                 gps.passing_stats, gps.rushing_stats,
                 gps.receiving_stats, gps.kicking_stats,
                 fpByPlayer.get(gps.player_id, 0),
+                teamId=gps.team_id,
             )
         return result
 
@@ -718,6 +933,81 @@ class FantasyTracker:
         except Exception:
             pass
 
+        # Game performance ratings (per-game, same formula as season perf)
+        gamePerformanceRatings = {}
+        if pm:
+            from database.models import GamePlayerStats as GPSModel
+            weekGameIds = [g.id for g in weekGames]
+            if weekGameIds:
+                gpsList = session.query(GPSModel).filter(
+                    GPSModel.game_id.in_(weekGameIds)
+                ).all()
+                gamePerformanceRatings = pm.calculateGamePerformanceRatings(gpsList)
+
+        # Roster player team IDs (for same-team stacking effects)
+        rosterPlayerTeamIds = {}
+        for pid in rosterPlayerIds:
+            ps = weekPlayerStats.get(pid, {})
+            teamId = ps.get("teamId")
+            if teamId:
+                rosterPlayerTeamIds[pid] = teamId
+            elif pm:
+                # Fallback: get from live player object
+                player = pm.getPlayerById(pid)
+                if player and hasattr(player, 'team') and hasattr(player.team, 'id'):
+                    rosterPlayerTeamIds[pid] = player.team.id
+
+        # Favorite team game-outcome fields (score margin, comeback, walk-off)
+        favoriteTeamScoreMargin = 0
+        favoriteTeamComebackWin = False
+        favoriteTeamLargestDeficit = 0
+        favoriteTeamWalkOffWin = False
+
+        favGame = teamGameMap.get(userFavoriteTeamId) if userFavoriteTeamId else None
+        if favGame and favoriteTeamWonThisWeek:
+            favoriteTeamScoreMargin = abs(favGame.home_score - favGame.away_score)
+
+            # Scan gameFeed for comeback and walk-off detection
+            isHome = (favGame.home_team_id == userFavoriteTeamId)
+            if sm and sm.currentSeason and sm.currentSeason.activeGames:
+                for game in sm.currentSeason.activeGames:
+                    hTeam = getattr(game, 'homeTeam', None)
+                    aTeam = getattr(game, 'awayTeam', None)
+                    hId = getattr(hTeam, 'id', None)
+                    aId = getattr(aTeam, 'id', None)
+                    if userFavoriteTeamId not in (hId, aId):
+                        continue
+                    isHomeGame = (hId == userFavoriteTeamId)
+
+                    maxDeficit = 0
+                    lastGoAheadEntry = None
+                    for entry in getattr(game, 'gameFeed', []):
+                        hScore = entry.get('homeTeamScore', 0)
+                        aScore = entry.get('awayTeamScore', 0)
+                        # Positive = favorite team leading, negative = trailing
+                        diff = (hScore - aScore) if isHomeGame else (aScore - hScore)
+                        if diff < 0:
+                            maxDeficit = max(maxDeficit, abs(diff))
+
+                        # Track go-ahead plays (team goes from tied/behind to ahead)
+                        prevH = entry.get('prevHomeScore', hScore)
+                        prevA = entry.get('prevAwayScore', aScore)
+                        prevDiff = (prevH - prevA) if isHomeGame else (prevA - prevH)
+                        if diff > 0 and prevDiff <= 0:
+                            lastGoAheadEntry = entry
+
+                    if maxDeficit > 0:
+                        favoriteTeamComebackWin = True
+                        favoriteTeamLargestDeficit = maxDeficit
+
+                    # Walk-off: go-ahead in last 60 sec of Q4 or during OT
+                    if lastGoAheadEntry:
+                        q = lastGoAheadEntry.get('quarter', 0)
+                        clock = lastGoAheadEntry.get('gameClockSeconds', 999)
+                        if q == 5 or (q == 4 and clock <= 60):
+                            favoriteTeamWalkOffWin = True
+                    break  # Only process the matching game
+
         return CardCalcContext(
             rosterPlayerIds=rosterPlayerIds,
             weekPlayerStats=weekPlayerStats,
@@ -739,6 +1029,12 @@ class FantasyTracker:
             rosterUnchangedWeeks=rosterUnchangedWeeks,
             teamResults=teamResults,
             playerPerformanceRatings=playerPerfRatings,
+            gamePerformanceRatings=gamePerformanceRatings,
+            rosterPlayerTeamIds=rosterPlayerTeamIds,
+            favoriteTeamScoreMargin=favoriteTeamScoreMargin,
+            favoriteTeamComebackWin=favoriteTeamComebackWin,
+            favoriteTeamLargestDeficit=favoriteTeamLargestDeficit,
+            favoriteTeamWalkOffWin=favoriteTeamWalkOffWin,
             activeModifier=activeModifier,
             unusedSwaps=roster.swaps_available or 0,
         )
@@ -762,6 +1058,7 @@ class FantasyTracker:
             "matchMultiplied": b.matchMultiplied,
             "matchMultiplier": b.matchMultiplier,
             "preMatchFP": b.preMatchFP,
+            "preMatchFloobits": b.preMatchFloobits,
             "preMatchMult": b.preMatchMult,
             "preMatchXMult": b.preMatchXMult,
             "conditionalBonus": b.conditionalBonus,

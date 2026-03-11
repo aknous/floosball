@@ -58,6 +58,7 @@ class Season:
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
         self.activeGames = None
+        self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []
         self.playoffBracket: List[Dict[str, Any]] = []
         self.isComplete = False
@@ -123,8 +124,8 @@ class SeasonManager:
         self.timingManager.setMode(mode)
         logger.info(f"Season timing mode set to {mode.value}")
     
-    def setTimingModeFromString(self, mode_str: str) -> None:
-        """Set timing mode from string (scheduled/sequential/turbo/fast)"""
+    def setTimingModeFromString(self, mode_str: str, scheduleGap: int = 60) -> None:
+        """Set timing mode from string (scheduled/sequential/turbo/fast/test-scheduled)"""
         mode_str = mode_str.lower()
         if mode_str == 'scheduled':
             self.setTimingMode(TimingMode.SCHEDULED)
@@ -136,6 +137,9 @@ class SeasonManager:
             self.setTimingMode(TimingMode.FAST)
         elif mode_str == 'demo':
             self.setTimingMode(TimingMode.DEMO)
+        elif mode_str == 'test-scheduled':
+            self.timingManager.scheduleGap = scheduleGap
+            self.setTimingMode(TimingMode.TEST_SCHEDULED)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -235,6 +239,11 @@ class SeasonManager:
             playerManager = self.serviceContainer.getService('player_manager')
             if playerManager:
                 playerManager.loadCurrentSeasonStats(self.currentSeason.seasonNumber)
+            # Clean up orphaned game data from any interrupted week
+            # (the next week will replay from scratch, generating new records)
+            self._cleanupOrphanedWeekGames(
+                self.currentSeason.seasonNumber, resumeFromWeek + 1
+            )
 
         for week in self.currentSeason.schedule:
             roundIndex = self.currentSeason.schedule.index(week)  # 0-indexed
@@ -283,6 +292,7 @@ class SeasonManager:
             weekStartTime = week['startTime']
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
             self.currentSeason.activeGames = week['games']
+            self.currentSeason.completedWeekGames = None  # Clear previous week's finished games
 
             # Wait for week setup time
             await self.timingManager.waitForWeekSetup(weekSetupTime)
@@ -324,6 +334,11 @@ class SeasonManager:
                 await leaderboardTask
             except asyncio.CancelledError:
                 pass
+
+            # Clear active games so roster swaps are unlocked between weeks.
+            # Keep a reference so the API can still serve them until next week.
+            self.currentSeason.completedWeekGames = self.currentSeason.activeGames
+            self.currentSeason.activeGames = None
 
             # Notify about week completion (for state saving)
             await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
@@ -661,8 +676,8 @@ class SeasonManager:
         if fantasyTracker:
             fantasyTracker.bankWeek(self.currentSeason.seasonNumber, week)
 
-        # Grant roster swap every 7 weeks (regular season only)
-        if not in_playoffs and week % 7 == 0:
+        # Grant roster swap every week (regular season only)
+        if not in_playoffs:
             self._grantRosterSwaps(self.currentSeason.seasonNumber)
 
         # Process card effects for this week (persists bonuses to DB)
@@ -688,10 +703,13 @@ class SeasonManager:
 
         # Broadcast week_end event so frontend can refresh card state
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            nextStart = self.getNextGameStartTime(week)
+            nextStartIso = nextStart.isoformat() + 'Z' if nextStart else None
             weekEndEvent = SeasonEvent.weekEnd(
                 seasonNumber=self.currentSeason.seasonNumber,
                 weekNumber=week,
-                results=[]
+                results=[],
+                nextGameStartTime=nextStartIso,
             )
             broadcaster.broadcast_sync('season', weekEndEvent)
 
@@ -1141,6 +1159,41 @@ class SeasonManager:
         dbRow.away_ints       = aDef.get('ints')
         dbRow.away_fum_rec    = aDef.get('fumRec')
 
+    def _cleanupOrphanedWeekGames(self, season: int, week: int) -> None:
+        """Remove Game + GamePlayerStats records left behind by an interrupted week.
+
+        When the app crashes mid-week, completed games were already saved to the DB.
+        On resume the week replays from scratch, creating new records.  The old
+        records must be deleted first so queries (e.g. _getFullWeekPlayerStats)
+        don't return duplicate/stale data.
+        """
+        if not DB_IMPORTS_AVAILABLE or not USE_DATABASE:
+            return
+        try:
+            from database.connection import get_session as _getSession
+            session = _getSession()
+            orphanedGames = session.query(DBGame).filter_by(
+                season=season, week=week
+            ).all()
+            if not orphanedGames:
+                session.close()
+                return
+            gameIds = [g.id for g in orphanedGames]
+            # Delete player stats first (FK dependency)
+            deleted = session.query(DBGamePlayerStats).filter(
+                DBGamePlayerStats.game_id.in_(gameIds)
+            ).delete(synchronize_session='fetch')
+            for g in orphanedGames:
+                session.delete(g)
+            session.commit()
+            session.close()
+            logger.info(
+                f"Cleaned up {len(orphanedGames)} orphaned games and "
+                f"{deleted} player stat records for S{season}W{week}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to clean up orphaned week games: {e}")
+
     def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
         """Save a completed game to the database"""
         try:
@@ -1519,6 +1572,15 @@ class SeasonManager:
         return True
 
     def getWeekStartTime(self, now:datetime.datetime, week:int):
+        from managers.timingManager import TimingMode
+
+        # TEST_SCHEDULED: compressed timeline — each round starts gap seconds apart
+        if self.timingManager.mode == TimingMode.TEST_SCHEDULED:
+            if not hasattr(self, '_testScheduleAnchor'):
+                self._testScheduleAnchor = datetime.datetime.utcnow()
+            gap = self.timingManager.scheduleGap
+            return self._testScheduleAnchor + datetime.timedelta(seconds=week * gap)
+
         dateNow = datetime.datetime.now()
         dateNowUtc = datetime.datetime.utcnow()
         if dateNow.day == dateNowUtc.day:
@@ -1555,7 +1617,33 @@ class SeasonManager:
             targetDate = (seasonStart + datetime.timedelta(days=dayNumber)).date()
 
         return datetime.datetime(targetDate.year, targetDate.month, targetDate.day, adjustedHour)
-    
+
+    def getNextGameStartTime(self, currentWeek: int) -> 'datetime.datetime | None':
+        """Return the start time of the next week's games, or None if no next week.
+
+        For SCHEDULED / TEST_SCHEDULED modes the time comes from the schedule.
+        For SEQUENTIAL / TURBO modes we estimate from delay config.
+        For FAST mode we return None (no meaningful wait).
+        """
+        from managers.timingManager import TimingMode
+
+        if self.timingManager.mode == TimingMode.FAST:
+            return None
+
+        schedule = self.currentSeason.schedule if self.currentSeason else []
+        nextIndex = currentWeek  # schedule is 0-indexed, currentWeek is 1-indexed
+
+        if self.timingManager._isScheduledMode:
+            # Look up from schedule directly
+            if nextIndex < len(schedule):
+                return schedule[nextIndex]['startTime']
+            return None
+
+        # SEQUENTIAL / TURBO: estimate based on delay config
+        delays = self.timingManager.delays
+        gap = delays.get('week_end_wait', 120) + delays.get('week_start_wait', 30) + delays.get('game_announcement', 30)
+        return datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
+
     def _generateSchedule(self) -> List[List[tuple]]:
         """Generate full season schedule using original algorithm"""
         import random
@@ -1896,6 +1984,7 @@ class SeasonManager:
                 await self.timingManager.waitForChampionship()
 
             self.currentSeason.activeGames = playoffGamesList
+            self.currentSeason.completedWeekGames = None  # Clear previous round's finished games
             self.currentSeason.currentWeekText = self.currentWeekText
             self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
 
@@ -1940,6 +2029,11 @@ class SeasonManager:
                 await playoffLeaderboardTask
             except asyncio.CancelledError:
                 pass
+
+            # Clear active games so roster swaps are unlocked between rounds.
+            # Keep a reference so the API can still serve them until next round.
+            self.currentSeason.completedWeekGames = self.currentSeason.activeGames
+            self.currentSeason.activeGames = None
 
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
@@ -3197,12 +3291,20 @@ class SeasonManager:
                     session.close()
                     return 0
                 currencyRepo = CurrencyRepository(session)
+                from database.repositories.notification_repository import NotificationRepository
+                notifRepo = NotificationRepository(session)
                 count = 0
                 for user in users:
                     currencyRepo.addFunds(
                         user.id, amount, transactionType,
                         description=description,
                         season=season, week=week,
+                    )
+                    notifRepo.create(
+                        user.id, 'favorite_team',
+                        'Team Bonus',
+                        f'{description}! +{amount} Floobits',
+                        data={'teamId': teamId, 'amount': amount},
                     )
                     count += 1
                 session.commit()
@@ -3251,6 +3353,8 @@ class SeasonManager:
             session = get_session()
             try:
                 currencyRepo = CurrencyRepository(session)
+                from database.repositories.notification_repository import NotificationRepository
+                notifRepo = NotificationRepository(session)
                 awarded = 0
                 for i, entry in enumerate(weekRanked):
                     userId = entry['userId']
@@ -3271,12 +3375,30 @@ class SeasonManager:
                         description=f'Week {week} leaderboard #{weekRank}',
                         season=season, week=week,
                     )
+                    notifRepo.create(
+                        userId, 'leaderboard_weekly',
+                        f'Week {week} Leaderboard',
+                        f'You placed #{weekRank} on the Week {week} leaderboard! +{prize} Floobits',
+                        data={'season': season, 'week': week, 'rank': weekRank, 'prize': prize},
+                    )
                     awarded += 1
                     logger.info(f"Weekly leaderboard prize: user {userId} #{weekRank} = {prize} Floobits")
 
                 session.commit()
                 if awarded:
                     logger.info(f"Awarded weekly leaderboard prizes to {awarded} users for week {week}")
+
+                # Email top-3 finishers
+                try:
+                    from managers.emailManager import sendPrizeEmails
+                    sendPrizeEmails(
+                        session, weekRanked,
+                        WEEKLY_LEADERBOARD_PRIZES,
+                        f'Week {week} leaderboard',
+                        topN=3,
+                    )
+                except Exception as emailErr:
+                    logger.warning(f"Error sending weekly prize emails: {emailErr}")
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error awarding weekly leaderboard prizes: {e}")
@@ -3318,6 +3440,8 @@ class SeasonManager:
             session = get_session()
             try:
                 currencyRepo = CurrencyRepository(session)
+                from database.repositories.notification_repository import NotificationRepository
+                notifRepo = NotificationRepository(session)
 
                 for i, entry in enumerate(entries):
                     userId = entry['userId']
@@ -3335,6 +3459,12 @@ class SeasonManager:
                             description=f'Season {completedSeason} leaderboard #{seasonRank}',
                             season=completedSeason,
                         )
+                        notifRepo.create(
+                            userId, 'leaderboard_season',
+                            f'Season {completedSeason} Leaderboard',
+                            f'You placed #{seasonRank} on the Season {completedSeason} leaderboard! +{prize} Floobits',
+                            data={'season': completedSeason, 'rank': seasonRank, 'prize': prize},
+                        )
                         logger.info(
                             f"Season leaderboard prize: user {userId} #{seasonRank} = {prize} Floobits"
                         )
@@ -3347,6 +3477,12 @@ class SeasonManager:
                             description=f'Season {completedSeason} FP payout ({seasonTotal:.0f} FP)',
                             season=completedSeason,
                         )
+                        notifRepo.create(
+                            userId, 'season_fp_payout',
+                            f'Season {completedSeason} FP Payout',
+                            f'Season {completedSeason} complete! Your {seasonTotal:.0f} FP earned you {fpPayout} Floobits',
+                            data={'season': completedSeason, 'fp': seasonTotal, 'payout': fpPayout},
+                        )
                         logger.info(
                             f"Season FP payout: user {userId} = {fpPayout} Floobits "
                             f"({seasonTotal:.0f} FP / {SEASON_FP_PAYOUT_DIVISOR})"
@@ -3354,6 +3490,18 @@ class SeasonManager:
 
                 session.commit()
                 logger.info(f"Season-end prizes awarded for season {completedSeason}")
+
+                # Email top-3 season finishers
+                try:
+                    from managers.emailManager import sendPrizeEmails
+                    sendPrizeEmails(
+                        session, entries,
+                        SEASON_LEADERBOARD_PRIZES,
+                        f'Season {completedSeason} leaderboard',
+                        topN=3,
+                    )
+                except Exception as emailErr:
+                    logger.warning(f"Error sending season prize emails: {emailErr}")
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error awarding season-end prizes: {e}")

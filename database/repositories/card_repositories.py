@@ -135,6 +135,15 @@ class EquippedCardRepository:
             .all()
         )
 
+    def getEquippedCardIds(self, userId: int) -> set:
+        """Get the set of user_card_ids that are currently equipped (any week)."""
+        rows = (
+            self.session.query(EquippedCard.user_card_id)
+            .filter_by(user_id=userId)
+            .all()
+        )
+        return {r[0] for r in rows}
+
     def save(self, equipped: EquippedCard) -> EquippedCard:
         self.session.add(equipped)
         self.session.flush()

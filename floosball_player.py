@@ -541,7 +541,7 @@ class PlayerAttributes:
         # Intangibles: use mentalSeed as center with moderate variance
         # This allows independent control of physical vs mental abilities
         stdDev = 7
-        numSkills = 5
+        numSkills = 6
         intSkillValList = np.random.normal(mentalSeed, stdDev, numSkills)
         intSkillValList = np.clip(intSkillValList, 60, 100)
         intSkillValList: list = intSkillValList.tolist()
@@ -551,6 +551,7 @@ class PlayerAttributes:
         self.creativity = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
         self.discipline = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
         self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        self.resilience = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
 
     def changeStat(self, value):
         if value >= 95:

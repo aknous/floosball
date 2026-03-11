@@ -18,17 +18,21 @@ class TimingMode(Enum):
     TURBO = "turbo"           # No in-game delays, but pauses between games/weeks/seasons
     FAST = "fast"             # No delays, immediate execution
     DEMO = "demo"             # Like FAST but with visible offseason pick delays for UI testing
+    TEST_SCHEDULED = "test-scheduled"  # Compressed SCHEDULED: real polling but minutes apart instead of hours
 
 class TimingManager:
     """Manages timing and delays for different simulation modes"""
     
-    def __init__(self, mode: TimingMode = TimingMode.FAST):
+    def __init__(self, mode: TimingMode = TimingMode.FAST, scheduleGap: int = 60):
         self.mode = mode
+        self.scheduleGap = scheduleGap  # seconds between rounds in TEST_SCHEDULED mode
         self.delays = self._getDefaultDelays()
         if mode == TimingMode.TURBO:
             self.delays.update(self._getTurboDelays())
         elif mode == TimingMode.DEMO:
             self.delays.update(self._getDemoDelays())
+        elif mode == TimingMode.TEST_SCHEDULED:
+            self.delays.update(self._getTestScheduledDelays())
 
         logger.info(f"TimingManager initialized in {mode.value} mode")
     
@@ -84,6 +88,22 @@ class TimingManager:
             'championship': 10.0,
         }
 
+    def _getTestScheduledDelays(self) -> Dict[str, float]:
+        """Test-scheduled overrides: compressed real-time scheduling with fast polling"""
+        return {
+            'daily_check': 2.0,        # Poll every 2s instead of 30s
+            'week_setup': 5.0,
+            'week_start_wait': 5.0,
+            'week_end_wait': 5.0,
+            'between_games': 1.0,
+            'game_announcement': 5.0,
+            'offseason': 5.0,
+            'offseason_pick': 0.1,
+            'season_transition': 10.0,
+            'playoff_round': 5.0,
+            'championship': 5.0,
+        }
+
     def setMode(self, mode: TimingMode) -> None:
         """Change timing mode"""
         self.mode = mode
@@ -91,6 +111,8 @@ class TimingManager:
             self.delays.update(self._getTurboDelays())
         elif mode == TimingMode.DEMO:
             self.delays.update(self._getDemoDelays())
+        elif mode == TimingMode.TEST_SCHEDULED:
+            self.delays.update(self._getTestScheduledDelays())
         logger.info(f"Timing mode changed to {mode.value}")
     
     def setCustomDelays(self, delays: Dict[str, float]) -> None:
@@ -98,9 +120,13 @@ class TimingManager:
         self.delays.update(delays)
         logger.info(f"Updated timing delays: {delays}")
     
+    @property
+    def _isScheduledMode(self) -> bool:
+        return self.mode in (TimingMode.SCHEDULED, TimingMode.TEST_SCHEDULED)
+
     async def waitForWeekStart(self, weekStartTime: datetime.datetime) -> None:
         """Wait until week should start based on timing mode"""
-        if self.mode == TimingMode.SCHEDULED:
+        if self._isScheduledMode:
             # Wait for actual scheduled time
             now = datetime.datetime.utcnow()
             timeToStart = weekStartTime - now
@@ -121,7 +147,7 @@ class TimingManager:
 
     async def waitForWeekSetup(self, weekSetupTime: datetime.datetime) -> None:
         """Wait for week setup time"""
-        if self.mode == TimingMode.SCHEDULED:
+        if self._isScheduledMode:
             # Wait for setup time (usually 10 minutes before start)
             now = datetime.datetime.utcnow()
             if now < weekSetupTime:
@@ -137,7 +163,7 @@ class TimingManager:
 
     async def waitForGamesStart(self, weekStartTime: datetime.datetime) -> None:
         """Wait until games should start"""
-        if self.mode == TimingMode.SCHEDULED:
+        if self._isScheduledMode:
             # Wait for exact start time
             now = datetime.datetime.utcnow()
             if now < weekStartTime:
@@ -156,7 +182,7 @@ class TimingManager:
         if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: post-week delay {self.delays['week_end_wait']}s")
             await asyncio.sleep(self.delays['week_end_wait'])
-        elif self.mode == TimingMode.SCHEDULED:
+        elif self._isScheduledMode:
             # Shorter delay for scheduled mode since timing is handled by schedule
             await asyncio.sleep(self.delays['week_end_wait'] / 4)
 
@@ -171,7 +197,7 @@ class TimingManager:
         if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: offseason delay {self.delays['offseason']}s")
             await asyncio.sleep(self.delays['offseason'])
-        elif self.mode == TimingMode.SCHEDULED:
+        elif self._isScheduledMode:
             # Shorter delay for scheduled mode
             await asyncio.sleep(self.delays['offseason'] / 2)
 
@@ -180,7 +206,7 @@ class TimingManager:
         if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: season transition delay {self.delays['season_transition']}s")
             await asyncio.sleep(self.delays['season_transition'])
-        elif self.mode == TimingMode.SCHEDULED:
+        elif self._isScheduledMode:
             await asyncio.sleep(self.delays['season_transition'] / 4)
 
     async def waitForPlayoffRound(self) -> None:
@@ -197,7 +223,7 @@ class TimingManager:
     
     def shouldWaitForTime(self) -> bool:
         """Check if current mode uses real-time scheduling"""
-        return self.mode == TimingMode.SCHEDULED
+        return self._isScheduledMode
     
     def shouldUseDelays(self) -> bool:
         """Check if current mode uses any delays"""
@@ -280,10 +306,11 @@ class TimingManager:
                 mode = tm
                 break
         
-        manager = cls(mode)
-        
+        scheduleGap = int(config.get('scheduleGap', 60))
+        manager = cls(mode, scheduleGap=scheduleGap)
+
         # Set custom delays if provided
         if 'timingDelays' in config:
             manager.setCustomDelays(config['timingDelays'])
-        
+
         return manager

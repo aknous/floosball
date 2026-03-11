@@ -561,6 +561,8 @@ class User(Base):
     pending_favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     favorite_team_locked_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     auto_fill_roster: Mapped[bool] = mapped_column(Boolean, default=True)
+    has_completed_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -618,6 +620,7 @@ class FantasyRosterPlayer(Base):
     player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
     slot: Mapped[str] = mapped_column(String(10), nullable=False)  # QB, RB, WR1, WR2, TE, K
     points_at_lock: Mapped[float] = mapped_column(Float, default=0.0)
+    stats_at_lock: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON: player gameStatsDict at lock time
 
     # Relationships
     roster: Mapped["FantasyRoster"] = relationship("FantasyRoster", back_populates="players")
@@ -669,6 +672,35 @@ class UnusedName(Base):
 
     def __repr__(self):
         return f"<UnusedName(id={self.id}, name='{self.name}')>"
+
+
+class BetaAllowlist(Base):
+    """Beta allowlist - emails permitted to access the app during beta."""
+    __tablename__ = "beta_allowlist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<BetaAllowlist(email='{self.email}')>"
+
+
+class UserNotification(Base):
+    """In-app notifications for users (leaderboard prizes, team bonuses, etc.)."""
+    __tablename__ = "user_notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<UserNotification(id={self.id}, user_id={self.user_id}, type='{self.type}')>"
 
 
 class SimulationState(Base):

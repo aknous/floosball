@@ -277,15 +277,19 @@ class SeasonEvent:
         return event
     
     @staticmethod
-    def weekEnd(seasonNumber: int, weekNumber: int, results: List[Dict]) -> Dict[str, Any]:
+    def weekEnd(seasonNumber: int, weekNumber: int, results: List[Dict],
+                nextGameStartTime: str = None) -> Dict[str, Any]:
         """Create a week end event"""
-        return {
+        event = {
             'event': EventType.WEEK_END.value,
             'seasonNumber': seasonNumber,
             'weekNumber': weekNumber,
             'results': results,
             'message': f"Week {weekNumber} complete"
         }
+        if nextGameStartTime:
+            event['nextGameStartTime'] = nextGameStartTime
+        return event
 
     @staticmethod
     def dayComplete(dayNumber: int) -> Dict[str, Any]:

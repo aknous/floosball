@@ -97,6 +97,35 @@ class AvatarGenerator:
 
         return pngBytes
 
+    def generateLeagueLogo(self, size: int = 256) -> str:
+        """Generate the Floosball league logo as SVG — blue circle with tilted football."""
+        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 32 32">
+  <circle cx="16" cy="16" r="16" fill="#3b82f6"/>
+  <g transform="rotate(-45 16 16)">
+    <ellipse cx="16" cy="16" rx="10" ry="6.5" fill="#e2e8f0"/>
+    <line x1="6" y1="16" x2="26" y2="16" stroke="#3b82f6" stroke-width="1.2"/>
+    <line x1="13" y1="13.2" x2="13" y2="18.8" stroke="#3b82f6" stroke-width="1"/>
+    <line x1="16" y1="12.5" x2="16" y2="19.5" stroke="#3b82f6" stroke-width="1"/>
+    <line x1="19" y1="13.2" x2="19" y2="18.8" stroke="#3b82f6" stroke-width="1"/>
+  </g>
+</svg>'''
+
+    def getLeagueLogoPng(self, size: int = 256) -> bytes:
+        """Generate or return cached PNG of the league logo."""
+        pngPath = os.path.join(self.cacheDir, f"league_logo_{size}.png")
+        if os.path.exists(pngPath):
+            with open(pngPath, 'rb') as f:
+                return f.read()
+        svg = self.generateLeagueLogo(size)
+        import cairosvg
+        pngBytes = cairosvg.svg2png(bytestring=svg.encode('utf-8'), output_width=size, output_height=size)
+        try:
+            with open(pngPath, 'wb') as f:
+                f.write(pngBytes)
+        except Exception as e:
+            logger.error(f"Failed to save league logo PNG: {e}")
+        return pngBytes
+
     def clearCache(self):
         """Clear both memory and disk cache"""
         # Clear memory cache

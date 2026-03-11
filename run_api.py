@@ -15,9 +15,11 @@ Timing Modes:
     --sequential, --timing=sequential   Same as slow mode
     --scheduled, --timing=scheduled     Real-time scheduling
     --demo, --timing=demo           Demo mode - fast games, visible offseason pick delays (UI testing)
+    --test-scheduled                Compressed scheduled mode - real polling, minutes apart (no WS broadcast)
 
 Options:
     --fresh                         Clear database and start fresh
+    --schedule-gap=N                Seconds between rounds in test-scheduled mode (default 60)
 
 Examples:
     python run_api.py --fast
@@ -25,6 +27,8 @@ Examples:
     python run_api.py --slow
     python run_api.py --fresh --fast
     python run_api.py --demo --fresh
+    python run_api.py --fresh --test-scheduled
+    python run_api.py --fresh --test-scheduled --schedule-gap=10
 """
 
 import sys
@@ -46,9 +50,10 @@ def parse_args():
     """Parse command line arguments"""
     args = {
         'timing_mode': TimingMode.FAST,
-        'fresh_start': False
+        'fresh_start': False,
+        'schedule_gap': 60,
     }
-    
+
     for arg in sys.argv[1:]:
         if arg.startswith('--timing='):
             mode_str = arg.split('=')[1].lower()
@@ -62,6 +67,8 @@ def parse_args():
                 args['timing_mode'] = TimingMode.SCHEDULED
             elif mode_str == 'demo':
                 args['timing_mode'] = TimingMode.DEMO
+            elif mode_str == 'test-scheduled':
+                args['timing_mode'] = TimingMode.TEST_SCHEDULED
         elif arg in ['--timing-fast', '--fast']:
             args['timing_mode'] = TimingMode.FAST
         elif arg in ['--timing-turbo', '--turbo']:
@@ -72,13 +79,17 @@ def parse_args():
             args['timing_mode'] = TimingMode.SCHEDULED
         elif arg in ['--timing-demo', '--demo']:
             args['timing_mode'] = TimingMode.DEMO
+        elif arg in ['--test-scheduled']:
+            args['timing_mode'] = TimingMode.TEST_SCHEDULED
         elif arg == '--fresh':
             args['fresh_start'] = True
-    
+        elif arg.startswith('--schedule-gap='):
+            args['schedule_gap'] = int(arg.split('=')[1])
+
     return args
 
 
-async def initialize_application(timing_mode: TimingMode, fresh_start: bool):
+async def initialize_application(timing_mode: TimingMode, fresh_start: bool, schedule_gap: int = 60):
     """Initialize the Floosball application"""
     logger.info("Initializing Floosball Application...")
     
@@ -97,20 +108,24 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool):
     config = get_config()
     
     # Add timing configuration to config
-    config['timingMode'] = timing_mode.name.lower()
-    
+    config['timingMode'] = timing_mode.value
+    config['scheduleGap'] = schedule_gap
+
     # Create application (timing will be set via TimingManager in container)
     floosball_app = FloosballApplication(service_container)
-    
+
     # Initialize league system (this handles fresh start via force_fresh)
     await floosball_app.initializeLeague(config, force_fresh=fresh_start)
-    
+
     # Set reference in API
     set_floosball_app(floosball_app)
-    
-    # Enable broadcasting
-    broadcaster.enable(ws_manager)
-    logger.info("Game broadcasting enabled")
+
+    # Enable broadcasting (skip in test-scheduled mode)
+    if timing_mode != TimingMode.TEST_SCHEDULED:
+        broadcaster.enable(ws_manager)
+        logger.info("Game broadcasting enabled")
+    else:
+        logger.info("Test-scheduled mode: broadcasting disabled")
     
     # Start the application in background
     asyncio.create_task(floosball_app.runSimulation())
@@ -133,7 +148,8 @@ async def run_server():
     # Initialize application
     floosball_app = await initialize_application(
         args['timing_mode'],
-        args['fresh_start']
+        args['fresh_start'],
+        args['schedule_gap']
     )
     
     # Configure uvicorn

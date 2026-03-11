@@ -58,6 +58,31 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 CLUTCH_PRESSURE_THRESHOLD = 50   # Min gamePressure (0-100) for clutch/choke consideration
 CLUTCH_MODIFIER_THRESHOLD = 2.0  # Min abs(keyPressureMod) for clutch/choke indicator
 
+# Momentum system
+MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
+MOMENTUM_BLOWOUT_DECAY_RATE = 0.08     # Accelerated decay in blowouts (22+ diff)
+MOMENTUM_MIDGAP_DECAY_RATE = 0.05      # Moderate decay (15-21 diff)
+MOMENTUM_CASCADE_STEP = 0.15           # Multiplier increase per consecutive streak event
+MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
+MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
+MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
+MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
+MOMENTUM_NEUTRAL_ZONE = 10             # Abs momentum below this = no gameplay effect
+MOMENTUM_SHIFT_THRESHOLD = 10          # Min abs delta for momentum shift highlight
+MOMENTUM_CROSS_ZERO_THRESHOLD = 6      # Min abs delta when crossing zero for highlight
+MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it
+
+# Momentum event deltas (raw, before dampening)
+MOMENTUM_TD = 20
+MOMENTUM_TURNOVER = 18
+MOMENTUM_SAFETY = 18
+MOMENTUM_TURNOVER_ON_DOWNS = 12
+MOMENTUM_FG_MISSED = 10
+MOMENTUM_FG_MADE = 8
+MOMENTUM_SACK = 6
+MOMENTUM_BIG_PLAY_BONUS = 5
+MOMENTUM_PUNT = 4
+
 # Play selection
 RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage matchup weight delta
 
