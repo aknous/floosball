@@ -592,6 +592,7 @@ class FantasyRoster(Base):
     total_points: Mapped[float] = mapped_column(Float, default=0.0)
     card_bonus_points: Mapped[float] = mapped_column(Float, default=0.0)
     swaps_available: Mapped[int] = mapped_column(Integer, default=0)
+    purchased_swaps: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -975,6 +976,48 @@ class FeaturedShopCard(Base):
     user: Mapped["User"] = relationship("User")
     card_template: Mapped["CardTemplate"] = relationship("CardTemplate")
 
+    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    generated_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     __table_args__ = (
         Index("idx_featured_shop_user_season", "user_id", "season"),
+    )
+
+
+class ShopPurchase(Base):
+    """Tracks power-up purchases from the shop."""
+    __tablename__ = "shop_purchases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    item_slug: Mapped[str] = mapped_column(String(30), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_shop_purchase_user_season", "user_id", "season"),
+        Index("idx_shop_purchase_item_week", "item_slug", "user_id", "season", "week"),
+    )
+
+
+class UserModifierOverride(Base):
+    """Per-user weekly modifier override (from Modifier Nullifier power-up)."""
+    __tablename__ = "user_modifier_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    override_modifier: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "week", name="uq_mod_override_user_week"),
+        Index("idx_mod_override_user_season_week", "user_id", "season", "week"),
     )

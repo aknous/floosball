@@ -68,8 +68,8 @@ MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
 MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
 MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
 MOMENTUM_NEUTRAL_ZONE = 10             # Abs momentum below this = no gameplay effect
-MOMENTUM_SHIFT_THRESHOLD = 10          # Min abs delta for momentum shift highlight
-MOMENTUM_CROSS_ZERO_THRESHOLD = 6      # Min abs delta when crossing zero for highlight
+MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
+MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight
 MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it
 
 # Momentum event deltas (raw, before dampening)
@@ -105,3 +105,50 @@ SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25
 
 SEASON_FP_PAYOUT_DIVISOR = 25  # 1 Floobit per N FP
+
+# Power-Up Shop
+POWERUP_EXTRA_SWAP = {
+    "slug": "extra_swap",
+    "displayName": "Extra Swap Token",
+    "description": "Grants +1 roster swap. Use it to make an additional player change.",
+    "price": 25,
+}
+POWERUP_MODIFIER_NULLIFIER = {
+    "slug": "modifier_nullifier",
+    "displayName": "Modifier Nullifier",
+    "description": "Override this week's modifier to Steady (no effect) for your cards only.",
+    "price": 40,
+}
+POWERUP_TEMP_FLEX = {
+    "slug": "temp_flex",
+    "displayName": "Temporary Flex Slot",
+    "description": "Adds a FLEX roster slot (any position) for 4 weeks.",
+    "price": 150,
+    "durationWeeks": 4,
+    "seasonLimit": 2,
+}
+POWERUP_SHOP_REROLL = {
+    "slug": "shop_reroll",
+    "displayName": "Shop Reroll",
+    "description": "Regenerate your featured shop cards with a fresh selection.",
+    "price": 20,
+}
+POWERUP_TEMP_CARD_SLOT = {
+    "slug": "temp_card_slot",
+    "displayName": "Temporary Card Slot",
+    "description": "Adds a 6th card equipment slot for 4 weeks.",
+    "price": 150,
+    "durationWeeks": 4,
+    "seasonLimit": 2,
+}
+
+POWERUP_CATALOG = {
+    "extra_swap": POWERUP_EXTRA_SWAP,
+    "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
+    "temp_flex": POWERUP_TEMP_FLEX,
+    "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
+    "shop_reroll": POWERUP_SHOP_REROLL,
+}
+
+# Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
+SWAP_CYCLE_WEEKS = 7

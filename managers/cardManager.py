@@ -404,12 +404,27 @@ class CardManager:
                 drawnTemplates.extend(picked)
                 cardsNeeded -= len(picked)
 
-            # Elite packs also guarantee a holographic or better
-            if packType.name == 'elite':
+            # Grand packs also guarantee a holographic or better
+            if packType.name == 'grand':
                 holoPlus = self._editionsAtOrAbove('holographic')
                 holoPool = [t for t in allTemplates if t.edition in holoPlus and t not in drawnTemplates]
                 if holoPool:
                     picked = self._weightedDraw(holoPool, packWeights, count=1)
+                    drawnTemplates.extend(picked)
+                    cardsNeeded -= len(picked)
+
+            # Exquisite packs guarantee a second prismatic+ and a gold+
+            if packType.name == 'exquisite':
+                prismaticPlus = self._editionsAtOrAbove('prismatic')
+                prismPool = [t for t in allTemplates if t.edition in prismaticPlus and t not in drawnTemplates]
+                if prismPool:
+                    picked = self._weightedDraw(prismPool, packWeights, count=1)
+                    drawnTemplates.extend(picked)
+                    cardsNeeded -= len(picked)
+                goldPlus = self._editionsAtOrAbove('gold')
+                goldPool = [t for t in allTemplates if t.edition in goldPlus and t not in drawnTemplates]
+                if goldPool:
+                    picked = self._weightedDraw(goldPool, packWeights, count=1)
                     drawnTemplates.extend(picked)
                     cardsNeeded -= len(picked)
 
@@ -493,14 +508,19 @@ class CardManager:
         'diamond': 5.0,
     }
 
-    def getFeaturedCards(self, session, userId: int, currentSeason: int) -> List[dict]:
+    def getFeaturedCards(self, session, userId: int, currentSeason: int,
+                         currentWeek: int = 0, isScheduledMode: bool = False) -> List[dict]:
         """Return the user's persisted featured shop cards for this season.
 
+        Supports daily refresh: in scheduled mode, refreshes if generated_at is
+        before today.  In testing modes, refreshes every 7-week cycle.
         On first call per user per season, generates a random selection and
         persists it.  Subsequent calls return the same set (minus purchased).
         """
         from database.models import FeaturedShopCard
         from database.repositories.card_repositories import CardTemplateRepository
+        from datetime import datetime, date
+        from constants import SWAP_CYCLE_WEEKS
 
         # Check for existing selection
         existing = (
@@ -509,6 +529,31 @@ class CardManager:
             .all()
         )
 
+        # ── Daily refresh check ──
+        needsRefresh = False
+        if existing and currentWeek > 0:
+            sampleRow = existing[0]
+            if sampleRow.generated_at is not None:
+                if isScheduledMode:
+                    # Refresh if generated before today
+                    needsRefresh = sampleRow.generated_at.date() < date.today()
+                else:
+                    # Refresh if generated in a previous 7-week cycle
+                    currentCycle = (currentWeek - 1) // SWAP_CYCLE_WEEKS + 1
+                    genWeek = sampleRow.generated_at_week or 0
+                    genCycle = (genWeek - 1) // SWAP_CYCLE_WEEKS + 1 if genWeek > 0 else 0
+                    needsRefresh = currentCycle > genCycle
+
+        if needsRefresh:
+            # Delete unpurchased and regenerate
+            session.query(FeaturedShopCard).filter(
+                FeaturedShopCard.user_id == userId,
+                FeaturedShopCard.season == currentSeason,
+                FeaturedShopCard.purchased == False,
+            ).delete()
+            session.flush()
+            existing = []
+
         if not existing:
             # Check if user ever had featured cards this season (all purchased)
             anyThisSeason = (
@@ -516,8 +561,8 @@ class CardManager:
                 .filter_by(user_id=userId, season=currentSeason)
                 .first()
             )
-            if anyThisSeason:
-                # All purchased, nothing left
+            # Only skip generation if there are purchased rows AND no refresh happened
+            if anyThisSeason and not needsRefresh:
                 return []
 
             # Generate fresh selection for this user
@@ -548,13 +593,16 @@ class CardManager:
                 poolCopy.pop(idx)
                 weightsCopy.pop(idx)
 
-            # Persist the selection
+            # Persist the selection with generation timestamp
+            now = datetime.now()
             for t in picked:
                 featuredRow = FeaturedShopCard(
                     user_id=userId,
                     season=currentSeason,
                     card_template_id=t.id,
                     purchased=False,
+                    generated_at=now,
+                    generated_at_week=currentWeek,
                 )
                 session.add(featuredRow)
             session.flush()

@@ -79,35 +79,6 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
     }
 
 
-def _subtractLockStats(currentStats: dict, lockStats: dict) -> dict:
-    """Subtract lock-time stats from current stats to get post-lock deltas.
-
-    Used when a roster is locked mid-game so card effects only count
-    post-lock performance (TDs, yards, FP, etc.).
-    """
-    def _subDict(cur: dict, lock: dict) -> dict:
-        return {k: cur.get(k, 0) - lock.get(k, 0) for k in cur}
-
-    return {
-        "fantasyPoints": max(0, currentStats.get("fantasyPoints", 0) - lockStats.get("fantasyPoints", 0)),
-        "passing_stats": _subDict(
-            currentStats.get("passing_stats", {}),
-            lockStats.get("passing_stats", {}),
-        ),
-        "rushing_stats": _subDict(
-            currentStats.get("rushing_stats", {}),
-            lockStats.get("rushing_stats", {}),
-        ),
-        "receiving_stats": _subDict(
-            currentStats.get("receiving_stats", {}),
-            lockStats.get("receiving_stats", {}),
-        ),
-        "kicking_stats": _subDict(
-            currentStats.get("kicking_stats", {}),
-            lockStats.get("kicking_stats", {}),
-        ),
-    }
-
 
 class FantasyTracker:
     """Single source of truth for fantasy roster points.
@@ -411,7 +382,6 @@ class FantasyTracker:
                 seasonEarnedFP = 0.0
                 currentWeekPlayerFP = 0.0
                 playerLockOffsets = {}   # playerId -> FP offset for current week
-                playerStatsAtLock = {}   # playerId -> parsed gameStatsDict at lock time
                 for rp in roster.players:
                     pObj = self._playerManager.getPlayerById(rp.player_id)
                     playerWeeks = perPlayerWeekFP.get(rp.player_id, {})
@@ -429,15 +399,6 @@ class FantasyTracker:
                     adjustedWeekFP = max(0, playerWeekFP - lockWeekOffset)
                     currentWeekPlayerFP += adjustedWeekFP
                     playerLockOffsets[rp.player_id] = lockWeekOffset
-                    # Only apply stats_at_lock during the lock week (lockWeekOffset > 0
-                    # means points_at_lock falls within the current week)
-                    if rp.stats_at_lock and lockWeekOffset > 0:
-                        try:
-                            playerStatsAtLock[rp.player_id] = _json.loads(
-                                rp.stats_at_lock
-                            )
-                        except Exception:
-                            pass
 
                     rosterPlayers.append({
                         "slot": rp.slot,
@@ -545,7 +506,6 @@ class FantasyTracker:
                     weekRawFP = 0.0
                     rosterTotalTds = 0
                     rosterPlayerRatings = {}
-                    hasStatsAtLock = bool(playerStatsAtLock)
 
                     if gamesActive:
                         # Build from live game data
@@ -554,11 +514,6 @@ class FantasyTracker:
                             if pObj:
                                 pTeamId = getattr(pObj.team, 'id', 0) if hasattr(pObj, 'team') else 0
                                 stats = _liveStatsToDbFormat(pObj.gameStatsDict, teamId=pTeamId)
-                                # Use post-lock delta stats when available
-                                lockStats = playerStatsAtLock.get(rp.player_id)
-                                if lockStats:
-                                    lockConverted = _liveStatsToDbFormat(lockStats, teamId=pTeamId)
-                                    stats = _subtractLockStats(stats, lockConverted)
                                 # Use post-lock FP (adjusted for lock offset)
                                 offset = playerLockOffsets.get(rp.player_id, 0)
                                 effectiveFP = perPlayerWeekFP.get(
@@ -579,11 +534,6 @@ class FantasyTracker:
                                 rp.player_id, {}
                             )
                             if pStats:
-                                # Use post-lock delta stats when available
-                                lockStats = playerStatsAtLock.get(rp.player_id)
-                                if lockStats:
-                                    lockConverted = _liveStatsToDbFormat(lockStats)
-                                    pStats = _subtractLockStats(pStats, lockConverted)
                                 # Adjust FP for lock offset
                                 offset = playerLockOffsets.get(rp.player_id, 0)
                                 pStats["fantasyPoints"] = max(
@@ -623,19 +573,13 @@ class FantasyTracker:
                         rosterTotalTds, playerPositionMap, userId,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
-                    # New formula: (rosterFP + Σ+FP) × (1 + Σ+FPx) × xFPx₁ × xFPx₂ × ...
+                    # Formula: (rosterFP + Σ+FP) × (1 + Σ+FPx) × xFPx₁ × xFPx₂ × ...
                     baseFP = weekRawFP + calcResult.totalBonusFP
-                    addMultPool = 1 + calcResult.totalMultBonus
+                    addMultPool = 1.0 + calcResult.totalMultBonus
                     xMultProduct = 1.0
                     for xm in calcResult.xMultFactors:
                         xMultProduct *= xm
                     weekCardBonus = round(baseFP * addMultPool * xMultProduct - weekRawFP, 2)
-                    # Fall back to card_bonus_at_lock offset only when
-                    # stats_at_lock isn't available (legacy data)
-                    if not hasStatsAtLock:
-                        bonusAtLock = getattr(userEquipped[0], 'card_bonus_at_lock', 0) or 0
-                        if bonusAtLock > 0:
-                            weekCardBonus = round(weekCardBonus - bonusAtLock, 2)
                     if weekCardBonus < 0:
                         weekCardBonus = 0.0
                     cardBreakdowns = [
@@ -933,6 +877,17 @@ class FantasyTracker:
         except Exception:
             pass
 
+        # Check for user-level modifier override (Modifier Nullifier power-up)
+        try:
+            from database.models import UserModifierOverride
+            modOverride = session.query(UserModifierOverride).filter_by(
+                user_id=userId, season=season, week=currentWeek
+            ).first()
+            if modOverride:
+                activeModifier = modOverride.override_modifier
+        except Exception:
+            pass
+
         # Game performance ratings (per-game, same formula as season perf)
         gamePerformanceRatings = {}
         if pm:
@@ -944,18 +899,20 @@ class FantasyTracker:
                 ).all()
                 gamePerformanceRatings = pm.calculateGamePerformanceRatings(gpsList)
 
-        # Roster player team IDs (for same-team stacking effects)
+        # Roster player team IDs and names (for same-team stacking and stat line display)
         rosterPlayerTeamIds = {}
+        rosterPlayerNames = {}
         for pid in rosterPlayerIds:
             ps = weekPlayerStats.get(pid, {})
             teamId = ps.get("teamId")
             if teamId:
                 rosterPlayerTeamIds[pid] = teamId
-            elif pm:
-                # Fallback: get from live player object
+            if pm:
                 player = pm.getPlayerById(pid)
-                if player and hasattr(player, 'team') and hasattr(player.team, 'id'):
-                    rosterPlayerTeamIds[pid] = player.team.id
+                if player:
+                    rosterPlayerNames[pid] = player.name
+                    if not teamId and hasattr(player, 'team') and hasattr(player.team, 'id'):
+                        rosterPlayerTeamIds[pid] = player.team.id
 
         # Favorite team game-outcome fields (score margin, comeback, walk-off)
         favoriteTeamScoreMargin = 0
@@ -1031,12 +988,13 @@ class FantasyTracker:
             playerPerformanceRatings=playerPerfRatings,
             gamePerformanceRatings=gamePerformanceRatings,
             rosterPlayerTeamIds=rosterPlayerTeamIds,
+            rosterPlayerNames=rosterPlayerNames,
             favoriteTeamScoreMargin=favoriteTeamScoreMargin,
             favoriteTeamComebackWin=favoriteTeamComebackWin,
             favoriteTeamLargestDeficit=favoriteTeamLargestDeficit,
             favoriteTeamWalkOffWin=favoriteTeamWalkOffWin,
             activeModifier=activeModifier,
-            unusedSwaps=roster.swaps_available or 0,
+            unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
         )
 
     @staticmethod

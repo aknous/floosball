@@ -75,6 +75,9 @@ class CardCalcContext:
     # Roster player team IDs (for same-team stacking effects)
     rosterPlayerTeamIds: Dict[int, int] = field(default_factory=dict)  # playerId → teamId
 
+    # Roster player names (for stat line display)
+    rosterPlayerNames: Dict[int, str] = field(default_factory=dict)  # playerId → name
+
     # Favorite team game-outcome data
     favoriteTeamScoreMargin: int = 0
     favoriteTeamComebackWin: bool = False
@@ -185,6 +188,10 @@ def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
     if not rosterPids:
         return ""
 
+    # Build player name prefix
+    names = [ctx.rosterPlayerNames.get(pid, "?") for pid in rosterPids]
+    namePrefix = " + ".join(names)
+
     # Aggregate stats across all roster players at this position (handles WR1+WR2)
     totalFP = 0
     totalTds = 0
@@ -222,7 +229,9 @@ def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
     if totalFgs:
         parts.append(f"{totalFgs} FG")
 
-    return ", ".join(parts)
+    if not parts:
+        return namePrefix
+    return f"{namePrefix}: {', '.join(parts)}"
 
 
 def _getPlayerStat(playerStats: dict, statKey: str) -> float:
@@ -340,10 +349,6 @@ def _computeCardPass(
         matchedXMult = 0
     elif mod == "payday":
         matchedFloobits *= 3  # Triple Floobits
-    elif mod == "spotlight":
-        if effectName in _ROSTER_POSITION_EFFECTS:
-            matchedFP *= 1.5  # +50% FP for roster-position effects
-
     # 3. Check position conditional if matched
     conditionalBonus = 0.0
     conditionalLabel = None
@@ -514,6 +519,13 @@ def calculateWeekCardBonuses(
             result.xMultFactors.append(breakdown.secondaryXMult)
         result.floobitsEarned += breakdown.floobitsEarned
         result.cardBreakdowns.append(breakdown)
+
+    # Synergy modifier: +0.1 xFPx per unique position among equipped cards
+    if ctx.activeModifier == "synergy":
+        uniquePositions = len(set(ctx.equippedCardPositions))
+        if uniquePositions > 1:
+            synergyXMult = 1 + uniquePositions * 0.1
+            result.xMultFactors.append(round(synergyXMult, 2))
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
     result.totalMultBonus = round(result.totalMultBonus, 1)

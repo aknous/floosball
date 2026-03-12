@@ -1271,14 +1271,34 @@ class Game:
             return 0
         return round((gameplan.runPassRatio - 0.5) * 8)
 
+    def _estimateFgProbability(self):
+        """Estimate FG make probability for the current field position and kicker."""
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if not kicker:
+            return 0.0
+        fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
+        baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
+        normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
+        fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
+        if fgDist < 30:
+            fgProb = min(0.96, fgProb + 0.10)
+        return max(0.05, min(0.96, fgProb))
+
     def _otPlayCaller(self, scoreDiff: int):
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+        fgProb = self._estimateFgProbability()
+
+        # High-probability FG (>80%) — always kick in OT regardless of down
+        if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= 0.80:
+            self.play.playType = PlayType.FieldGoal
+            return
+
         if self.down == 4:
-            kicker = self.offensiveTeam.rosterDict.get('k')
-            kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
             reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
-            fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
-            # Only kick FG in OT if it ties or wins (down ≤3); trailing by more, a FG still loses
+            # Kick FG on 4th if in reasonable range and it ties or wins
             if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -1328,8 +1348,6 @@ class Game:
         targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
         # Tied and in FG range: consider kicking now or playing conservatively
-        kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
         reasonableFg = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
         fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
         inFgRange = self.yardsToEndzone <= kickerMaxFg and fgDist <= reasonableFg
@@ -3281,14 +3299,34 @@ class Game:
             self.lastMomentumTeam = benefitingTeam
 
     def _isMomentumShift(self, previousMomentum, newMomentum):
-        """Check if a momentum change qualifies as a highlight."""
+        """Check if a momentum change qualifies as a highlight.
+
+        A momentum shift should represent a dramatic change in who controls the
+        game — not routine scoring by a team already dominating.  We require
+        either (a) a zero-crossing (actual lead-change in momentum), or (b) a
+        large swing that moves *against* the prevailing momentum direction.
+        Piling-on events (same direction the momentum is already going) are
+        never flagged, no matter how big the raw delta.
+        """
         delta = abs(newMomentum - previousMomentum)
         crossedZero = (previousMomentum > 0 and newMomentum < 0) or \
                       (previousMomentum < 0 and newMomentum > 0)
-        if delta >= MOMENTUM_SHIFT_THRESHOLD:
-            return True
+
+        # Zero-crossing is the clearest shift — the tide literally turned
         if crossedZero and delta >= MOMENTUM_CROSS_ZERO_THRESHOLD:
             return True
+
+        # Non-crossing: only flag if the event pushed *against* the prevailing
+        # momentum (a comeback surge), not piling on in the same direction
+        sameDirection = (previousMomentum >= 0 and newMomentum > previousMomentum) or \
+                        (previousMomentum <= 0 and newMomentum < previousMomentum)
+        if sameDirection:
+            return False
+
+        # Against-the-grain swing must be large to qualify
+        if delta >= MOMENTUM_SHIFT_THRESHOLD:
+            return True
+
         return False
 
     def _applyMomentumEvent(self, rawDelta, benefitingTeam):
@@ -3296,16 +3334,27 @@ class Game:
         previousMomentum = self.momentum
         resistingTeam = self.awayTeam if benefitingTeam is self.homeTeam else self.homeTeam
 
-        # Cascade multiplier
-        self._updateMomentumStreak(benefitingTeam)
-        cascadeMultiplier = 1.0 + MOMENTUM_CASCADE_STEP * (abs(self.momentumStreak) - 1)
-        cascadeMultiplier = min(MOMENTUM_MAX_CASCADE, cascadeMultiplier)
+        # Streak inertia: if the opposing team was on a roll, this event
+        # is harder to push through.  A streak of 3+ by the other side
+        # dampens the incoming event (they have to "break through" the run).
+        prevStreak = abs(self.momentumStreak)
+        opposingRoll = benefitingTeam is not self.lastMomentumTeam and self.lastMomentumTeam is not None
+        if opposingRoll and prevStreak >= 3:
+            # 3 → 0.80, 4 → 0.65, 5 → 0.50
+            streakInertia = max(0.50, 1.0 - (prevStreak - 2) * 0.15)
+        else:
+            streakInertia = 1.0
 
         # Dampening
         gapDamp = self._scoreGapDampener()
         mentalResist = self._mentalResistance(resistingTeam)
 
-        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist
+        # Cascade multiplier — scale down in blowouts so piling-on streaks flatten out
+        self._updateMomentumStreak(benefitingTeam)
+        streakBonus = MOMENTUM_CASCADE_STEP * (abs(self.momentumStreak) - 1) * gapDamp
+        cascadeMultiplier = min(1.0 + streakBonus, MOMENTUM_MAX_CASCADE)
+
+        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia
 
         if benefitingTeam is self.homeTeam:
             self.momentum += finalDelta
@@ -4265,28 +4314,66 @@ class Play():
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
         self.fgDistance = yardsToFG
-        distanceFactor = 0.12   # Gentler drop-off with distance (was 0.15)
-        skillFactor = 1.5       # Adjusted kicker skill impact (was 2)
+        distanceFactor = 0.18   # Steeper drop-off with distance for realistic miss rates
+        skillFactor = 0.85      # Tighter kicker skill impact range
 
-        # Base probability uses sigmoid centered at 52 yards (was 50)
+        # Base probability uses sigmoid centered at 52 yards
         baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 52))), 2)
-        normalizedSkill = (self.kicker.gameAttributes.overallRating - 50) / 50  # Wider range (was 60-100)
-        
-        # Apply pressure modifier to kicker's effective skill
-        pressureModifier = self.kicker.attributes.getPressureModifier(self.game.gamePressure)
-        self.gamePressure = self.game.gamePressure
-        self.keyPressureMod = pressureModifier
-        self.clutchPlayerName = self.kicker.name
-        adjustedSkill = normalizedSkill + (pressureModifier / 100)  # Normalize pressure modifier to skill scale
-        
-        # Final probability: base * skill, then add bonus for short kicks
-        probability = baseProbability * (0.4 + adjustedSkill * skillFactor)  # Minimum 40% of base
-        
+        normalizedSkill = (self.kicker.gameAttributes.overallRating - 50) / 50
+
+        # Base skill probability (no pressure)
+        probability = baseProbability * (0.52 + normalizedSkill * skillFactor)
+
         # Bonus for chip shots (under 30 yards)
         if self.fgDistance < 30:
-            probability = min(1.0, probability + 0.15)
-        
-        probability = round(max(0.05, min(1, probability)) * 100)  # 5-100% range
+            probability = min(0.96, probability + 0.10)
+
+        probability = max(0.05, min(0.96, probability))
+
+        # ── Kicker Pressure System ──
+        # FG attempts are uniquely high-pressure — apply a direct probability
+        # adjustment based on game pressure and the kicker's mental attributes.
+        self.gamePressure = self.game.gamePressure
+        self.clutchPlayerName = self.kicker.name
+        normalizedPressure = min(100, max(0, self.game.gamePressure)) / 100.0
+
+        if normalizedPressure >= 0.3:
+            attrs = self.kicker.attributes
+            # Mental composure: average of focus + discipline, normalized to -1..+1
+            mentalAvg = (getattr(attrs, 'focus', 80) + getattr(attrs, 'discipline', 80)) / 2
+            mentalNorm = (mentalAvg - 80) / 20  # 60→-1, 80→0, 100→+1
+
+            # pressureHandling: -10 to +10, normalize to -1..+1
+            phNorm = getattr(attrs, 'pressureHandling', 0) / 10
+
+            # Combined mental score: -1 (chokes) to +1 (ice cold)
+            mentalScore = 0.5 * phNorm + 0.3 * mentalNorm + 0.2 * (getattr(attrs, 'clutchFactor', 0) / 100)
+
+            # Max swing scales with pressure intensity: low pressure = tiny, high = up to ±12%
+            maxSwing = normalizedPressure * 0.12
+
+            # Roll for outcome — mental score shifts the distribution
+            # mentalScore +1: ~70% boost, ~20% neutral, ~10% penalty
+            # mentalScore  0: ~25% boost, ~50% neutral, ~25% penalty
+            # mentalScore -1: ~10% boost, ~20% neutral, ~70% penalty
+            roll = batched_randint(1, 100)
+            boostChance = max(5, min(75, int(25 + mentalScore * 45)))
+            neutralChance = max(15, min(55, int(50 - abs(mentalScore) * 30)))
+            # penaltyChance is the remainder
+
+            if roll <= boostChance:
+                pressureAdj = batched_random() * maxSwing  # positive boost
+            elif roll <= boostChance + neutralChance:
+                pressureAdj = 0
+            else:
+                pressureAdj = -(batched_random() * maxSwing)  # penalty
+
+            self.keyPressureMod = round(pressureAdj * 100, 1)
+            probability = max(0.05, min(0.96, probability + pressureAdj))
+        else:
+            self.keyPressureMod = 0
+
+        probability = round(probability * 100)  # Convert to 5-96% integer range
 
         x = batched_randint(1,100)
 

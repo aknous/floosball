@@ -92,14 +92,14 @@ A single global modifier rotates each week (every 7 games), announced **before g
 |---|---|---|---|
 | `amplify` | **Amplify** | +FPx values are doubled | Load up additive mult cards |
 | `cascade` | **Cascade** | xFPx bonus portions are doubled (×1.3 → ×1.6) | Even one xFPx becomes huge |
-| `ironclad` | **Ironclad** | K-slot cards that grow over time won't reset this week | Safe to ride risky K-slot cards |
+| `ironclad` | **Ironclad** | Streak cards can't reset this week | Safe to ride risky streak cards |
 | `overdrive` | **Overdrive** | Match bonus is 2.5x instead of 1.5x | Prioritize matched cards |
 | `payday` | **Payday** | Floobits earned are tripled | Equip RB floobits cards |
 | `grounded` | **Grounded** | All mult effects disabled (+FPx and xFPx) | Pure flat FP + floobits day |
 | `wildcard` | **Wildcard** | All cards treated as matched | Equip best effects regardless of roster |
-| `spotlight` | **Spotlight** | Card-player-specific effects get +50% FP | Favor main_character, hype_man, etc. |
 | `longshot` | **Longshot** | Conditional thresholds halved | Conditionals trigger much easier |
 | `frenzy` | **Frenzy** | +FP values are doubled | Stack flat FP cards |
+| `synergy` | **Synergy** | Bonus xFPx for each unique position in your card slots | Diversify card positions |
 | `steady` | **Steady** | No special effect — all normal rules apply | Standard week, no adaptation needed |
 
 ### Selection Rules
@@ -122,9 +122,9 @@ MODIFIER_WEIGHTS = {
     "payday":    10,
     "grounded":  5,   # Disruptive — less frequent
     "wildcard":  8,
-    "spotlight": 8,
     "longshot":  10,
     "frenzy":    10,
+    "synergy":   10,
     "steady":    10,  # No effect — normal week
 }
 ```

@@ -112,6 +112,9 @@ class SeasonManager:
         # Offseason transaction history (persists for page refresh)
         self._offseasonTransactions: list = []
 
+        # Cached next-game-start timestamp (set once, survives page refreshes)
+        self._cachedNextGameStart: Optional[datetime.datetime] = None
+
         logger.info("SeasonManager initialized")
     
     def setStateUpdateCallback(self, callback):
@@ -265,31 +268,35 @@ class SeasonManager:
 
 
 
+            weekStartTime = week['startTime']
+
+            # Cache the game start time so REST API returns a stable value on refresh
+            if self.timingManager._isScheduledMode:
+                self._cachedNextGameStart = weekStartTime
+            else:
+                # Sequential/turbo: compute from delays relative to now
+                delays = self.timingManager.delays
+                gap = delays.get('week_start_wait', 30) + delays.get('game_announcement', 30)
+                self._cachedNextGameStart = datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
+
             # Broadcast week start event
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                nextStartIso = self._cachedNextGameStart.isoformat() + 'Z' if self._cachedNextGameStart else None
+                modInfo = {
+                    "name": weeklyModifier,
+                    "displayName": self.MODIFIER_DISPLAY.get(weeklyModifier, weeklyModifier.title()),
+                    "description": self.MODIFIER_DESCRIPTIONS.get(weeklyModifier, ""),
+                } if weeklyModifier else None
                 week_event = SeasonEvent.weekStart(
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=self.currentSeason.currentWeek,
                     games=[],
                     weekText=self.currentSeason.currentWeekText,
                     modifier=weeklyModifier,
+                    modifierInfo=modInfo,
+                    nextGameStartTime=nextStartIso,
                 )
                 broadcaster.broadcast_sync('season', week_event)
-
-            # Lock equipped cards for this week
-            try:
-                from database.connection import get_session as _getSession
-                from database.repositories.card_repositories import EquippedCardRepository
-                lockSession = _getSession()
-                EquippedCardRepository(lockSession).lockWeek(
-                    self.currentSeason.seasonNumber, self.currentSeason.currentWeek
-                )
-                lockSession.commit()
-                lockSession.close()
-            except Exception as e:
-                logger.error(f"Failed to lock equipped cards for week {self.currentSeason.currentWeek}: {e}")
-
-            weekStartTime = week['startTime']
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
             self.currentSeason.activeGames = week['games']
             self.currentSeason.completedWeekGames = None  # Clear previous week's finished games
@@ -309,6 +316,40 @@ class SeasonManager:
 
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
+
+            # Clear cached countdown — games are starting now
+            self._cachedNextGameStart = None
+
+            # Auto-lock all equipped cards and unlocked rosters at game start
+            try:
+                from database.connection import get_session as _getSession
+                from database.repositories.card_repositories import EquippedCardRepository
+                from database.models import FantasyRoster
+                lockSession = _getSession()
+                EquippedCardRepository(lockSession).lockAllForWeek(
+                    self.currentSeason.seasonNumber, self.currentSeason.currentWeek
+                )
+                # Auto-lock rosters that have all slots filled
+                tracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
+                unlocked = lockSession.query(FantasyRoster).filter_by(
+                    season=self.currentSeason.seasonNumber, is_locked=False
+                ).all()
+                for roster in unlocked:
+                    filledSlots = {rp.slot for rp in roster.players}
+                    if len(filledSlots) >= 6:
+                        roster.is_locked = True
+                        roster.locked_at = datetime.datetime.utcnow()
+                        for rp in roster.players:
+                            rp.points_at_lock = (
+                                tracker.getPlayerSeasonFP(
+                                    rp.player_id, self.currentSeason.seasonNumber
+                                ) if tracker else 0
+                            )
+                        logger.info(f"Auto-locked roster for user {roster.user_id}")
+                lockSession.commit()
+                lockSession.close()
+            except Exception as e:
+                logger.error(f"Failed to auto-lock cards/rosters for week {self.currentSeason.currentWeek}: {e}")
 
             # Add game start highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -802,6 +843,7 @@ class SeasonManager:
                         gps.passing_stats, gps.rushing_stats,
                         gps.receiving_stats, gps.kicking_stats,
                         weekFPByPlayer.get(gps.player_id, 0),
+                        teamId=gps.team_id,
                     )
                 for pid, fp in weekFPByPlayer.items():
                     if pid not in weekPlayerStats:
@@ -857,6 +899,11 @@ class SeasonManager:
                         perfRating = getattr(p, 'seasonPerformanceRating', 0)
                         if perfRating > 0:
                             playerPerfRatings[p.id] = perfRating
+
+                # Game performance ratings (per-game, for Boom Week / Game Ball / Dud Insurance)
+                gamePerfRatings = {}
+                if self.playerManager and gameStats:
+                    gamePerfRatings = self.playerManager.calculateGamePerformanceRatings(gameStats)
 
                 # Team data from live objects (ELO, streaks, losses, playoff status)
                 teamManager = self.serviceContainer.getService('team_manager')
@@ -917,6 +964,22 @@ class SeasonManager:
                     rosterPlayerPositions = {
                         pid: playerPositionMap.get(pid, 0) for pid in rosterPlayerIds
                     }
+
+                    # Build team IDs and names for roster players
+                    rosterPlayerTeamIds = {}
+                    rosterPlayerNames = {}
+                    for pid in rosterPlayerIds:
+                        ps = weekPlayerStats.get(pid, {})
+                        teamId = ps.get("teamId")
+                        if teamId:
+                            rosterPlayerTeamIds[pid] = teamId
+                    if self.playerManager:
+                        for pid in rosterPlayerIds:
+                            player = self.playerManager.getPlayerById(pid)
+                            if player:
+                                rosterPlayerNames[pid] = player.name
+                                if pid not in rosterPlayerTeamIds and hasattr(player, 'team') and hasattr(player.team, 'id'):
+                                    rosterPlayerTeamIds[pid] = player.team.id
 
                     streakCounts = {
                         eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
@@ -983,6 +1046,18 @@ class SeasonManager:
                     )
                     rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
 
+                    # Check for user-level modifier override (Modifier Nullifier power-up)
+                    userModifier = activeModifier
+                    try:
+                        from database.models import UserModifierOverride
+                        modOverride = session.query(UserModifierOverride).filter_by(
+                            user_id=userId, season=season, week=week
+                        ).first()
+                        if modOverride:
+                            userModifier = modOverride.override_modifier
+                    except Exception:
+                        pass
+
                     # Build context
                     calcCtx = CardCalcContext(
                         rosterPlayerIds=rosterPlayerIds,
@@ -1005,8 +1080,11 @@ class SeasonManager:
                         rosterUnchangedWeeks=rosterUnchangedWeeks,
                         teamResults=teamResults,
                         playerPerformanceRatings=playerPerfRatings,
-                        activeModifier=activeModifier,
-                        unusedSwaps=roster.swaps_available or 0,
+                        gamePerformanceRatings=gamePerfRatings,
+                        rosterPlayerTeamIds=rosterPlayerTeamIds,
+                        rosterPlayerNames=rosterPlayerNames,
+                        activeModifier=userModifier,
+                        unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
                     )
 
                     # Calculate card bonuses
@@ -1021,10 +1099,6 @@ class SeasonManager:
                     totalFP = round(baseFP * addMultPool * xMultProduct, 2)
                     # Subtract raw FP so we store only the card bonus portion
                     totalFP = round(totalFP - weekRawFP, 2)
-                    # Subtract pre-lock card bonus (if cards were locked mid-game)
-                    bonusAtLock = getattr(userEquipped[0], 'card_bonus_at_lock', 0) or 0
-                    if bonusAtLock > 0:
-                        totalFP = round(totalFP - bonusAtLock, 2)
                     if totalFP < 0:
                         totalFP = 0.0
 
@@ -1639,10 +1713,15 @@ class SeasonManager:
                 return schedule[nextIndex]['startTime']
             return None
 
-        # SEQUENTIAL / TURBO: estimate based on delay config
+        # SEQUENTIAL / TURBO: return cached timestamp if available
+        if self._cachedNextGameStart is not None:
+            return self._cachedNextGameStart
+
+        # Compute once and cache
         delays = self.timingManager.delays
         gap = delays.get('week_end_wait', 120) + delays.get('week_start_wait', 30) + delays.get('game_announcement', 30)
-        return datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
+        self._cachedNextGameStart = datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
+        return self._cachedNextGameStart
 
     def _generateSchedule(self) -> List[List[tuple]]:
         """Generate full season schedule using original algorithm"""
@@ -3186,28 +3265,28 @@ class SeasonManager:
 
     MODIFIER_WEIGHTS = {
         "amplify": 10, "cascade": 8, "ironclad": 10, "overdrive": 10,
-        "payday": 10, "grounded": 5, "wildcard": 8, "spotlight": 8,
-        "longshot": 10, "frenzy": 10, "steady": 10,
+        "payday": 10, "grounded": 5, "wildcard": 8,
+        "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
     }
 
     MODIFIER_DISPLAY = {
         "amplify": "Amplify", "cascade": "Cascade", "ironclad": "Ironclad",
         "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
-        "wildcard": "Wildcard", "spotlight": "Spotlight", "longshot": "Longshot",
-        "frenzy": "Frenzy", "steady": "Steady",
+        "wildcard": "Wildcard", "longshot": "Longshot",
+        "frenzy": "Frenzy", "synergy": "Synergy", "steady": "Steady",
     }
 
     MODIFIER_DESCRIPTIONS = {
         "amplify": "+FPx values are doubled",
         "cascade": "xFPx bonus portions are doubled",
-        "ironclad": "K-slot cards that grow over time won't reset this week",
+        "ironclad": "Streak cards can't reset this week",
         "overdrive": "Match bonus is 2.5x instead of 1.5x",
         "payday": "Floobits earned are tripled",
         "grounded": "All mult effects disabled (+FPx and xFPx)",
         "wildcard": "All cards treated as matched",
-        "spotlight": "Card-player-specific effects get +50% FP",
         "longshot": "Conditional thresholds halved",
         "frenzy": "+FP values are doubled",
+        "synergy": "Bonus xFPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
     }
 

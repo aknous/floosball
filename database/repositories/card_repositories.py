@@ -159,9 +159,11 @@ class EquippedCardRepository:
     def lockWeek(self, season: int, week: int):
         """Lock equipped cards for users who have all slots filled.
 
-        Base is 5 slots; users with an MVP-classified card get 6.
+        Base is 5 slots; users with an MVP-classified card or active
+        temp_card_slot power-up get 6.
         """
         from sqlalchemy import func
+        from database.models import ShopPurchase
 
         # Find each user's card count for this week
         userCounts = (
@@ -175,29 +177,48 @@ class EquippedCardRepository:
             .all()
         )
 
+        if not userCounts:
+            self.session.flush()
+            return
+
+        candidateIds = {row[0] for row in userCounts}
+
         # Check which of these users have an MVP card equipped this week
-        mvpUserIds = set()
-        if userCounts:
-            candidateIds = {row[0] for row in userCounts}
-            mvpRows = (
-                self.session.query(EquippedCard.user_id)
-                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
-                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
-                .filter(
-                    EquippedCard.season == season,
-                    EquippedCard.week == week,
-                    EquippedCard.user_id.in_(candidateIds),
-                    CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("mvp"),
-                )
-                .distinct()
-                .all()
+        mvpRows = (
+            self.session.query(EquippedCard.user_id)
+            .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+            .filter(
+                EquippedCard.season == season,
+                EquippedCard.week == week,
+                EquippedCard.user_id.in_(candidateIds),
+                CardTemplate.classification.isnot(None),
+                CardTemplate.classification.contains("mvp"),
             )
-            mvpUserIds = {row[0] for row in mvpRows}
+            .distinct()
+            .all()
+        )
+        mvpUserIds = {row[0] for row in mvpRows}
+
+        # Check which users have an active temp_card_slot power-up
+        cardSlotRows = (
+            self.session.query(ShopPurchase.user_id)
+            .filter(
+                ShopPurchase.user_id.in_(candidateIds),
+                ShopPurchase.season == season,
+                ShopPurchase.item_slug == "temp_card_slot",
+                ShopPurchase.expires_at_week >= week,
+            )
+            .distinct()
+            .all()
+        )
+        cardSlotUserIds = {row[0] for row in cardSlotRows}
+
+        sixSlotUserIds = mvpUserIds | cardSlotUserIds
 
         fullUserIds = set()
         for userId, cnt in userCounts:
-            requiredSlots = 6 if userId in mvpUserIds else 5
+            requiredSlots = 6 if userId in sixSlotUserIds else 5
             if cnt >= requiredSlots:
                 fullUserIds.add(userId)
 
@@ -208,6 +229,15 @@ class EquippedCardRepository:
                 EquippedCard.locked == False,
                 EquippedCard.user_id.in_(fullUserIds),
             ).update({"locked": True}, synchronize_session='fetch')
+        self.session.flush()
+
+    def lockAllForWeek(self, season: int, week: int):
+        """Lock ALL equipped cards for a week when games start (auto-lock)."""
+        self.session.query(EquippedCard).filter(
+            EquippedCard.season == season,
+            EquippedCard.week == week,
+            EquippedCard.locked == False,
+        ).update({"locked": True}, synchronize_session='fetch')
         self.session.flush()
 
     def unlockWeek(self, season: int, week: int):
@@ -318,8 +348,8 @@ class PackTypeRepository:
         """Seed default pack types if they don't exist."""
         defaults = [
             PackType(
-                name='standard',
-                display_name='Standard Pack',
+                name='humble',
+                display_name='Humble Pack',
                 cost=50,
                 cards_per_pack=3,
                 guaranteed_rarity=None,
@@ -327,8 +357,8 @@ class PackTypeRepository:
                 description='3 random cards. Anything is possible!',
             ),
             PackType(
-                name='premium',
-                display_name='Premium Pack',
+                name='proper',
+                display_name='Proper Pack',
                 cost=125,
                 cards_per_pack=5,
                 guaranteed_rarity='chrome',
@@ -336,13 +366,22 @@ class PackTypeRepository:
                 description='5 cards with at least one Chrome or better.',
             ),
             PackType(
-                name='elite',
-                display_name='Elite Pack',
+                name='grand',
+                display_name='Grand Pack',
                 cost=300,
                 cards_per_pack=5,
                 guaranteed_rarity='prismatic',
                 rarity_weights={'base': 60, 'chrome': 35, 'holographic': 30, 'gold': 25, 'prismatic': 15, 'diamond': 5},
                 description='5 cards with a guaranteed Prismatic and Holographic or better.',
+            ),
+            PackType(
+                name='exquisite',
+                display_name='Exquisite Pack',
+                cost=750,
+                cards_per_pack=5,
+                guaranteed_rarity='prismatic',
+                rarity_weights={'base': 20, 'chrome': 20, 'holographic': 25, 'gold': 30, 'prismatic': 30, 'diamond': 25},
+                description='5 cards with a guaranteed Prismatic or better. Diamond drop rate massively boosted.',
             ),
         ]
         for pt in defaults:

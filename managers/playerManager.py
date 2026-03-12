@@ -1851,7 +1851,8 @@ class PlayerManager:
         # Build position lookup from active players
         positionMap = {}
         for p in self.activePlayers:
-            positionMap[p.id] = getattr(p, 'positionId', 0)
+            pos = getattr(p, 'position', None)
+            positionMap[p.id] = pos.value if pos else 0
 
         # Group per-game stats by position
         qbRows = []

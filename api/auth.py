@@ -17,6 +17,7 @@ from logger_config import get_logger
 logger = get_logger("floosball.auth")
 
 _bearerScheme = HTTPBearer()
+_optionalBearerScheme = HTTPBearer(auto_error=False)
 
 # ---------------------------------------------------------------------------
 # Random username generation
@@ -271,3 +272,15 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
         raise credentialsException
     finally:
         session.close()
+
+
+def getOptionalUser(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_optionalBearerScheme),
+) -> Optional[User]:
+    """Return the authenticated User if a valid token is present, else None."""
+    if creds is None:
+        return None
+    try:
+        return getCurrentUser(creds)
+    except Exception:
+        return None
