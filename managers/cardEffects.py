@@ -378,7 +378,7 @@ EFFECT_TOOLTIPS = {
     "pedigree": "Good breeding shows. xFPx when your favorite team's ELO is high enough.",
     # Streak (K)
     "couch_potato": "Just sit there. Literally. FP that grows every week this card stays equipped.",
-    "on_fire": "Don't let the flame die. xFPx that grows each week your K slot makes 2+ FGs. Resets if they don't.",
+    "on_fire": "Don't let the flame die. xFPx that grows each week your K slot makes a FG. Resets if they don't.",
     "gravy_train": "The gravy train keeps rolling. Floobits growing each week the depicted player's team wins. Resets on a loss.",
     "snowball_fight": "It just keeps getting bigger. FP growing each week your roster scores a TD. Resets if they don't.",
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Resets on a loss.",
@@ -484,7 +484,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "pedigree": "{rewardValue} xFPx when fav team ELO ≥ {eloThreshold}",
     # Streak (K)
     "couch_potato": "+{baseReward} FP, grows by {growthPerTick} each week equipped",
-    "on_fire": "{baseReward} xFPx, +{growthPerTick} per consecutive 2+ FG week. Resets if under 2 FGs",
+    "on_fire": "{baseReward} xFPx, +{growthPerTick} per consecutive FG week. Resets if no FG",
     "gravy_train": "{baseReward} Floobits, +{growthPerTick} per consecutive team win. Resets on loss",
     "snowball_fight": "+{baseReward} FP, +{growthPerTick} per consecutive roster TD week. Resets if no TD",
     "fairweather_fan": "{baseReward} Floobits, +{growthPerTick} per consecutive fav team win. Resets on loss",
@@ -662,7 +662,7 @@ CATEGORY_EFFECT_POOLS = {
 # isWeekly: if True, streak resets each week (accumulates within a week)
 STREAK_CONFIGS = {
     "couch_potato":      {"resetCondition": "equipped", "isWeekly": False},
-    "on_fire":           {"resetCondition": "kicker_2fg", "isWeekly": False},
+    "on_fire":           {"resetCondition": "kicker_fg", "isWeekly": False},
     "gravy_train":       {"resetCondition": "card_player_team_wins", "isWeekly": False},
     "snowball_fight":    {"resetCondition": "roster_td", "isWeekly": False},
     "fairweather_fan":   {"resetCondition": "favorite_team_wins", "isWeekly": False},
