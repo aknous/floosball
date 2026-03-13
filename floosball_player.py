@@ -324,6 +324,8 @@ class Player:
         self.stat_tracker.add_fg(yards, isRegularSeason)
         
         # Handle additional stats not covered by base StatTracker
+        if yards >= 40:
+            self.gameStatsDict['kicking']['fg40+'] = self.gameStatsDict['kicking'].get('fg40+', 0) + 1
         if yards >= 45:
             self.gameStatsDict['kicking']['fg45+'] += 1
             if isRegularSeason:

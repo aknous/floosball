@@ -55,6 +55,14 @@ class ShopPurchaseRepository:
             ShopPurchase.expires_at_week >= currentWeek,
         ).first()
 
+    def getActiveFortunesFavor(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
+        return self.session.query(ShopPurchase).filter(
+            ShopPurchase.user_id == userId,
+            ShopPurchase.season == season,
+            ShopPurchase.item_slug == "fortunes_favor",
+            ShopPurchase.expires_at_week >= currentWeek,
+        ).first()
+
     def getActiveTempCardSlot(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,

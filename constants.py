@@ -142,12 +142,22 @@ POWERUP_TEMP_CARD_SLOT = {
     "seasonLimit": 2,
 }
 
+POWERUP_FORTUNES_FAVOR = {
+    "slug": "fortunes_favor",
+    "displayName": "Fortune's Favor",
+    "description": "Boosts all chance card trigger rates by 10% for 3 weeks.",
+    "price": 100,
+    "durationWeeks": 3,
+    "seasonLimit": 2,
+}
+
 POWERUP_CATALOG = {
     "extra_swap": POWERUP_EXTRA_SWAP,
     "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
     "temp_flex": POWERUP_TEMP_FLEX,
     "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
     "shop_reroll": POWERUP_SHOP_REROLL,
+    "fortunes_favor": POWERUP_FORTUNES_FAVOR,
 }
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits

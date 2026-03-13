@@ -45,6 +45,7 @@ def _liveStatsToDbFormat(gameStatsDict: dict, teamId: int = 0) -> dict:
         "kicking_stats": {
             "fgs": kicking.get("fgs", 0),
             "longest": kicking.get("longest", 0),
+            "fg40plus": kicking.get("fg40+", 0),
         },
     }
 
@@ -75,6 +76,7 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         "kicking_stats": {
             "fgs": (kickingStats or {}).get("fgs", 0),
             "longest": (kickingStats or {}).get("longest", 0),
+            "fg40plus": (kickingStats or {}).get("fg40+", (kickingStats or {}).get("fg40plus", 0)),
         },
     }
 
@@ -573,13 +575,12 @@ class FantasyTracker:
                         rosterTotalTds, playerPositionMap, userId,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
-                    # Formula: (rosterFP + Σ+FP) × (1 + Σ+FPx) × xFPx₁ × xFPx₂ × ...
+                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
                     baseFP = weekRawFP + calcResult.totalBonusFP
-                    addMultPool = 1.0 + calcResult.totalMultBonus
-                    xMultProduct = 1.0
-                    for xm in calcResult.xMultFactors:
-                        xMultProduct *= xm
-                    weekCardBonus = round(baseFP * addMultPool * xMultProduct - weekRawFP, 2)
+                    multProduct = 1.0
+                    for f in calcResult.multFactors:
+                        multProduct *= f
+                    weekCardBonus = round(baseFP * multProduct - weekRawFP, 2)
                     if weekCardBonus < 0:
                         weekCardBonus = 0.0
                     cardBreakdowns = [
@@ -589,8 +590,7 @@ class FantasyTracker:
                     eqSummary = {
                         "weekRawFP": round(weekRawFP, 1),
                         "totalBonusFP": round(calcResult.totalBonusFP, 2),
-                        "totalMultBonus": round(calcResult.totalMultBonus, 2),
-                        "xMultFactors": [round(x, 2) for x in calcResult.xMultFactors],
+                        "multFactors": [round(f, 2) for f in calcResult.multFactors],
                     }
                 elif hasStoredCurrentWeekBonus:
                     stored = userWeekBonuses[currentWeek]
@@ -772,6 +772,7 @@ class FantasyTracker:
         # Favorite team data from live objects
         favoriteTeamElo = 1500.0
         favoriteTeamStreak = 0
+        favoriteTeamPriorStreak = 0
         favoriteTeamSeasonLosses = 0
         favoriteTeamInPlayoffs = False
         favoriteTeamWonThisWeek = False
@@ -805,6 +806,7 @@ class FantasyTracker:
                 favoriteTeamElo = getattr(favTeam, 'elo', 1500.0)
                 favStats = getattr(favTeam, 'seasonTeamStats', {})
                 favoriteTeamStreak = favStats.get('streak', 0)
+                favoriteTeamPriorStreak = favStats.get('priorStreak', 0)
                 favoriteTeamSeasonLosses = favStats.get('losses', 0)
                 favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
 
@@ -965,7 +967,44 @@ class FantasyTracker:
                             favoriteTeamWalkOffWin = True
                     break  # Only process the matching game
 
+        # Compute kicker season FG misses for Good Neighbor
+        kickerSeasonFgMisses = 0
+        kickerPids = [pid for pid in rosterPlayerIds
+                      if playerPositionMap.get(pid) == 5]
+        if kickerPids:
+            from database.models import GamePlayerStats as GPSModel2
+            seasonKickerStats = (
+                session.query(GPSModel2)
+                .join(Game, GPSModel2.game_id == Game.id)
+                .filter(Game.season == season, Game.week < currentWeek,
+                        GPSModel2.player_id.in_(kickerPids))
+                .all()
+            )
+            for ks in seasonKickerStats:
+                kStats = ks.kicking_stats or {}
+                if isinstance(kStats, str):
+                    import json as _jsonk
+                    kStats = _jsonk.loads(kStats)
+                kickerSeasonFgMisses += kStats.get("fg_missed", 0)
+
+        # Compute chanceBonus from Fortune's Favor + fortunate modifier
+        chanceBonus = 0.0
+        if activeModifier == "fortunate":
+            chanceBonus += 0.15
+        try:
+            from database.repositories.shop_repository import ShopPurchaseRepository
+            shopRepo = ShopPurchaseRepository(session)
+            if hasattr(shopRepo, 'getActiveFortunesFavor') and shopRepo.getActiveFortunesFavor(userId, season, currentWeek):
+                chanceBonus += 0.10
+        except Exception:
+            pass
+
         return CardCalcContext(
+            userId=userId,
+            season=season,
+            weekNumber=currentWeek,
+            chanceBonus=chanceBonus,
+            kickerSeasonFgMisses=kickerSeasonFgMisses,
             rosterPlayerIds=rosterPlayerIds,
             weekPlayerStats=weekPlayerStats,
             weekRawFP=weekRawFP,
@@ -977,6 +1016,7 @@ class FantasyTracker:
             favoriteTeamElo=favoriteTeamElo,
             leagueAverageElo=leagueAverageElo,
             favoriteTeamStreak=favoriteTeamStreak,
+            favoriteTeamPriorStreak=favoriteTeamPriorStreak,
             favoriteTeamSeasonLosses=favoriteTeamSeasonLosses,
             favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
             favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
@@ -1012,21 +1052,22 @@ class FantasyTracker:
             "outputType": b.outputType,
             "primaryFP": b.primaryFP,
             "primaryMult": b.primaryMult,
-            "primaryXMult": b.primaryXMult,
             "matchMultiplied": b.matchMultiplied,
             "matchMultiplier": b.matchMultiplier,
             "preMatchFP": b.preMatchFP,
             "preMatchFloobits": b.preMatchFloobits,
             "preMatchMult": b.preMatchMult,
-            "preMatchXMult": b.preMatchXMult,
             "conditionalBonus": b.conditionalBonus,
             "conditionalLabel": b.conditionalLabel,
             "secondaryFP": b.secondaryFP,
             "secondaryFloobits": b.secondaryFloobits,
             "secondaryMult": b.secondaryMult,
-            "secondaryXMult": b.secondaryXMult,
             "totalFP": b.totalFP,
             "floobitsEarned": b.floobitsEarned,
             "playerStatLine": b.playerStatLine,
             "equation": b.equation,
+            "isChanceEffect": b.isChanceEffect,
+            "chanceRoll": b.chanceRoll,
+            "chanceThreshold": b.chanceThreshold,
+            "chanceTriggered": b.chanceTriggered,
         }

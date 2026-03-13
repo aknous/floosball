@@ -991,6 +991,7 @@ class SeasonManager:
 
                     favoriteTeamElo = 1500.0
                     favoriteTeamStreak = 0
+                    favoriteTeamPriorStreak = 0
                     favoriteTeamSeasonLosses = 0
                     favoriteTeamInPlayoffs = False
                     favoriteTeamWonThisWeek = False
@@ -1004,6 +1005,7 @@ class SeasonManager:
                             favoriteTeamElo = getattr(favTeam, 'elo', 1500.0)
                             favStats = getattr(favTeam, 'seasonTeamStats', {})
                             favoriteTeamStreak = favStats.get('streak', 0)
+                            favoriteTeamPriorStreak = favStats.get('priorStreak', 0)
                             favoriteTeamSeasonLosses = favStats.get('losses', 0)
                             favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
                             favoriteTeamBigPlays = bigPlaysByTeam.get(userFavoriteTeamId, 0)
@@ -1058,8 +1060,44 @@ class SeasonManager:
                     except Exception:
                         pass
 
+                    # Compute kicker season FG misses for Good Neighbor
+                    kickerSeasonFgMisses = 0
+                    kickerPids = [rp.player_id for rp in roster.players
+                                  if playerPositionMap.get(rp.player_id) == 5]
+                    if kickerPids:
+                        seasonKickerStats = (
+                            session.query(GamePlayerStats)
+                            .join(Game, GamePlayerStats.game_id == Game.id)
+                            .filter(Game.season == season, Game.week < week,
+                                    GamePlayerStats.player_id.in_(kickerPids))
+                            .all()
+                        )
+                        for ks in seasonKickerStats:
+                            kStats = ks.kicking_stats or {}
+                            if isinstance(kStats, str):
+                                import json as _jsonk
+                                kStats = _jsonk.loads(kStats)
+                            kickerSeasonFgMisses += kStats.get("fg_missed", 0)
+
+                    # Compute chanceBonus from Fortune's Favor + fortunate modifier
+                    chanceBonus = 0.0
+                    if userModifier == "fortunate":
+                        chanceBonus += 0.15
+                    try:
+                        from database.repositories.shop_repository import ShopPurchaseRepository
+                        shopRepo = ShopPurchaseRepository(session)
+                        if hasattr(shopRepo, 'getActiveFortunesFavor') and shopRepo.getActiveFortunesFavor(userId, season, week):
+                            chanceBonus += 0.10
+                    except Exception:
+                        pass
+
                     # Build context
                     calcCtx = CardCalcContext(
+                        userId=userId,
+                        season=season,
+                        weekNumber=week,
+                        chanceBonus=chanceBonus,
+                        kickerSeasonFgMisses=kickerSeasonFgMisses,
                         rosterPlayerIds=rosterPlayerIds,
                         weekPlayerStats=weekPlayerStats,
                         weekRawFP=weekRawFP,
@@ -1071,6 +1109,7 @@ class SeasonManager:
                         favoriteTeamElo=favoriteTeamElo,
                         leagueAverageElo=leagueAverageElo,
                         favoriteTeamStreak=favoriteTeamStreak,
+                        favoriteTeamPriorStreak=favoriteTeamPriorStreak,
                         favoriteTeamSeasonLosses=favoriteTeamSeasonLosses,
                         favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
                         favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
@@ -1090,13 +1129,12 @@ class SeasonManager:
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # New formula: (rosterFP + Σ+FP) × (1 + Σ+FPx) × xFPx₁ × xFPx₂ × ...
+                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
                     baseFP = weekRawFP + result.totalBonusFP
-                    addMultPool = 1 + result.totalMultBonus  # +FPx pool
-                    xMultProduct = 1.0
-                    for xm in result.xMultFactors:
-                        xMultProduct *= xm
-                    totalFP = round(baseFP * addMultPool * xMultProduct, 2)
+                    multProduct = 1.0
+                    for f in result.multFactors:
+                        multProduct *= f
+                    totalFP = round(baseFP * multProduct, 2)
                     # Subtract raw FP so we store only the card bonus portion
                     totalFP = round(totalFP - weekRawFP, 2)
                     if totalFP < 0:
@@ -1119,7 +1157,6 @@ class SeasonManager:
                             "outputType": b.outputType,
                             "primaryFP": b.primaryFP,
                             "primaryMult": b.primaryMult,
-                            "primaryXMult": b.primaryXMult,
                             "primaryFloobits": b.primaryFloobits,
                             "matchMultiplied": b.matchMultiplied,
                             "matchMultiplier": b.matchMultiplier,
@@ -1130,19 +1167,21 @@ class SeasonManager:
                             "secondaryFP": b.secondaryFP,
                             "secondaryFloobits": b.secondaryFloobits,
                             "secondaryMult": b.secondaryMult,
-                            "secondaryXMult": b.secondaryXMult,
                             "totalFP": b.totalFP,
                             "floobitsEarned": b.floobitsEarned,
                             "playerStatLine": b.playerStatLine,
                             "equation": b.equation,
+                            "isChanceEffect": b.isChanceEffect,
+                            "chanceRoll": b.chanceRoll,
+                            "chanceThreshold": b.chanceThreshold,
+                            "chanceTriggered": b.chanceTriggered,
                         } for b in result.cardBreakdowns]
                         storedJson = _json.dumps({
                             "breakdowns": breakdownDicts,
                             "equationSummary": {
                                 "weekRawFP": round(weekRawFP, 1),
                                 "totalBonusFP": round(result.totalBonusFP, 2),
-                                "totalMultBonus": round(result.totalMultBonus, 2),
-                                "xMultFactors": [round(x, 2) for x in result.xMultFactors],
+                                "multFactors": [round(f, 2) for f in result.multFactors],
                             },
                         })
                         weekBonus = WeeklyCardBonus(
@@ -3267,6 +3306,7 @@ class SeasonManager:
         "amplify": 10, "cascade": 8, "ironclad": 10, "overdrive": 10,
         "payday": 10, "grounded": 5, "wildcard": 8,
         "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
+        "fortunate": 8,
     }
 
     MODIFIER_DISPLAY = {
@@ -3274,20 +3314,22 @@ class SeasonManager:
         "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
         "wildcard": "Wildcard", "longshot": "Longshot",
         "frenzy": "Frenzy", "synergy": "Synergy", "steady": "Steady",
+        "fortunate": "Fortunate",
     }
 
     MODIFIER_DESCRIPTIONS = {
-        "amplify": "+FPx values are doubled",
-        "cascade": "xFPx bonus portions are doubled",
+        "amplify": "FPx bonus portions are doubled",
+        "cascade": "FPx bonus portions are doubled",
         "ironclad": "Streak cards can't reset this week",
         "overdrive": "Match bonus is 2.5x instead of 1.5x",
         "payday": "Floobits earned are tripled",
-        "grounded": "All mult effects disabled (+FPx and xFPx)",
+        "grounded": "All FPx effects disabled",
         "wildcard": "All cards treated as matched",
         "longshot": "Conditional thresholds halved",
         "frenzy": "+FP values are doubled",
-        "synergy": "Bonus xFPx for each unique position in your card slots",
+        "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
+        "fortunate": "Chance card trigger rates increased by 15%",
     }
 
     def _selectWeeklyModifier(self, season: int, week: int) -> str:

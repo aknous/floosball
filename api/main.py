@@ -1401,22 +1401,31 @@ def admin_card_options(x_admin_password: Optional[str] = Header(default=None)):
     """Return available editions, effects, and classifications for the card grant tool."""
     _check_admin_password(x_admin_password)
     from managers.cardEffects import (
-        CATEGORY_EFFECT_POOLS, EFFECT_DISPLAY_NAMES, EDITION_POWER_SCALES,
+        SHARED_EFFECT_POOL, POSITION_EXCLUSIVE_POOLS,
+        EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY, EDITION_POWER_SCALES,
     )
     editions = list(EDITION_POWER_SCALES.keys())
+    # Build effects grouped by category from the shared + exclusive pools
     effects = {}
-    for category, pool in CATEGORY_EFFECT_POOLS.items():
-        effects[category] = [
-            {"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name)}
-            for name, _w in pool
-        ]
+    allEffects = list(SHARED_EFFECT_POOL)
+    for posPool in POSITION_EXCLUSIVE_POOLS.values():
+        allEffects.extend(posPool)
+    seen = set()
+    for name, _w in allEffects:
+        if name in seen:
+            continue
+        seen.add(name)
+        cat = EFFECT_CATEGORY.get(name, "flat_fp")
+        if cat not in effects:
+            effects[cat] = []
+        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name)})
     classifications = ["rookie", "mvp", "champion", "all_pro",
                         "mvp_champion", "all_pro_champion", "mvp_all_pro_champion"]
     return build_success_response({
         "editions": editions,
         "effects": effects,
         "classifications": classifications,
-        "categories": list(CATEGORY_EFFECT_POOLS.keys()),
+        "categories": list(effects.keys()),
     })
 
 
@@ -1451,7 +1460,7 @@ def admin_grant_card(payload: Dict[str, Any],
     _check_admin_password(x_admin_password)
     from database.connection import get_session
     from database.models import User, CardTemplate, UserCard
-    from managers.cardEffects import buildEffectConfig, POSITION_CATEGORY, EDITION_POWER_SCALES
+    from managers.cardEffects import buildEffectConfig, EDITION_POWER_SCALES
     from managers.cardManager import EDITION_SELL_VALUES
 
     email = payload.get("email", "").strip().lower()
@@ -1490,9 +1499,6 @@ def admin_grant_card(payload: Dict[str, Any],
 
     posNum = playerObj.position.value if hasattr(playerObj.position, 'value') else playerObj.position
     rating = round(playerObj.playerRating)
-
-    # Determine category for the effect
-    category = POSITION_CATEGORY.get(posNum, "flat_fp")
 
     # Build effect config (with optional forced effect/category)
     effectConfig = buildEffectConfig(
@@ -3298,6 +3304,20 @@ def getShopPowerups(user: _User = Depends(_getCurrentUser)):
                     and seasonCount < info.get("seasonLimit", 2) and currentWeek > 0
                 )
 
+            elif slug == "fortunes_favor":
+                # 1 active at a time, 2 per season (mirrors temp_flex)
+                activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
+                seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
+                item["purchased"] = seasonCount
+                item["limit"] = info.get("seasonLimit", 2)
+                item["limitLabel"] = "per season"
+                item["durationWeeks"] = info.get("durationWeeks", 3)
+                item["activeUntilWeek"] = activeFavor.expires_at_week if activeFavor else None
+                item["available"] = (
+                    activeFavor is None
+                    and seasonCount < info.get("seasonLimit", 2) and currentWeek > 0
+                )
+
             elif slug == "shop_reroll":
                 # 1 per refresh cycle
                 if isScheduledMode:
@@ -3416,6 +3436,20 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
             expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
 
+        elif slug == "fortunes_favor":
+            if currentWeek < 1:
+                raise HTTPException(status_code=400, detail="No active week")
+            activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
+            if activeFavor:
+                raise HTTPException(status_code=409, detail="You already have Fortune's Favor active")
+            seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
+            seasonLimit = itemInfo.get("seasonLimit", 2)
+            if seasonCount >= seasonLimit:
+                raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
+            durationWeeks = itemInfo.get("durationWeeks", 3)
+            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+
         elif slug == "shop_reroll":
             if currentWeek < 1:
                 raise HTTPException(status_code=400, detail="No active week")
@@ -3472,6 +3506,10 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
         elif slug == "temp_card_slot":
             responseData["expiresAtWeek"] = expiresAtWeek
             responseData["durationWeeks"] = itemInfo.get("durationWeeks", 4)
+
+        elif slug == "fortunes_favor":
+            responseData["expiresAtWeek"] = expiresAtWeek
+            responseData["durationWeeks"] = itemInfo.get("durationWeeks", 3)
 
         elif slug == "shop_reroll":
             # Delete unpurchased featured cards and regenerate

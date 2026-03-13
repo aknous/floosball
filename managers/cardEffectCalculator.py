@@ -8,7 +8,9 @@ Single-pass system: each card's named effect is computed via cardEffects.compute
 then match bonus and secondary effects are applied.
 """
 
+import hashlib
 import logging
+import random as _random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
@@ -50,6 +52,7 @@ class CardCalcContext:
     userFavoriteTeamId: Optional[int] = None
     favoriteTeamElo: float = 1500.0
     favoriteTeamStreak: int = 0  # Positive = win streak, negative = loss streak
+    favoriteTeamPriorStreak: int = 0  # Streak value before this week's game result
     favoriteTeamSeasonLosses: int = 0
     favoriteTeamInPlayoffs: bool = False
     favoriteTeamWonThisWeek: bool = False
@@ -95,6 +98,18 @@ class CardCalcContext:
     # Swap data (for Stockpiler effect)
     unusedSwaps: int = 0
 
+    # Chance card infrastructure
+    userId: int = 0
+    season: int = 0
+    weekNumber: int = 0
+    chanceBonus: float = 0.0  # Sum of Providence + innate synergy + Fortunate modifier
+    chanceCardCount: int = 0  # Number of chance cards in hand (for synergy effects)
+    kickerSeasonFgMisses: int = 0  # Season-long kicker FG misses (for Good Neighbor)
+
+    # Streak card infrastructure
+    streakCardCount: int = 0  # Number of streak cards in hand (for synergy effects)
+    activeStreakCount: int = 0  # Number of season streak cards with active (non-zero) streaks
+
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
     _firstPassBreakdowns: Optional[List] = None  # Set for second-pass effects
@@ -113,13 +128,12 @@ class CardBreakdown:
     displayName: str = ""
     detail: str = ""          # Human-readable effect description (e.g. "+2.5 FP per week")
     category: str = ""
-    outputType: str = "fp"  # "fp", "mult", "xmult", "floobits"
+    outputType: str = "fp"  # "fp", "mult", "floobits"
 
     # Primary effect
     primaryFP: float = 0.0
     primaryFloobits: int = 0
-    primaryMult: float = 0.0   # +FPx value
-    primaryXMult: float = 0.0  # xFPx value (>1 when active)
+    primaryMult: float = 0.0   # FPx factor (e.g. 1.3 means ×1.3)
 
     # Match bonus
     matchMultiplied: bool = False
@@ -127,7 +141,6 @@ class CardBreakdown:
     preMatchFP: float = 0.0
     preMatchFloobits: int = 0
     preMatchMult: float = 0.0
-    preMatchXMult: float = 0.0
 
     # Position conditional
     conditionalBonus: float = 0.0
@@ -136,8 +149,7 @@ class CardBreakdown:
     # Secondary effect (from edition)
     secondaryFP: float = 0.0
     secondaryFloobits: int = 0
-    secondaryMult: float = 0.0   # +FPx from edition (e.g. holo)
-    secondaryXMult: float = 0.0  # xFPx from edition (e.g. prismatic)
+    secondaryMult: float = 0.0   # FPx factor from edition
 
     # Totals
     totalFP: float = 0.0
@@ -149,25 +161,30 @@ class CardBreakdown:
     # Human-readable equation showing how primary output was derived
     equation: str = ""
 
+    # Chance card metadata
+    isChanceEffect: bool = False
+    chanceRoll: float = 0.0
+    chanceThreshold: float = 0.0
+    chanceTriggered: bool = False
+
 
 @dataclass
 class CardBonusResult:
     totalBonusFP: float = 0.0
-    totalMultBonus: float = 0.0    # Sum of +FPx values
-    xMultFactors: List[float] = field(default_factory=list)  # Individual xFPx values (>1)
+    multFactors: List[float] = field(default_factory=list)  # All FPx factors (each >1)
     floobitsEarned: int = 0
     cardBreakdowns: List[CardBreakdown] = field(default_factory=list)
 
 
 # Effects that use the roster player's stats at the card's position
 _ROSTER_POSITION_EFFECTS = {
-    "main_character", "hype_man", "cha_ching", "ace_up_the_sleeve",
-    "showoff", "glow_up", "spotlight_moment", "schadenfreude", "hot_hand",
+    "luminary", "squire", "cha_ching", "ace_up_the_sleeve",
+    "showoff", "flourish", "spotlight_moment", "schadenfreude", "hot_hand",
     # New position-based effects
     "gunslinger", "air_raid", "workhorse", "goal_line_vulture",
-    "possession", "deep_threat", "double_trouble",
+    "possession", "trebuchet", "double_trouble",
     "safety_blanket", "mismatch", "sniper",
-    "game_ball", "boom_week", "dud_insurance",
+    "game_ball", "spectacle", "indemnity",
 }
 
 
@@ -272,13 +289,25 @@ def _checkConditional(conditional: Optional[dict], playerStats: dict) -> tuple:
 # Second-pass effects that need access to first-pass card results
 _SECOND_PASS_EFFECTS = frozenset({
     "copycat", "chain_reaction", "bonus_round",
-    "double_down", "feast_or_famine", "last_resort",
+    "double_down", "last_resort",
+    "high_roller", "jackpot",
+    "fortitude", "immaculate",
 })
 
 # Tradeoff effects that modify the overall bonus aggregation
 _TRADEOFF_EFFECTS = frozenset({
-    "double_down", "feast_or_famine", "last_resort",
+    "double_down", "last_resort",
 })
+
+
+def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _random.Random:
+    """Create a deterministic RNG seeded by user+season+week+card.
+
+    Same card in same week always produces the same roll.
+    """
+    seedStr = f"{ctx.userId}-{ctx.season}-{ctx.weekNumber}-{userCardId}-{seedExtra}"
+    seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
+    return _random.Random(seedHash)
 
 
 def _computeCardPass(
@@ -317,11 +346,9 @@ def _computeCardPass(
     preMatchFP = primary.fpBonus
     preMatchFloobits = primary.floobits
     preMatchMult = primary.multBonus
-    preMatchXMult = primary.xMultBonus
     matchedFP = primary.fpBonus
     matchedFloobits = primary.floobits
     matchedMult = primary.multBonus
-    matchedXMult = primary.xMultBonus
 
     # Overdrive: match multiplier is 2.5x instead of 1.5x
     matchMult = 2.5 if mod == "overdrive" else DEFAULT_MATCH_MULTIPLIER
@@ -329,24 +356,20 @@ def _computeCardPass(
     if isMatch:
         matchedFP *= matchMult
         matchedFloobits = int(matchedFloobits * matchMult)
-        matchedMult *= matchMult
-        # xFPx match bonus: scale the bonus portion above 1
-        if matchedXMult > 0:
-            bonusPortion = (matchedXMult - 1) * matchMult
-            matchedXMult = 1 + bonusPortion
+        # FPx match bonus: scale the bonus portion above 1
+        if matchedMult > 1:
+            bonusPortion = (matchedMult - 1) * matchMult
+            matchedMult = 1 + bonusPortion
 
     # Apply modifier effects to primary values
-    if mod == "amplify":
-        matchedMult *= 2  # Double +FPx
-    elif mod == "cascade":
-        # Double xFPx bonus portion
-        if matchedXMult > 1:
-            matchedXMult = 1 + (matchedXMult - 1) * 2
+    if mod in ("amplify", "cascade"):
+        # Double FPx bonus portion
+        if matchedMult > 1:
+            matchedMult = 1 + (matchedMult - 1) * 2
     elif mod == "frenzy":
         matchedFP *= 2  # Double +FP
     elif mod == "grounded":
         matchedMult = 0  # Disable all mult effects
-        matchedXMult = 0
     elif mod == "payday":
         matchedFloobits *= 3  # Triple Floobits
     # 3. Check position conditional if matched
@@ -369,31 +392,26 @@ def _computeCardPass(
 
     # 4. Add secondary effects (static, from edition, no match bonus)
     secondary = EDITION_SECONDARY.get(cardEdition)
-    if secondary is None and cardEdition == 'diamond':
-        # Diamond generates random secondary at equip time — check effect_config
+    if secondary is None and cardEdition == 'prismatic':
+        # Prismatic generates random secondary at card creation — check effect_config
         secondary = effectConfig.get("secondary")
     secondaryFP = 0.0
     secondaryFloobits = 0
-    secondaryMult = 0.0   # +FPx from edition
-    secondaryXMult = 0.0  # xFPx from edition
+    secondaryMult = 0.0   # FPx factor from edition
     if secondary:
         secondaryFP = secondary.get("flatFP", 0)
         secondaryFloobits = secondary.get("floobits", 0)
         secondaryMult = secondary.get("mult", 0)
-        secondaryXMult = secondary.get("xMult", 0)
         # Grounded disables ALL multiplier effects, including edition bonuses
         if mod == "grounded":
             secondaryMult = 0.0
-            secondaryXMult = 0.0
 
     # 5. Total up
     totalCardFP = matchedFP + conditionalBonus + secondaryFP
     totalCardFloobits = matchedFloobits + secondaryFloobits
 
     # Determine primary output type
-    if primary.xMultBonus > 0:
-        outputType = "xmult"
-    elif primary.multBonus > 0:
+    if primary.multBonus > 0:
         outputType = "mult"
     elif primary.floobits > 0:
         outputType = "floobits"
@@ -401,15 +419,15 @@ def _computeCardPass(
         outputType = "fp"
     # When primary result is all zeros, infer from config
     if outputType == "fp" and primary.fpBonus == 0:
-        _XMULT_KEYS = {"xMultValue", "fpShareScale", "baseXMult", "eloPer100", "perSwapXMult"}
-        _MULT_KEYS = {"perTdMult", "perPlayerMult", "perLossMult", "baseMult", "multPercent"}
+        _MULT_KEYS = {"xMultValue", "fpShareScale", "baseXMult", "eloPer100", "perSwapXMult",
+                       "perTdMult", "perPlayerMult", "perLossMult", "baseMult", "enhancedMult",
+                       "multPercent", "perTdXMult", "perHundredYards"}
         _FLOOBITS_KEYS = {"floobits", "perTdFloobits", "fpPercent", "perMissFloobits",
-                          "perPlayerFloobits", "perStreakFloobits"}
+                          "perPlayerFloobits", "perStreakFloobits", "enhancedFloobits",
+                          "baseFloobits"}
         rewardType = effectConfig.get("rewardType")
-        if rewardType in ("xmult", "mult", "floobits"):
+        if rewardType in ("mult", "floobits"):
             outputType = rewardType
-        elif any(k in effectConfig for k in _XMULT_KEYS):
-            outputType = "xmult"
         elif any(k in effectConfig for k in _MULT_KEYS):
             outputType = "mult"
         elif category == "floobits" or any(k in effectConfig for k in _FLOOBITS_KEYS):
@@ -427,24 +445,25 @@ def _computeCardPass(
         outputType=outputType,
         primaryFP=round(matchedFP, 2),
         primaryFloobits=matchedFloobits,
-        primaryMult=round(matchedMult, 1),
-        primaryXMult=round(matchedXMult, 1),
+        primaryMult=round(matchedMult, 2),
         matchMultiplied=isMatch,
         matchMultiplier=matchMult,
         preMatchFP=round(preMatchFP, 2),
         preMatchFloobits=preMatchFloobits,
-        preMatchMult=round(preMatchMult, 1),
-        preMatchXMult=round(preMatchXMult, 1),
+        preMatchMult=round(preMatchMult, 2),
         conditionalBonus=conditionalBonus,
         conditionalLabel=conditionalLabel,
         secondaryFP=secondaryFP,
         secondaryFloobits=secondaryFloobits,
         secondaryMult=secondaryMult,
-        secondaryXMult=secondaryXMult,
         totalFP=round(totalCardFP, 2),
         floobitsEarned=totalCardFloobits,
         playerStatLine=_buildPlayerStatLine(effectName, cardPlayerId, ctx),
         equation=primary.equation,
+        isChanceEffect=bool(effectConfig.get("isChanceEffect") or effectConfig.get("primary", {}).get("isChanceEffect")),
+        chanceRoll=primary.chanceRoll,
+        chanceThreshold=primary.chanceThreshold,
+        chanceTriggered=primary.chanceTriggered,
     )
 
 
@@ -482,6 +501,39 @@ def calculateWeekCardBonuses(
         ctx.equippedCardOutputTypes.append(ec.get("outputType", "fp"))
         ctx.equippedCardEffectNames.append(ec.get("effectName", ""))
 
+    # Pre-scan for chance card synergy + Providence amplifier
+    chanceCardCount = 0
+    for eq in equippedCards:
+        ec = eq.user_card.card_template.effect_config or {}
+        if ec.get("isChanceAmplifier"):
+            chanceAmp = ec.get("primary", {}).get("chanceBonus", 0)
+            ctx.chanceBonus += chanceAmp
+        if ec.get("isChanceEffect"):
+            chanceCardCount += 1
+    ctx.chanceCardCount = chanceCardCount
+    # Innate chance synergy: each chance card boosts all others by +0.04
+    if chanceCardCount > 1:
+        ctx.chanceBonus += (chanceCardCount - 1) * 0.04
+
+    # Pre-scan for streak card synergy
+    from managers.cardEffects import STREAK_CONFIGS
+    streakCardCount = 0
+    activeStreakCount = 0
+    for eq in equippedCards:
+        ec = eq.user_card.card_template.effect_config or {}
+        effectName = ec.get("effectName", "")
+        if effectName in STREAK_CONFIGS:
+            streakCardCount += 1
+            # Season streaks with non-zero count are "active"
+            if not STREAK_CONFIGS[effectName].get("isWeekly", False):
+                if ctx.streakCounts.get(eq.id, 0) > 0:
+                    activeStreakCount += 1
+            else:
+                # Weekly streaks are always considered active
+                activeStreakCount += 1
+    ctx.streakCardCount = streakCardCount
+    ctx.activeStreakCount = activeStreakCount
+
     # Separate first-pass and second-pass cards
     firstPassCards = []
     secondPassCards = []
@@ -512,23 +564,21 @@ def calculateWeekCardBonuses(
     # Aggregate totals from all breakdowns
     for breakdown in allBreakdowns:
         result.totalBonusFP += breakdown.totalFP
-        result.totalMultBonus += breakdown.primaryMult + breakdown.secondaryMult
-        if breakdown.primaryXMult > 1:
-            result.xMultFactors.append(breakdown.primaryXMult)
-        if breakdown.secondaryXMult > 1:
-            result.xMultFactors.append(breakdown.secondaryXMult)
+        if breakdown.primaryMult > 1:
+            result.multFactors.append(round(breakdown.primaryMult, 2))
+        if breakdown.secondaryMult > 1:
+            result.multFactors.append(round(breakdown.secondaryMult, 2))
         result.floobitsEarned += breakdown.floobitsEarned
         result.cardBreakdowns.append(breakdown)
 
-    # Synergy modifier: +0.1 xFPx per unique position among equipped cards
+    # Synergy modifier: +0.1 FPx per unique position among equipped cards
     if ctx.activeModifier == "synergy":
         uniquePositions = len(set(ctx.equippedCardPositions))
         if uniquePositions > 1:
-            synergyXMult = 1 + uniquePositions * 0.1
-            result.xMultFactors.append(round(synergyXMult, 2))
+            synergyMult = 1 + uniquePositions * 0.1
+            result.multFactors.append(round(synergyMult, 2))
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
-    result.totalMultBonus = round(result.totalMultBonus, 1)
     return result
 
 
@@ -542,7 +592,7 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     normalBreakdowns = [b for b in breakdowns if b.effectName not in _TRADEOFF_EFFECTS]
 
     if "double_down" in tradeoffNames and normalBreakdowns:
-        # Large xFPx applied to lowest non-zero bonus, zeroes highest bonus
+        # Large FPx applied to lowest non-zero bonus, zeroes highest bonus
         nonZero = [b for b in normalBreakdowns if b.totalFP > 0 or b.floobitsEarned > 0]
         if len(nonZero) >= 2:
             # Sort by total FP (using FP as primary metric)
@@ -552,30 +602,8 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
             highest.primaryFP = 0
             highest.primaryFloobits = 0
             highest.primaryMult = 0
-            highest.primaryXMult = 0
             highest.totalFP = highest.conditionalBonus + highest.secondaryFP
             highest.floobitsEarned = highest.secondaryFloobits
             highest.equation = f"zeroed by Double Down (was {highest.equation})"
 
-    if "feast_or_famine" in tradeoffNames:
-        # If any card produced nothing, zero ALL card bonuses
-        anyZero = any(
-            b.totalFP == 0 and b.floobitsEarned == 0
-            for b in normalBreakdowns
-        )
-        if anyZero:
-            for b in normalBreakdowns:
-                b.primaryFP = 0
-                b.primaryFloobits = 0
-                b.primaryMult = 0
-                b.primaryXMult = 0
-                b.totalFP = b.conditionalBonus + b.secondaryFP
-                b.floobitsEarned = b.secondaryFloobits
-                b.equation = f"zeroed by Feast or Famine (was {b.equation})"
-            # Also zero the Feast or Famine card itself
-            for b in breakdowns:
-                if b.effectName == "feast_or_famine":
-                    b.primaryFP = 0
-                    b.primaryXMult = 0
-                    b.totalFP = b.conditionalBonus + b.secondaryFP
-                    b.equation = "not all cards triggered"
+

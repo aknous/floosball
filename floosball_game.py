@@ -2103,6 +2103,7 @@ class Game:
             self._accumulateOffenseStats(self.homeTeam, self.homeScore)
             self._accumulateOffenseStats(self.awayTeam, self.awayScore)
 
+            self.winningTeam.seasonTeamStats['priorStreak'] = self.winningTeam.seasonTeamStats['streak']
             if self.winningTeam.seasonTeamStats['streak'] >= 0:
                 self.winningTeam.seasonTeamStats['streak'] += 1
                 if self.winningTeam.seasonTeamStats['streak'] > 3 and not self.winningTeam.winningStreak:
@@ -2112,6 +2113,7 @@ class Game:
                 self.winningTeam.seasonTeamStats['streak'] = 1
             self._accumulateDefenseStats(self.winningTeam)
 
+            self.losingTeam.seasonTeamStats['priorStreak'] = self.losingTeam.seasonTeamStats['streak']
             if self.losingTeam.seasonTeamStats['streak'] >= 0:
                 self.losingTeam.seasonTeamStats['streak'] = -1
                 if self.losingTeam.winningStreak:

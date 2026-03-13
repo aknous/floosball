@@ -263,9 +263,10 @@ class CardManager:
         if classification and "rookie" in classification:
             sellValue *= 2
 
-        # Derive category from position if missing from effectConfig (legacy cards)
-        POSITION_CATEGORY = {1: "multiplier", 2: "floobits", 3: "flat_fp", 4: "conditional", 5: "streak"}
-        category = effectConfig.get("category") or POSITION_CATEGORY.get(template.position, "flat_fp")
+        # Derive category from effect name if missing from effectConfig (legacy cards)
+        from managers.cardEffects import EFFECT_CATEGORY
+        effectName = effectConfig.get("effectName", "")
+        category = effectConfig.get("category") or EFFECT_CATEGORY.get(effectName, "flat_fp")
 
         # Derive outputType for frontend coloring (legacy fallback)
         outputType = effectConfig.get("outputType")
