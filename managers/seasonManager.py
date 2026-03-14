@@ -2386,16 +2386,36 @@ class SeasonManager:
                 # Initialize for players missing the attribute
                 player.freeAgentYears = 1
         
+        # STEP 1.7: Resolve Fire Coach GM votes
+        logger.info("Step 1.7: Resolve GM fire coach votes")
+        gmResults = []
+        await self._resolveGmFireCoachVotes(gmResults)
+
+        # STEP 1.8: Resolve Re-sign GM votes (flags players so contract processing skips them)
+        logger.info("Step 1.8: Resolve GM re-sign votes")
+        await self._resolveGmResignVotes(gmResults)
+
         # STEP 2: Process contract decrements and retirements for rostered players
         logger.info("Step 2: Contract decrements and team retirements")
         await self._processRosteredPlayerContracts()
-        
-        # STEP 3: Replacement player generation is handled in conductFreeAgencySimulation (Step 4)
-        # This ensures all retirements (both rostered and free agent) are processed before generating replacements
-        
-        # STEP 4: Run comprehensive free agency simulation (includes free agent retirements and replacement generation)
-        # Performance ratings from previous season are used to evaluate cuts
-        logger.info("Step 4: Free agency simulation")
+
+        # STEP 2.5: Resolve Cut Player GM votes (releases players to FA pool)
+        logger.info("Step 2.5: Resolve GM cut player votes")
+        await self._resolveGmCutVotes(gmResults)
+
+        # STEP 3: FA retirements + rookie generation (split from old Step 4)
+        logger.info("Step 3: Free agent retirements and rookie generation")
+        self.playerManager._processFreeAgentRetirements(
+            self.currentSeason.seasonNumber if self.currentSeason else 1, [])
+        self.playerManager._generateReplacementPlayers(
+            self.currentSeason.seasonNumber if self.currentSeason else 1)
+
+        # STEP 3.5: FA Voting Window (GM Mode sign_fa)
+        logger.info("Step 3.5: FA voting window")
+        await self._runFaVotingWindow()
+
+        # STEP 4: FA Draft (simplified — directives first, then best available)
+        logger.info("Step 4: Free agency draft")
         await self._processFreeAgency()
 
         # STEP 4.5: Handle retired players on fantasy rosters
@@ -2642,6 +2662,7 @@ class SeasonManager:
             currentSeason=currentSeasonNum,
             leagueHighlights=leagueHighlights,
             eventLog=eventLog,
+            skipRetirements=True,  # Handled in Steps 3 (GM Mode flow)
         )
 
         # Replay events with delay so frontend sees live updates
@@ -2712,9 +2733,6 @@ class SeasonManager:
             leagueHighlights = self.currentSeason.leagueHighlights
         
         for team in teamManager.teams:
-            # Initialize cuts available for free agency
-            team.cutsAvailable = 2
-            
             for position, player in list(team.rosterDict.items()):
                 if player is None:
                     continue
@@ -2748,8 +2766,17 @@ class SeasonManager:
                             shouldRetire = randint(1, 100) > 90  # 10% retire
                 
                 if shouldRetire:
-                    # Player retires
+                    # Player retires (overrides re-sign)
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
+                elif getattr(player, '_gmResigned', False):
+                    # GM Mode: re-signed via vote — renew contract
+                    player.term = self.playerManager._getPlayerTerm(player.playerTier)
+                    player.termRemaining = player.term
+                    player._gmResigned = False
+                    leagueHighlights.insert(0, {
+                        'event': {'text': f'{player.name} re-signed with {team.name} for {player.term} season(s) (GM vote)'}
+                    })
+                    logger.info(f"GM re-sign: {player.name} renewed with {team.name} for {player.term} seasons")
                 elif player.termRemaining <= 0:
                     # Contract expired - move to free agency
                     player.previousTeam = team.name
@@ -2816,6 +2843,189 @@ class SeasonManager:
         
         self.playerManager.unusedNames.append(name)
     
+    # ── GM Mode offseason helpers ─────────────────────────────────────────
+
+    async def _resolveGmFireCoachVotes(self, gmResults: list) -> None:
+        """Resolve fire_coach GM votes for all teams."""
+        from database.connection import get_session
+        from database.models import User
+        from managers.gmManager import GmManager
+
+        session = get_session()
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            activeUsers = session.query(User).filter(User.is_active == True).count()
+            gm = GmManager(session)
+            results = gm.resolveFireCoachVotes(
+                teamManager.teams, activeUsers, season, teamManager
+            )
+            session.commit()
+            gmResults.extend(results)
+            for r in results:
+                logger.info(f"GM fire_coach result: {r['teamName']} → {r['outcome']}")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"GM fire coach resolution error: {e}")
+        finally:
+            session.close()
+
+    async def _resolveGmResignVotes(self, gmResults: list) -> None:
+        """Resolve resign_player GM votes. Sets _gmResigned flag on players."""
+        from database.connection import get_session
+        from database.models import User
+        from managers.gmManager import GmManager
+
+        session = get_session()
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            activeUsers = session.query(User).filter(User.is_active == True).count()
+            gm = GmManager(session)
+            results = gm.resolveResignVotes(
+                teamManager.teams, activeUsers, season, self.playerManager
+            )
+            session.commit()
+            gmResults.extend(results)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"GM re-sign resolution error: {e}")
+        finally:
+            session.close()
+
+    async def _resolveGmCutVotes(self, gmResults: list) -> None:
+        """Resolve cut_player GM votes. Cut players join the FA pool."""
+        from database.connection import get_session
+        from database.models import User
+        from managers.gmManager import GmManager
+
+        session = get_session()
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            activeUsers = session.query(User).filter(User.is_active == True).count()
+            # Build position-keyed FA lists for releasePlayerToFreeAgency
+            freeAgentLists = {
+                'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
+                'rb': [p for p in self.playerManager.freeAgents if p.position.value == 2],
+                'wr': [p for p in self.playerManager.freeAgents if p.position.value == 3],
+                'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
+                'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
+            }
+            gm = GmManager(session)
+            results = gm.resolveCutVotes(
+                teamManager.teams, activeUsers, season, self.playerManager,
+                freeAgentLists
+            )
+            session.commit()
+            gmResults.extend(results)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"GM cut resolution error: {e}")
+        finally:
+            session.close()
+
+    async def _runFaVotingWindow(self) -> None:
+        """Open FA voting window, wait for duration, then resolve sign_fa votes."""
+        from constants import GM_FA_WINDOW_FAST, GM_FA_WINDOW_SCHEDULED
+        import asyncio
+
+        # Determine window duration based on timing mode
+        timingMode = getattr(self.timingManager, 'timingMode', 'fast')
+        duration = GM_FA_WINDOW_FAST if timingMode == 'fast' else GM_FA_WINDOW_SCHEDULED
+
+        # Set flag so API endpoints know the window is open
+        self._faWindowOpen = True
+
+        # Broadcast FA window open
+        if BROADCASTING_AVAILABLE and broadcaster:
+            try:
+                faPool = [
+                    {"id": p.id, "name": p.name, "position": p.position.name,
+                     "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
+                    for p in self.playerManager.freeAgents
+                ]
+                from api.event_models import GmEvent
+                await broadcaster.broadcast_season_event(
+                    GmEvent.faWindowOpen(
+                        self.currentSeason.seasonNumber if self.currentSeason else 0,
+                        faPool, duration
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Could not broadcast FA window open: {e}")
+
+        logger.info(f"FA voting window open for {duration}s")
+        await asyncio.sleep(duration)
+        self._faWindowOpen = False
+
+        # Broadcast FA window close
+        if BROADCASTING_AVAILABLE and broadcaster:
+            try:
+                from api.event_models import GmEvent
+                await broadcaster.broadcast_season_event(
+                    GmEvent.faWindowClose(
+                        self.currentSeason.seasonNumber if self.currentSeason else 0,
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Could not broadcast FA window close: {e}")
+
+        # Resolve sign_fa ballots via RCV and set directives on playerManager
+        from database.connection import get_session
+        from database.models import User
+        from managers.gmManager import GmManager
+
+        session = get_session()
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            activeUsers = session.query(User).filter(User.is_active == True).count()
+
+            # Build open positions per team
+            teamOpenPositions = {}
+            for team in teamManager.teams:
+                openPositions = []
+                posMap = {'qb': 1, 'rb': 2, 'wr1': 3, 'wr2': 3, 'te': 4, 'k': 5}
+                for slot, posVal in posMap.items():
+                    if team.rosterDict.get(slot) is None:
+                        openPositions.append(posVal)
+                if openPositions:
+                    teamOpenPositions[team.id] = openPositions
+
+            freeAgentLists = {
+                'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
+                'rb': [p for p in self.playerManager.freeAgents if p.position.value == 2],
+                'wr': [p for p in self.playerManager.freeAgents if p.position.value == 3],
+                'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
+                'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
+            }
+
+            gm = GmManager(session)
+            directives = gm.resolveSignFaVotes(
+                teamManager.teams, activeUsers, season,
+                freeAgentLists, teamOpenPositions
+            )
+            session.commit()
+
+            # Pass directives to playerManager for use in FA draft
+            self.playerManager._gmFaDirectives = directives
+            if directives:
+                logger.info(f"GM FA directives for {len(directives)} team(s)")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"GM FA vote resolution error: {e}")
+        finally:
+            session.close()
+
     # NOTE: This method is no longer used - free agent retirements are handled
     # by playerManager._processFreeAgentRetirements() within conductFreeAgencySimulation()
     # Kept for reference only

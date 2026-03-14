@@ -34,6 +34,7 @@ from constants import (
     QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
     TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_REASONABLE_RATIO, YARDS_TO_FIRST_DOWN,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
+    CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
@@ -1217,11 +1218,13 @@ class Game:
         else:
             self.awayTimeoutsRemaining = max(0, self.awayTimeoutsRemaining - 1)
         self.clockRunning = False
-        self.gameFeed.insert(0, {'event': {
+        timeoutEvent = {
             'text': f'{self.offensiveTeam.name} calls timeout',
             'quarter': self.currentQuarter,
             'timeRemaining': self.formatTime(self.gameClockSeconds),
-        }})
+        }
+        self.gameFeed.insert(0, {'event': timeoutEvent})
+        self.broadcastGameState(includeLastPlay=False, eventMessage=timeoutEvent)
 
     def _checkDefensiveTimeout(self):
         """Defense calls timeout to stop the clock when trailing and the offense is milking clock."""
@@ -1259,11 +1262,13 @@ class Game:
         else:
             self.awayTimeoutsRemaining = max(0, self.awayTimeoutsRemaining - 1)
         self.clockRunning = False
-        self.gameFeed.insert(0, {'event': {
+        timeoutEvent = {
             'text': f'{self.defensiveTeam.name} calls timeout',
             'quarter': self.currentQuarter,
             'timeRemaining': self.formatTime(self.gameClockSeconds),
-        }})
+        }
+        self.gameFeed.insert(0, {'event': timeoutEvent})
+        self.broadcastGameState(includeLastPlay=False, eventMessage=timeoutEvent)
 
     def _runPassBias(self, gameplan) -> int:
         """Map runPassRatio (0.25–0.75) to threshold offset (-2 to +2) for batched_randint(1,10)."""
@@ -1986,7 +1991,12 @@ class Game:
         self.play.playText = text
 
     def _evaluateClutchChoke(self):
-        """Evaluate whether the current play qualifies as a clutch or choke moment."""
+        """Evaluate whether the current play qualifies as a clutch or choke moment.
+
+        Clutch = big moments: TDs, FGs, big gainers, 4th down conversions.
+        Choke = costly mistakes: turnovers, missed FGs, sacks, drops.
+        Uses asymmetric thresholds — choke has a lower bar than clutch.
+        """
         play = self.play
         if play.gamePressure < CLUTCH_PRESSURE_THRESHOLD:
             return
@@ -2010,23 +2020,32 @@ class Game:
                 play.keyPressureMod = play.qbPressureMod
                 play.clutchPlayerName = play.passer.name if play.passer else ''
 
-        if abs(play.keyPressureMod) < CLUTCH_MODIFIER_THRESHOLD:
+        meetsClutchThreshold = play.keyPressureMod >= CLUTCH_MODIFIER_THRESHOLD
+        meetsChokeThreshold = play.keyPressureMod <= -CHOKE_MODIFIER_THRESHOLD
+
+        if not (meetsClutchThreshold or meetsChokeThreshold):
             return
 
+        # Clutch: scoring plays, big gainers, 4th down conversions
         isPositiveOutcome = (
-            play.isPassCompletion or play.isTd or play.isFgGood
-            or play.playResult == PlayResult.FirstDown
+            play.isTd
+            or play.isFgGood
+            or (play.isPassCompletion and play.yardage >= 20)
+            or (play.playType == PlayType.Run and play.yardage >= 15)
+            or (getattr(play, 'down', 0) == 4 and play.playResult == PlayResult.FirstDown)
         )
+        # Choke: turnovers, missed FGs, sacks, drops, turnover on downs
         isNegativeOutcome = (
             play.isInterception or play.isFumbleLost or play.isSack
             or play.passIsDropped
+            or play.playResult == PlayResult.TurnoverOnDowns
             or (play.playType == PlayType.FieldGoal and not play.isFgGood)
             or (play.playType == PlayType.Run and play.yardage <= 0)
         )
 
-        if play.keyPressureMod >= CLUTCH_MODIFIER_THRESHOLD and isPositiveOutcome:
+        if meetsClutchThreshold and isPositiveOutcome:
             play.isClutchPlay = True
-        elif play.keyPressureMod <= -CLUTCH_MODIFIER_THRESHOLD and isNegativeOutcome:
+        elif meetsChokeThreshold and isNegativeOutcome:
             play.isChokePlay = True
 
     def _accumulateOffenseStats(self, team, score):
@@ -2805,15 +2824,11 @@ class Game:
                     # After kneel: defense gets a chance to call timeout before play clock drains
                     if self.play.playType is PlayType.Kneel:
                         self._checkDefensiveTimeout()
-                        logging.warning(f"[KNEEL] clockRunning={self.clockRunning}, gameClockSeconds={self.gameClockSeconds}")
                         if self.clockRunning and self.gameClockSeconds > 0:
                             # No timeout called — drain the play clock (time between plays)
                             playClockDrain = min(36, self.gameClockSeconds)
-                            logging.warning(f"[KNEEL] Draining play clock: {playClockDrain}s, clock will be {self.gameClockSeconds - playClockDrain}")
                             self.consumeGameTime(playClockDrain)
                             self.checkTwoMinuteWarning()
-                        else:
-                            logging.warning(f"[KNEEL] Play clock drain SKIPPED")
 
                     # Fall through to outcome section so the down is advanced correctly
 
@@ -2952,6 +2967,7 @@ class Game:
 
                     elif self.play.yardage >= self.yardsToFirstDown:
                         downBefore = self.down
+                        self.play.down = downBefore  # Store pre-play down for clutch/choke evaluation
                         self.down = 1
                         if self.offensiveTeam is self.homeTeam:
                             self.home1stDownsTotal += 1
@@ -3057,7 +3073,16 @@ class Game:
                         else:
                             self.play.playResult = PlayResult.TurnoverOnDowns
                             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
+                            self.clockRunning = False  # Clock stops after turnover on downs
+                            self.formatPlayText()
+                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
+                                self.highlights.insert(0, {'play': self.play})
+                                self.leagueHighlights.insert(0, {'play': self.play})
+                            self.gameFeed.insert(0, {'play': self.play})
+                            self.broadcastGameState(includeLastPlay=True)
                             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
+                            self._pendingPossessionChange = True
+                            lastPlayFormatted = True
                             break
         
         # Game over - ensure the final play is formatted, in gameFeed, and broadcast.
@@ -3157,9 +3182,11 @@ class Game:
         # Player postgame processing: sync stats, update confidence/determination, compute derived stats
         self._processPlayerPostgame()
         
-        # Broadcast final game state with the "Final" event message so the play feed updates live
+        # Broadcast final game state with the "Final" event message so the play feed updates live.
+        # Include the last play alongside the event so the frontend always gets the final play
+        # even if the earlier per-play broadcast was missed (async task timing).
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
-            self.broadcastGameState(includeLastPlay=False, eventMessage=finalEventMessage, isFinalBroadcast=True)
+            self.broadcastGameState(includeLastPlay=True, eventMessage=finalEventMessage, isFinalBroadcast=True)
         
         # Broadcast game end event
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -3187,8 +3214,13 @@ class Game:
                 }
             )
             broadcaster.broadcast_sync(self.id, event)
-    
-    
+
+        # Yield to the event loop so all queued broadcast tasks (final play,
+        # "Final" event, game_end) actually send before playGame() returns.
+        # Without this, create_task broadcasts have no await point to execute.
+        await asyncio.sleep(0)
+
+
     def getOrdinal(self, n):
         """Get ordinal suffix for a number (1st, 2nd, 3rd, 4th)"""
         if n == 1:
@@ -3536,6 +3568,17 @@ class Game:
         homeWpa = float(newHomeWp - self.previousHomeWinProbability)
         awayWpa = float(newAwayWp - self.previousAwayWinProbability)
 
+        # DEBUG: Log large WPA to diagnose Q2 spikes
+        if abs(homeWpa) >= 5.0:
+            logging.warning(
+                f"[WP-DEBUG] game={self.id} Q{self.currentQuarter} {self.formatTime(self.gameClockSeconds)} "
+                f"| homeWpa={homeWpa:+.1f} prevHomeWp={self.previousHomeWinProbability:.1f} newHomeWp={newHomeWp:.1f} "
+                f"| score={self.homeScore}-{self.awayScore} down={self.down} ytfd={self.yardsToFirstDown} yte={self.yardsToEndzone} "
+                f"| off={self.offensiveTeam.abbr} includePlay={includeLastPlay} event={'yes' if eventMessage else 'no'} "
+                f"| playType={getattr(self.play, 'playType', None)} playResult={getattr(self.play, 'playResult', None)} "
+                f"| scoreChange={getattr(self.play, 'scoreChange', False)}"
+            )
+
         # Compute upset alert: pre-game underdog (35% or less) is now favored by 65%+, starting Q2.
         # Only qualifies as an upset if the pre-game favorite is currently in a playoff spot
         # (top half of their league standings as of this week).
@@ -3561,9 +3604,40 @@ class Game:
 
         # Build last play data if requested (and no event message)
         lastPlayData = None
+        finalPlayData = None  # Carries the actual final play alongside the "Final" event
         if eventMessage:
             # Use event message instead of play data
             lastPlayData = eventMessage
+            # For final broadcasts, also include the actual last play so the frontend
+            # always gets it (even if the earlier per-play broadcast didn't arrive).
+            if isFinalBroadcast and includeLastPlay and hasattr(self, 'play') and self.play:
+                playObj = self.play
+                finalPlayData = {
+                    'playNumber': self.totalPlays,
+                    'quarter': getattr(playObj, 'quarter', self.currentQuarter),
+                    'timeRemaining': getattr(playObj, 'timeRemaining', self.formatTime(self.gameClockSeconds)),
+                    'down': getattr(playObj, 'down', self.down),
+                    'distance': getattr(playObj, 'yardsTo1st', self.yardsToFirstDown),
+                    'yardLine': getattr(playObj, 'yardLine', self.yardLine),
+                    'playType': playObj.playType.name if hasattr(playObj, 'playType') and hasattr(playObj.playType, 'name') else 'Unknown',
+                    'yardsGained': getattr(playObj, 'yardage', 0),
+                    'description': getattr(playObj, 'playText', ''),
+                    'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
+                    'isTouchdown': getattr(playObj, 'isTd', False),
+                    'isTurnover': (getattr(playObj, 'isFumbleLost', False) or getattr(playObj, 'isInterception', False)),
+                    'isSack': getattr(playObj, 'isSack', False),
+                    'scoreChange': getattr(playObj, 'scoreChange', False),
+                    'homeTeamScore': getattr(playObj, 'homeTeamScore', None),
+                    'awayTeamScore': getattr(playObj, 'awayTeamScore', None),
+                    'offensiveTeam': playObj.offense.abbr if hasattr(playObj, 'offense') else self.offensiveTeam.abbr,
+                    'defensiveTeam': playObj.defense.abbr if hasattr(playObj, 'defense') else self.defensiveTeam.abbr,
+                    'homeWpa': getattr(playObj, 'homeWpa', 0),
+                    'awayWpa': getattr(playObj, 'awayWpa', 0),
+                    'isBigPlay': getattr(playObj, 'isBigPlay', False),
+                    'isClutchPlay': getattr(playObj, 'isClutchPlay', False),
+                    'isChokePlay': getattr(playObj, 'isChokePlay', False),
+                    'isMomentumShift': getattr(playObj, 'isMomentumShift', False),
+                }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
             # Store WP data on the Play object so it persists in gameFeed references
             # (gameFeed stores {'play': self.play} by reference)
@@ -3579,9 +3653,11 @@ class Game:
                 self._applyMomentumEvent(MOMENTUM_BIG_PLAY_BONUS, benefitingTeam)
 
             # Only keep clutch/choke tags if the play had meaningful WP impact
+            # Asymmetric: clutch needs bigger WPA swing than choke
             wpImpact = max(abs(homeWpa), abs(awayWpa))
-            if wpImpact < 5.0:
+            if self.play.isClutchPlay and wpImpact < CLUTCH_WPA_THRESHOLD:
                 self.play.isClutchPlay = False
+            if self.play.isChokePlay and wpImpact < CHOKE_WPA_THRESHOLD:
                 self.play.isChokePlay = False
 
             lastPlayData = {
@@ -3653,6 +3729,7 @@ class Game:
             'yardsToSafety': (100 - self.yardsToEndzone) if hasattr(self, 'yardsToEndzone') else None,
             'isPossessionChange': isPossessionChange,
             'lastPlay': lastPlayData,
+            'finalPlay': finalPlayData,
             'homeWinProbability': round(newHomeWp, 1),
             'awayWinProbability': round(newAwayWp, 1),
             'homeWpa': round(homeWpa, 2),
@@ -3967,12 +4044,18 @@ class Game:
                 self.gameClockSeconds = 600  # 10 minute OT
                 self.isOvertime = True
                 self.twoMinuteWarningShown = False
+                self.homeTimeoutsRemaining = 2
+                self.awayTimeoutsRemaining = 2
             # else game is over
         elif self.currentQuarter >= 5:
             # Additional OT periods - reset clock if game is still tied
             if self.homeScore == self.awayScore:
                 self.gameClockSeconds = 600  # Another 10 minute OT period
                 self.twoMinuteWarningShown = False
+                self.homeTimeoutsRemaining = 2
+                self.awayTimeoutsRemaining = 2
+                self.otFirstPossComplete = False
+                self.otSecondPossComplete = False
                 # Keep currentQuarter at 5 for tracking (all OT periods shown as "OT")
             # else game is over with a winner
     
@@ -4295,6 +4378,7 @@ class Play():
         self.passIsDropped = False
         self.isInBounds = True  # Default to in bounds
         self.targetSideline = False  # True when play caller targets sideline routes
+        self.down = 0                    # Pre-play down (for clutch/choke 4th down checks)
         self.gamePressure = 0            # Snapshot of game pressure at play time
         self.keyPressureMod = 0.0        # The key player's pressure modifier
         self.qbPressureMod = 0.0         # QB-specific pressure modifier (pass plays)
@@ -5210,7 +5294,7 @@ class Play():
                 )
 
                 # QB choking under pressure increases INT risk
-                if qbPressureMod <= -CLUTCH_MODIFIER_THRESHOLD:
+                if qbPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
                     chokeIntBoost = abs(qbPressureMod) * 0.5
                     catchProbs['intProb'] = min(25, catchProbs['intProb'] + chokeIntBoost)
 

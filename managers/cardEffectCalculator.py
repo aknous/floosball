@@ -57,6 +57,7 @@ class CardCalcContext:
     favoriteTeamInPlayoffs: bool = False
     favoriteTeamWonThisWeek: bool = False
     favoriteTeamOpponentElo: float = 1500.0
+    favoriteTeamOpponentName: str = ""
     favoriteTeamBigPlays: int = 0
     favoriteTeamGameFinal: bool = False
     favoriteTeamSeasonUpsetWins: int = 0
@@ -109,6 +110,7 @@ class CardCalcContext:
     # Streak card infrastructure
     streakCardCount: int = 0  # Number of streak cards in hand (for synergy effects)
     activeStreakCount: int = 0  # Number of season streak cards with active (non-zero) streaks
+    liveStreakConditionsMet: Dict[int, bool] = field(default_factory=dict)  # eqId → conditionMet this game
 
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""

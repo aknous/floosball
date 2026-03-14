@@ -55,6 +55,11 @@ class EventType(Enum):
     OFFSEASON_TEAM_COMPLETE = "offseason_team_complete"
     OFFSEASON_COMPLETE      = "offseason_complete"
 
+    # GM Mode events
+    GM_VOTE_RESOLVED = "gm_vote_resolved"
+    GM_FA_WINDOW_OPEN = "gm_fa_window_open"
+    GM_FA_WINDOW_CLOSE = "gm_fa_window_close"
+
     # System events
     ERROR = "error"
     INFO = "info"
@@ -435,6 +440,47 @@ class PlayerEvent:
             'homeTeamStats': homeTeamStats or {},
             'awayTeamStats': awayTeamStats or {},
             'message': f"Player stats updated for game {gameId}"
+        }
+
+
+class GmEvent:
+    """Factory for GM Mode events"""
+
+    @staticmethod
+    def voteResolved(teamId: int, teamName: str, voteType: str,
+                     outcome: str, targetPlayerName: str = None,
+                     totalVotes: int = 0, threshold: int = 0,
+                     probability: float = 0.0, details: str = None) -> Dict[str, Any]:
+        return {
+            'event': EventType.GM_VOTE_RESOLVED.value,
+            'timestamp': datetime.now().isoformat(),
+            'teamId': teamId,
+            'teamName': teamName,
+            'voteType': voteType,
+            'outcome': outcome,
+            'targetPlayerName': targetPlayerName,
+            'totalVotes': totalVotes,
+            'threshold': threshold,
+            'probability': probability,
+            'details': details,
+        }
+
+    @staticmethod
+    def faWindowOpen(season: int, faPool: List[Dict], durationSeconds: int) -> Dict[str, Any]:
+        return {
+            'event': EventType.GM_FA_WINDOW_OPEN.value,
+            'timestamp': datetime.now().isoformat(),
+            'season': season,
+            'faPool': faPool,
+            'durationSeconds': durationSeconds,
+        }
+
+    @staticmethod
+    def faWindowClose(season: int) -> Dict[str, Any]:
+        return {
+            'event': EventType.GM_FA_WINDOW_CLOSE.value,
+            'timestamp': datetime.now().isoformat(),
+            'season': season,
         }
 
 

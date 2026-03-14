@@ -44,6 +44,7 @@ def _liveStatsToDbFormat(gameStatsDict: dict, teamId: int = 0) -> dict:
         },
         "kicking_stats": {
             "fgs": kicking.get("fgs", 0),
+            "fgAtt": kicking.get("fgAtt", 0),
             "longest": kicking.get("longest", 0),
             "fg40plus": kicking.get("fg40+", 0),
         },
@@ -573,6 +574,7 @@ class FantasyTracker:
                         session, roster, rosterPlayerIds, userEquipped,
                         cardCalcStats, weekRawFP, rosterPlayerRatings,
                         rosterTotalTds, playerPositionMap, userId,
+                        gamesActive=gamesActive,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
                     # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
@@ -750,6 +752,7 @@ class FantasyTracker:
         self, session, roster, rosterPlayerIds, userEquipped,
         weekPlayerStats, weekRawFP, rosterPlayerRatings,
         rosterTotalTds, playerPositionMap, userId,
+        gamesActive=False,
     ):
         """Build a CardCalcContext for card bonus computation."""
         from database.models import FantasyRosterSwap, Game, User
@@ -762,6 +765,7 @@ class FantasyTracker:
         streakCounts = {
             eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
         }
+
         rosterPlayerPositions = {
             pid: playerPositionMap.get(pid, 0) for pid in rosterPlayerIds
         }
@@ -777,6 +781,7 @@ class FantasyTracker:
         favoriteTeamInPlayoffs = False
         favoriteTeamWonThisWeek = False
         favoriteTeamOpponentElo = 1500.0
+        favoriteTeamOpponentName = ""
         favoriteTeamBigPlays = 0
         favoriteTeamGameFinal = False
         teamResults = {}
@@ -810,7 +815,7 @@ class FantasyTracker:
                 favoriteTeamSeasonLosses = favStats.get('losses', 0)
                 favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
 
-                # Big plays from live games
+                # Big plays + opponent info from live games
                 if sm and sm.currentSeason and sm.currentSeason.activeGames:
                     for game in sm.currentSeason.activeGames:
                         homeTeam = getattr(game, 'homeTeam', None)
@@ -818,6 +823,10 @@ class FantasyTracker:
                         hId = getattr(homeTeam, 'id', None)
                         aId = getattr(awayTeam, 'id', None)
                         if userFavoriteTeamId in (hId, aId):
+                            oppTeamLive = awayTeam if userFavoriteTeamId == hId else homeTeam
+                            if oppTeamLive and not favoriteTeamOpponentName:
+                                favoriteTeamOpponentElo = getattr(oppTeamLive, 'elo', 1500.0)
+                                favoriteTeamOpponentName = getattr(oppTeamLive, 'abbr', '') or getattr(oppTeamLive, 'name', '')
                             for entry in getattr(game, 'gameFeed', []):
                                 if entry.get('isBigPlay'):
                                     favoriteTeamBigPlays += 1
@@ -839,6 +848,7 @@ class FantasyTracker:
                     oppTeam = teamManager.getTeamById(oppId)
                     if oppTeam:
                         favoriteTeamOpponentElo = getattr(oppTeam, 'elo', 1500.0)
+                        favoriteTeamOpponentName = getattr(oppTeam, 'abbr', '') or getattr(oppTeam, 'name', '')
                     # teamGameMap only contains final games, so presence = final
                     favoriteTeamGameFinal = True
 
@@ -939,31 +949,40 @@ class FantasyTracker:
                     isHomeGame = (hId == userFavoriteTeamId)
 
                     maxDeficit = 0
-                    lastGoAheadEntry = None
-                    for entry in getattr(game, 'gameFeed', []):
-                        hScore = entry.get('homeTeamScore', 0)
-                        aScore = entry.get('awayTeamScore', 0)
+                    lastGoAheadPlay = None
+                    prevDiff = 0  # start tied (0-0)
+                    # gameFeed is newest-first; reverse for chronological order
+                    for entry in reversed(getattr(game, 'gameFeed', [])):
+                        playObj = entry.get('play')
+                        if not playObj or not getattr(playObj, 'scoreChange', False):
+                            continue
+                        hScore = getattr(playObj, 'homeTeamScore', 0)
+                        aScore = getattr(playObj, 'awayTeamScore', 0)
                         # Positive = favorite team leading, negative = trailing
                         diff = (hScore - aScore) if isHomeGame else (aScore - hScore)
                         if diff < 0:
                             maxDeficit = max(maxDeficit, abs(diff))
 
                         # Track go-ahead plays (team goes from tied/behind to ahead)
-                        prevH = entry.get('prevHomeScore', hScore)
-                        prevA = entry.get('prevAwayScore', aScore)
-                        prevDiff = (prevH - prevA) if isHomeGame else (prevA - prevH)
                         if diff > 0 and prevDiff <= 0:
-                            lastGoAheadEntry = entry
+                            lastGoAheadPlay = playObj
+                        prevDiff = diff
 
                     if maxDeficit > 0:
                         favoriteTeamComebackWin = True
                         favoriteTeamLargestDeficit = maxDeficit
 
                     # Walk-off: go-ahead in last 60 sec of Q4 or during OT
-                    if lastGoAheadEntry:
-                        q = lastGoAheadEntry.get('quarter', 0)
-                        clock = lastGoAheadEntry.get('gameClockSeconds', 999)
-                        if q == 5 or (q == 4 and clock <= 60):
+                    if lastGoAheadPlay:
+                        q = getattr(lastGoAheadPlay, 'quarter', 0)
+                        timeStr = getattr(lastGoAheadPlay, 'timeRemaining', '15:00')
+                        # Parse "M:SS" to seconds
+                        try:
+                            parts = timeStr.split(':')
+                            clock = int(parts[0]) * 60 + int(parts[1])
+                        except (ValueError, IndexError):
+                            clock = 999
+                        if q >= 5 or (q == 4 and clock <= 60):
                             favoriteTeamWalkOffWin = True
                     break  # Only process the matching game
 
@@ -999,6 +1018,17 @@ class FantasyTracker:
         except Exception:
             pass
 
+        # Live streak condition evaluation (during active games)
+        liveStreakConditionsMet = {}
+        if gamesActive:
+            liveStreakConditionsMet = self._evaluateLiveStreakConditions(
+                userEquipped, weekPlayerStats, rosterPlayerIds,
+                rosterTotalTds, weekRawFP, playerPositionMap,
+                streakCounts, teamResults,
+                userFavoriteTeamId, favoriteTeamWonThisWeek,
+                favoriteTeamOpponentElo, favoriteTeamElo,
+            )
+
         return CardCalcContext(
             userId=userId,
             season=season,
@@ -1021,6 +1051,7 @@ class FantasyTracker:
             favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
             favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
             favoriteTeamOpponentElo=favoriteTeamOpponentElo,
+            favoriteTeamOpponentName=favoriteTeamOpponentName,
             favoriteTeamBigPlays=favoriteTeamBigPlays,
             favoriteTeamGameFinal=favoriteTeamGameFinal,
             rosterUnchangedWeeks=rosterUnchangedWeeks,
@@ -1035,7 +1066,83 @@ class FantasyTracker:
             favoriteTeamWalkOffWin=favoriteTeamWalkOffWin,
             activeModifier=activeModifier,
             unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+            liveStreakConditionsMet=liveStreakConditionsMet,
         )
+
+    def _evaluateLiveStreakConditions(
+        self, userEquipped, weekPlayerStats, rosterPlayerIds,
+        rosterTotalTds, weekRawFP, playerPositionMap,
+        streakCounts, teamResults,
+        userFavoriteTeamId, favoriteTeamWonThisWeek,
+        favoriteTeamOpponentElo, favoriteTeamElo,
+    ) -> dict:
+        """Evaluate streak conditions from live game data.
+
+        Returns {eqId: bool} for each season-streak card.
+        If condition is met, also increments streakCounts[eqId] in-place.
+        """
+        from managers.cardEffects import STREAK_CONFIGS
+
+        result = {}
+        # Find kicker stats once (position 5)
+        kickerStats = None
+        for pid in rosterPlayerIds:
+            if playerPositionMap.get(pid) == 5:
+                kickerStats = weekPlayerStats.get(pid, {}).get("kicking_stats", {})
+                break
+
+        for eq in userEquipped:
+            ec = eq.user_card.card_template.effect_config or {}
+            effectName = ec.get("effectName", "")
+            category = ec.get("category", "")
+            if category != "streak":
+                continue
+            config = STREAK_CONFIGS.get(effectName, {})
+            if config.get("isWeekly"):
+                continue
+
+            condition = config.get("resetCondition", "equipped")
+            conditionMet = False
+
+            if condition == "equipped":
+                conditionMet = True
+            elif condition == "roster_unchanged":
+                conditionMet = True  # Already locked
+            elif condition == "kicker_fg":
+                conditionMet = (kickerStats or {}).get("fgs", 0) > 0
+            elif condition == "kicker_35plus":
+                conditionMet = (kickerStats or {}).get("longest", 0) >= 35
+            elif condition == "kicker_no_miss":
+                # Can't confirm "no miss" until game ends — defer
+                fgAtt = (kickerStats or {}).get("fgAtt", 0)
+                fgMade = (kickerStats or {}).get("fgs", 0)
+                if fgAtt > 0 and fgMade < fgAtt:
+                    conditionMet = False  # Already missed one
+                else:
+                    conditionMet = False  # Can't confirm yet, show base
+            elif condition == "roster_td":
+                conditionMet = rosterTotalTds > 0
+            elif condition == "roster_75fp":
+                conditionMet = weekRawFP >= 75
+            elif condition == "card_player_team_wins":
+                cardPlayerId = eq.user_card.card_template.player_id
+                cardPlayerStats = weekPlayerStats.get(cardPlayerId, {})
+                teamId = cardPlayerStats.get("teamId")
+                conditionMet = teamResults.get(teamId, False) if teamId else False
+            elif condition == "favorite_team_wins":
+                conditionMet = favoriteTeamWonThisWeek
+            elif condition == "favorite_team_upset_win":
+                conditionMet = (
+                    favoriteTeamWonThisWeek
+                    and favoriteTeamOpponentElo > favoriteTeamElo
+                )
+
+            result[eq.id] = conditionMet
+            if conditionMet:
+                # Increment streak count for this computation
+                streakCounts[eq.id] = getattr(eq, 'streak_count', 0) + 1
+
+        return result
 
     @staticmethod
     def _breakdownToDict(b) -> dict:

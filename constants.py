@@ -55,8 +55,11 @@ YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 
 # Clutch/Choke thresholds
-CLUTCH_PRESSURE_THRESHOLD = 50   # Min gamePressure (0-100) for clutch/choke consideration
-CLUTCH_MODIFIER_THRESHOLD = 2.0  # Min abs(keyPressureMod) for clutch/choke indicator
+CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
+CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
+CHOKE_MODIFIER_THRESHOLD = 1.0    # Min abs(keyPressureMod) for choke (lower bar than clutch)
+CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
+CHOKE_WPA_THRESHOLD = 3.0         # Min WPA% impact for choke plays
 
 # Momentum system
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
@@ -109,19 +112,19 @@ SEASON_FP_PAYOUT_DIVISOR = 25  # 1 Floobit per N FP
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
-    "displayName": "Extra Swap Token",
-    "description": "Grants +1 roster swap. Use it to make an additional player change.",
+    "displayName": "Dispensation",
+    "description": "+1 roster swap to make an additional player change.",
     "price": 25,
 }
 POWERUP_MODIFIER_NULLIFIER = {
     "slug": "modifier_nullifier",
-    "displayName": "Modifier Nullifier",
-    "description": "Override this week's modifier to Steady (no effect) for your cards only.",
+    "displayName": "Annulment",
+    "description": "Your cards operate under Steady (no modifier effect) this week.",
     "price": 40,
 }
 POWERUP_TEMP_FLEX = {
     "slug": "temp_flex",
-    "displayName": "Temporary Flex Slot",
+    "displayName": "Conscription",
     "description": "Adds a FLEX roster slot (any position) for 4 weeks.",
     "price": 150,
     "durationWeeks": 4,
@@ -129,13 +132,13 @@ POWERUP_TEMP_FLEX = {
 }
 POWERUP_SHOP_REROLL = {
     "slug": "shop_reroll",
-    "displayName": "Shop Reroll",
-    "description": "Regenerate your featured shop cards with a fresh selection.",
+    "displayName": "Requisition",
+    "description": "Regenerates your featured shop cards.",
     "price": 20,
 }
 POWERUP_TEMP_CARD_SLOT = {
     "slug": "temp_card_slot",
-    "displayName": "Temporary Card Slot",
+    "displayName": "Accession",
     "description": "Adds a 6th card equipment slot for 4 weeks.",
     "price": 150,
     "durationWeeks": 4,
@@ -144,7 +147,7 @@ POWERUP_TEMP_CARD_SLOT = {
 
 POWERUP_FORTUNES_FAVOR = {
     "slug": "fortunes_favor",
-    "displayName": "Fortune's Favor",
+    "displayName": "Patronage",
     "description": "Boosts all chance card trigger rates by 10% for 3 weeks.",
     "price": 100,
     "durationWeeks": 3,
@@ -162,3 +165,55 @@ POWERUP_CATALOG = {
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
+
+# ─── GM Mode ────────────────────────────────────────────────────────────────────
+
+GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa"}
+
+# Cost per vote (Floobits)
+GM_VOTE_COST = {
+    "fire_coach": 15,
+    "cut_player": 10,
+    "resign_player": 10,
+    "sign_fa": 12,
+}
+
+# Action weight for threshold calculation
+GM_VOTE_WEIGHT = {
+    "fire_coach": 1.5,
+    "cut_player": 1.0,
+    "resign_player": 0.75,
+    "sign_fa": 1.0,
+}
+
+# Base minimum votes required (floor of threshold)
+GM_VOTE_BASE_MIN = {
+    "fire_coach": 8,
+    "cut_player": 5,
+    "resign_player": 4,
+    "sign_fa": 5,
+}
+
+# Per-user limits
+GM_VOTES_PER_SEASON = 20
+GM_VOTES_PER_TYPE = 8
+GM_VOTES_PER_TARGET = 5
+
+# FA ballot
+GM_FA_BALLOT_COST = 15
+GM_FA_BALLOT_MAX_RANKINGS = 5
+
+# FA voting window duration (seconds)
+GM_FA_WINDOW_FAST = 30
+GM_FA_WINDOW_SCHEDULED = 7200  # 2 hours
+
+# Threshold formula: threshold = max(baseMin, ceil(activeUsers * 0.15 * weight))
+GM_THRESHOLD_USER_FACTOR = 0.15
+
+# Probability: at threshold = 45%, linear to 95% at 2x threshold
+GM_PROB_BASE = 0.45
+GM_PROB_RANGE = 0.50
+GM_PROB_CAP = 0.95
+
+# Coach pool
+GM_COACH_POOL_SIZE = 5

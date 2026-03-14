@@ -24,15 +24,20 @@ class CardTemplateRepository:
     def getById(self, templateId: int) -> Optional[CardTemplate]:
         return self.session.query(CardTemplate).filter_by(id=templateId).first()
 
-    def getBySeason(self, season: int) -> List[CardTemplate]:
-        return self.session.query(CardTemplate).filter_by(season_created=season).all()
+    def getBySeason(self, season: int, includeUpgraded: bool = False) -> List[CardTemplate]:
+        query = self.session.query(CardTemplate).filter_by(season_created=season)
+        if not includeUpgraded:
+            query = query.filter(CardTemplate.is_upgraded == False)
+        return query.all()
 
-    def getBySeasonAndEdition(self, season: int, edition: str) -> List[CardTemplate]:
-        return (
+    def getBySeasonAndEdition(self, season: int, edition: str, includeUpgraded: bool = False) -> List[CardTemplate]:
+        query = (
             self.session.query(CardTemplate)
             .filter_by(season_created=season, edition=edition)
-            .all()
         )
+        if not includeUpgraded:
+            query = query.filter(CardTemplate.is_upgraded == False)
+        return query.all()
 
     def getByPlayer(self, playerId: int, season: Optional[int] = None) -> List[CardTemplate]:
         query = self.session.query(CardTemplate).filter_by(player_id=playerId)
@@ -135,14 +140,12 @@ class EquippedCardRepository:
             .all()
         )
 
-    def getEquippedCardIds(self, userId: int) -> set:
-        """Get the set of user_card_ids that are currently equipped (any week)."""
-        rows = (
-            self.session.query(EquippedCard.user_card_id)
-            .filter_by(user_id=userId)
-            .all()
-        )
-        return {r[0] for r in rows}
+    def getEquippedCardIds(self, userId: int, season: int = 0, week: int = 0) -> set:
+        """Get the set of user_card_ids equipped for a specific season/week."""
+        query = self.session.query(EquippedCard.user_card_id).filter_by(user_id=userId)
+        if season and week:
+            query = query.filter_by(season=season, week=week)
+        return {r[0] for r in query.all()}
 
     def save(self, equipped: EquippedCard) -> EquippedCard:
         self.session.add(equipped)
@@ -370,9 +373,9 @@ class PackTypeRepository:
                 display_name='Grand Pack',
                 cost=300,
                 cards_per_pack=5,
-                guaranteed_rarity='prismatic',
+                guaranteed_rarity='holographic',
                 rarity_weights={'base': 60, 'chrome': 35, 'holographic': 30, 'gold': 25, 'prismatic': 15, 'diamond': 5},
-                description='5 cards with a guaranteed Prismatic and Holographic or better.',
+                description='5 cards with two guaranteed Holographic or better.',
             ),
             PackType(
                 name='exquisite',

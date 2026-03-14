@@ -746,6 +746,7 @@ class CardTemplate(Base):
     effect_config: Mapped[dict] = mapped_column(JSON, nullable=False)
     rarity_weight: Mapped[int] = mapped_column(Integer, nullable=False)
     sell_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_upgraded: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -755,7 +756,8 @@ class CardTemplate(Base):
     user_cards: Mapped[list["UserCard"]] = relationship("UserCard", back_populates="card_template")
 
     __table_args__ = (
-        UniqueConstraint("player_id", "edition", "season_created", name="uq_card_template"),
+        # Partial unique index created in migration (WHERE is_upgraded = 0)
+        # Upgraded templates are exempt from uniqueness constraint
         Index("idx_card_template_season", "season_created"),
         Index("idx_card_template_edition", "edition"),
         Index("idx_card_template_player", "player_id"),
@@ -836,6 +838,28 @@ class WeeklyCardBonus(Base):
 
     def __repr__(self):
         return f"<WeeklyCardBonus(user_id={self.user_id}, S{self.season}W{self.week}, fp={self.bonus_fp})>"
+
+
+class CardUpgradeLog(Base):
+    """Audit log for card upgrades in The Combine."""
+    __tablename__ = "card_upgrade_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    upgrade_type: Mapped[str] = mapped_column(String(20), nullable=False)  # promotion, blend, transplant
+    subject_user_card_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # NULL for blend (result is new)
+    offering_user_card_ids: Mapped[dict] = mapped_column(JSON, nullable=False)  # list of sacrificed card IDs
+    old_template_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # NULL for blend
+    new_template_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    floobits_spent: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_upgrade_log_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<CardUpgradeLog(user_id={self.user_id}, type='{self.upgrade_type}')>"
 
 
 class WeeklyModifier(Base):
@@ -1021,3 +1045,87 @@ class UserModifierOverride(Base):
         UniqueConstraint("user_id", "season", "week", name="uq_mod_override_user_week"),
         Index("idx_mod_override_user_season_week", "user_id", "season", "week"),
     )
+
+
+# ─── GM Mode ────────────────────────────────────────────────────────────────────
+
+
+class GmVote(Base):
+    """GM Mode vote — a single vote cast by a user for a team action."""
+    __tablename__ = "gm_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    team: Mapped["Team"] = relationship("Team")
+    target_player: Mapped[Optional["Player"]] = relationship("Player")
+
+    __table_args__ = (
+        Index("idx_gm_votes_team_season", "team_id", "season"),
+        Index("idx_gm_votes_user_season", "user_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<GmVote(id={self.id}, user={self.user_id}, team={self.team_id}, type='{self.vote_type}')>"
+
+
+class GmVoteResult(Base):
+    """GM Mode vote result — outcome of aggregated votes for a team action."""
+    __tablename__ = "gm_vote_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)
+    threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    success_probability: Mapped[float] = mapped_column(Float, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    team: Mapped["Team"] = relationship("Team")
+    target_player: Mapped[Optional["Player"]] = relationship("Player")
+
+    __table_args__ = (
+        Index("idx_gm_vote_results_team_season", "team_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<GmVoteResult(team={self.team_id}, type='{self.vote_type}', outcome='{self.outcome}')>"
+
+
+class GmFaBallot(Base):
+    """GM Mode FA ballot — ranked choice ballot for free agent signing."""
+    __tablename__ = "gm_fa_ballots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    rankings: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array of player IDs
+    cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    team: Mapped["Team"] = relationship("Team")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "team_id", "season", name="uq_gm_fa_ballot"),
+        Index("idx_gm_fa_ballots_team_season", "team_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<GmFaBallot(user={self.user_id}, team={self.team_id}, season={self.season})>"

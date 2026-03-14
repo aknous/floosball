@@ -82,6 +82,7 @@ class TeamManager:
             self._createTeamsFromConfig(config)
             
         self.assignCoachesToTeams()
+        self.generateCoachPool()
         self.logger.info(f"Generated {len(self.teams)} teams")
 
     def _loadTeamsFromDatabase(self) -> bool:
@@ -1268,3 +1269,63 @@ class TeamManager:
                 team.coach = self.generateCoach()
                 self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
+
+    def generateCoachPool(self, count: int = 5) -> None:
+        """Generate unassigned coaches and persist them to the DB coach pool."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        from database.models import Coach as DBCoach
+        try:
+            # Clear old pool entries (unassigned coaches)
+            self.db_session.query(DBCoach).filter(DBCoach.team_id == None).delete()
+            for _ in range(count):
+                coach = self.generateCoach()
+                dbCoach = DBCoach(
+                    name=coach.name,
+                    team_id=None,
+                    seasons_coached=0,
+                    offensive_mind=coach.offensiveMind,
+                    defensive_mind=coach.defensiveMind,
+                    adaptability=coach.adaptability,
+                    aggressiveness=coach.aggressiveness,
+                    clock_management=coach.clockManagement,
+                    player_development=coach.playerDevelopment,
+                    overall_rating=coach.overallRating,
+                )
+                self.db_session.add(dbCoach)
+            self.db_session.flush()
+            self.logger.info(f"Generated coach pool of {count} available coaches")
+        except Exception as e:
+            self.logger.error(f"Failed to generate coach pool: {e}")
+            self.db_session.rollback()
+
+    def getAvailableCoaches(self):
+        """Return list of unassigned coaches from the DB pool."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return []
+        from database.models import Coach as DBCoach
+        return self.db_session.query(DBCoach).filter(DBCoach.team_id == None).all()
+
+    def hireCoachFromPool(self, team: FloosTeam.Team, coachId: int) -> bool:
+        """Hire a coach from the pool by DB id. Returns True on success."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return False
+        from database.models import Coach as DBCoach
+        dbCoach = self.db_session.get(DBCoach, coachId)
+        if not dbCoach or dbCoach.team_id is not None:
+            return False
+        # Build in-memory coach and assign
+        coach = FloosCoach.Coach()
+        coach.id = dbCoach.id
+        coach.name = dbCoach.name
+        coach.offensiveMind = dbCoach.offensive_mind
+        coach.defensiveMind = dbCoach.defensive_mind
+        coach.adaptability = dbCoach.adaptability
+        coach.aggressiveness = dbCoach.aggressiveness
+        coach.clockManagement = dbCoach.clock_management
+        coach.playerDevelopment = dbCoach.player_development
+        team.coach = coach
+        dbCoach.team_id = team.id
+        self.db_session.flush()
+        self.logger.info(f"{team.name} hired coach {coach.name} from pool")
+        return True

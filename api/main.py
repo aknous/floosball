@@ -2648,9 +2648,11 @@ def get_fantasy_weekly_leaderboard(season: Optional[int] = Query(default=None)):
                         "weekPoints": round(fp, 1),
                     })
                 players.sort(key=lambda p: p["weekPoints"], reverse=True)
+                rosterUser = session.get(User, userId)
                 entries.append({
                     "userId": userId,
                     "username": info["username"],
+                    "favoriteTeamId": rosterUser.favorite_team_id if rosterUser else None,
                     "weekPoints": round(data["weekPoints"], 1),
                     "cardBonusPoints": round(data.get("cardBonusPoints", 0), 1),
                     "players": players,
@@ -2750,6 +2752,7 @@ def getCardCollection(
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
@@ -2760,8 +2763,8 @@ def getCardCollection(
         equippedRepo = EquippedCardRepository(session)
         cards = cardRepo.getByUser(user.id)
 
-        # Get equipped card IDs so we can tag them
-        equippedCardIds = equippedRepo.getEquippedCardIds(user.id)
+        # Get equipped card IDs for current week only
+        equippedCardIds = equippedRepo.getEquippedCardIds(user.id, currentSeason, currentWeek)
 
         result = []
         for card in cards:
@@ -2811,6 +2814,167 @@ def sellCards(req: SellCardsRequest, user: _User = Depends(_getCurrentUser)):
         session.rollback()
         logger.error(f"Card sell failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to sell cards")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# THE COMBINE (CARD UPGRADES)
+# ============================================================================
+
+
+class PromotionRequest(BaseModel):
+    subjectCardId: int
+    offeringCardId: int
+
+
+class BlendRequest(BaseModel):
+    offeringCardIds: List[int]
+
+
+class TransplantRequest(BaseModel):
+    targetCardId: int
+    offeringCardId: int
+
+
+@app.post("/api/cards/promote")
+def promoteCard(req: PromotionRequest, user: _User = Depends(_getCurrentUser)):
+    """Promotion: Sacrifice a higher-edition card to promote the subject's edition."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.promoteCard(session, user.id, req.subjectCardId,
+                                         req.offeringCardId, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Card promotion failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to promote card")
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/promote/preview")
+def previewPromotion(req: PromotionRequest, user: _User = Depends(_getCurrentUser)):
+    """Preview Promotion result."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.previewPromotion(session, user.id, req.subjectCardId,
+                                              req.offeringCardId, currentSeason)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/blend")
+def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
+    """The Blender: Sacrifice multiple cards to create one new random card."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.blendCards(session, user.id, req.offeringCardIds, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Card blend failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to blend cards")
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/blend/preview")
+def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
+    """Preview The Blender result (shows resulting edition based on total value)."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.previewBlend(session, user.id, req.offeringCardIds, currentSeason)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/transplant")
+def transplantCard(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
+    """Transplant: Sacrifice offering to transfer its effect onto the target."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.transplantCard(session, user.id, req.targetCardId,
+                                            req.offeringCardId, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Card transplant failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to transplant effect")
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/transplant/preview")
+def previewTransplant(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
+    """Preview Transplant result and cost."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.previewTransplant(session, user.id, req.targetCardId,
+                                               req.offeringCardId, currentSeason)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         session.close()
 
@@ -3000,7 +3164,7 @@ def setEquippedCards(
             if c.slotNumber > maxSlots:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Slot 6 requires an MVP card or Temporary Card Slot power-up"
+                    detail=f"Slot 6 requires an MVP card or Accession power-up"
                     if not hasExtraSlot else f"Invalid slot number: {c.slotNumber}"
                 )
 
@@ -3441,7 +3605,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=400, detail="No active week")
             activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
             if activeFavor:
-                raise HTTPException(status_code=409, detail="You already have Fortune's Favor active")
+                raise HTTPException(status_code=409, detail="You already have Patronage active")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
             if seasonCount >= seasonLimit:
@@ -3523,6 +3687,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             featured = cardManager.getFeaturedCards(
                 session, user.id, currentSeasonNum,
                 currentWeek=currentWeek, isScheduledMode=isScheduledMode,
+                forceRegenerate=True,
             )
             responseData["featuredCards"] = featured
 
@@ -3570,7 +3735,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
             weeksRemaining = activeFlex.expires_at_week - currentWeek + (0 if gamesRunning else 1)
             active.append({
                 "slug": "temp_flex",
-                "displayName": "Temporary Flex Slot",
+                "displayName": "Conscription",
                 "expiresAtWeek": activeFlex.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining <= 1,
@@ -3583,7 +3748,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
             weeksRemaining = activeCardSlot.expires_at_week - currentWeek + (0 if gamesRunning else 1)
             active.append({
                 "slug": "temp_card_slot",
-                "displayName": "Temporary Card Slot",
+                "displayName": "Accession",
                 "expiresAtWeek": activeCardSlot.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining <= 1,
@@ -3594,7 +3759,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         if override:
             active.append({
                 "slug": "modifier_nullifier",
-                "displayName": "Modifier Nullifier",
+                "displayName": "Annulment",
                 "overrideModifier": override.override_modifier,
                 "week": currentWeek,
             })
@@ -3606,13 +3771,377 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         if roster and roster.purchased_swaps > 0:
             active.append({
                 "slug": "extra_swap",
-                "displayName": "Extra Swap Tokens",
+                "displayName": "Dispensation",
                 "count": roster.purchased_swaps,
             })
 
         return build_success_response({
             "active": active,
             "currentWeek": currentWeek,
+        })
+    finally:
+        session.close()
+
+
+# ============================================================================
+# GM MODE
+# ============================================================================
+
+
+class GmVoteRequest(BaseModel):
+    voteType: str
+    targetPlayerId: Optional[int] = None
+
+
+class GmFaBallotRequest(BaseModel):
+    rankings: List[int]
+
+
+@app.post("/api/gm/vote")
+def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
+    """Cast a GM Mode vote for user's favorite team."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmVoteRepository
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.models import User, Player
+    from constants import (
+        GM_VOTE_TYPES, GM_VOTE_COST, GM_VOTES_PER_SEASON,
+        GM_VOTES_PER_TYPE, GM_VOTES_PER_TARGET,
+    )
+    from managers.gmManager import GmManager
+
+    if req.voteType not in GM_VOTE_TYPES:
+        raise HTTPException(400, f"Invalid vote type: {req.voteType}")
+
+    if req.voteType == "sign_fa":
+        raise HTTPException(400, "Use POST /api/gm/fa-ballot for free agent votes")
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            raise HTTPException(400, "You must have a favorite team to vote")
+
+        teamId = dbUser.favorite_team_id
+
+        # Validate target
+        if req.voteType in ("cut_player", "resign_player"):
+            if not req.targetPlayerId:
+                raise HTTPException(400, "targetPlayerId required for this vote type")
+            player = session.query(Player).filter_by(id=req.targetPlayerId).first()
+            if not player or player.team_id != teamId:
+                raise HTTPException(400, "Target player not on your favorite team")
+            if req.voteType == "resign_player" and player.term_remaining != 1:
+                raise HTTPException(400, "Player does not have an expiring contract")
+
+        # Check limits
+        voteRepo = GmVoteRepository(session)
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.seasonNumber if sm else 0
+        counts = voteRepo.getUserVoteCounts(user.id, currentSeason)
+
+        if counts["total"] >= GM_VOTES_PER_SEASON:
+            raise HTTPException(400, f"Season vote limit reached ({GM_VOTES_PER_SEASON})")
+        if counts["perType"].get(req.voteType, 0) >= GM_VOTES_PER_TYPE:
+            raise HTTPException(400, f"Vote type limit reached ({GM_VOTES_PER_TYPE} per type)")
+        targetKey = f"{req.voteType}:{req.targetPlayerId or 'none'}"
+        if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
+            raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
+
+        # Deduct cost
+        cost = GM_VOTE_COST[req.voteType]
+        currencyRepo = CurrencyRepository(session)
+        result = currencyRepo.spendFunds(
+            user.id, cost, "gm_vote",
+            f"GM vote: {req.voteType}", currentSeason,
+        )
+        if result is None:
+            raise HTTPException(400, "Insufficient Floobits")
+
+        # Cast vote
+        vote = voteRepo.castVote(
+            userId=user.id, teamId=teamId, season=currentSeason,
+            voteType=req.voteType, costPaid=cost,
+            targetPlayerId=req.targetPlayerId,
+        )
+        session.commit()
+
+        # Get current tally for response
+        activeUsers = session.query(User).filter(User.is_active == True).count()
+        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
+        targetTally = next(
+            (t for t in tallies
+             if t["voteType"] == req.voteType
+             and t["targetPlayerId"] == req.targetPlayerId),
+            {"votes": 1}
+        )
+        threshold = GmManager.calculateThreshold(activeUsers, req.voteType)
+        probability = GmManager.calculateProbability(targetTally["votes"], threshold)
+
+        return build_success_response({
+            "voteId": vote.id,
+            "voteType": req.voteType,
+            "targetPlayerId": req.targetPlayerId,
+            "costPaid": cost,
+            "currentVotes": targetTally["votes"],
+            "threshold": threshold,
+            "probability": round(probability, 3),
+            "remainingBalance": result.balance,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"GM vote error: {e}")
+        raise HTTPException(500, "Failed to cast vote")
+    finally:
+        session.close()
+
+
+@app.get("/api/gm/team/{teamId}/summary")
+def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
+    """Get aggregated GM vote tallies for a team this season."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmVoteRepository
+    from database.models import User
+    from managers.gmManager import GmManager
+
+    session = get_session()
+    try:
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.seasonNumber if sm else 0
+        voteRepo = GmVoteRepository(session)
+        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
+
+        activeUsers = session.query(User).filter(User.is_active == True).count()
+
+        # Enrich with threshold/probability
+        enriched = []
+        for t in tallies:
+            threshold = GmManager.calculateThreshold(activeUsers, t["voteType"])
+            probability = GmManager.calculateProbability(t["votes"], threshold)
+            enriched.append({
+                **t,
+                "threshold": threshold,
+                "probability": round(probability, 3),
+            })
+
+        return build_success_response({
+            "teamId": teamId,
+            "season": currentSeason,
+            "tallies": enriched,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/gm/team/{teamId}/eligible")
+def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser)):
+    """Get eligible targets per vote type for a team."""
+    from database.connection import get_session
+    from database.models import Player, Coach
+
+    session = get_session()
+    try:
+        # Coach info
+        sm = floosball_app.seasonManager if floosball_app else None
+        teamManager = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        team = None
+        if teamManager:
+            for t in teamManager.teams:
+                if t.id == teamId:
+                    team = t
+                    break
+
+        coachInfo = None
+        if team and team.coach:
+            c = team.coach
+            coachInfo = {
+                "id": getattr(c, 'id', None),
+                "name": c.name,
+                "overallRating": c.overallRating,
+                "offensiveMind": c.offensiveMind,
+                "defensiveMind": c.defensiveMind,
+                "adaptability": c.adaptability,
+                "aggressiveness": c.aggressiveness,
+                "clockManagement": c.clockManagement,
+                "playerDevelopment": c.playerDevelopment,
+            }
+
+        # Available coaches in pool
+        availableCoaches = []
+        coachPool = session.query(Coach).filter(Coach.team_id == None).all()
+        for c in coachPool:
+            availableCoaches.append({
+                "id": c.id,
+                "name": c.name,
+                "overallRating": c.overall_rating,
+                "offensiveMind": c.offensive_mind,
+                "defensiveMind": c.defensive_mind,
+                "adaptability": c.adaptability,
+                "aggressiveness": c.aggressiveness,
+                "clockManagement": c.clock_management,
+                "playerDevelopment": c.player_development,
+            })
+
+        # Rostered players (for cut votes — all players eligible)
+        rosteredPlayers = []
+        players = session.query(Player).filter_by(team_id=teamId).all()
+        for p in players:
+            rosteredPlayers.append({
+                "id": p.id,
+                "name": p.name,
+                "position": p.position,
+                "rating": p.player_rating,
+                "tier": p.tier,
+                "termRemaining": p.term_remaining,
+            })
+
+        # Expiring contract players (for resign votes)
+        expiringPlayers = [p for p in rosteredPlayers if p["termRemaining"] == 1]
+
+        return build_success_response({
+            "teamId": teamId,
+            "coach": coachInfo,
+            "availableCoaches": availableCoaches,
+            "rosteredPlayers": rosteredPlayers,
+            "expiringPlayers": expiringPlayers,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/gm/fa-ballot")
+def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUser)):
+    """Submit or update a ranked FA ballot during the voting window."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmFaBallotRepository
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.models import User
+    from constants import GM_FA_BALLOT_COST, GM_FA_BALLOT_MAX_RANKINGS
+
+    if not req.rankings or len(req.rankings) > GM_FA_BALLOT_MAX_RANKINGS:
+        raise HTTPException(400, f"Provide 1-{GM_FA_BALLOT_MAX_RANKINGS} ranked player IDs")
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            raise HTTPException(400, "You must have a favorite team to vote")
+
+        teamId = dbUser.favorite_team_id
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.seasonNumber if sm else 0
+
+        # Check if FA window is open
+        faWindowOpen = getattr(sm, '_faWindowOpen', False) if sm else False
+        if not faWindowOpen:
+            raise HTTPException(400, "FA voting window is not currently open")
+
+        ballotRepo = GmFaBallotRepository(session)
+        existing = ballotRepo.getUserBallot(user.id, teamId, currentSeason)
+
+        costPaid = 0
+        if not existing:
+            # First submission — charge ballot cost
+            currencyRepo = CurrencyRepository(session)
+            result = currencyRepo.spendFunds(
+                user.id, GM_FA_BALLOT_COST, "gm_fa_ballot",
+                "GM FA ballot submission", currentSeason,
+            )
+            if result is None:
+                raise HTTPException(400, "Insufficient Floobits")
+            costPaid = GM_FA_BALLOT_COST
+
+        ballot = ballotRepo.submitBallot(
+            userId=user.id, teamId=teamId, season=currentSeason,
+            rankings=req.rankings, costPaid=costPaid,
+        )
+        session.commit()
+
+        return build_success_response({
+            "ballotId": ballot.id,
+            "rankings": req.rankings,
+            "costPaid": costPaid,
+            "isUpdate": existing is not None,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"FA ballot error: {e}")
+        raise HTTPException(500, "Failed to submit ballot")
+    finally:
+        session.close()
+
+
+@app.get("/api/gm/votes")
+def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
+    """Get current user's GM votes this season."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmVoteRepository
+
+    session = get_session()
+    try:
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.seasonNumber if sm else 0
+        voteRepo = GmVoteRepository(session)
+        votes = voteRepo.getUserVotes(user.id, currentSeason)
+        counts = voteRepo.getUserVoteCounts(user.id, currentSeason)
+
+        return build_success_response({
+            "season": currentSeason,
+            "votes": [
+                {
+                    "id": v.id,
+                    "voteType": v.vote_type,
+                    "targetPlayerId": v.target_player_id,
+                    "costPaid": v.cost_paid,
+                    "createdAt": v.created_at.isoformat() if v.created_at else None,
+                }
+                for v in votes
+            ],
+            "counts": counts,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/gm/results")
+def get_gm_results(user: _User = Depends(_getCurrentUser)):
+    """Get GM vote resolution results for user's favorite team."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmVoteRepository
+    from database.models import User
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            return build_success_response({"results": []})
+
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.seasonNumber if sm else 0
+        voteRepo = GmVoteRepository(session)
+        results = voteRepo.getResults(dbUser.favorite_team_id, currentSeason)
+
+        return build_success_response({
+            "teamId": dbUser.favorite_team_id,
+            "season": currentSeason,
+            "results": [
+                {
+                    "id": r.id,
+                    "voteType": r.vote_type,
+                    "targetPlayerId": r.target_player_id,
+                    "totalVotes": r.total_votes,
+                    "threshold": r.threshold,
+                    "probability": r.success_probability,
+                    "outcome": r.outcome,
+                    "details": r.details,
+                    "resolvedAt": r.resolved_at.isoformat() if r.resolved_at else None,
+                }
+                for r in results
+            ],
         })
     finally:
         session.close()

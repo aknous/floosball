@@ -2094,7 +2094,7 @@ class PlayerManager:
             results.append(entry)
         return results
 
-    def conductFreeAgencySimulation(self, freeAgencyOrder: List, currentSeason: int, leagueHighlights: List = None, eventLog: List = None) -> Dict[str, Any]:
+    def conductFreeAgencySimulation(self, freeAgencyOrder: List, currentSeason: int, leagueHighlights: List = None, eventLog: List = None, skipRetirements: bool = False) -> Dict[str, Any]:
         """
         Complete Free Agency Simulation System - replaces original free agency logic from offseason() function
         Multi-round system with GM skill-based evaluation, tier upgrades, and salary cap management
@@ -2141,13 +2141,15 @@ class PlayerManager:
         # NOTE: Contract expirations are already handled in seasonManager._processRosteredPlayerContracts()
         # during offseason Step 2, so we don't need to call _processContractExpirations() here
         
-        # Process free agent retirements (players with 3+ years as free agents)
-        log_fa("\n=== FREE AGENT RETIREMENTS ===")
-        self._processFreeAgentRetirements(currentSeason, leagueHighlights)
-        
-        # Generate replacement players for retired players
-        log_fa("\n=== REPLACEMENT PLAYERS GENERATED ===")
-        self._generateReplacementPlayers(currentSeason)
+        # Process free agent retirements and generate replacements
+        # (skipped when GM Mode handles these in earlier offseason steps)
+        if not skipRetirements:
+            log_fa("\n=== FREE AGENT RETIREMENTS ===")
+            self._processFreeAgentRetirements(currentSeason, leagueHighlights)
+            log_fa("\n=== REPLACEMENT PLAYERS GENERATED ===")
+            self._generateReplacementPlayers(currentSeason)
+        else:
+            log_fa("\n=== FA RETIREMENTS/ROOKIES: handled in earlier offseason step ===")
         
         log_fa(f"\n=== FREE AGENT POOL (Total: {len(self.freeAgents)}) ===")
         for player in sorted(self.freeAgents, key=lambda p: (p.position.value, -p.attributes.skillRating)):
@@ -2183,22 +2185,55 @@ class PlayerManager:
             logger.error("No teams available for free agency!")
             return freeAgencyDict
         
-        # Initialize team completion status and cuts available
+        # Initialize team completion status
         for team in teams:
             team.freeAgencyComplete = False
-            team.cutsAvailable = 2  # Each team gets 2 cuts per season
-        
+
         logger.info(f"Free agency starting with {len(self.freeAgents)} free agents and {len(teams)} teams")
-        
-        # MULTI-ROUND FREE AGENCY PROCESS - matches original exactly
+
+        # GM directives: {teamId: [playerId, ...]} — populated by GM Mode sign_fa votes
+        gmDirectives = getattr(self, '_gmFaDirectives', {})
+
+        # DIRECTIVE PHASE: Honor GM directives first (one pass per team)
+        freeAgentLists = {
+            'qb': freeAgentQbList, 'rb': freeAgentRbList,
+            'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
+            'te': freeAgentTeList, 'k': freeAgentKList,
+        }
+        for team in freeAgencyOrder:
+            directives = gmDirectives.get(getattr(team, 'id', None), [])
+            for targetId in directives:
+                # Find the targeted player in the FA pool
+                targetPlayer = None
+                targetListKey = None
+                for lKey, faList in freeAgentLists.items():
+                    for p in faList:
+                        if p.id == targetId:
+                            targetPlayer = p
+                            targetListKey = lKey
+                            break
+                    if targetPlayer:
+                        break
+                if not targetPlayer:
+                    continue
+                # Find open roster slot matching player's position
+                openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
+                if not openSlot:
+                    continue
+                # Sign the player
+                self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
+                                 freeAgencyDict, leagueHighlights, eventLog)
+                log_fa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
+
+        # FILL PHASE: Multi-round fill for remaining open roster spots
         teamsComplete = 0
         roundNum = 0
         maxRounds = 100  # Safety valve to prevent infinite loops
-        
+
         while teamsComplete < len(teams):
             teamsComplete = 0  # Reset counter each round - original recounts each iteration!
             roundNum += 1
-            
+
             if roundNum > maxRounds:
                 logger.warning(f"Free agency exceeded {maxRounds} rounds, ending simulation")
                 # Mark all remaining teams as complete
@@ -2208,32 +2243,21 @@ class PlayerManager:
                         logger.warning(f"{team.name} forced complete with open positions: {openPos}")
                         team.freeAgencyComplete = True
                 break
-            
+
             for team in freeAgencyOrder:
                 # Count teams that are already complete
                 if team.freeAgencyComplete:
                     teamsComplete += 1
                     continue
-                
-                # PHASE 1: Try to cut and upgrade players (if cuts available)
-                if team.cutsAvailable > 0:
-                    cutMade = self._attemptPlayerCutAndUpgrade(
-                        team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
-                        freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
-                        eventLog=eventLog
-                    )
-                    team.cutsAvailable -= 1  # Decrement cuts regardless of success
-                    if cutMade:
-                        continue  # If cut was made, skip roster fill this round
 
-                # PHASE 2: Attempt to fill ONE open roster spot
+                # Attempt to fill ONE open roster spot
                 # Returns True if roster complete, False if not complete (has open positions)
                 rosterComplete = self._attemptRosterFill(
                     team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                     freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                     eventLog=eventLog
                 )
-                
+
                 if rosterComplete:
                     # No open positions - team is complete
                     teamsComplete += 1
@@ -2798,7 +2822,73 @@ class PlayerManager:
 
         logger.debug(f"{team.name} filled {pos} with {selectedPlayer.name}")
         return False  # Roster not complete yet, has more open positions
-    
+
+    def releasePlayerToFreeAgency(self, player, team, freeAgentLists: dict) -> None:
+        """Release a rostered player to the free agent pool (GM Mode cut)."""
+        # Find and clear roster slot
+        for pos, rostered in list(team.rosterDict.items()):
+            if rostered is not None and rostered.id == player.id:
+                team.rosterDict[pos] = None
+                break
+        # Remove number
+        if hasattr(player, 'currentNumber') and player.currentNumber in team.playerNumbersList:
+            team.playerNumbersList.remove(player.currentNumber)
+        player.previousTeam = team.name
+        player.team = 'Free Agent'
+        player.freeAgentYears = 0
+        if player not in self.freeAgents:
+            self.freeAgents.append(player)
+        # Add to position-specific list
+        posVal = player.position.value
+        posListMap = {1: 'qb', 2: 'rb', 3: 'wr', 4: 'te', 5: 'k'}
+        listKey = posListMap.get(posVal)
+        if listKey and listKey in freeAgentLists:
+            freeAgentLists[listKey].append(player)
+            freeAgentLists[listKey].sort(key=lambda p: p.attributes.skillRating, reverse=True)
+        logger.info(f"GM cut: {player.name} released from {team.name} to FA pool")
+
+    def _findOpenSlotForPosition(self, team, positionValue: int) -> str:
+        """Find an open roster slot matching a position value. Returns slot key or None."""
+        posSlots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
+        candidates = posSlots.get(positionValue, [])
+        for slot in candidates:
+            if team.rosterDict.get(slot) is None:
+                return slot
+        return None
+
+    def _signPlayer(self, team, player, slot: str, faList: list,
+                    freeAgencyDict: dict, leagueHighlights: list,
+                    eventLog: list = None) -> None:
+        """Sign a player from the FA pool to a specific roster slot."""
+        if player in faList:
+            faList.remove(player)
+        if player in self.freeAgents:
+            self.freeAgents.remove(player)
+        player.team = team
+        player.freeAgentYears = 0
+        team.rosterDict[slot] = player
+        team.assignPlayerNumber(player)
+        player.term = self._getPlayerTerm(player.playerTier)
+        player.termRemaining = player.term
+        txId = f"{team.name}_{player.name}"
+        freeAgencyDict[txId] = {
+            'name': player.name, 'pos': player.position.name,
+            'rating': player.attributes.skillRating,
+            'tier': player.playerTier.value, 'term': player.term,
+            'previousTeam': getattr(player, 'previousTeam', 'Rookie'),
+            'roster': 'Starting',
+        }
+        leagueHighlights.insert(0, {
+            'event': {'text': f'{team.name} signed {player.name} ({player.position.name}) for {player.term} season(s)'}
+        })
+        if eventLog is not None:
+            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+            eventLog.append({
+                'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                'player': player.name, 'position': player.position.name,
+                'rating': round(player.playerRating, 1), 'tier': player.playerTier.name,
+            })
+
     def _executeRosterSigning(self, team, position, newPlayer, freeAgencyDict, leagueHighlights, freeAgentLists=None):
         """Execute signing a player to fill an open roster spot"""
         # TODO: capHit feature not fully developed - disabled for now
