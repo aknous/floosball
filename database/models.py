@@ -1129,3 +1129,34 @@ class GmFaBallot(Base):
 
     def __repr__(self):
         return f"<GmFaBallot(user={self.user_id}, team={self.team_id}, season={self.season})>"
+
+
+# ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
+
+
+class PickEmPick(Base):
+    """Pick-Em pick — a user's prediction for a single game in a week."""
+    __tablename__ = "pick_em_picks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    game_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    home_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    away_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    picked_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "week", "game_index", name="uq_pickem_pick"),
+        Index("idx_pickem_user_season", "user_id", "season"),
+        Index("idx_pickem_season_week", "season", "week"),
+    )
+
+    def __repr__(self):
+        return f"<PickEmPick(user={self.user_id}, S{self.season}W{self.week}, game={self.game_index}, picked={self.picked_team_id})>"

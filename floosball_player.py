@@ -469,12 +469,12 @@ class PlayerAttributes:
         
         # Roll for outcome (1-100)
         roll = batched_randint(1, 100)
-        
+
         # Map pressureHandling to probability zones
         # pressureHandling +10: overperform 60%, no effect 30%, underperform 10%
         # pressureHandling 0: overperform 15%, no effect 70%, underperform 15%
         # pressureHandling -10: overperform 10%, no effect 30%, underperform 60%
-        
+
         # Calculate probability zones based on pressureHandling
         if self.pressureHandling >= 0:
             # Positive pressure handling: more overperform, less underperform
@@ -486,6 +486,15 @@ class PlayerAttributes:
             overPerformChance = 15 + (self.pressureHandling * 0.5)  # 15 to 10
             noEffectChance = 70 + (self.pressureHandling * 4)       # 70 to 30
             # underperform is the remainder (15 to 60)
+
+        # High pressure compresses the no-effect zone — players are more
+        # likely to either rise or crumble in big moments
+        if normalizedPressure >= 0.7:
+            compressionFactor = (normalizedPressure - 0.7) / 0.3  # 0→1 as pressure goes 70→100
+            noEffectReduction = noEffectChance * 0.5 * compressionFactor
+            noEffectChance -= noEffectReduction
+            overPerformChance += noEffectReduction * 0.5
+            # underperform (remainder) gets the other half
         
         if roll <= overPerformChance:
             # Overperform
@@ -494,8 +503,13 @@ class PlayerAttributes:
             # No effect
             return 0
         else:
-            # Underperform
-            return -(batched_random() * maxVariance)
+            # Underperform — use a variance floor so even neutral players can
+            # produce choke-level modifiers under high pressure.  The floor only
+            # kicks in when pressure is significant (≥0.5 normalised).
+            chokeVariance = maxVariance
+            if normalizedPressure >= 0.5:
+                chokeVariance = max(2.0, maxVariance)
+            return -(batched_random() * chokeVariance)
 
 
     def getPlayerAttributes(self, position, physicalSeed = None, mentalSeed = None):

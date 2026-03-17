@@ -58,8 +58,8 @@ EFFECT_CATEGORY = {
     # streak
     "couch_potato": "streak", "on_fire": "streak", "gravy_train": "streak",
     "snowball_fight": "streak", "fairweather_fan": "streak", "bandwagon_express": "streak",
-    "touchdown_jackpot": "streak", "odometer": "streak", "complacency": "streak",
-    "leg_day": "streak", "automatic": "streak", "hot_hand": "streak",
+    "touchdown_jackpot": "accumulator", "odometer": "accumulator", "complacency": "streak",
+    "leg_day": "streak", "automatic": "streak", "hot_hand": "accumulator",
     "momentum": "streak",
     # cross-position (declared by _buildCrossPositionParams)
     "game_ball": "cross", "spectacle": "cross", "indemnity": "cross",
@@ -438,11 +438,11 @@ EFFECT_TOOLTIPS = {
     "snowball_fight": "It just keeps getting bigger. FP growing each week your roster scores a TD. Resets if they don't. Stacking streak cards accelerates growth.",
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
-    "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly. Counts toward streak synergy for other streak cards.",
-    "odometer": "Miles and miles of yards. FP ticking up per chunk of roster yards, resets weekly. Counts toward streak synergy for other streak cards.",
+    "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
+    "odometer": "Miles and miles of yards. FP ticking up per chunk of roster yards, resets weekly.",
     "leg_day": "Never skip it. FP growing each week your K slot nails a 35+ yard FG. Streak holds through bye weeks. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week your K slot goes perfect on FGs. Resets on a miss. Stacking streak cards accelerates growth.",
-    "hot_hand": "Feed the hot hand. FP scales with how many FGs your K slot makes each week. Counts toward streak synergy for other streak cards.",
+    "hot_hand": "Feed the hot hand. FP scales with how many FGs your K slot makes each week.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 75 FP. Resets if they don't. Stacking streak cards accelerates growth.",
     # ── New Position-Based Effects ──
     "gunslinger": "Let it fly. FP that scales with how many passing yards your QB slot racks up.",
@@ -452,7 +452,7 @@ EFFECT_TOOLTIPS = {
     "stampede": "Get rolling. Base FPx always, enhanced FPx when your RB slot hits 75+ rushing yards.",
     "goal_line_vulture": "Vulture season. Floobits for every rushing TD your RB slot punches in.",
     "possession": "Chain-mover. FP that scales with how many catches your WR slots haul in combined.",
-    "trebuchet": "One big play changes everything. FP if either of your WR slots catches a pass of 40+ yards.",
+    "trebuchet": "One big play changes everything. FP if either of your WR slots catches a pass of 25+ yards.",
     "double_trouble": "Two is better than one. FP bonus when BOTH of your WR slots score a TD in the same week.",
     "slippery": "Yards after the catch turn into points. FP that scales with your WR slots' combined YAC.",
     "jailbreak": "Big YAC day = big bonus. Flat FP reward when your WR slots combine for enough yards after catch.",
@@ -564,7 +564,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "stampede": "{baseMult}x FPx base, {enhancedMult}x FPx at {yardThreshold}+ rush yards",
     "goal_line_vulture": "{perTdFloobits} Floobits per rushing TD by your RB slot",
     "possession": "+{perReceptionFP} FP per reception by your WR slots (combined)",
-    "trebuchet": "+{rewardValue} FP if a WR slot catches a 40+ yard pass",
+    "trebuchet": "+{rewardValue} FP if a WR slot catches a 25+ yard pass",
     "double_trouble": "+{rewardValue} FP when both WR slots score a TD",
     "slippery": "+{perYacFP} FP per 10 YAC by your WR slots",
     "jailbreak": "+{rewardValue} FP if your WR slots combine for {threshold}+ YAC",
@@ -699,13 +699,15 @@ class EffectResult:
     chanceTriggered: bool = False
 
 
-def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context):
+def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context, ctx=None):
     """Build a standardized chance card equation string."""
-    bonusStr = f" + {chanceBonus:.0%} bonus" if chanceBonus > 0 else ""
-    pctStr = f"{baseChance:.0%} base{bonusStr} = {totalChance:.0%}" if bonusStr else f"{totalChance:.0%}"
+    bonusStr = f"+{chanceBonus:.0%}" if chanceBonus > 0 else ""
+    pctStr = f"({baseChance:.0%}{bonusStr})" if bonusStr else f"{totalChance:.0%}"
+    if ctx and getattr(ctx, 'gamesActive', False):
+        return f"{context} · {pctStr} chance"
     if triggered:
-        return f"{pctStr} chance — triggered -> {reward} ({context})"
-    return f"{pctStr} chance — did not trigger ({context})"
+        return f"{context} · {pctStr} · hit → {reward}"
+    return f"{context} · {pctStr} · missed"
 
 
 # ─── Primary Parameter Builders ──────────────────────────────────────────────
@@ -730,14 +732,14 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         return {"rewardType": "mult", "baseXMult": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "perDuplicateXMult": round((0.08 + rn * 0.004) * editionScale, 2)}
     if effectName == "diversified":
-        return {"perTypeFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+        return {"rewardType": "fp", "perTypeFP": round((3.0 + rn * 0.12) * editionScale, 1)}
     if effectName == "gold_rush":
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stacked_deck":
         return {"perCardMult": round((0.05 + rn * 0.003) * editionScale, 2)}
     # ── Trigger-Chain Effects (second pass) ──
     if effectName == "copycat":
-        return {"_noParams": True}  # No params needed — copies highest flat FP from other cards
+        return {"rewardType": "fp", "_noParams": True}  # No params needed — copies highest flat FP from other cards
     if effectName == "chain_reaction":
         return {"rewardType": "mult", "perCardXMult": round((0.08 + rn * 0.004) * editionScale, 2)}
     if effectName == "bonus_round":
@@ -933,8 +935,6 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "baseFP": round((4 + rn * 0.15) * editionScale, 1),
                 "rewardValue": round((12 + rn * 0.5) * editionScale, 1),
                 "eloThreshold": 1600}
-    if effectName == "safety_blanket":
-        return {"rewardType": "fp", "perReceptionFP": round((1.0 + rn * 0.04) * editionScale, 1)}
     if effectName == "monolith":
         return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     if effectName == "mismatch":
@@ -1004,13 +1004,11 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((3.0 + rn * 0.12) * editionScale, 1),
                 "growthPerTick": round((1.5 + rn * 0.06) * editionScale, 1)}
     if effectName == "hot_hand":
-        return {"perFGFP": round((3 + rn * 0.12) * editionScale, 1)}
+        return {"rewardType": "fp", "perFGFP": round((3 + rn * 0.12) * editionScale, 1)}
     if effectName == "momentum":
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
-    if effectName == "sniper":
-        return {"perFgFP": round((5 + rn * 0.2) * editionScale, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "baseReward": round(1.0 * editionScale, 1), "growthPerTick": round(0.5 * editionScale, 1)}
 
 
@@ -1020,6 +1018,28 @@ _PARAM_BUILDERS = {
     "floobits": _buildFloobitsParams,
     "conditional": _buildConditionalParams,
     "streak": _buildStreakParams,
+    "accumulator": _buildStreakParams,
+}
+
+# Effects whose handler lives in a different builder than their EFFECT_CATEGORY
+# would dispatch to. Overrides category-based dispatch for param building only.
+_EFFECT_BUILDER_OVERRIDES = {
+    # flat_fp effects with handlers in _buildMultiplierParams
+    "babysitter": _buildMultiplierParams,
+    "martyr": _buildMultiplierParams,
+    "resplendent": _buildMultiplierParams,
+    "loyalty_program": _buildMultiplierParams,
+    "underdog": _buildMultiplierParams,
+    "house_money": _buildMultiplierParams,
+    "locomotive": _buildMultiplierParams,
+    "trebuchet": _buildMultiplierParams,
+    "double_trouble": _buildMultiplierParams,
+    "gunslinger": _buildMultiplierParams,
+    # floobits effects with handlers in _buildMultiplierParams
+    "hometown_hero": _buildMultiplierParams,
+    "air_raid": _buildMultiplierParams,
+    # flat_fp effect with handler in _buildFloobitsParams
+    "workhorse": _buildFloobitsParams,
 }
 
 
@@ -1045,6 +1065,11 @@ def _deriveOutputType(category: str, effectName: str, primary: dict) -> str:
     explicitType = primary.get("rewardType")
     if explicitType:
         return explicitType
+    # Accumulators/streaks may have stale stored primary — check current builder
+    if category in ("accumulator", "streak") and effectName in STREAK_CONFIGS:
+        currentParams = _buildStreakParams(effectName, primary.get("playerRating", 70), 1.0)
+        if currentParams.get("rewardType"):
+            return currentParams["rewardType"]
     if effectName in _MULT_EFFECTS:
         return "mult"
     if category == "flat_fp":
@@ -1054,6 +1079,23 @@ def _deriveOutputType(category: str, effectName: str, primary: dict) -> str:
     if category == "multiplier":
         return "mult"
     return "fp"
+
+
+def rebuildPrimaryParams(effectName: str, playerRating: int, editionScale: float) -> dict:
+    """Rebuild primary params from the current builder for a given effect.
+
+    Used by serializeCard to fix stale stored params that don't match
+    the current template placeholders.
+    """
+    category = EFFECT_CATEGORY.get(effectName, "flat_fp")
+    if category == "cross":
+        builder = _buildCrossPositionParams
+    elif effectName in _EFFECT_BUILDER_OVERRIDES:
+        builder = _EFFECT_BUILDER_OVERRIDES[effectName]
+    else:
+        builder = _PARAM_BUILDERS.get(category, _buildFlatFPParams)
+    result = builder(effectName, playerRating, editionScale)
+    return result if result else {"baseFP": round(2 * editionScale, 1)}
 
 
 # ─── Config Builder ──────────────────────────────────────────────────────────
@@ -1086,9 +1128,11 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     if secondary is None and edition == 'prismatic':
         secondary = buildPrismaticSecondary()
 
-    # Builder from category (handles "cross" via _buildCrossPositionParams)
+    # Builder: check per-effect overrides first, then category dispatch
     if category == "cross":
         builder = _buildCrossPositionParams
+    elif effectName in _EFFECT_BUILDER_OVERRIDES:
+        builder = _EFFECT_BUILDER_OVERRIDES[effectName]
     else:
         builder = _PARAM_BUILDERS.get(category, _buildFlatFPParams)
     primary = builder(effectName, playerRating, editionScale)
@@ -1274,10 +1318,10 @@ def _computeScrappy(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{count} low-rated")
+                   f"+{enhancedFP} FP", f"{count} low-rated", ctx=ctx)
     if not triggered:
         eq = f"+{baseFP} FP floor — " + eq
     return EffectResult(fpBonus=fp, equation=eq,
@@ -1381,10 +1425,10 @@ def _computeBabysitter(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{count} under {threshold} FP")
+                   f"+{enhancedFP} FP", f"{count} under {threshold} FP", ctx=ctx)
     if not triggered:
         eq = f"+{baseFP} FP floor — " + eq
     return EffectResult(fpBonus=fp, equation=eq,
@@ -1418,10 +1462,10 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"team lost, {losses} season losses")
+                   f"+{enhancedFP} FP", f"team lost, {losses} season losses", ctx=ctx)
     if not triggered:
         eq = f"+{baseFP} FP floor — " + eq
     return EffectResult(fpBonus=fp, equation=eq,
@@ -1497,10 +1541,10 @@ def _computeUnderdog(primary, ctx, cardPlayerId, eqId):
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     eloDiff = round(eloBelowAvg)
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{eloDiff} ELO below avg")
+                   f"+{enhancedFP} FP", f"{eloDiff} ELO below avg", ctx=ctx)
     if not triggered:
         eq = f"+{baseFP} FP floor — " + eq
     return EffectResult(fpBonus=fp, equation=eq,
@@ -1586,10 +1630,10 @@ def _computegood_neighbor(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{totalMisses} season misses")
+                   f"+{enhancedFloobits}F", f"{totalMisses} season misses", ctx=ctx)
     if not triggered:
         eq = f"+{baseFloobits}F floor — " + eq
     return EffectResult(floobits=floobitsVal, equation=eq,
@@ -1618,10 +1662,11 @@ def _computeConsolationPrize(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
+    context = f"{count} under {threshold} FP"
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{count} under {threshold} FP")
+                   f"+{enhancedFloobits}F", context, ctx=ctx)
     if not triggered:
         eq = f"+{baseFloobits}F floor — " + eq
     return EffectResult(floobits=floobitsVal, equation=eq,
@@ -1647,10 +1692,10 @@ def _computeRockBottom(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{lossStreak} loss streak")
+                   f"+{enhancedFloobits}F", f"{lossStreak} loss streak", ctx=ctx)
     if not triggered:
         eq = f"+{baseFloobits}F floor — " + eq
     return EffectResult(floobits=floobitsVal, equation=eq,
@@ -1903,7 +1948,7 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
             else:
                 eq = f"{totalYards} yds / {yardsPerTick} = {ticks} ticks × {baseReward}"
         else:
-            eq = f"{baseReward} base + ({growthPerTick}/tick × {ticks} ticks)"
+            eq = f"{baseReward} base + ({growthPerTick}/TD × {ticks} TDs)"
     else:
         # Season streaks: live-aware computation
         # streakCounts already includes +1 increment if condition was met live
@@ -1911,9 +1956,9 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         conditionMet = ctx.liveStreakConditionsMet.get(eqId, True)
 
         if not conditionMet:
-            # Condition not yet met this game → show base only (no growth)
+            # Condition not yet met → show base only (no growth)
             result = _streakReward(primary, baseReward)
-            result.equation = f"{baseReward} base (streak {streakCount}, awaiting condition)"
+            result.equation = f"{baseReward} base"
             return result
 
         peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
@@ -1921,9 +1966,9 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         growthTicks = max(0, effectiveCount - 1)
         totalReward = baseReward + growthPerTick * growthTicks
         if peerBonus > 0:
-            eq = f"{baseReward} base + ({growthPerTick}/wk × {growthTicks} ticks [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+            eq = f"{baseReward} base + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
         else:
-            eq = f"{baseReward} base + ({growthPerTick}/wk × {max(0, streakCount - 1)} wk streak)"
+            eq = f"{baseReward} base + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
 
     result = _streakReward(primary, totalReward)
     result.equation = eq
@@ -2024,7 +2069,7 @@ def _computeWorkhorse(primary, ctx, cardPlayerId, eqId):
     """FP scaling with RB slot's rushing attempts."""
     perAttFP = primary.get("perAttemptFP", 0.8)
     stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
-    attempts = stats.get("rushing_stats", {}).get("rushAtt", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
+    attempts = stats.get("rushing_stats", {}).get("carries", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     fp = round(perAttFP * attempts, 1)
     eq = f"{perAttFP} FP/att × {attempts} rush attempts = +{fp} FP"
     return EffectResult(fpBonus=fp, equation=eq)
@@ -2034,7 +2079,7 @@ def _computeExpedition(primary, ctx, cardPlayerId, eqId):
     """FP scaling with RB slot's rushing yards."""
     perFiftyFP = primary.get("perFiftyYardsFP", 2.5)
     stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
-    rushYards = stats.get("rushing_stats", {}).get("rushYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
+    rushYards = stats.get("rushing_stats", {}).get("runYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     chunks = rushYards / 50.0
     fp = round(perFiftyFP * chunks, 1)
     eq = f"{perFiftyFP} FP/50yds × {rushYards} rush yds = +{fp} FP"
@@ -2047,7 +2092,7 @@ def _computeStampede(primary, ctx, cardPlayerId, eqId):
     enhancedMult = primary.get("enhancedMult", 1.25)
     threshold = primary.get("yardThreshold", 75)
     stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
-    rushYards = stats.get("rushing_stats", {}).get("rushYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
+    rushYards = stats.get("rushing_stats", {}).get("runYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     if rushYards >= threshold:
         eq = f"{enhancedMult:.2f}x FPx ({rushYards} rush yds >= {threshold})"
         return EffectResult(multBonus=enhancedMult, equation=eq)
@@ -2076,7 +2121,7 @@ def _computePossession(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeDeepThreat(primary, ctx, cardPlayerId, eqId):
-    """FP if either WR slot catches a 40+ yard pass."""
+    """FP if either WR slot catches a 25+ yard pass."""
     rewardValue = primary.get("rewardValue", 12)
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 3)
     hasDeepCatch = False
@@ -2085,13 +2130,13 @@ def _computeDeepThreat(primary, ctx, cardPlayerId, eqId):
         rcvStats = stats.get("receiving_stats", {})
         if isinstance(rcvStats, dict):
             longest = rcvStats.get("longest", 0) or rcvStats.get("longestRec", 0)
-            if longest >= 40:
+            if longest >= 25:
                 hasDeepCatch = True
                 break
     if hasDeepCatch:
-        eq = f"+{rewardValue} FP (WR 40+ yd reception)"
+        eq = f"+{rewardValue} FP (WR 25+ yd reception)"
         return EffectResult(fpBonus=rewardValue, equation=eq)
-    eq = "No 40+ yd WR reception"
+    eq = "No 25+ yd WR reception"
     return EffectResult(equation=eq)
 
 
@@ -2306,10 +2351,10 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{worstUnder:.0f} pts under")
+                   f"+{enhancedFloobits}F", f"{worstUnder:.0f} pts under", ctx=ctx)
     if not triggered:
         eq = f"+{baseFloobits}F floor — " + eq
     return EffectResult(floobits=floobitsVal, equation=eq,
@@ -2641,10 +2686,10 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
-    triggered = roll <= totalChance
+    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{failedCount} cards failed")
+                   f"+{enhancedFP} FP", f"{failedCount} cards failed", ctx=ctx)
     if not triggered:
         eq = f"+{baseFP} FP floor — " + eq
     return EffectResult(fpBonus=fp, equation=eq,

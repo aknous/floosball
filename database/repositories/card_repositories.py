@@ -142,10 +142,11 @@ class EquippedCardRepository:
 
     def getEquippedCardIds(self, userId: int, season: int = 0, week: int = 0) -> set:
         """Get the set of user_card_ids equipped for a specific season/week."""
-        query = self.session.query(EquippedCard.user_card_id).filter_by(user_id=userId)
-        if season and week:
-            query = query.filter_by(season=season, week=week)
-        return {r[0] for r in query.all()}
+        return {
+            r[0] for r in self.session.query(EquippedCard.user_card_id)
+            .filter_by(user_id=userId, season=season, week=week)
+            .all()
+        }
 
     def save(self, equipped: EquippedCard) -> EquippedCard:
         self.session.add(equipped)

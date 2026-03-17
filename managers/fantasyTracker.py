@@ -37,10 +37,14 @@ def _liveStatsToDbFormat(gameStatsDict: dict, teamId: int = 0) -> dict:
         "rushing_stats": {
             "runYards": rushing.get("yards", 0),
             "runTds": rushing.get("tds", 0),
+            "carries": rushing.get("carries", 0),
         },
         "receiving_stats": {
             "rcvYards": receiving.get("yards", 0),
             "rcvTds": receiving.get("tds", 0),
+            "receptions": receiving.get("receptions", 0),
+            "yac": receiving.get("yac", 0),
+            "longest": receiving.get("longest", 0),
         },
         "kicking_stats": {
             "fgs": kicking.get("fgs", 0),
@@ -69,13 +73,18 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         "rushing_stats": {
             "runYards": (rushingStats or {}).get("yards", 0),
             "runTds": (rushingStats or {}).get("tds", 0),
+            "carries": (rushingStats or {}).get("carries", 0),
         },
         "receiving_stats": {
             "rcvYards": (receivingStats or {}).get("yards", 0),
             "rcvTds": (receivingStats or {}).get("tds", 0),
+            "receptions": (receivingStats or {}).get("receptions", 0),
+            "yac": (receivingStats or {}).get("yac", 0),
+            "longest": (receivingStats or {}).get("longest", 0),
         },
         "kicking_stats": {
             "fgs": (kickingStats or {}).get("fgs", 0),
+            "fgAtt": (kickingStats or {}).get("fgAtt", 0),
             "longest": (kickingStats or {}).get("longest", 0),
             "fg40plus": (kickingStats or {}).get("fg40+", (kickingStats or {}).get("fg40plus", 0)),
         },
@@ -287,6 +296,9 @@ class FantasyTracker:
                 equippedRepo = EquippedCardRepository(session)
                 allEquipped = equippedRepo.getAllForWeek(seasonNum, currentWeek)
                 for eq in allEquipped:
+                    # During active games, only locked cards produce output
+                    if gamesActive and not eq.locked:
+                        continue
                     equippedByUser.setdefault(eq.user_id, []).append(eq)
 
             # ── 6. Player ratings and positions ──
@@ -1028,11 +1040,21 @@ class FantasyTracker:
                 userFavoriteTeamId, favoriteTeamWonThisWeek,
                 favoriteTeamOpponentElo, favoriteTeamElo,
             )
+        elif not teamResults:
+            # Between weeks (no final games yet) — streak conditions unknown,
+            # default to False so cards don't show stale output from prior week
+            from managers.cardEffects import STREAK_CONFIGS
+            for eq in userEquipped:
+                ec = eq.user_card.card_template.effect_config or {}
+                effectName = ec.get("effectName", "")
+                if effectName in STREAK_CONFIGS and not STREAK_CONFIGS[effectName].get("isWeekly", False):
+                    liveStreakConditionsMet[eq.id] = False
 
         return CardCalcContext(
             userId=userId,
             season=season,
             weekNumber=currentWeek,
+            gamesActive=gamesActive,
             chanceBonus=chanceBonus,
             kickerSeasonFgMisses=kickerSeasonFgMisses,
             rosterPlayerIds=rosterPlayerIds,
@@ -1177,4 +1199,6 @@ class FantasyTracker:
             "chanceRoll": b.chanceRoll,
             "chanceThreshold": b.chanceThreshold,
             "chanceTriggered": b.chanceTriggered,
+            "streakActive": b.streakActive,
+            "streakCount": b.streakCount,
         }

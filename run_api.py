@@ -16,6 +16,7 @@ Timing Modes:
     --scheduled, --timing=scheduled     Real-time scheduling
     --demo, --timing=demo           Demo mode - fast games, visible offseason pick delays (UI testing)
     --test-scheduled                Compressed scheduled mode - real polling, minutes apart (no WS broadcast)
+    --offseason-test                Fast regular season (no broadcast), interactive offseason (3 min FA window, live draft)
 
 Options:
     --fresh                         Clear database and start fresh
@@ -69,6 +70,8 @@ def parse_args():
                 args['timing_mode'] = TimingMode.DEMO
             elif mode_str == 'test-scheduled':
                 args['timing_mode'] = TimingMode.TEST_SCHEDULED
+            elif mode_str == 'offseason-test':
+                args['timing_mode'] = TimingMode.OFFSEASON_TEST
         elif arg in ['--timing-fast', '--fast']:
             args['timing_mode'] = TimingMode.FAST
         elif arg in ['--timing-turbo', '--turbo']:
@@ -81,6 +84,8 @@ def parse_args():
             args['timing_mode'] = TimingMode.DEMO
         elif arg in ['--test-scheduled']:
             args['timing_mode'] = TimingMode.TEST_SCHEDULED
+        elif arg in ['--offseason-test']:
+            args['timing_mode'] = TimingMode.OFFSEASON_TEST
         elif arg == '--fresh':
             args['fresh_start'] = True
         elif arg.startswith('--schedule-gap='):
@@ -121,11 +126,11 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
     set_floosball_app(floosball_app)
 
     # Enable broadcasting (skip in test-scheduled mode)
-    if timing_mode != TimingMode.TEST_SCHEDULED:
+    if timing_mode not in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST):
         broadcaster.enable(ws_manager)
         logger.info("Game broadcasting enabled")
     else:
-        logger.info("Test-scheduled mode: broadcasting disabled")
+        logger.info(f"{timing_mode.value} mode: broadcasting disabled at startup")
     
     # Start the application in background
     asyncio.create_task(floosball_app.runSimulation())

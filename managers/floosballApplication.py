@@ -244,6 +244,9 @@ class FloosballApplication:
             # Handle offseason
             await self.seasonManager.handleOffseason()
 
+            # Wait between seasons (SCHEDULED: polls until Monday; others: fixed delay)
+            await self.seasonManager.timingManager.waitBetweenSeasons()
+
             # Update season counter
             seasonsPlayed += 1
             gameState = self.serviceContainer.getService('game_state')

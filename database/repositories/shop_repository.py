@@ -1,11 +1,19 @@
 """Repository for shop power-up purchases."""
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from database.models import ShopPurchase, UserModifierOverride
+from constants import DAILY_RESET_HOUR_UTC
+
+
+def _dailyResetBoundary() -> datetime:
+    """Return the most recent daily reset timestamp (DAILY_RESET_HOUR_UTC today or yesterday)."""
+    now = datetime.utcnow()
+    todayReset = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
+    return todayReset if now >= todayReset else todayReset - timedelta(days=1)
 
 
 class ShopPurchaseRepository:
@@ -23,13 +31,12 @@ class ShopPurchaseRepository:
         return query.all()
 
     def getPurchasesToday(self, userId: int, itemSlug: str) -> int:
-        """Count purchases of a specific item made today (for daily limit in production)."""
-        today = date.today()
-        todayStart = datetime(today.year, today.month, today.day)
+        """Count purchases since the last daily reset boundary (DAILY_RESET_HOUR_UTC)."""
+        boundary = _dailyResetBoundary()
         return self.session.query(func.count(ShopPurchase.id)).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.item_slug == itemSlug,
-            ShopPurchase.created_at >= todayStart,
+            ShopPurchase.created_at >= boundary,
         ).scalar() or 0
 
     def getPurchasesForCycle(self, userId: int, season: int, itemSlug: str, cycleStartWeek: int, cycleEndWeek: int) -> int:
@@ -123,9 +130,9 @@ class ModifierOverrideRepository:
         """Check if user already rerolled in current refresh cycle."""
         if generatedAt is None:
             return 0
-        todayStart = datetime(today.year, today.month, today.day)
+        boundary = _dailyResetBoundary()
         return session.query(func.count(ShopPurchase.id)).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.item_slug == itemSlug,
-            ShopPurchase.created_at >= todayStart,
+            ShopPurchase.created_at >= boundary,
         ).scalar() or 0

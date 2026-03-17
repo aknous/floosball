@@ -19,7 +19,7 @@ engine = create_engine(
     echo=False,  # Set to True for SQL debugging
     future=True,
     connect_args={
-        "timeout": 30,  # Increase timeout for busy database
+        "timeout": 5,  # Timeout for busy database
         "check_same_thread": False  # Allow multiple threads (needed for async)
     }
 )
@@ -30,7 +30,7 @@ from sqlalchemy import event
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
+    cursor.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
     cursor.close()
 
 # Session factory

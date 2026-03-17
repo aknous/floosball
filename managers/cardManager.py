@@ -318,28 +318,32 @@ class CardManager:
         # Inject posLabel from card position if missing (legacy cards)
         if "posLabel" not in primary:
             primary["posLabel"] = POSITION_LABELS.get(template.position, "??")
-        # Legacy migration: squire was converted from FPx to FP; also fix cards
-        # created while param builder was in wrong category (had baseFP instead of perTdFP)
-        if effectName == "squire" and "perTdFP" not in primary:
-            legacyVal = primary.get("perTdXMult") or primary.get("xMultValue")
-            if legacyVal:
-                primary["perTdFP"] = legacyVal
-            else:
-                # Regenerate from player rating + edition scale
-                edScale = effectConfig.get("editionScale", 1.0)
-                rn = max(0, template.player_rating - 60)
-                primary["perTdFP"] = round((4 + rn * 0.15) * edScale, 1)
-        for field, templates in [("detail", EFFECT_DETAIL_TEMPLATES), ("tooltip", EFFECT_TOOLTIPS), ("tagline", EFFECT_TAGLINES)]:
-            tpl = templates.get(effectName, "")
-            if tpl:
-                for key, val in primary.items():
-                    tpl = tpl.replace("{" + key + "}", str(val))
-                statKey = primary.get("stat", "")
-                if statKey:
-                    tpl = tpl.replace("{statDisplay}", STAT_DISPLAY_NAMES.get(statKey, statKey))
-                # Strip any unresolved placeholders (legacy cards with missing params)
-                tpl = _re.sub(r'\{[a-zA-Z_]+\}', '?', tpl)
-                effectConfig[field] = tpl
+        # Rebuild templates from current templates + stored primary params
+        def _rebuildTemplates(params):
+            for tField, tDict in [("detail", EFFECT_DETAIL_TEMPLATES), ("tooltip", EFFECT_TOOLTIPS), ("tagline", EFFECT_TAGLINES)]:
+                tpl = tDict.get(effectName, "")
+                if tpl:
+                    for key, val in params.items():
+                        tpl = tpl.replace("{" + key + "}", str(val))
+                    statKey = params.get("stat", "")
+                    if statKey:
+                        tpl = tpl.replace("{statDisplay}", STAT_DISPLAY_NAMES.get(statKey, statKey))
+                    tpl = _re.sub(r'\{[a-zA-Z_]+\}', '?', tpl)
+                    effectConfig[tField] = tpl
+
+        _rebuildTemplates(primary)
+
+        # If detail still has unresolved '?' placeholders, stored params are stale —
+        # regenerate from current builder
+        if "?" in effectConfig.get("detail", ""):
+            from managers.cardEffects import rebuildPrimaryParams
+            edScale = effectConfig.get("editionScale", 1.0)
+            freshPrimary = rebuildPrimaryParams(effectName, template.player_rating, edScale)
+            freshPrimary["posLabel"] = primary.get("posLabel", POSITION_LABELS.get(template.position, "??"))
+            primary = freshPrimary
+            _rebuildTemplates(primary)
+            # Re-derive output type with fresh params
+            outputType = _deriveOutputType(category, effectName, primary)
 
         # Rebuild secondary bonus from current edition constants
         from managers.cardEffects import EDITION_SECONDARY, buildPrismaticSecondary
@@ -353,12 +357,17 @@ class CardManager:
             if currentSecondary is not None:
                 effectConfig["secondary"] = currentSecondary
 
+        teamColor = None
+        if template.team and hasattr(template.team, 'color'):
+            teamColor = template.team.color
+
         return {
             "id": userCard.id,
             "templateId": template.id,
             "playerId": template.player_id,
             "playerName": template.player_name,
             "teamId": template.team_id,
+            "teamColor": teamColor,
             "playerRating": template.player_rating,
             "position": template.position,
             "edition": template.edition,
@@ -379,7 +388,8 @@ class CardManager:
             "acquiredVia": userCard.acquired_via,
         }
 
-    def sellCards(self, session, userId: int, userCardIds: List[int], currentSeason: int) -> dict:
+    def sellCards(self, session, userId: int, userCardIds: List[int], currentSeason: int,
+                  currentWeek: int = 0) -> dict:
         """Sell one or more cards from a user's collection.
 
         Returns dict with totalFloobits earned and count of cards sold.
@@ -400,11 +410,16 @@ class CardManager:
             missingIds = [cid for cid in userCardIds if cid not in foundIds]
             raise ValueError(f"Cards not found or not owned: {missingIds}")
 
-        # Check none are currently equipped
+        # Check none are currently equipped (this week only)
         equippedIds = {
             ec.user_card_id
             for ec in session.query(EquippedCard)
-            .filter(EquippedCard.user_card_id.in_(userCardIds), EquippedCard.user_id == userId)
+            .filter(
+                EquippedCard.user_card_id.in_(userCardIds),
+                EquippedCard.user_id == userId,
+                EquippedCard.season == currentSeason,
+                EquippedCard.week == currentWeek,
+            )
             .all()
         }
         if equippedIds:
@@ -432,8 +447,9 @@ class CardManager:
 
     # ─── The Combine (Card Upgrades) ──────────────────────────────────────────
 
-    def _validateUpgradeCards(self, session, userId: int, cardIds: List[int]):
-        """Validate cards for upgrade: owned by user and not equipped.
+    def _validateUpgradeCards(self, session, userId: int, cardIds: List[int],
+                              currentSeason: int = 0, currentWeek: int = 0):
+        """Validate cards for upgrade: owned by user and not equipped this week.
         Returns list of UserCard objects with templates loaded.
         """
         from database.repositories.card_repositories import UserCardRepository
@@ -446,13 +462,18 @@ class CardManager:
             missingIds = [cid for cid in cardIds if cid not in foundIds]
             raise ValueError(f"Cards not found or not owned: {missingIds}")
 
-        equippedIds = {
-            ec.user_card_id
-            for ec in session.query(EquippedCard)
-            .filter(EquippedCard.user_card_id.in_(cardIds), EquippedCard.user_id == userId)
-            .all()
-        }
+        equippedRows = session.query(EquippedCard).filter(
+            EquippedCard.user_card_id.in_(cardIds),
+            EquippedCard.user_id == userId,
+            EquippedCard.season == currentSeason,
+            EquippedCard.week == currentWeek,
+        ).all()
+        equippedIds = {ec.user_card_id for ec in equippedRows}
         if equippedIds:
+            # Log details for debugging
+            for ec in equippedRows:
+                logger.warning(f"Card {ec.user_card_id} equipped in S{ec.season}W{ec.week} slot={ec.slot_number} locked={ec.locked}")
+            logger.warning(f"Blend blocked: season={currentSeason} week={currentWeek} equippedIds={equippedIds}")
             raise ValueError(f"Cannot use equipped cards: {list(equippedIds)}")
 
         return cards
@@ -488,7 +509,7 @@ class CardManager:
         return templateRepo.save(template)
 
     def promoteCard(self, session, userId: int, subjectCardId: int,
-                    offeringCardId: int, currentSeason: int) -> dict:
+                    offeringCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
         """Promotion: Sacrifice a higher-edition card to promote the subject's edition.
 
         The subject keeps its effect (recomputed at new power scale).
@@ -497,7 +518,8 @@ class CardManager:
         from database.models import CardUpgradeLog
         from database.repositories.card_repositories import UserCardRepository
 
-        cards = self._validateUpgradeCards(session, userId, [subjectCardId, offeringCardId])
+        cards = self._validateUpgradeCards(session, userId, [subjectCardId, offeringCardId],
+                                           currentSeason, currentWeek)
         cardMap = {c.id: c for c in cards}
         subject = cardMap[subjectCardId]
         offering = cardMap[offeringCardId]
@@ -552,7 +574,7 @@ class CardManager:
         return self.serializeCard(subject, currentSeason)
 
     def blendCards(self, session, userId: int, offeringCardIds: List[int],
-                   currentSeason: int) -> dict:
+                   currentSeason: int, currentWeek: int = 0) -> dict:
         """The Blender: Sacrifice multiple cards to create one new random card.
 
         The result edition is determined by total classification-aware value
@@ -569,7 +591,8 @@ class CardManager:
         # Deduplicate
         offeringCardIds = list(set(offeringCardIds))
 
-        cards = self._validateUpgradeCards(session, userId, offeringCardIds)
+        cards = self._validateUpgradeCards(session, userId, offeringCardIds,
+                                           currentSeason, currentWeek)
 
         # Sum classification-aware values
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
@@ -646,7 +669,8 @@ class CardManager:
         return self.serializeCard(newCard, currentSeason)
 
     def transplantCard(self, session, userId: int, targetCardId: int,
-                       offeringCardId: int, currentSeason: int) -> dict:
+                       offeringCardId: int, currentSeason: int,
+                       currentWeek: int = 0) -> dict:
         """Transplant: Sacrifice the offering to transfer its effect onto the target.
 
         Cost in Floobits scales with value difference between target and offering.
@@ -656,7 +680,8 @@ class CardManager:
             UserCardRepository, CurrencyRepository,
         )
 
-        cards = self._validateUpgradeCards(session, userId, [targetCardId, offeringCardId])
+        cards = self._validateUpgradeCards(session, userId, [targetCardId, offeringCardId],
+                                           currentSeason, currentWeek)
         cardMap = {c.id: c for c in cards}
         target = cardMap[targetCardId]
         offering = cardMap[offeringCardId]
@@ -716,9 +741,11 @@ class CardManager:
         return self.serializeCard(target, currentSeason)
 
     def previewPromotion(self, session, userId: int, subjectCardId: int,
-                         offeringCardId: int, currentSeason: int) -> dict:
+                         offeringCardId: int, currentSeason: int,
+                         currentWeek: int = 0) -> dict:
         """Preview Promotion result without executing."""
-        cards = self._validateUpgradeCards(session, userId, [subjectCardId, offeringCardId])
+        cards = self._validateUpgradeCards(session, userId, [subjectCardId, offeringCardId],
+                                           currentSeason, currentWeek)
         cardMap = {c.id: c for c in cards}
         subject = cardMap[subjectCardId]
         offering = cardMap[offeringCardId]
@@ -754,13 +781,14 @@ class CardManager:
         }
 
     def previewBlend(self, session, userId: int, offeringCardIds: List[int],
-                     currentSeason: int) -> dict:
+                     currentSeason: int, currentWeek: int = 0) -> dict:
         """Preview The Blender result (edition only — player/effect are random)."""
         if len(offeringCardIds) < 2:
             raise ValueError("The Blender requires at least 2 cards")
 
         offeringCardIds = list(set(offeringCardIds))
-        cards = self._validateUpgradeCards(session, userId, offeringCardIds)
+        cards = self._validateUpgradeCards(session, userId, offeringCardIds,
+                                           currentSeason, currentWeek)
 
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
 
@@ -777,9 +805,11 @@ class CardManager:
         }
 
     def previewTransplant(self, session, userId: int, targetCardId: int,
-                          offeringCardId: int, currentSeason: int) -> dict:
+                          offeringCardId: int, currentSeason: int,
+                          currentWeek: int = 0) -> dict:
         """Preview Transplant result and cost."""
-        cards = self._validateUpgradeCards(session, userId, [targetCardId, offeringCardId])
+        cards = self._validateUpgradeCards(session, userId, [targetCardId, offeringCardId],
+                                           currentSeason, currentWeek)
         cardMap = {c.id: c for c in cards}
         target = cardMap[targetCardId]
         offering = cardMap[offeringCardId]
@@ -979,8 +1009,8 @@ class CardManager:
         """
         from database.models import FeaturedShopCard
         from database.repositories.card_repositories import CardTemplateRepository
-        from datetime import datetime, date
-        from constants import SWAP_CYCLE_WEEKS
+        from datetime import datetime, date, timedelta
+        from constants import SWAP_CYCLE_WEEKS, DAILY_RESET_HOUR_UTC
 
         # Check for existing selection
         existing = (
@@ -995,8 +1025,11 @@ class CardManager:
             sampleRow = existing[0]
             if sampleRow.generated_at is not None:
                 if isScheduledMode:
-                    # Refresh if generated before today
-                    needsRefresh = sampleRow.generated_at.date() < date.today()
+                    # Refresh if generated before the most recent daily reset boundary
+                    now = datetime.utcnow()
+                    todayReset = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
+                    boundary = todayReset if now >= todayReset else todayReset - timedelta(days=1)
+                    needsRefresh = sampleRow.generated_at < boundary
                 else:
                     # Refresh if generated in a previous 7-week cycle
                     currentCycle = (currentWeek - 1) // SWAP_CYCLE_WEEKS + 1

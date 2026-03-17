@@ -99,13 +99,13 @@ class SeasonManager:
 
         # Initialize timing manager with default fast mode
         self.timingManager = TimingManager(TimingMode.FAST)
-        
+
         # Game stats file
         self.game_stats_file = None
-        
+
         # Track games for verbose logging
         self.games_simulated_this_season = 0
-        
+
         # Global game counter for unique IDs across all seasons
         self._gameIdCounter = 0
 
@@ -116,7 +116,11 @@ class SeasonManager:
         self._cachedNextGameStart: Optional[datetime.datetime] = None
 
         logger.info("SeasonManager initialized")
-    
+
+    @property
+    def _isTestMode(self) -> bool:
+        return self.timingManager.mode in (TimingMode.OFFSEASON_TEST, TimingMode.DEMO)
+
     def setStateUpdateCallback(self, callback):
         """Set callback function for state updates"""
         self.stateUpdateCallback = callback
@@ -143,6 +147,8 @@ class SeasonManager:
         elif mode_str == 'test-scheduled':
             self.timingManager.scheduleGap = scheduleGap
             self.setTimingMode(TimingMode.TEST_SCHEDULED)
+        elif mode_str == 'offseason-test':
+            self.setTimingMode(TimingMode.OFFSEASON_TEST)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -270,11 +276,20 @@ class SeasonManager:
 
             weekStartTime = week['startTime']
 
-            # Cache the game start time so REST API returns a stable value on refresh
+            # Detect catch-up: current time is past this week's scheduled start
             if self.timingManager._isScheduledMode:
+                isBehindSchedule = datetime.datetime.utcnow() > weekStartTime
+                if isBehindSchedule and not self.timingManager.catchingUp:
+                    logger.info(f"Week {self.currentSeason.currentWeek}: past scheduled time — entering catch-up mode")
+                elif not isBehindSchedule and self.timingManager.catchingUp:
+                    logger.info(f"Week {self.currentSeason.currentWeek}: back on schedule — resuming normal timing")
+                self.timingManager.catchingUp = isBehindSchedule
+
+            # Cache the game start time so REST API returns a stable value on refresh
+            if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
                 self._cachedNextGameStart = weekStartTime
             else:
-                # Sequential/turbo: compute from delays relative to now
+                # Sequential/turbo/catch-up: compute from delays relative to now
                 delays = self.timingManager.delays
                 gap = delays.get('week_start_wait', 30) + delays.get('game_announcement', 30)
                 self._cachedNextGameStart = datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
@@ -446,15 +461,6 @@ class SeasonManager:
             self.recordsManager.checkCareerRecords()
             self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber)
 
-            # Commit all games from this week to database
-            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session:
-                try:
-                    self.db_session.commit()
-                    logger.debug(f"Committed {len(weekGames)} games from week {self.currentSeason.currentWeek}")
-                except Exception as e:
-                    logger.error(f"Failed to commit week games: {e}")
-                    self.db_session.rollback()
-
             # Checkpoint: save team + player season stats after each week so a restart
             # can recover mid-season state without losing accumulated stats.
             self._saveTeamSeasonStatsToDatabase()
@@ -478,7 +484,10 @@ class SeasonManager:
                     await broadcaster.broadcast_season_event(SeasonEvent.dayComplete(dayNum))
                 else:
                     await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
-    
+
+        # Reset catch-up flag after regular season completes
+        self.timingManager.catchingUp = False
+
     async def _simulatePlayoffs(self) -> None:
         """Simulate playoff games"""
         logger.info("Starting playoff simulation")
@@ -727,6 +736,9 @@ class SeasonManager:
         # Award weekly leaderboard prizes (after card effects are finalized)
         if not in_playoffs:
             self._awardWeeklyLeaderboardPrizes(self.currentSeason.seasonNumber, week)
+
+        # Resolve pick-em picks and award Floobits
+        self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
         # Unlock equipped cards now that week is over
         try:
@@ -1126,6 +1138,18 @@ class SeasonManager:
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
                     )
 
+                    # Populate streak conditions for breakdown display
+                    from managers.cardEffects import STREAK_CONFIGS as _streakConfigs
+                    streakConditions = {}
+                    for eq in userEquipped:
+                        ec = eq.user_card.card_template.effect_config or {}
+                        eName = ec.get("effectName", "")
+                        if eName in _streakConfigs:
+                            streakConditions[eq.id] = checkStreakCondition(
+                                eName, calcCtx, eq.user_card.card_template.player_id
+                            )
+                    calcCtx.liveStreakConditionsMet = streakConditions
+
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
@@ -1175,6 +1199,8 @@ class SeasonManager:
                             "chanceRoll": b.chanceRoll,
                             "chanceThreshold": b.chanceThreshold,
                             "chanceTriggered": b.chanceTriggered,
+                            "streakActive": b.streakActive,
+                            "streakCount": b.streakCount,
                         } for b in result.cardBreakdowns]
                         storedJson = _json.dumps({
                             "breakdowns": breakdownDicts,
@@ -1338,7 +1364,7 @@ class SeasonManager:
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
                         self._savePlayerGameStats(db_game.id, playerStats)
-                    self.db_session.flush()
+                    self.db_session.commit()
                     logger.debug(f"Updated game in database: {game.awayTeam.abbr} @ {game.homeTeam.abbr}, Score: {game.awayScore}-{game.homeScore}")
                     return
 
@@ -1392,8 +1418,7 @@ class SeasonManager:
             if playerStats:
                 self._savePlayerGameStats(db_game.id, playerStats)
             
-            # Don't commit yet - will batch commit at end of week
-            self.db_session.flush()  # Flush to get IDs but don't commit
+            self.db_session.commit()
             logger.debug(f"Saved game to database: {game.awayTeam.abbr} @ {game.homeTeam.abbr}, Score: {game.awayScore}-{game.homeScore}")
             
         except Exception as e:
@@ -1613,6 +1638,8 @@ class SeasonManager:
             newGame.isRegularSeasonGame = not row.is_playoff
             newGame.status = (FloosGame.GameStatus.Final if row.status == 'final'
                               else FloosGame.GameStatus.Scheduled)
+            newGame.homeScore = row.home_score or 0
+            newGame.awayScore = row.away_score or 0
 
             # Use stored game_date if present; otherwise compute from current time
             weekIdx = row.week - 1
@@ -1703,25 +1730,20 @@ class SeasonManager:
         elif dateNow.day > dateNowUtc.day:
             utcOffset = dateNowUtc.hour - (dateNow.hour + 24)
 
-        startTimeHoursList = [11, 12, 13, 14, 15, 16, 17]
+        startTimeHoursList = [12, 13, 14, 15, 16, 17, 18]
         startTimeHour = startTimeHoursList[week % 7]
         adjustedHour = (startTimeHour + utcOffset) % 24
 
         if week > 28:
-            # Playoffs: schedule relative to today (unchanged legacy logic kept intact)
-            startDay = 4
-            todayWeekDay = dateNowUtc.isoweekday()
-            if week == 32:
-                startDayOffset = 0 if todayWeekDay == startDay + 5 else (startDay + 5) - todayWeekDay
-            else:
-                if todayWeekDay == startDay + 5:
-                    startDayOffset = startDay + 4
-                elif todayWeekDay == startDay + 4:
-                    startDayOffset = 0
-                else:
-                    startDayOffset = (startDay + 4) - todayWeekDay
-            dayOffset = startDayOffset
-            targetDate = (now + datetime.timedelta(days=dayOffset)).date()
+            # Playoffs: anchored to season start date, all 4 rounds on day 4 (Fri).
+            # Regular season uses days 0–3 (Mon–Thu).  Saturday is for offseason/FA.
+            # Round 1 → 12 PM, Round 2 → 1 PM, League Championship → 2 PM, Floos Bowl → 3 PM
+            playoffRound = week - 28  # 1-based: 1, 2, 3, 4
+            playoffHours = {1: 12, 2: 13, 3: 14, 4: 15}
+            playoffHour = playoffHours.get(playoffRound, 12)
+            adjustedHour = (playoffHour + utcOffset) % 24
+            seasonStart = self.currentSeason.startDate if self.currentSeason else now
+            targetDate = (seasonStart + datetime.timedelta(days=4)).date()
         else:
             # Regular season: 28 rounds across 4 game days (7 rounds/day), anchored to
             # the season's actual start date instead of "next Thursday"
@@ -1750,6 +1772,9 @@ class SeasonManager:
             # Look up from schedule directly
             if nextIndex < len(schedule):
                 return schedule[nextIndex]['startTime']
+            # Playoff rounds aren't pre-scheduled — compute on demand
+            if currentWeek >= 28 and self.currentSeason and not self.currentSeason.isComplete:
+                return self.getWeekStartTime(datetime.datetime.utcnow(), currentWeek + 1)
             return None
 
         # SEQUENTIAL / TURBO: return cached timestamp if available
@@ -2067,10 +2092,13 @@ class SeasonManager:
                     playoffGamesDict[league.name] = gamesList.copy()
                     playoffGamesList.extend(gamesList)
 
-                self.currentWeek = 'Playoffs Round {}'.format(x+1)
-                self.currentWeekText = 'Playoffs Round {}'.format(x+1)
-                if currentRound != 1:
-                    await self.timingManager.waitForPlayoffRound()
+                if currentRound == numOfRounds - 1:
+                    self.currentWeek = 'League Championship'
+                    self.currentWeekText = 'League Championship'
+                else:
+                    self.currentWeek = 'Playoffs Round {}'.format(x+1)
+                    self.currentWeekText = 'Playoffs Round {}'.format(x+1)
+                await self.timingManager.waitForPlayoffRound(roundStartTime)
             else:
                 floosbowlTeams = []
                 for league in self.leagueManager.leagues:
@@ -2099,12 +2127,15 @@ class SeasonManager:
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
-                await self.timingManager.waitForChampionship()
+                await self.timingManager.waitForChampionship(roundStartTime)
 
             self.currentSeason.activeGames = playoffGamesList
             self.currentSeason.completedWeekGames = None  # Clear previous round's finished games
             self.currentSeason.currentWeekText = self.currentWeekText
             self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
+
+            # Games are about to start — clear cached countdown
+            self._cachedNextGameStart = None
 
             # Broadcast playoff round start so the frontend updates the week label
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -2112,7 +2143,7 @@ class SeasonManager:
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=28 + currentRound,
                     games=[],
-                    weekText=self.currentWeekText
+                    weekText=self.currentWeekText,
                 ))
 
             # Lock equipped cards for playoff week
@@ -2130,10 +2161,9 @@ class SeasonManager:
 
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
 
-            #await asyncio.sleep(30)
-            # while datetime.datetime.utcnow() < roundStartTime:
-            #     await asyncio.sleep(30)
-                
+            # Clear cached countdown — games are starting now
+            self._cachedNextGameStart = None
+
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Start'.format(self.currentWeekText)}})
 
             # Start periodic leaderboard broadcast during playoff games
@@ -2229,21 +2259,28 @@ class SeasonManager:
             # jsonFile.write(json.dumps(playoffDict, indent=4))
             # jsonFile.close()
             
-            # Commit playoff games from this round to database
-            if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session:
-                try:
-                    self.db_session.commit()
-                    logger.debug(f"Committed playoff round {x+1} games")
-                except Exception as e:
-                    logger.error(f"Failed to commit playoff games: {e}")
-                    self.db_session.rollback()
-            
             if x < numOfRounds - 1:
                 self.playerManager.sortPlayersByPosition()
                 teamManager = self.serviceContainer.getService('team_manager')
                 if teamManager:
                     teamManager.sortDefenses()
-                #await asyncio.sleep(30)
+
+                # Broadcast next playoff round start time for countdown
+                nextRoundStart = self.getWeekStartTime(datetime.datetime.utcnow(), 28 + currentRound + 1)
+                self._cachedNextGameStart = nextRoundStart
+                nextStartIso = nextRoundStart.isoformat() + 'Z' if nextRoundStart else None
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                    nextRoundText = 'Floos Bowl' if currentRound + 1 == numOfRounds else (
+                        'League Championship' if currentRound + 1 == numOfRounds - 1 else
+                        f'Playoffs Round {currentRound + 1}'
+                    )
+                    weekEndEvent = SeasonEvent.weekEnd(
+                        seasonNumber=self.currentSeason.seasonNumber,
+                        weekNumber=28 + currentRound,
+                        results=[],
+                        nextGameStartTime=nextStartIso,
+                    )
+                    broadcaster.broadcast_sync('season', weekEndEvent)
             
     
     async def _simulatePlayoffGame(self, game: FloosGame.Game) -> None:
@@ -2353,18 +2390,112 @@ class SeasonManager:
     async def _handleOffseason(self) -> None:
         """Handle offseason activities"""
         logger.info("Processing offseason activities")
-        
+
+        # Clear stale state from previous season's offseason
+        self._offseasonTransactions = []
+        self.playerManager._gmFaDirectives = {}
+
         # Set offseason status
         if self.currentSeason:
             self.currentSeason.currentWeek = 'Offseason'
             self.currentSeason.currentWeekText = 'Offseason'
-        
-        # Wait for offseason timing
+
+        # STEP 0: Award season-end prizes immediately after Floosbowl
+        # Users receive Floobits before the FA window so they can spend them on ballots
+        logger.info("Step 0: Awarding season-end prizes")
+        self._processUserSeasonTransitions()
+        self._awardSeasonEndPrizes(self.currentSeason.seasonNumber)
+        self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
+
+        # Wait for offseason timing (5 min in scheduled mode)
         await self.timingManager.waitForOffseason()
-        
-        # STEP 1: Player offseason training (without resetting performance ratings yet)
-        logger.info("Step 1: Player offseason training")
-        # Build a map of player id → coach dev rating for rostered players
+
+        # STEP 1: Increment free agent years for existing free agents
+        logger.info("Step 1: Increment free agent years")
+        for player in self.playerManager.freeAgents:
+            if hasattr(player, 'freeAgentYears'):
+                player.freeAgentYears += 1
+            else:
+                player.freeAgentYears = 1
+
+        # STEP 2: Resolve GM votes (coach, re-sign, cut)
+        logger.info("Step 2: Resolve GM votes")
+        gmResults = []
+        await self._resolveGmFireCoachVotes(gmResults)
+        await self._resolveGmResignVotes(gmResults)
+
+        # STEP 3: Process contract decrements and retirements for rostered players
+        logger.info("Step 3: Contract decrements and team retirements")
+        await self._processRosteredPlayerContracts()
+
+        # STEP 3.5: Resolve Cut Player GM votes (releases players to FA pool)
+        logger.info("Step 3.5: Resolve GM cut player votes")
+        await self._resolveGmCutVotes(gmResults)
+
+        # STEP 4: FA retirements + rookie generation
+        logger.info("Step 4: Free agent retirements and rookie generation")
+        self.playerManager._processFreeAgentRetirements(
+            self.currentSeason.seasonNumber if self.currentSeason else 1, [])
+        self.playerManager._generateReplacementPlayers(
+            self.currentSeason.seasonNumber if self.currentSeason else 1)
+
+        # Enable broadcasting for OFFSEASON_TEST mode before FA window + draft
+        offseasonTestBroadcastEnabled = False
+        if self.timingManager.mode == TimingMode.OFFSEASON_TEST and BROADCASTING_AVAILABLE:
+            from api.game_broadcaster import broadcaster as bc
+            from api.websocket_manager import manager as wsMgr
+            bc.enable(wsMgr)
+            offseasonTestBroadcastEnabled = True
+            logger.info("OFFSEASON_TEST: broadcasting enabled for FA window + draft")
+            # Broadcast offseason_start so the frontend transitions to OffseasonPanel
+            try:
+                freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+                draftOrderList = [
+                    {'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None), 'color': getattr(t, 'color', None)}
+                    for t in freeAgencyOrder
+                ]
+                # Snapshot pre-FA rosters
+                rosterSnapshots = {}
+                for t in freeAgencyOrder:
+                    abbr = getattr(t, 'abbr', t.name[:3].upper())
+                    roster = {}
+                    for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
+                        p = t.rosterDict.get(slot)
+                        if p:
+                            roster[slot] = {
+                                'id': p.id, 'name': p.name,
+                                'position': p.position.name,
+                                'rating': round(p.playerRating, 1),
+                                'tier': p.playerTier.name,
+                                'termRemaining': getattr(p, 'termRemaining', 0),
+                            }
+                        else:
+                            roster[slot] = None
+                    rosterSnapshots[abbr] = roster
+                startEvent = OffseasonEvent.start(draftOrderList)
+                startEvent['rosterSnapshots'] = rosterSnapshots
+                await broadcaster.broadcast_season_event(startEvent)
+                # Brief delay so the frontend can mount OffseasonPanel before FA window event
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.warning(f"Could not broadcast offseason start for OFFSEASON_TEST: {e}")
+
+        # STEP 5: FA Voting Window (GM Mode sign_fa)
+        logger.info("Step 5: FA voting window")
+        await self._runFaVotingWindow()
+
+        # STEP 6: FA Draft
+        logger.info("Step 6: Free agency draft")
+        await self._processFreeAgency()
+
+        # Disable broadcasting after draft for OFFSEASON_TEST mode
+        if offseasonTestBroadcastEnabled:
+            from api.game_broadcaster import broadcaster as bc
+            bc.disable()
+            logger.info("OFFSEASON_TEST: broadcasting disabled after draft")
+
+        # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
+        logger.info("Step 7: Player offseason training")
         rosteredDevRating: dict = {}
         teamManager = self.serviceContainer.getService('team_manager')
         for team in teamManager.teams:
@@ -2376,93 +2507,41 @@ class SeasonManager:
             if hasattr(player, 'offseasonTraining'):
                 devRating = rosteredDevRating.get(getattr(player, 'id', None), 50)
                 player.offseasonTraining(coachDevRating=devRating)
-        
-        # STEP 1.5: Increment free agent years for existing free agents
-        logger.info("Step 1.5: Increment free agent years")
-        for player in self.playerManager.freeAgents:
-            if hasattr(player, 'freeAgentYears'):
-                player.freeAgentYears += 1
-            else:
-                # Initialize for players missing the attribute
-                player.freeAgentYears = 1
-        
-        # STEP 1.7: Resolve Fire Coach GM votes
-        logger.info("Step 1.7: Resolve GM fire coach votes")
-        gmResults = []
-        await self._resolveGmFireCoachVotes(gmResults)
 
-        # STEP 1.8: Resolve Re-sign GM votes (flags players so contract processing skips them)
-        logger.info("Step 1.8: Resolve GM re-sign votes")
-        await self._resolveGmResignVotes(gmResults)
-
-        # STEP 2: Process contract decrements and retirements for rostered players
-        logger.info("Step 2: Contract decrements and team retirements")
-        await self._processRosteredPlayerContracts()
-
-        # STEP 2.5: Resolve Cut Player GM votes (releases players to FA pool)
-        logger.info("Step 2.5: Resolve GM cut player votes")
-        await self._resolveGmCutVotes(gmResults)
-
-        # STEP 3: FA retirements + rookie generation (split from old Step 4)
-        logger.info("Step 3: Free agent retirements and rookie generation")
-        self.playerManager._processFreeAgentRetirements(
-            self.currentSeason.seasonNumber if self.currentSeason else 1, [])
-        self.playerManager._generateReplacementPlayers(
-            self.currentSeason.seasonNumber if self.currentSeason else 1)
-
-        # STEP 3.5: FA Voting Window (GM Mode sign_fa)
-        logger.info("Step 3.5: FA voting window")
-        await self._runFaVotingWindow()
-
-        # STEP 4: FA Draft (simplified — directives first, then best available)
-        logger.info("Step 4: Free agency draft")
-        await self._processFreeAgency()
-
-        # STEP 4.5: Handle retired players on fantasy rosters
-        # Must run before Step 7 (HoF) which clears newlyRetiredPlayers
+        # STEP 8: Handle retired players on fantasy rosters
+        # Must run before HoF which clears newlyRetiredPlayers
         retiredPlayerIds = {
             p.id for p in self.playerManager.newlyRetiredPlayers
             if hasattr(p, 'id')
         }
-        # Also include players retired in Step 2 (rostered contract retirements)
-        # that were already moved to retiredPlayers list
         retiredPlayerIds.update(
             p.id for p in self.playerManager.retiredPlayers
             if hasattr(p, 'id')
         )
         if retiredPlayerIds:
             nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
-            logger.info(f"Step 4.5: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
+            logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
             self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
 
-        # STEP 5: Reset season performance ratings AFTER free agency
-        # This allows performance ratings to be used in cut decisions
-        logger.info("Step 5: Reset season performance ratings")
+        # STEP 9: Reset season performance ratings
+        logger.info("Step 9: Reset season performance ratings")
         for player in self.playerManager.activePlayers:
             if hasattr(player, 'seasonPerformanceRating'):
                 player.seasonPerformanceRating = 0
-        
-        # STEP 6: Update team ratings and defenses after roster changes
-        logger.info("Step 6: Update team ratings")
+
+        # STEP 10: Update team ratings and defenses after roster changes
+        logger.info("Step 10: Update team ratings")
         await self._updateTeamRatings()
-        
-        # STEP 7: Induct Hall of Fame players
-        logger.info("Step 7: Hall of Fame inductions")
+
+        # STEP 11: Induct Hall of Fame players
+        logger.info("Step 11: Hall of Fame inductions")
         self.playerManager.inductHallOfFame()
-        
-        # STEP 8: Save unused names
+
+        # STEP 12: Save unused names
         self.playerManager.saveUnusedNames()
 
-        # STEP 9: User season transitions (pending favorites, fantasy roster finalization)
-        logger.info("Step 9: Processing user season transitions")
-        self._processUserSeasonTransitions()
-
-        # STEP 9.5: Season-end economy payouts (leaderboard prizes + FP-to-Floobits)
-        logger.info("Step 9.5: Awarding season-end prizes")
-        self._awardSeasonEndPrizes(self.currentSeason.seasonNumber)
-
-        # STEP 10: Generate card templates for newly drafted rookies
-        logger.info("Step 10: Generating rookie card templates")
+        # STEP 13: Generate card templates for newly drafted rookies
+        logger.info("Step 13: Generating rookie card templates")
         nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
         self._generateRookieCardTemplates(nextSeason)
 
@@ -2575,9 +2654,9 @@ class SeasonManager:
                 logger.info(f"Fantasy roster {roster.id} (user {roster.user_id}): finalized at {totalPoints:.1f} pts")
 
             # Carry rosters forward: clone locked rosters into new season
-            # Only carry forward players who are still active (not retired)
+            # Only carry forward players who are still on a team (not retired)
             activePlayerIds = {
-                p.id for p in session.query(Player.id).filter_by(is_active=True).all()
+                p.id for p in self.playerManager.activePlayers
             }
 
             carriedCount = 0
@@ -2627,56 +2706,75 @@ class SeasonManager:
             session.close()
 
     async def _processFreeAgency(self) -> None:
-        """Process free agency period using comprehensive simulation"""
+        """Process free agency with live per-pick broadcasting.
+
+        Instead of running the full simulation synchronously and replaying
+        events, this iterates a generator that yields one event at a time.
+        Each pick mutates rosters in-place before being broadcast, so REST
+        endpoints always return accurate data — no snapshot system needed.
+        """
         logger.info("Processing free agency")
-        
-        # Use the free agency order built during playoffs
-        # Order: Non-playoff teams (worst to best) → Playoff losers by round → Runner-up → Champion
+
         if not self.currentSeason or not hasattr(self.currentSeason, 'freeAgencyOrder'):
             logger.error("No free agency order available (playoffs must be completed first)")
             return
-        
+
         freeAgencyOrder = self.currentSeason.freeAgencyOrder
-        
-        # Get league highlights list
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
-        
-        # Broadcast offseason start with draft order
+
+        # Broadcast offseason_start with draft order + current roster snapshots.
+        # Rosters haven't been modified yet, so snapshots reflect pre-FA state.
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
                 draftOrderList = [
-                    {'name': t.name, 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None)}
+                    {'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None), 'color': getattr(t, 'color', None)}
                     for t in freeAgencyOrder
                 ]
-                await broadcaster.broadcast_season_event(OffseasonEvent.start(draftOrderList))
+                rosterSnapshots = {}
+                for t in freeAgencyOrder:
+                    abbr = getattr(t, 'abbr', t.name[:3].upper())
+                    roster = {}
+                    for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
+                        p = t.rosterDict.get(slot)
+                        if p:
+                            roster[slot] = {
+                                'id': p.id, 'name': p.name,
+                                'position': p.position.name,
+                                'rating': round(p.playerRating, 1),
+                                'tier': p.playerTier.name,
+                                'termRemaining': getattr(p, 'termRemaining', 0),
+                            }
+                        else:
+                            roster[slot] = None
+                    rosterSnapshots[abbr] = roster
+                startEvent = OffseasonEvent.start(draftOrderList)
+                startEvent['rosterSnapshots'] = rosterSnapshots
+                await broadcaster.broadcast_season_event(startEvent)
             except Exception as e:
                 logger.warning(f"Could not broadcast offseason start: {e}")
 
-        # Run the comprehensive free agency simulation (sync), collecting events
+        # Live pick-by-pick iteration
         currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
-        eventLog = []
-        freeAgencyHistory = self.playerManager.conductFreeAgencySimulation(
+        self._offseasonTransactions = []
+
+        pickGen = self.playerManager.freeAgencyPickGenerator(
             freeAgencyOrder=freeAgencyOrder,
             currentSeason=currentSeasonNum,
             leagueHighlights=leagueHighlights,
-            eventLog=eventLog,
-            skipRetirements=True,  # Handled in Steps 3 (GM Mode flow)
+            skipRetirements=True,
         )
 
-        # Replay events with delay so frontend sees live updates
-        self._offseasonTransactions = []
-        if BROADCASTING_AVAILABLE and broadcaster and eventLog:
+        if BROADCASTING_AVAILABLE and broadcaster:
             try:
-                for entry in eventLog:
-                    if entry['type'] == 'pick':
-                        # Keep snapshot in sync: remove signed player before broadcasting
-                        if self.playerManager._freeAgentSnapshot is not None:
-                            self.playerManager._freeAgentSnapshot = [
-                                fa for fa in self.playerManager._freeAgentSnapshot
-                                if fa['name'] != entry['player']
-                            ]
+                for entry in pickGen:
+                    if entry['type'] == 'on_clock':
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.on_clock(entry['team'], entry['teamAbbr'])
+                        )
+                        await self.timingManager.waitBetweenOffseasonPicks()
+                    elif entry['type'] == 'pick':
                         await broadcaster.broadcast_season_event(
                             OffseasonEvent.pick(
                                 entry['team'], entry['teamAbbr'],
@@ -2684,41 +2782,25 @@ class SeasonManager:
                                 entry['rating'], entry['tier'],
                             )
                         )
-                    elif entry['type'] == 'cut':
-                        # Keep snapshot in sync: add cut player back before broadcasting
-                        if self.playerManager._freeAgentSnapshot is not None:
-                            cutFa = {
-                                'name': entry['player'], 'position': entry['position'],
-                                'rating': entry['rating'], 'tier': entry.get('tier', 'TierC'),
-                            }
-                            self.playerManager._freeAgentSnapshot = sorted(
-                                self.playerManager._freeAgentSnapshot + [cutFa],
-                                key=lambda fa: -fa['rating']
-                            )
-                        await broadcaster.broadcast_season_event(
-                            OffseasonEvent.cut(
-                                entry['team'], entry['teamAbbr'],
-                                entry['player'], entry['position'],
-                                entry['rating'], entry.get('tier', ''),
-                            )
-                        )
+                        self._offseasonTransactions.append(entry)
                     elif entry['type'] == 'team_complete':
                         await broadcaster.broadcast_season_event(
                             OffseasonEvent.team_complete(entry['team'], entry['teamAbbr'])
                         )
-                    if entry['type'] != 'team_complete':
-                        self._offseasonTransactions.append(entry)
-                    await self.timingManager.waitBetweenOffseasonPicks()
                 await broadcaster.broadcast_season_event(
                     OffseasonEvent.complete(len(self.playerManager.freeAgents))
                 )
-                # Clear snapshot so REST endpoint switches back to live freeAgents
-                self.playerManager._freeAgentSnapshot = None
             except Exception as e:
                 logger.warning(f"Could not broadcast offseason events: {e}")
-                self.playerManager._freeAgentSnapshot = None
+                # Drain remaining generator events so simulation completes
+                for _ in pickGen:
+                    pass
+        else:
+            # No broadcaster — just drain the generator to run the simulation
+            for _ in pickGen:
+                pass
 
-        logger.info(f"Free agency complete: {len(freeAgencyHistory)} transactions")
+        logger.info("Free agency complete")
     
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
@@ -2846,9 +2928,8 @@ class SeasonManager:
     # ── GM Mode offseason helpers ─────────────────────────────────────────
 
     async def _resolveGmFireCoachVotes(self, gmResults: list) -> None:
-        """Resolve fire_coach GM votes for all teams."""
+        """Resolve fire_coach and hire_coach GM votes for all teams."""
         from database.connection import get_session
-        from database.models import User
         from managers.gmManager import GmManager
 
         session = get_session()
@@ -2857,25 +2938,35 @@ class SeasonManager:
             if not teamManager:
                 return
             season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            activeUsers = session.query(User).filter(User.is_active == True).count()
-            gm = GmManager(session)
-            results = gm.resolveFireCoachVotes(
-                teamManager.teams, activeUsers, season, teamManager
+            gm = GmManager(session, lowQuorum=self._isTestMode)
+
+            # Phase 1: Resolve fire votes (fires coach but does not hire)
+            fireResults, firedTeamIds = gm.resolveFireCoachVotes(
+                teamManager.teams, season, teamManager
             )
-            session.commit()
-            gmResults.extend(results)
-            for r in results:
+            gmResults.extend(fireResults)
+            for r in fireResults:
                 logger.info(f"GM fire_coach result: {r['teamName']} → {r['outcome']}")
+
+            # Phase 2: Resolve hire votes for teams that fired their coach
+            if firedTeamIds:
+                hireResults = gm.resolveHireCoachVotes(
+                    teamManager.teams, season, teamManager, firedTeamIds
+                )
+                gmResults.extend(hireResults)
+                for r in hireResults:
+                    logger.info(f"GM hire_coach result: {r['teamName']} → {r['outcome']}")
+
+            session.commit()
         except Exception as e:
             session.rollback()
-            logger.error(f"GM fire coach resolution error: {e}")
+            logger.error(f"GM fire/hire coach resolution error: {e}")
         finally:
             session.close()
 
     async def _resolveGmResignVotes(self, gmResults: list) -> None:
         """Resolve resign_player GM votes. Sets _gmResigned flag on players."""
         from database.connection import get_session
-        from database.models import User
         from managers.gmManager import GmManager
 
         session = get_session()
@@ -2884,10 +2975,9 @@ class SeasonManager:
             if not teamManager:
                 return
             season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            activeUsers = session.query(User).filter(User.is_active == True).count()
-            gm = GmManager(session)
+            gm = GmManager(session, lowQuorum=self._isTestMode)
             results = gm.resolveResignVotes(
-                teamManager.teams, activeUsers, season, self.playerManager
+                teamManager.teams, season, self.playerManager
             )
             session.commit()
             gmResults.extend(results)
@@ -2900,7 +2990,6 @@ class SeasonManager:
     async def _resolveGmCutVotes(self, gmResults: list) -> None:
         """Resolve cut_player GM votes. Cut players join the FA pool."""
         from database.connection import get_session
-        from database.models import User
         from managers.gmManager import GmManager
 
         session = get_session()
@@ -2909,7 +2998,6 @@ class SeasonManager:
             if not teamManager:
                 return
             season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            activeUsers = session.query(User).filter(User.is_active == True).count()
             # Build position-keyed FA lists for releasePlayerToFreeAgency
             freeAgentLists = {
                 'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
@@ -2918,9 +3006,9 @@ class SeasonManager:
                 'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
                 'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
             }
-            gm = GmManager(session)
+            gm = GmManager(session, lowQuorum=self._isTestMode)
             results = gm.resolveCutVotes(
-                teamManager.teams, activeUsers, season, self.playerManager,
+                teamManager.teams, season, self.playerManager,
                 freeAgentLists
             )
             session.commit()
@@ -2933,15 +3021,23 @@ class SeasonManager:
 
     async def _runFaVotingWindow(self) -> None:
         """Open FA voting window, wait for duration, then resolve sign_fa votes."""
-        from constants import GM_FA_WINDOW_FAST, GM_FA_WINDOW_SCHEDULED
+        from constants import GM_FA_WINDOW_FAST, GM_FA_WINDOW_SEQUENTIAL, GM_FA_WINDOW_SCHEDULED
         import asyncio
 
         # Determine window duration based on timing mode
-        timingMode = getattr(self.timingManager, 'timingMode', 'fast')
-        duration = GM_FA_WINDOW_FAST if timingMode == 'fast' else GM_FA_WINDOW_SCHEDULED
+        mode = self.timingManager.mode
+        if mode == TimingMode.FAST:
+            duration = GM_FA_WINDOW_FAST
+        elif mode in (TimingMode.SCHEDULED, TimingMode.TEST_SCHEDULED):
+            duration = GM_FA_WINDOW_SCHEDULED
+        else:
+            # SEQUENTIAL, TURBO, DEMO, OFFSEASON_TEST all use the middle duration
+            duration = GM_FA_WINDOW_SEQUENTIAL
 
         # Set flag so API endpoints know the window is open
+        import time
         self._faWindowOpen = True
+        self._faWindowEnd = time.time() + duration
 
         # Broadcast FA window open
         if BROADCASTING_AVAILABLE and broadcaster:
@@ -2964,6 +3060,7 @@ class SeasonManager:
         logger.info(f"FA voting window open for {duration}s")
         await asyncio.sleep(duration)
         self._faWindowOpen = False
+        self._faWindowEnd = None
 
         # Broadcast FA window close
         if BROADCASTING_AVAILABLE and broadcaster:
@@ -2979,7 +3076,6 @@ class SeasonManager:
 
         # Resolve sign_fa ballots via RCV and set directives on playerManager
         from database.connection import get_session
-        from database.models import User
         from managers.gmManager import GmManager
 
         session = get_session()
@@ -2988,7 +3084,6 @@ class SeasonManager:
             if not teamManager:
                 return
             season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            activeUsers = session.query(User).filter(User.is_active == True).count()
 
             # Build open positions per team
             teamOpenPositions = {}
@@ -3009,9 +3104,9 @@ class SeasonManager:
                 'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
             }
 
-            gm = GmManager(session)
+            gm = GmManager(session, lowQuorum=self._isTestMode)
             directives = gm.resolveSignFaVotes(
-                teamManager.teams, activeUsers, season,
+                teamManager.teams, season,
                 freeAgentLists, teamOpenPositions
             )
             session.commit()
@@ -3020,6 +3115,30 @@ class SeasonManager:
             self.playerManager._gmFaDirectives = directives
             if directives:
                 logger.info(f"GM FA directives for {len(directives)} team(s)")
+
+            # Broadcast directives to frontend with player details
+            if BROADCASTING_AVAILABLE and broadcaster and directives:
+                try:
+                    # Build player lookup from free agents
+                    faLookup = {p.id: p for p in self.playerManager.freeAgents}
+                    enriched = {}
+                    for tId, playerIds in directives.items():
+                        enriched[tId] = []
+                        for pid in playerIds:
+                            p = faLookup.get(pid)
+                            if p:
+                                enriched[tId].append({
+                                    "id": p.id,
+                                    "name": p.name,
+                                    "position": p.position.name,
+                                    "rating": round(p.playerRating, 1),
+                                })
+                    from api.event_models import GmEvent
+                    await broadcaster.broadcast_season_event(
+                        GmEvent.faDirectives(enriched)
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not broadcast FA directives: {e}")
         except Exception as e:
             session.rollback()
             logger.error(f"GM FA vote resolution error: {e}")
@@ -3188,10 +3307,9 @@ class SeasonManager:
             else:
                 player.seasonsPlayed = 1
             
-            # Decrement contract terms
-            if hasattr(player, 'termRemaining') and player.termRemaining > 0:
-                player.termRemaining -= 1
-            
+            # Note: contract termRemaining is decremented in _processRosteredPlayerContracts()
+            # Do NOT decrement here — it would double-decrement rostered players
+
             # Update service time using proper progression logic
             if player.seasonsPlayed >= 10:
                 player.serviceTime = FloosPlayer.PlayerServiceTime.Veteran4
@@ -3477,11 +3595,12 @@ class SeasonManager:
                             posValue = slotPositionMap.get(slot)
                             if posValue is not None:
                                 # Find best available player at this position
+                                activeIds = {p.id for p in self.playerManager.activePlayers}
                                 bestPlayer = (
                                     session.query(Player)
                                     .filter(
                                         Player.position == posValue,
-                                        Player.is_active == True,
+                                        Player.id.in_(activeIds),
                                         ~Player.id.in_(allRosteredIds),
                                     )
                                     .order_by(Player.player_rating.desc())
@@ -3836,6 +3955,188 @@ class SeasonManager:
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error awarding season-end prizes: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _resolvePickEmWeek(self, season: int, week: int) -> None:
+        """Resolve pick-em picks for the completed week and award Floobits."""
+        from constants import PICKEM_CORRECT_REWARD, PICKEM_PERFECT_WEEK_BONUS
+        from constants import (
+            PICKEM_WEEKLY_PRIZES, PICKEM_WEEKLY_TOP_PCT,
+            PICKEM_WEEKLY_TOP_PCT_PRIZE,
+        )
+
+        # Get the just-completed games
+        completedGames = self.currentSeason.completedWeekGames
+        if not completedGames:
+            return
+
+        try:
+            from database.connection import get_session
+            from database.repositories.pickem_repository import PickEmRepository
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.repositories.notification_repository import NotificationRepository
+
+            session = get_session()
+            try:
+                pickemRepo = PickEmRepository(session)
+                currencyRepo = CurrencyRepository(session)
+                notifRepo = NotificationRepository(session)
+
+                # 1. Resolve each game's picks
+                totalGames = len(completedGames)
+                for i, game in enumerate(completedGames):
+                    winner = getattr(game, 'winningTeam', None)
+                    if winner is None:
+                        continue
+                    pickemRepo.resolvePicks(season, week, i, winner.id)
+
+                # 2. Award per-correct-pick Floobits + perfect week bonus
+                userResults = pickemRepo.getWeekResultsByUser(season, week)
+                for userId, correctCount, totalPicks in userResults:
+                    if totalPicks == 0:
+                        continue
+                    reward = correctCount * PICKEM_CORRECT_REWARD
+                    isPerfect = correctCount == totalPicks and totalPicks == totalGames
+                    if isPerfect:
+                        reward += PICKEM_PERFECT_WEEK_BONUS
+
+                    if reward > 0:
+                        currencyRepo.addFunds(
+                            userId, reward, 'pickem_correct',
+                            description=f'Week {week}: {correctCount}/{totalPicks} correct',
+                            season=season, week=week,
+                        )
+
+                    # 3. Notify each user
+                    title = f'Week {week} Prognostications'
+                    if isPerfect:
+                        body = f'CLAIRVOYANT! {correctCount}/{totalPicks} correct — +{reward} Floobits'
+                    elif correctCount > 0:
+                        body = f'{correctCount}/{totalPicks} correct — +{reward} Floobits'
+                    else:
+                        body = f'0/{totalPicks} correct this week. Better luck next time!'
+                    notifRepo.create(
+                        userId, 'pickem_results', title, body,
+                        data={'season': season, 'week': week, 'correct': correctCount,
+                              'total': totalPicks, 'reward': reward, 'perfect': isPerfect},
+                    )
+
+                # 4. Award weekly pick-em leaderboard prizes
+                weekRows = pickemRepo.getWeekLeaderboard(season, week)
+                totalEntries = len(weekRows)
+                topCutoff = max(3, int(totalEntries * PICKEM_WEEKLY_TOP_PCT))
+
+                for i, (userId, correctCount, totalPicks) in enumerate(weekRows):
+                    weekRank = i + 1
+                    if correctCount <= 0:
+                        continue
+                    prize = PICKEM_WEEKLY_PRIZES.get(weekRank)
+                    if prize is None and weekRank <= topCutoff and totalEntries >= 4:
+                        prize = PICKEM_WEEKLY_TOP_PCT_PRIZE
+                    if not prize:
+                        continue
+                    currencyRepo.addFunds(
+                        userId, prize, 'pickem_leaderboard_weekly',
+                        description=f'Week {week} Prognostications #{weekRank}',
+                        season=season, week=week,
+                    )
+                    notifRepo.create(
+                        userId, 'pickem_leaderboard_weekly',
+                        f'Week {week} Prognostications Leaderboard',
+                        f'You placed #{weekRank} on the Week {week} Prognostications leaderboard! +{prize} Floobits',
+                        data={'season': season, 'week': week, 'rank': weekRank, 'prize': prize},
+                    )
+                    logger.info(f"Pick-em weekly prize: user {userId} #{weekRank} = {prize} Floobits")
+
+                session.commit()
+
+                # 5. Broadcast pick-em results via WebSocket
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                    from database.models import User
+                    leaderboardData = []
+                    for userId, correctCount, totalPicks in weekRows[:10]:
+                        dbUser = session.query(User).filter_by(id=userId).first()
+                        username = dbUser.username if dbUser and dbUser.username else f"User {userId}"
+                        leaderboardData.append({
+                            "userId": userId, "username": username,
+                            "correct": correctCount, "total": totalPicks,
+                        })
+                    pickemEvent = {
+                        "event": "pickem_results",
+                        "season": season,
+                        "week": week,
+                        "games": [
+                            {"gameIndex": i, "winnerId": getattr(g, 'winningTeam', None).id}
+                            for i, g in enumerate(completedGames)
+                            if getattr(g, 'winningTeam', None) is not None
+                        ],
+                        "leaderboard": leaderboardData,
+                    }
+                    broadcaster.broadcast_sync('season', pickemEvent)
+
+                logger.info(f"Pick-em resolved for S{season}W{week}: {len(userResults)} users")
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error resolving pick-em for week {week}: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _awardPickEmSeasonPrizes(self, completedSeason: int) -> None:
+        """Award season-end pick-em leaderboard prizes."""
+        from constants import (
+            PICKEM_SEASON_PRIZES, PICKEM_SEASON_TOP_PCT,
+            PICKEM_SEASON_TOP_PCT_PRIZE,
+        )
+
+        try:
+            from database.connection import get_session
+            from database.repositories.pickem_repository import PickEmRepository
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.repositories.notification_repository import NotificationRepository
+
+            session = get_session()
+            try:
+                pickemRepo = PickEmRepository(session)
+                currencyRepo = CurrencyRepository(session)
+                notifRepo = NotificationRepository(session)
+
+                seasonRows = pickemRepo.getSeasonLeaderboard(completedSeason)
+                totalEntries = len(seasonRows)
+                topCutoff = max(3, int(totalEntries * PICKEM_SEASON_TOP_PCT))
+
+                for i, (userId, correctCount, totalPicks) in enumerate(seasonRows):
+                    seasonRank = i + 1
+                    if correctCount <= 0:
+                        continue
+                    prize = PICKEM_SEASON_PRIZES.get(seasonRank)
+                    if prize is None and seasonRank <= topCutoff and totalEntries >= 4:
+                        prize = PICKEM_SEASON_TOP_PCT_PRIZE
+                    if not prize:
+                        continue
+                    currencyRepo.addFunds(
+                        userId, prize, 'pickem_leaderboard_season',
+                        description=f'Season {completedSeason} Prognostications #{seasonRank}',
+                        season=completedSeason,
+                    )
+                    notifRepo.create(
+                        userId, 'pickem_leaderboard_season',
+                        f'Season {completedSeason} Prognostications Champion',
+                        f'You placed #{seasonRank} on the Season Prognostications leaderboard! +{prize} Floobits',
+                        data={'season': completedSeason, 'rank': seasonRank, 'prize': prize},
+                    )
+                    logger.info(f"Pick-em season prize: user {userId} #{seasonRank} = {prize} Floobits")
+
+                session.commit()
+                logger.info(f"Pick-em season prizes awarded for season {completedSeason}")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error awarding pick-em season prizes: {e}")
             finally:
                 session.close()
         except ImportError:

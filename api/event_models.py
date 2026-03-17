@@ -52,6 +52,7 @@ class EventType(Enum):
     OFFSEASON_START         = "offseason_start"
     OFFSEASON_PICK          = "offseason_pick"
     OFFSEASON_CUT           = "offseason_cut"
+    OFFSEASON_ON_CLOCK      = "offseason_on_clock"
     OFFSEASON_TEAM_COMPLETE = "offseason_team_complete"
     OFFSEASON_COMPLETE      = "offseason_complete"
 
@@ -59,6 +60,10 @@ class EventType(Enum):
     GM_VOTE_RESOLVED = "gm_vote_resolved"
     GM_FA_WINDOW_OPEN = "gm_fa_window_open"
     GM_FA_WINDOW_CLOSE = "gm_fa_window_close"
+    GM_FA_DIRECTIVES = "gm_fa_directives"
+
+    # Pick-Em events
+    PICKEM_RESULTS = "pickem_results"
 
     # System events
     ERROR = "error"
@@ -381,6 +386,15 @@ class OffseasonEvent:
         }
 
     @staticmethod
+    def on_clock(teamName: str, teamAbbr: str) -> Dict[str, Any]:
+        return {
+            'event': EventType.OFFSEASON_ON_CLOCK.value,
+            'timestamp': datetime.now().isoformat(),
+            'teamName': teamName,
+            'teamAbbr': teamAbbr,
+        }
+
+    @staticmethod
     def team_complete(teamName: str, teamAbbr: str) -> Dict[str, Any]:
         return {
             'event': EventType.OFFSEASON_TEAM_COMPLETE.value,
@@ -481,6 +495,18 @@ class GmEvent:
             'event': EventType.GM_FA_WINDOW_CLOSE.value,
             'timestamp': datetime.now().isoformat(),
             'season': season,
+        }
+
+    @staticmethod
+    def faDirectives(directives: Dict[int, List[Dict]]) -> Dict[str, Any]:
+        """Broadcast resolved FA directives per team.
+
+        directives: {teamId: [{id, name, position, rating}, ...]}
+        """
+        return {
+            'event': EventType.GM_FA_DIRECTIVES.value,
+            'timestamp': datetime.now().isoformat(),
+            'directives': directives,
         }
 
 

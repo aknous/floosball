@@ -103,13 +103,14 @@ class CardCalcContext:
     userId: int = 0
     season: int = 0
     weekNumber: int = 0
+    gamesActive: bool = False  # True during live games, False at week end
     chanceBonus: float = 0.0  # Sum of Providence + innate synergy + Fortunate modifier
     chanceCardCount: int = 0  # Number of chance cards in hand (for synergy effects)
     kickerSeasonFgMisses: int = 0  # Season-long kicker FG misses (for Good Neighbor)
 
     # Streak card infrastructure
     streakCardCount: int = 0  # Number of streak cards in hand (for synergy effects)
-    activeStreakCount: int = 0  # Number of season streak cards with active (non-zero) streaks
+    activeStreakCount: int = 0  # Number of season streak cards whose condition is met this week
     liveStreakConditionsMet: Dict[int, bool] = field(default_factory=dict)  # eqId → conditionMet this game
 
     # Internal — set by computeEffect dispatcher, not by caller
@@ -168,6 +169,10 @@ class CardBreakdown:
     chanceRoll: float = 0.0
     chanceThreshold: float = 0.0
     chanceTriggered: bool = False
+
+    # Streak card metadata
+    streakActive: Optional[bool] = None  # None = not a streak card, True/False = condition met this week
+    streakCount: int = 0  # Current streak count
 
 
 @dataclass
@@ -427,7 +432,7 @@ def _computeCardPass(
         _FLOOBITS_KEYS = {"floobits", "perTdFloobits", "fpPercent", "perMissFloobits",
                           "perPlayerFloobits", "perStreakFloobits", "enhancedFloobits",
                           "baseFloobits"}
-        rewardType = effectConfig.get("rewardType")
+        rewardType = effectConfig.get("rewardType") or effectConfig.get("primary", {}).get("rewardType")
         if rewardType in ("mult", "floobits"):
             outputType = rewardType
         elif any(k in effectConfig for k in _MULT_KEYS):
@@ -466,6 +471,8 @@ def _computeCardPass(
         chanceRoll=primary.chanceRoll,
         chanceThreshold=primary.chanceThreshold,
         chanceTriggered=primary.chanceTriggered,
+        streakActive=ctx.liveStreakConditionsMet.get(eq.id) if category == "streak" else None,
+        streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" else 0,
     )
 
 
@@ -517,21 +524,22 @@ def calculateWeekCardBonuses(
     if chanceCardCount > 1:
         ctx.chanceBonus += (chanceCardCount - 1) * 0.04
 
-    # Pre-scan for streak card synergy
-    from managers.cardEffects import STREAK_CONFIGS
+    # Pre-scan for streak card synergy (season streaks only — weekly accumulators excluded)
+    # A streak is "active" only if its condition is being met THIS week,
+    # not merely because streak_count > 0 from a prior week.
+    from managers.cardEffects import STREAK_CONFIGS, checkStreakCondition
     streakCardCount = 0
     activeStreakCount = 0
     for eq in equippedCards:
         ec = eq.user_card.card_template.effect_config or {}
         effectName = ec.get("effectName", "")
         if effectName in STREAK_CONFIGS:
+            # Weekly accumulators don't participate in streak synergy
+            if STREAK_CONFIGS[effectName].get("isWeekly", False):
+                continue
             streakCardCount += 1
-            # Season streaks with non-zero count are "active"
-            if not STREAK_CONFIGS[effectName].get("isWeekly", False):
-                if ctx.streakCounts.get(eq.id, 0) > 0:
-                    activeStreakCount += 1
-            else:
-                # Weekly streaks are always considered active
+            cardPlayerId = eq.user_card.card_template.player_id
+            if checkStreakCondition(effectName, ctx, cardPlayerId):
                 activeStreakCount += 1
     ctx.streakCardCount = streakCardCount
     ctx.activeStreakCount = activeStreakCount

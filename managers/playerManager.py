@@ -1318,7 +1318,7 @@ class PlayerManager:
                                 # Denormalized receiving stats
                                 receiving_yards=s_receiving.get('yards', 0),
                                 receiving_tds=s_receiving.get('tds', 0),
-                                receptions=s_receiving.get('recs', 0),
+                                receptions=s_receiving.get('receptions', 0),
                                 # Denormalized defensive stats
                                 sacks=s_defense.get('sacks', 0),
                                 interceptions=s_defense.get('ints', 0),
@@ -1348,7 +1348,7 @@ class PlayerManager:
                             # Update denormalized receiving stats
                             db_season_stats.receiving_yards = s_receiving.get('yards', 0)
                             db_season_stats.receiving_tds = s_receiving.get('tds', 0)
-                            db_season_stats.receptions = s_receiving.get('recs', 0)
+                            db_season_stats.receptions = s_receiving.get('receptions', 0)
                             # Update denormalized defensive stats
                             db_season_stats.sacks = s_defense.get('sacks', 0)
                             db_season_stats.interceptions = s_defense.get('ints', 0)
@@ -2312,7 +2312,182 @@ class PlayerManager:
         
         logger.info(f"Free agency complete. {len(freeAgencyDict)} transactions made.")
         return freeAgencyHistory
-    
+
+    def freeAgencyPickGenerator(self, freeAgencyOrder: List, currentSeason: int,
+                                leagueHighlights: List = None, skipRetirements: bool = False):
+        """Generator that yields one FA event at a time for live broadcasting.
+
+        Yields dicts with 'type' key: 'on_clock', 'pick', 'team_complete'.
+        Rosters are mutated in-place as each pick is yielded, so the backend
+        state is always current and REST endpoints return accurate data.
+        """
+        import datetime as _dt
+
+        logger.info(f"Starting live free agency for season {currentSeason}")
+
+        freeAgencyDict = {}
+        if leagueHighlights is None:
+            leagueHighlights = []
+
+        # Log pre-FA rosters
+        fa_log_path = f"logs/free_agency_season_{currentSeason}.log"
+        try:
+            import os
+            os.makedirs("logs", exist_ok=True)
+            faLog = open(fa_log_path, 'w')
+            faLog.write(f"=== FREE AGENCY LOG - SEASON {currentSeason} ===\n")
+            faLog.write(f"Start Time: {_dt.datetime.now()}\n\n")
+        except Exception:
+            faLog = None
+
+        def logFa(msg):
+            if faLog:
+                faLog.write(msg + "\n")
+                faLog.flush()
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+
+        logFa("=== PRE-FREE AGENCY ROSTER STATE ===")
+        for team in teams:
+            rosterPlayers = [f"{pos}:{p.name if p else 'EMPTY'}" for pos, p in team.rosterDict.items()]
+            logFa(f"{team.name}: {', '.join(rosterPlayers)}")
+
+        if not skipRetirements:
+            self._processFreeAgentRetirements(currentSeason, leagueHighlights)
+            self._generateReplacementPlayers(currentSeason)
+
+        logFa(f"\n=== FREE AGENT POOL (Total: {len(self.freeAgents)}) ===")
+        for player in sorted(self.freeAgents, key=lambda p: (p.position.value, -p.attributes.skillRating)):
+            logFa(f"  {player.position.name:3} - {player.name:30} (Skill: {player.attributes.skillRating:3})")
+
+        # Prepare position-sorted FA lists
+        freeAgentQbList = sorted([p for p in self.freeAgents if p.position.value == 1], key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentRbList = sorted([p for p in self.freeAgents if p.position.value == 2], key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentWrList = sorted([p for p in self.freeAgents if p.position.value == 3], key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentTeList = sorted([p for p in self.freeAgents if p.position.value == 4], key=lambda p: p.attributes.skillRating, reverse=True)
+        freeAgentKList = sorted([p for p in self.freeAgents if p.position.value == 5], key=lambda p: p.attributes.skillRating, reverse=True)
+
+        if not teams:
+            logger.error("No teams available for free agency!")
+            return
+
+        for team in teams:
+            openPositions = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')
+                            if team.rosterDict.get(k) is None]
+            team.freeAgencyComplete = len(openPositions) == 0
+
+        # Build directive queues per team (ordered list of target player IDs)
+        freeAgentLists = {
+            'qb': freeAgentQbList, 'rb': freeAgentRbList,
+            'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
+            'te': freeAgentTeList, 'k': freeAgentKList,
+        }
+        gmDirectives = getattr(self, '_gmFaDirectives', {})
+        teamDirectiveQueues = {}
+        for team in freeAgencyOrder:
+            directives = gmDirectives.get(getattr(team, 'id', None), [])
+            if directives:
+                teamDirectiveQueues[team.id] = list(directives)
+
+        # --- DRAFT ROUNDS: one pick per team per round ---
+        teamsComplete = 0
+        roundNum = 0
+        maxRounds = 100
+
+        while teamsComplete < len(teams):
+            teamsComplete = 0
+            roundNum += 1
+            if roundNum > maxRounds:
+                logger.warning(f"Free agency exceeded {maxRounds} rounds, ending")
+                for team in teams:
+                    if not team.freeAgencyComplete:
+                        team.freeAgencyComplete = True
+                break
+
+            for team in freeAgencyOrder:
+                if team.freeAgencyComplete:
+                    teamsComplete += 1
+                    continue
+
+                teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+
+                # Yield on-the-clock before attempting pick
+                yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
+
+                # Try directive target first
+                directivePick = False
+                queue = teamDirectiveQueues.get(team.id, [])
+                while queue:
+                    targetId = queue.pop(0)
+                    targetPlayer = None
+                    targetListKey = None
+                    for lKey, faList in freeAgentLists.items():
+                        for p in faList:
+                            if p.id == targetId:
+                                targetPlayer = p
+                                targetListKey = lKey
+                                break
+                        if targetPlayer:
+                            break
+                    if not targetPlayer:
+                        continue
+                    openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
+                    if not openSlot:
+                        continue
+                    self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
+                                     freeAgencyDict, leagueHighlights)
+                    logFa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
+                    yield {
+                        'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                        'player': targetPlayer.name, 'position': targetPlayer.position.name,
+                        'rating': round(targetPlayer.playerRating, 1), 'tier': targetPlayer.playerTier.name,
+                    }
+                    directivePick = True
+                    # Check if roster is now full
+                    openPositions = [k for k, v in team.rosterDict.items() if v is None
+                                     and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
+                    if not openPositions:
+                        teamsComplete += 1
+                        team.freeAgencyComplete = True
+                        yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
+                    break  # One pick per turn
+
+                if not directivePick:
+                    # Fall back to best available
+                    pickEvents = []
+                    rosterComplete = self._attemptRosterFill(
+                        team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
+                        freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
+                        eventLog=pickEvents,
+                    )
+
+                    for ev in pickEvents:
+                        yield ev
+
+                    if rosterComplete:
+                        teamsComplete += 1
+                        team.freeAgencyComplete = True
+                        yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
+
+        # Cleanup
+        for team in teams:
+            team.freeAgencyComplete = False
+        for player in self.freeAgents:
+            player.team = 'Free Agent'
+
+        logFa(f"\n=== POST-FREE AGENCY ROSTER STATE ===")
+        logFa(f"Total rounds: {roundNum}")
+        for team in teams:
+            rosterPlayers = [f"{pos}:{p.name if p else 'EMPTY'}" for pos, p in team.rosterDict.items()]
+            logFa(f"{team.name}: {', '.join(rosterPlayers)}")
+        if faLog:
+            faLog.write(f"\nEnd Time: {_dt.datetime.now()}\n")
+            faLog.close()
+            logger.info(f"Free agency log saved to {fa_log_path}")
+
+        logger.info(f"Live free agency complete. {len(freeAgencyDict)} transactions made.")
+
     def _processContractExpirations(self) -> None:
         """Move players with expired contracts to free agency"""
         expiredPlayers = []
@@ -2743,21 +2918,8 @@ class PlayerManager:
         if not freeAgentList or len(freeAgentList) == 0:
             return False
         
-        # GM skill determines evaluation range
-        gmScore = getattr(team, 'gmScore', 1)
-        if gmScore >= len(freeAgentList):
-            evalRange = len(freeAgentList) - 1
-        else:
-            evalRange = gmScore
-        
-        # Safety check
-        if evalRange < 0:
-            evalRange = 0
-        
-        # GM picks from their evaluation range
-        selectedIndex = randint(0, evalRange)
-        
-        # CRITICAL: Check if player is already on a roster BEFORE popping
+        # Sign the best available player (lists are sorted by skill rating descending)
+        selectedIndex = 0
         candidate = freeAgentList[selectedIndex]
         for other_team in [t for t in teams if t != team]:
             for pos_key, roster_player in other_team.rosterDict.items():
@@ -2821,7 +2983,9 @@ class PlayerManager:
             })
 
         logger.debug(f"{team.name} filled {pos} with {selectedPlayer.name}")
-        return False  # Roster not complete yet, has more open positions
+        # Check if roster is now complete
+        remaining = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k') if team.rosterDict.get(k) is None]
+        return len(remaining) == 0
 
     def releasePlayerToFreeAgency(self, player, team, freeAgentLists: dict) -> None:
         """Release a rostered player to the free agent pool (GM Mode cut)."""

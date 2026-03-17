@@ -28,7 +28,7 @@ import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from constants import (
-    GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER,
+    GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
     RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER, FIELD_LENGTH,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
@@ -1994,8 +1994,8 @@ class Game:
         """Evaluate whether the current play qualifies as a clutch or choke moment.
 
         Clutch = big moments: TDs, FGs, big gainers, 4th down conversions.
-        Choke = costly mistakes: turnovers, missed FGs, sacks, drops.
-        Uses asymmetric thresholds — choke has a lower bar than clutch.
+        Choke = costly mistakes only: turnovers, missed FGs, failed critical downs.
+        Both require high game pressure, meaningful player modifier, and WPA impact.
         """
         play = self.play
         if play.gamePressure < CLUTCH_PRESSURE_THRESHOLD:
@@ -2020,8 +2020,20 @@ class Game:
                 play.keyPressureMod = play.qbPressureMod
                 play.clutchPlayerName = play.passer.name if play.passer else ''
 
-        meetsClutchThreshold = play.keyPressureMod >= CLUTCH_MODIFIER_THRESHOLD
-        meetsChokeThreshold = play.keyPressureMod <= -CHOKE_MODIFIER_THRESHOLD
+        # In extreme pressure moments, lower the modifier bar — the situation
+        # itself defines clutch/choke, not just the player's roll
+        if play.gamePressure >= 80:
+            pressureScale = 0.5
+        elif play.gamePressure >= 65:
+            pressureScale = 0.75
+        else:
+            pressureScale = 1.0
+
+        adjustedClutchThreshold = CLUTCH_MODIFIER_THRESHOLD * pressureScale
+        adjustedChokeThreshold = CHOKE_MODIFIER_THRESHOLD * pressureScale
+
+        meetsClutchThreshold = play.keyPressureMod >= adjustedClutchThreshold
+        meetsChokeThreshold = play.keyPressureMod <= -adjustedChokeThreshold
 
         if not (meetsClutchThreshold or meetsChokeThreshold):
             return
@@ -2034,13 +2046,13 @@ class Game:
             or (play.playType == PlayType.Run and play.yardage >= 15)
             or (getattr(play, 'down', 0) == 4 and play.playResult == PlayResult.FirstDown)
         )
-        # Choke: turnovers, missed FGs, sacks, drops, turnover on downs
+        # Choke: only truly costly mistakes — turnovers, missed FGs, failed critical downs
         isNegativeOutcome = (
-            play.isInterception or play.isFumbleLost or play.isSack
-            or play.passIsDropped
+            play.isInterception
+            or play.isFumbleLost
             or play.playResult == PlayResult.TurnoverOnDowns
             or (play.playType == PlayType.FieldGoal and not play.isFgGood)
-            or (play.playType == PlayType.Run and play.yardage <= 0)
+            or (play.passIsDropped and getattr(play, 'down', 0) >= 3)
         )
 
         if meetsClutchThreshold and isPositiveOutcome:
@@ -3162,6 +3174,8 @@ class Game:
 
         
         self.status = GameStatus.Final
+        # Freeze game stats while players are still on their teams
+        self._cachedGameStats = self._buildGameStatsSnapshot()
         self.gameDict['winningTeam'] = self.winningTeam.name
         self.gameDict['losingTeam'] = self.losingTeam.name
         self.saveGameData()
@@ -3237,8 +3251,9 @@ class Game:
 
         # Quarter pressure (0-40)
         if self.currentQuarter == 4:
-            # Pressure increases as 4th quarter progresses
-            pressure += PRESSURE_BASE + min(PRESSURE_MAX_ADDITIONAL, PRESSURE_MAX_ADDITIONAL * ((GAME_MAX_PLAYS - self.totalPlays) / PRESSURE_CALCULATION_DIVISOR))
+            # Pressure increases as 4th quarter progresses toward end of game
+            playsIntoQ4 = max(0, self.totalPlays - FOURTH_QUARTER_START)
+            pressure += PRESSURE_BASE + min(PRESSURE_MAX_ADDITIONAL, PRESSURE_MAX_ADDITIONAL * (playsIntoQ4 / PRESSURE_CALCULATION_DIVISOR))
         elif self.currentQuarter == 5:  # Overtime
             pressure += 40
         else:
@@ -3246,15 +3261,15 @@ class Game:
 
         # Score differential pressure (0-30), scaled by quarter so early-game ties
         # don't generate clutch/choke moments
-        score_diff = abs(self.homeScore - self.awayScore)
+        scoreDiff = abs(self.homeScore - self.awayScore)
         scorePressure = 0
-        if score_diff == 0:
+        if scoreDiff == 0:
             scorePressure = 30  # Tie game
-        elif score_diff <= 3:
+        elif scoreDiff <= 3:
             scorePressure = 25  # One field goal difference
-        elif score_diff <= 7:
+        elif scoreDiff <= 7:
             scorePressure = 20  # One possession game
-        elif score_diff <= 14:
+        elif scoreDiff <= 14:
             scorePressure = 10  # Two possession game
 
         # Scale score pressure by quarter: Q1=25%, Q2=50%, Q3=75%, Q4/OT=100%
@@ -3275,7 +3290,20 @@ class Game:
         elif self.yardsToEndzone <= 30:
             pressure += 5
 
-        # Apply the modifier
+        # Blowout dampening — large leads make the game feel decided,
+        # sharply reducing pressure regardless of other factors
+        if scoreDiff > 21:
+            pressure *= 0.1   # Game is effectively over
+        elif scoreDiff > 14:
+            pressure *= 0.3   # Comfortable lead, unlikely comeback
+
+        # Early-game dampening — Q1/Q2/Q3 plays rarely define a game,
+        # prevents high team modifiers (Floosbowl 2.5x) from inflating
+        # routine early plays into clutch/choke territory
+        earlyGameScale = {1: 0.3, 2: 0.5, 3: 0.7, 4: 1.0, 5: 1.0}
+        pressure *= earlyGameScale.get(self.currentQuarter, 1.0)
+
+        # Apply the team pressure modifier (playoff importance, Floosbowl, etc.)
         pressure = pressure * self.offensiveTeam.pressureModifier
 
         return min(100, pressure)  # Cap at 100
@@ -3438,6 +3466,9 @@ class Game:
     
     def _buildGameStatsSnapshot(self) -> dict:
         """Build a snapshot of team-level box score and per-player game stats."""
+        if hasattr(self, '_cachedGameStats') and self._cachedGameStats:
+            return self._cachedGameStats
+
         def teamSnapshot(team):
             roster = team.rosterDict
             qb  = roster.get('qb')
@@ -3567,17 +3598,6 @@ class Game:
         newAwayWp = winProb['away']
         homeWpa = float(newHomeWp - self.previousHomeWinProbability)
         awayWpa = float(newAwayWp - self.previousAwayWinProbability)
-
-        # DEBUG: Log large WPA to diagnose Q2 spikes
-        if abs(homeWpa) >= 5.0:
-            logging.warning(
-                f"[WP-DEBUG] game={self.id} Q{self.currentQuarter} {self.formatTime(self.gameClockSeconds)} "
-                f"| homeWpa={homeWpa:+.1f} prevHomeWp={self.previousHomeWinProbability:.1f} newHomeWp={newHomeWp:.1f} "
-                f"| score={self.homeScore}-{self.awayScore} down={self.down} ytfd={self.yardsToFirstDown} yte={self.yardsToEndzone} "
-                f"| off={self.offensiveTeam.abbr} includePlay={includeLastPlay} event={'yes' if eventMessage else 'no'} "
-                f"| playType={getattr(self.play, 'playType', None)} playResult={getattr(self.play, 'playResult', None)} "
-                f"| scoreChange={getattr(self.play, 'scoreChange', False)}"
-            )
 
         # Compute upset alert: pre-game underdog (35% or less) is now favored by 65%+, starting Q2.
         # Only qualifies as an upset if the pre-game favorite is currently in a playoff spot
@@ -4437,6 +4457,9 @@ class Play():
 
             # Max swing scales with pressure intensity: low pressure = tiny, high = up to ±12%
             maxSwing = normalizedPressure * 0.12
+            # Penalty swing is larger in high-pressure situations so kickers can
+            # choke on crucial FGs (up to ±18% at max pressure)
+            maxPenaltySwing = normalizedPressure * 0.18 if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD else maxSwing
 
             # Roll for outcome — mental score shifts the distribution
             # mentalScore +1: ~70% boost, ~20% neutral, ~10% penalty
@@ -4452,7 +4475,7 @@ class Play():
             elif roll <= boostChance + neutralChance:
                 pressureAdj = 0
             else:
-                pressureAdj = -(batched_random() * maxSwing)  # penalty
+                pressureAdj = -(batched_random() * maxPenaltySwing)  # penalty
 
             self.keyPressureMod = round(pressureAdj * 100, 1)
             probability = max(0.05, min(0.96, probability + pressureAdj))
@@ -4835,7 +4858,19 @@ class Play():
             
             stage2YardsGained = int(np.random.choice(stage2Yardages, p=stage2Curve))
             self.yardage += stage2YardsGained
-        
+
+        # STAGE 5: Breakaway (open field) — when RB gets past second level
+        if self.yardage >= 8 and self.yardage < self.yardsToEndzone:
+            speedRating = (self.runner.attributes.speed * 2 +
+                          self.runner.attributes.agility +
+                          self.runner.attributes.playMakingAbility) / 4
+            # 3–15% chance based on speed (60–100 range)
+            breakawayChance = max(3, min(15, (speedRating - 60) * 0.3 + 3))
+            if batched_randint(1, 100) <= breakawayChance:
+                remainingYards = self.yardsToEndzone - self.yardage
+                breakawayYards = min(remainingYards, int(np.random.exponential(15)))
+                self.yardage += breakawayYards
+
         # Fumble check
         fumbleRoll = batched_randint(1, 100)
         fumbleResist = round(((self.runner.gameAttributes.power * 0.8) + 
@@ -4851,7 +4886,12 @@ class Play():
         elif fumbleResist <= 67:
             fumbleResistModifier = 2
         
-        if (fumbleRoll + fumbleResistModifier) > 97:
+        # Runner choking under pressure lowers fumble threshold (high-pressure only)
+        fumbleThreshold = 97
+        if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD and runnerPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
+            fumbleThreshold = max(92, fumbleThreshold - int(abs(runnerPressureMod) * 2))
+
+        if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
             self.isFumble = True
             runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
@@ -5293,10 +5333,17 @@ class Play():
                     receiverPressureMod
                 )
 
-                # QB choking under pressure increases INT risk
-                if qbPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
-                    chokeIntBoost = abs(qbPressureMod) * 0.5
-                    catchProbs['intProb'] = min(25, catchProbs['intProb'] + chokeIntBoost)
+                # Choke boosts only in high-pressure situations (Q4 close games, etc.)
+                if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD:
+                    # QB choking under pressure increases INT risk
+                    if qbPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
+                        chokeIntBoost = abs(qbPressureMod) * 1.5
+                        catchProbs['intProb'] = min(25, catchProbs['intProb'] + chokeIntBoost)
+
+                    # Receiver choking under pressure increases drop risk
+                    if receiverPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
+                        chokeDropBoost = abs(receiverPressureMod) * 2.0
+                        catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
 
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
@@ -5351,12 +5398,10 @@ class Play():
                         if yacMaxYards > 0:
                             yacYardages = np.arange(0, yacMaxYards + 1)
                             
-                            # YAC decay rate based on receiver vs defense - BOOSTED
+                            # YAC decay rate based on receiver vs defense
                             yacOffense = receiverYACRating + receiverPressureMod
                             yacDefense = self.defense.defensePassCoverageRating
-                            offenseContribution = (2.0 * yacOffense) / 100  # was 1.5
-                            defenseContribution = 0.2 * yacDefense / 100    # was 0.3
-                            yacDecayRate = round(0.08 + 0.1 * (np.exp(defenseContribution) - offenseContribution), 3)  # was 0.12
+                            yacDecayRate = max(0.08, 0.20 + 0.005 * (yacDefense - yacOffense))
                             yacDecayRate *= decayMult
 
                             # Exponential decay curve for YAC
@@ -5364,7 +5409,17 @@ class Play():
                             yacCurve /= np.sum(yacCurve)
                             
                             yac = int(np.random.choice(yacYardages, p=yacCurve))
-                    
+
+                        # YAC breakaway — receiver beats last defender
+                        if yac >= 5 and (passYards + yac) < self.yardsToEndzone:
+                            rcvSpeed = (self.receiver.gameAttributes.speed * 2 +
+                                       self.receiver.gameAttributes.agility +
+                                       self.receiver.gameAttributes.playMakingAbility) / 4
+                            breakChance = max(3, min(15, (rcvSpeed - 60) * 0.3 + 3))
+                            if batched_randint(1, 100) <= breakChance:
+                                remYards = self.yardsToEndzone - passYards - yac
+                                yac += min(remYards, int(np.random.exponential(15)))
+
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
                         yac = self.yardsToEndzone - passYards

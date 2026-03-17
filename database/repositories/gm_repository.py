@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from database.models import GmVote, GmVoteResult, GmFaBallot
+from database.models import GmVote, GmVoteResult, GmFaBallot, User
 
 
 class GmVoteRepository:
@@ -98,6 +98,19 @@ class GmVoteRepository:
         self.session.add(result)
         self.session.flush()
         return result
+
+    def getEngagedVoterCount(self, teamId: int, season: int) -> int:
+        """Count distinct users who have favorite_team_id == teamId AND cast ≥1 GM vote this season."""
+        return (
+            self.session.query(func.count(func.distinct(GmVote.user_id)))
+            .join(User, User.id == GmVote.user_id)
+            .filter(
+                GmVote.team_id == teamId,
+                GmVote.season == season,
+                User.favorite_team_id == teamId,
+            )
+            .scalar()
+        ) or 0
 
     def getResults(self, teamId: int, season: int) -> List[GmVoteResult]:
         return (

@@ -69,6 +69,8 @@ class TeamManager:
         # Try database first if enabled
         if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
             if self._loadTeamsFromDatabase():
+                self.assignCoachesToTeams()
+                self.generateCoachPool()
                 self.logger.info(f"Generated {len(self.teams)} teams from database")
                 return
         

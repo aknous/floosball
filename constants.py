@@ -57,9 +57,9 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
 CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
-CHOKE_MODIFIER_THRESHOLD = 1.0    # Min abs(keyPressureMod) for choke (lower bar than clutch)
+CHOKE_MODIFIER_THRESHOLD = 1.5    # Min abs(keyPressureMod) for choke
 CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
-CHOKE_WPA_THRESHOLD = 3.0         # Min WPA% impact for choke plays
+CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 
 # Momentum system
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
@@ -166,9 +166,15 @@ POWERUP_CATALOG = {
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
 
+# Daily refresh boundary for SCHEDULED mode (UTC hour).
+# The "floosball day" rolls over at this hour so daily limits and shop refreshes
+# don't clash with live games.  10 AM UTC = 5 AM EST / 6 AM EDT — safely between
+# the last game ending (~midnight UTC) and the first game starting (5 PM UTC / noon ET).
+DAILY_RESET_HOUR_UTC = 10
+
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 
-GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa"}
+GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa", "hire_coach"}
 
 # Cost per vote (Floobits)
 GM_VOTE_COST = {
@@ -176,6 +182,7 @@ GM_VOTE_COST = {
     "cut_player": 10,
     "resign_player": 10,
     "sign_fa": 12,
+    "hire_coach": 10,
 }
 
 # Action weight for threshold calculation
@@ -184,14 +191,16 @@ GM_VOTE_WEIGHT = {
     "cut_player": 1.0,
     "resign_player": 0.75,
     "sign_fa": 1.0,
+    "hire_coach": 1.0,
 }
 
 # Base minimum votes required (floor of threshold)
 GM_VOTE_BASE_MIN = {
-    "fire_coach": 8,
-    "cut_player": 5,
-    "resign_player": 4,
-    "sign_fa": 5,
+    "fire_coach": 3,
+    "cut_player": 2,
+    "resign_player": 2,
+    "sign_fa": 2,
+    "hire_coach": 2,
 }
 
 # Per-user limits
@@ -201,19 +210,35 @@ GM_VOTES_PER_TARGET = 5
 
 # FA ballot
 GM_FA_BALLOT_COST = 15
-GM_FA_BALLOT_MAX_RANKINGS = 5
+GM_FA_BALLOT_MAX_RANKINGS = 18  # 6 roster slots × 3 ranked candidates each
 
 # FA voting window duration (seconds)
 GM_FA_WINDOW_FAST = 30
-GM_FA_WINDOW_SCHEDULED = 7200  # 2 hours
+GM_FA_WINDOW_SEQUENTIAL = 180  # 3 minutes (for testing)
+GM_FA_WINDOW_SCHEDULED = 64800  # 18 hours
 
-# Threshold formula: threshold = max(baseMin, ceil(activeUsers * 0.15 * weight))
-GM_THRESHOLD_USER_FACTOR = 0.15
+# Threshold formula: threshold = max(baseMin, ceil(engagedFans * factor * weight))
+# "Engaged fans" = users with favorite_team_id who cast ≥1 GM vote this season
+GM_THRESHOLD_USER_FACTOR = 0.35
 
 # Probability: at threshold = 45%, linear to 95% at 2x threshold
 GM_PROB_BASE = 0.45
 GM_PROB_RANGE = 0.50
 GM_PROB_CAP = 0.95
 
+# Minimum ballot appearance rate for a player to be an eligible directive target
+GM_FA_MIN_APPEARANCE_PCT = 0.25
+
 # Coach pool
 GM_COACH_POOL_SIZE = 5
+
+# ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
+
+PICKEM_CORRECT_REWARD = 5           # Floobits per correct pick
+PICKEM_PERFECT_WEEK_BONUS = 25      # Bonus for picking every game correctly in a week
+PICKEM_WEEKLY_PRIZES = {1: 15, 2: 10, 3: 5}
+PICKEM_WEEKLY_TOP_PCT = 0.25
+PICKEM_WEEKLY_TOP_PCT_PRIZE = 3
+PICKEM_SEASON_PRIZES = {1: 75, 2: 50, 3: 25}
+PICKEM_SEASON_TOP_PCT = 0.25
+PICKEM_SEASON_TOP_PCT_PRIZE = 10
