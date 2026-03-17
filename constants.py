@@ -114,19 +114,19 @@ POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
     "displayName": "Dispensation",
     "description": "+1 roster swap to make an additional player change.",
-    "price": 25,
+    "price": 35,
 }
 POWERUP_MODIFIER_NULLIFIER = {
     "slug": "modifier_nullifier",
     "displayName": "Annulment",
     "description": "Your cards operate under Steady (no modifier effect) this week.",
-    "price": 40,
+    "price": 60,
 }
 POWERUP_TEMP_FLEX = {
     "slug": "temp_flex",
     "displayName": "Conscription",
     "description": "Adds a FLEX roster slot (any position) for 4 weeks.",
-    "price": 150,
+    "price": 200,
     "durationWeeks": 4,
     "seasonLimit": 2,
 }
@@ -134,13 +134,13 @@ POWERUP_SHOP_REROLL = {
     "slug": "shop_reroll",
     "displayName": "Requisition",
     "description": "Regenerates your featured shop cards.",
-    "price": 20,
+    "price": 30,
 }
 POWERUP_TEMP_CARD_SLOT = {
     "slug": "temp_card_slot",
     "displayName": "Accession",
     "description": "Adds a 6th card equipment slot for 4 weeks.",
-    "price": 150,
+    "price": 200,
     "durationWeeks": 4,
     "seasonLimit": 2,
 }
@@ -149,7 +149,7 @@ POWERUP_FORTUNES_FAVOR = {
     "slug": "fortunes_favor",
     "displayName": "Patronage",
     "description": "Boosts all chance card trigger rates by 10% for 3 weeks.",
-    "price": 100,
+    "price": 125,
     "durationWeeks": 3,
     "seasonLimit": 2,
 }

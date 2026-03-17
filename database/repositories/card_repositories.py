@@ -354,7 +354,7 @@ class PackTypeRepository:
             PackType(
                 name='humble',
                 display_name='Humble Pack',
-                cost=50,
+                cost=100,
                 cards_per_pack=3,
                 guaranteed_rarity=None,
                 rarity_weights={'base': 100, 'chrome': 30, 'holographic': 20, 'gold': 15, 'prismatic': 5, 'diamond': 1},
@@ -363,7 +363,7 @@ class PackTypeRepository:
             PackType(
                 name='proper',
                 display_name='Proper Pack',
-                cost=125,
+                cost=250,
                 cards_per_pack=5,
                 guaranteed_rarity='chrome',
                 rarity_weights={'base': 80, 'chrome': 40, 'holographic': 30, 'gold': 20, 'prismatic': 8, 'diamond': 2},
@@ -372,7 +372,7 @@ class PackTypeRepository:
             PackType(
                 name='grand',
                 display_name='Grand Pack',
-                cost=300,
+                cost=600,
                 cards_per_pack=5,
                 guaranteed_rarity='holographic',
                 rarity_weights={'base': 60, 'chrome': 35, 'holographic': 30, 'gold': 25, 'prismatic': 15, 'diamond': 5},
@@ -381,7 +381,7 @@ class PackTypeRepository:
             PackType(
                 name='exquisite',
                 display_name='Exquisite Pack',
-                cost=750,
+                cost=1500,
                 cards_per_pack=5,
                 guaranteed_rarity='prismatic',
                 rarity_weights={'base': 20, 'chrome': 20, 'holographic': 25, 'gold': 30, 'prismatic': 30, 'diamond': 25},
@@ -392,6 +392,9 @@ class PackTypeRepository:
             existing = self.getByName(pt.name)
             if not existing:
                 self.session.add(pt)
+            else:
+                # Update existing pack type prices
+                existing.cost = pt.cost
         self.session.flush()
 
 

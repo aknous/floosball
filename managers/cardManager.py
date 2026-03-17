@@ -64,7 +64,7 @@ CLASSIFICATION_VALUE_MULTIPLIERS = {
 }
 
 # Transplant cost: baseFee + multiplier × max(0, targetValue - offeringValue)
-TRANSPLANT_BASE_FEE = 25
+TRANSPLANT_BASE_FEE = 40
 TRANSPLANT_VALUE_MULTIPLIER = 2
 
 
