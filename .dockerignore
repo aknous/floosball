@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+data/floosball.db*
+data/avatars/
+logs/
+legacy/
+tests/
+examples/
+scripts/
+*.md
+.vscode/
+.claude/

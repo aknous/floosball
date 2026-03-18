@@ -234,8 +234,21 @@ GM_COACH_POOL_SIZE = 5
 
 # ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
 
-PICKEM_CORRECT_REWARD = 5           # Floobits per correct pick
-PICKEM_PERFECT_WEEK_BONUS = 25      # Bonus for picking every game correctly in a week
+PICKEM_CORRECT_REWARD = 5           # (Legacy) Floobits per correct pick
+PICKEM_CLAIRVOYANT_THRESHOLD = 96    # Points threshold for Clairvoyant bonus (e.g. 12 games × 8 pts = all correct by Q1)
+PICKEM_CLAIRVOYANT_BONUS = 25       # Bonus Floobits when threshold is met
+
+# Points-based system (v2)
+PICKEM_BASE_POINTS = 10              # Max points per correct pick (pre-game)
+PICKEM_QUARTER_MULTIPLIERS = {       # Multiplier by game quarter at time of pick
+    0: 1.0,   # Pre-game (Scheduled status)
+    1: 0.8,   # Q1
+    2: 0.6,   # Q2
+    3: 0.4,   # Q3
+    4: 0.2,   # Q4
+    5: 0.1,   # OT
+}
+PICKEM_POINTS_TO_FLOOBITS = 0.5     # 1 point = 0.5 Floobits
 PICKEM_WEEKLY_PRIZES = {1: 15, 2: 10, 3: 5}
 PICKEM_WEEKLY_TOP_PCT = 0.25
 PICKEM_WEEKLY_TOP_PCT_PRIZE = 3

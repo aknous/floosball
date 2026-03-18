@@ -1296,10 +1296,20 @@ class Game:
         fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
         fgProb = self._estimateFgProbability()
 
-        # High-probability FG (>80%) — always kick in OT regardless of down
+        # First OT possession: a FG doesn't win — the other team gets a
+        # guaranteed possession to respond. Play for TD on early downs.
+        isFirstPoss = (
+            not self.otFirstPossComplete
+            and self.offensiveTeam is self.otFirstPossTeam
+        )
+
+        # High-probability FG (>80%) — kick immediately in sudden death or
+        # on the second team's possession, but on first possession only as
+        # a 4th-down fallback (play for TD on downs 1–3).
         if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= 0.80:
-            self.play.playType = PlayType.FieldGoal
-            return
+            if not isFirstPoss or self.down == 4:
+                self.play.playType = PlayType.FieldGoal
+                return
 
         if self.down == 4:
             reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
@@ -1352,11 +1362,18 @@ class Game:
         coach = getattr(self.offensiveTeam, 'coach', None)
         targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
-        # Tied and in FG range: consider kicking now or playing conservatively
+        # Tied and in FG range: consider kicking now or playing conservatively.
+        # On first possession, a FG just gives the opponent a chance to respond —
+        # push for TD instead of settling for 3.
         reasonableFg = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
         fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
         inFgRange = self.yardsToEndzone <= kickerMaxFg and fgDist <= reasonableFg
         if scoreDiff == 0 and inFgRange:
+            if isFirstPoss:
+                # First possession — play aggressively for TD, protect ball
+                weights = {'run': 40.0, 'short': 30.0, 'medium': 25.0, 'long': 5.0}
+                self._executeWeightedPlay(weights, targetSideline=targetSideline)
+                return
             # How easy is this FG? 1.0 = chip shot, 0.0 = at max range
             fgEase = max(0.0, (reasonableFg - fgDist) / reasonableFg) if reasonableFg > 0 else 0.0
             clockIQ = self._coachClockIQ(coach)

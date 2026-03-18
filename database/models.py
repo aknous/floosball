@@ -564,6 +564,7 @@ class User(Base):
     has_completed_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
     email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships
     fantasy_rosters: Mapped[list["FantasyRoster"]] = relationship("FantasyRoster", back_populates="user")
@@ -1147,6 +1148,8 @@ class PickEmPick(Base):
     away_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
     picked_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
     correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    points_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    points_earned: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships

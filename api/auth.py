@@ -237,12 +237,19 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                 emailAddresses = payload.get("email_addresses", [])
                 if emailAddresses and isinstance(emailAddresses, list):
                     jwtEmail = emailAddresses[0].get("email_address", "")
+            needsCommit = False
             if jwtEmail:
                 jwtEmail = jwtEmail.lower().strip()
                 if user.email != jwtEmail:
                     logger.info(f"Updating user email: {user.email} -> {jwtEmail}")
                     user.email = jwtEmail
-                    session.commit()
+                    needsCommit = True
+            # Stamp last login
+            from datetime import datetime as _dt
+            user.last_login_at = _dt.utcnow()
+            needsCommit = True
+            if needsCommit:
+                session.commit()
 
         # Beta gate: if enabled, verify user's email is on the allowlist
         try:

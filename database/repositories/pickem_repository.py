@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, case, and_
 
 from database.models import PickEmPick
+from constants import PICKEM_BASE_POINTS
 
 
 class PickEmRepository:
@@ -20,8 +21,11 @@ class PickEmRepository:
         ).order_by(PickEmPick.game_index).all()
 
     def submitPick(self, userId: int, season: int, week: int, gameIndex: int,
-                   homeTeamId: int, awayTeamId: int, pickedTeamId: int) -> PickEmPick:
-        """Submit or update a pick. Only allowed if correct IS NULL (game not resolved)."""
+                   homeTeamId: int, awayTeamId: int, pickedTeamId: int,
+                   pointsMultiplier: float = 1.0) -> PickEmPick:
+        """Submit or update a pick. Only allowed if correct IS NULL (game not resolved).
+        pointsMultiplier is set based on game quarter at time of pick.
+        """
         existing = self.session.query(PickEmPick).filter_by(
             user_id=userId, season=season, week=week, game_index=gameIndex,
         ).first()
@@ -30,6 +34,7 @@ class PickEmRepository:
             if existing.correct is not None:
                 raise ValueError("Cannot change a resolved pick")
             existing.picked_team_id = pickedTeamId
+            existing.points_multiplier = pointsMultiplier
             self.session.flush()
             return existing
 
@@ -41,63 +46,78 @@ class PickEmRepository:
             home_team_id=homeTeamId,
             away_team_id=awayTeamId,
             picked_team_id=pickedTeamId,
+            points_multiplier=pointsMultiplier,
         )
         self.session.add(pick)
         self.session.flush()
         return pick
 
     def resolvePicks(self, season: int, week: int, gameIndex: int, winningTeamId: int) -> int:
-        """Resolve all picks for a specific game. Returns count of rows updated."""
-        count = self.session.query(PickEmPick).filter(
+        """Resolve all picks for a specific game. Computes points_earned per pick.
+        Returns count of rows updated.
+        """
+        picks = self.session.query(PickEmPick).filter(
             PickEmPick.season == season,
             PickEmPick.week == week,
             PickEmPick.game_index == gameIndex,
             PickEmPick.correct.is_(None),
-        ).update(
-            {PickEmPick.correct: PickEmPick.picked_team_id == winningTeamId},
-            synchronize_session='fetch',
-        )
-        return count
+        ).all()
 
-    def getWeekResultsByUser(self, season: int, week: int) -> List[Tuple[int, int, int]]:
+        for pick in picks:
+            isCorrect = (pick.picked_team_id == winningTeamId)
+            pick.correct = isCorrect
+            multiplier = pick.points_multiplier if pick.points_multiplier is not None else 1.0
+            pick.points_earned = int(PICKEM_BASE_POINTS * multiplier) if isCorrect else 0
+
+        self.session.flush()
+        return len(picks)
+
+    def getWeekResultsByUser(self, season: int, week: int) -> List[Tuple[int, int, int, int]]:
         """Get aggregated results per user for a week.
-        Returns list of (userId, correctCount, totalPicks).
+        Returns list of (userId, correctCount, totalPicks, totalPoints).
         """
         return self.session.query(
             PickEmPick.user_id,
             func.count(case((PickEmPick.correct == True, 1))),  # noqa: E712
             func.count(PickEmPick.id),
+            func.coalesce(func.sum(PickEmPick.points_earned), 0),
         ).filter(
             PickEmPick.season == season,
             PickEmPick.week == week,
             PickEmPick.correct.isnot(None),
         ).group_by(PickEmPick.user_id).all()
 
-    def getWeekLeaderboard(self, season: int, week: int) -> List[Tuple[int, int, int]]:
-        """Week leaderboard: (userId, correctCount, totalPicks) ordered by correctCount DESC."""
+    def getWeekLeaderboard(self, season: int, week: int) -> List[Tuple[int, int, int, int]]:
+        """Week leaderboard: (userId, correctCount, totalPicks, totalPoints)
+        ordered by totalPoints DESC."""
         return self.session.query(
             PickEmPick.user_id,
             func.count(case((PickEmPick.correct == True, 1))),  # noqa: E712
             func.count(PickEmPick.id),
+            func.coalesce(func.sum(PickEmPick.points_earned), 0),
         ).filter(
             PickEmPick.season == season,
             PickEmPick.week == week,
             PickEmPick.correct.isnot(None),
         ).group_by(PickEmPick.user_id).order_by(
+            func.coalesce(func.sum(PickEmPick.points_earned), 0).desc(),
             func.count(case((PickEmPick.correct == True, 1))).desc(),  # noqa: E712
-            func.count(PickEmPick.id).desc(),  # tiebreaker: more picks
+            func.count(PickEmPick.id).desc(),
         ).all()
 
-    def getSeasonLeaderboard(self, season: int) -> List[Tuple[int, int, int]]:
-        """Season leaderboard: (userId, correctCount, totalPicks) ordered by correctCount DESC."""
+    def getSeasonLeaderboard(self, season: int) -> List[Tuple[int, int, int, int]]:
+        """Season leaderboard: (userId, correctCount, totalPicks, totalPoints)
+        ordered by totalPoints DESC."""
         return self.session.query(
             PickEmPick.user_id,
             func.count(case((PickEmPick.correct == True, 1))),  # noqa: E712
             func.count(PickEmPick.id),
+            func.coalesce(func.sum(PickEmPick.points_earned), 0),
         ).filter(
             PickEmPick.season == season,
             PickEmPick.correct.isnot(None),
         ).group_by(PickEmPick.user_id).order_by(
+            func.coalesce(func.sum(PickEmPick.points_earned), 0).desc(),
             func.count(case((PickEmPick.correct == True, 1))).desc(),  # noqa: E712
             func.count(PickEmPick.id).desc(),
         ).all()
@@ -107,6 +127,7 @@ class PickEmRepository:
         result = self.session.query(
             func.count(case((PickEmPick.correct == True, 1))),  # noqa: E712
             func.count(PickEmPick.id),
+            func.coalesce(func.sum(PickEmPick.points_earned), 0),
         ).filter(
             PickEmPick.user_id == userId,
             PickEmPick.season == season,
@@ -114,30 +135,31 @@ class PickEmRepository:
         ).first()
         correctCount = result[0] if result else 0
         totalPicks = result[1] if result else 0
+        totalPoints = result[2] if result else 0
 
-        # Count perfect weeks
-        perfectWeeks = self._countPerfectWeeks(userId, season)
+        # Count Clairvoyant weeks (points >= threshold)
+        clairvoyantWeeks = self._countClairvoyantWeeks(userId, season)
 
         return {
             "correctCount": correctCount,
             "totalPicks": totalPicks,
-            "perfectWeeks": perfectWeeks,
+            "totalPoints": totalPoints,
+            "clairvoyantWeeks": clairvoyantWeeks,
         }
 
-    def _countPerfectWeeks(self, userId: int, season: int) -> int:
-        """Count weeks where user picked every game correctly."""
-        # Get weeks where user has resolved picks
+    def _countClairvoyantWeeks(self, userId: int, season: int) -> int:
+        """Count weeks where user reached the Clairvoyant points threshold."""
+        from constants import PICKEM_CLAIRVOYANT_THRESHOLD
         weekStats = self.session.query(
             PickEmPick.week,
-            func.count(PickEmPick.id),
-            func.count(case((PickEmPick.correct == True, 1))),  # noqa: E712
+            func.coalesce(func.sum(PickEmPick.points_earned), 0),
         ).filter(
             PickEmPick.user_id == userId,
             PickEmPick.season == season,
             PickEmPick.correct.isnot(None),
         ).group_by(PickEmPick.week).all()
 
-        return sum(1 for _, total, correct in weekStats if total > 0 and total == correct)
+        return sum(1 for _, pts in weekStats if pts >= PICKEM_CLAIRVOYANT_THRESHOLD)
 
     def getPerfectWeekUsers(self, season: int, week: int, totalGames: int) -> List[int]:
         """Get user IDs who picked every game correctly in a week."""

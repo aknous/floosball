@@ -149,6 +149,8 @@ class SeasonManager:
             self.setTimingMode(TimingMode.TEST_SCHEDULED)
         elif mode_str == 'offseason-test':
             self.setTimingMode(TimingMode.OFFSEASON_TEST)
+        elif mode_str in ('catchup', 'catch-up'):
+            self.setTimingMode(TimingMode.CATCHUP)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -167,7 +169,13 @@ class SeasonManager:
         logger.info(f"Starting season {seasonNumber}")
         
         self.currentSeason = Season(seasonNumber)
-        
+
+        # CATCHUP mode: backdate season start to last Monday so schedule anchors to the past
+        from managers.timingManager import TimingMode, TimingManager
+        if self.timingManager.mode == TimingMode.CATCHUP:
+            self.currentSeason.startDate = TimingManager._lastMondayUtc(hour=11)
+            logger.info(f"CATCHUP mode: season start backdated to {self.currentSeason.startDate.isoformat()}")
+
         # Clear previous season data
         self._clearSeasonData()
 
@@ -272,7 +280,10 @@ class SeasonManager:
                 self.currentSeason.seasonNumber, self.currentSeason.currentWeek
             )
 
-
+            # Notify users whose power-ups (Accession / Conscription) just expired
+            self._notifyExpiredPowerups(
+                self.currentSeason.seasonNumber, self.currentSeason.currentWeek
+            )
 
             weekStartTime = week['startTime']
 
@@ -283,6 +294,9 @@ class SeasonManager:
                     logger.info(f"Week {self.currentSeason.currentWeek}: past scheduled time — entering catch-up mode")
                 elif not isBehindSchedule and self.timingManager.catchingUp:
                     logger.info(f"Week {self.currentSeason.currentWeek}: back on schedule — resuming normal timing")
+                    if self.timingManager.mode == TimingMode.CATCHUP:
+                        self.timingManager.mode = TimingMode.SCHEDULED
+                        logger.info("CATCHUP complete — switched to SCHEDULED mode")
                 self.timingManager.catchingUp = isBehindSchedule
 
             # Cache the game start time so REST API returns a stable value on refresh
@@ -376,7 +390,7 @@ class SeasonManager:
             weekGames = week['games']
 
             # Create tasks for all games in the week to run concurrently
-            gameTasks = [self._simulateGame(game) for game in weekGames]
+            gameTasks = [self._simulateGame(game, gameIndex=i) for i, game in enumerate(weekGames)]
 
             # Start periodic leaderboard broadcast during games
             leaderboardTask = asyncio.ensure_future(self._broadcastLeaderboardPeriodically())
@@ -496,7 +510,7 @@ class SeasonManager:
         # Simulate playoff rounds
         await self._simulatePlayoffRounds()
 
-    async def _simulateGame(self, game: FloosGame.Game) -> None:
+    async def _simulateGame(self, game: FloosGame.Game, gameIndex: int = -1) -> None:
         """Simulate a single game"""
 
         try:
@@ -569,6 +583,10 @@ class SeasonManager:
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+
+            # Resolve pick-em picks for this game immediately
+            if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):
+                self._resolvePickEmGame(gameIndex, gameInstance)
 
         except Exception as e:
             logger.error(
@@ -1332,6 +1350,115 @@ class SeasonManager:
             )
         except Exception as e:
             logger.warning(f"Failed to clean up orphaned week games: {e}")
+
+    def _notifyExpiredPowerups(self, season: int, currentWeek: int) -> None:
+        """Send notifications and clean up when Accession/Conscription power-ups expire."""
+        if not DB_IMPORTS_AVAILABLE or not USE_DATABASE or currentWeek <= 1:
+            return
+        try:
+            from database.connection import get_session as _getSession
+            from database.models import (
+                ShopPurchase, UserCard, CardTemplate,
+                FantasyRoster, FantasyRosterPlayer,
+            )
+            from database.repositories.notification_repository import NotificationRepository
+
+            session = _getSession()
+            # Find all power-ups that expired last week
+            expiredPurchases = session.query(ShopPurchase).filter(
+                ShopPurchase.item_slug.in_(["temp_card_slot", "temp_flex"]),
+                ShopPurchase.season == season,
+                ShopPurchase.expires_at_week == currentWeek - 1,
+            ).all()
+
+            if not expiredPurchases:
+                session.close()
+                return
+
+            # Users with an MVP card still have 6 card slots — don't notify for temp_card_slot
+            cardSlotUserIds = [p.user_id for p in expiredPurchases if p.item_slug == "temp_card_slot"]
+            mvpUserIds = set()
+            if cardSlotUserIds:
+                mvpRows = (
+                    session.query(UserCard.user_id)
+                    .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                    .filter(
+                        UserCard.user_id.in_(cardSlotUserIds),
+                        CardTemplate.season_created == season,
+                        CardTemplate.classification.isnot(None),
+                        CardTemplate.classification.contains("mvp"),
+                    )
+                    .distinct()
+                    .all()
+                )
+                mvpUserIds = {row[0] for row in mvpRows}
+
+            # Users with a champion card still have FLEX — don't notify/clean for temp_flex
+            flexUserIds = [p.user_id for p in expiredPurchases if p.item_slug == "temp_flex"]
+            championUserIds = set()
+            if flexUserIds:
+                from database.models import EquippedCard
+                champRows = (
+                    session.query(EquippedCard.user_id)
+                    .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                    .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                    .filter(
+                        EquippedCard.user_id.in_(flexUserIds),
+                        EquippedCard.season == season,
+                        EquippedCard.week == currentWeek,
+                        CardTemplate.classification.isnot(None),
+                        CardTemplate.classification.contains("champion"),
+                    )
+                    .distinct()
+                    .all()
+                )
+                championUserIds = {row[0] for row in champRows}
+
+            notifRepo = NotificationRepository(session)
+            notifiedCount = 0
+            for purchase in expiredPurchases:
+                if purchase.item_slug == "temp_card_slot":
+                    if purchase.user_id in mvpUserIds:
+                        continue
+                    notifRepo.create(
+                        purchase.user_id,
+                        'powerup_expired',
+                        'Accession Expired',
+                        'Your Accession power-up has expired. The 6th card slot is no longer available.',
+                        data={'itemSlug': 'temp_card_slot', 'expiredAtWeek': currentWeek - 1},
+                    )
+                    notifiedCount += 1
+                    logger.info(f"Notified user {purchase.user_id}: Accession expired (was active through week {currentWeek - 1})")
+
+                elif purchase.item_slug == "temp_flex":
+                    if purchase.user_id in championUserIds:
+                        continue
+                    # Remove the FLEX player from the roster
+                    roster = session.query(FantasyRoster).filter_by(
+                        user_id=purchase.user_id, season=season,
+                    ).first()
+                    if roster:
+                        flexPlayer = session.query(FantasyRosterPlayer).filter_by(
+                            roster_id=roster.id, slot="FLEX",
+                        ).first()
+                        if flexPlayer:
+                            session.delete(flexPlayer)
+                            logger.info(f"Removed FLEX player for user {purchase.user_id} (Conscription expired)")
+                    notifRepo.create(
+                        purchase.user_id,
+                        'powerup_expired',
+                        'Conscription Expired',
+                        'Your Conscription power-up has expired. The FLEX roster slot is no longer available.',
+                        data={'itemSlug': 'temp_flex', 'expiredAtWeek': currentWeek - 1},
+                    )
+                    notifiedCount += 1
+                    logger.info(f"Notified user {purchase.user_id}: Conscription expired (was active through week {currentWeek - 1})")
+
+            if notifiedCount:
+                session.commit()
+            session.close()
+        except Exception as e:
+            logger.warning(f"Failed to notify expired power-ups: {e}")
 
     def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
         """Save a completed game to the database"""
@@ -3960,10 +4087,37 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _resolvePickEmGame(self, gameIndex: int, game) -> None:
+        """Resolve pick-em picks for a single game immediately when it ends."""
+        season = self.currentSeason.seasonNumber
+        week = self.currentSeason.currentWeek
+        winner = getattr(game, 'winningTeam', None)
+        if winner is None:
+            return
+        try:
+            from database.connection import get_session
+            from database.repositories.pickem_repository import PickEmRepository
+            session = get_session()
+            try:
+                pickemRepo = PickEmRepository(session)
+                count = pickemRepo.resolvePicks(season, week, gameIndex, winner.id)
+                session.commit()
+                if count > 0:
+                    logger.info(f"Resolved {count} pick-em picks for game {gameIndex} (winner: {winner.name})")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error resolving pick-em for game {gameIndex}: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _resolvePickEmWeek(self, season: int, week: int) -> None:
-        """Resolve pick-em picks for the completed week and award Floobits."""
-        from constants import PICKEM_CORRECT_REWARD, PICKEM_PERFECT_WEEK_BONUS
+        """Award Floobits and leaderboard prizes for the completed week.
+        Individual game picks are already resolved by _resolvePickEmGame."""
         from constants import (
+            PICKEM_CLAIRVOYANT_THRESHOLD, PICKEM_CLAIRVOYANT_BONUS,
+            PICKEM_POINTS_TO_FLOOBITS,
             PICKEM_WEEKLY_PRIZES, PICKEM_WEEKLY_TOP_PCT,
             PICKEM_WEEKLY_TOP_PCT_PRIZE,
         )
@@ -3985,53 +4139,47 @@ class SeasonManager:
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)
 
-                # 1. Resolve each game's picks
-                totalGames = len(completedGames)
-                for i, game in enumerate(completedGames):
-                    winner = getattr(game, 'winningTeam', None)
-                    if winner is None:
-                        continue
-                    pickemRepo.resolvePicks(season, week, i, winner.id)
-
-                # 2. Award per-correct-pick Floobits + perfect week bonus
+                # Picks are already resolved per-game by _resolvePickEmGame.
+                # Award points-based Floobits + Clairvoyant bonus
                 userResults = pickemRepo.getWeekResultsByUser(season, week)
-                for userId, correctCount, totalPicks in userResults:
+                for userId, correctCount, totalPicks, totalPoints in userResults:
                     if totalPicks == 0:
                         continue
-                    reward = correctCount * PICKEM_CORRECT_REWARD
-                    isPerfect = correctCount == totalPicks and totalPicks == totalGames
-                    if isPerfect:
-                        reward += PICKEM_PERFECT_WEEK_BONUS
+                    reward = int(totalPoints * PICKEM_POINTS_TO_FLOOBITS)
+                    isClairvoyant = totalPoints >= PICKEM_CLAIRVOYANT_THRESHOLD
+                    if isClairvoyant:
+                        reward += PICKEM_CLAIRVOYANT_BONUS
 
                     if reward > 0:
                         currencyRepo.addFunds(
                             userId, reward, 'pickem_correct',
-                            description=f'Week {week}: {correctCount}/{totalPicks} correct',
+                            description=f'Week {week}: {totalPoints} pts ({correctCount}/{totalPicks} correct)',
                             season=season, week=week,
                         )
 
                     # 3. Notify each user
                     title = f'Week {week} Prognostications'
-                    if isPerfect:
-                        body = f'CLAIRVOYANT! {correctCount}/{totalPicks} correct — +{reward} Floobits'
+                    if isClairvoyant:
+                        body = f'CLAIRVOYANT! {totalPoints} pts ({correctCount}/{totalPicks} correct) — +{reward} Floobits'
                     elif correctCount > 0:
-                        body = f'{correctCount}/{totalPicks} correct — +{reward} Floobits'
+                        body = f'{correctCount}/{totalPicks} correct — {totalPoints} pts — +{reward} Floobits'
                     else:
                         body = f'0/{totalPicks} correct this week. Better luck next time!'
                     notifRepo.create(
                         userId, 'pickem_results', title, body,
                         data={'season': season, 'week': week, 'correct': correctCount,
-                              'total': totalPicks, 'reward': reward, 'perfect': isPerfect},
+                              'total': totalPicks, 'totalPoints': totalPoints,
+                              'reward': reward, 'clairvoyant': isClairvoyant},
                     )
 
-                # 4. Award weekly pick-em leaderboard prizes
+                # 4. Award weekly pick-em leaderboard prizes (ranked by points)
                 weekRows = pickemRepo.getWeekLeaderboard(season, week)
                 totalEntries = len(weekRows)
                 topCutoff = max(3, int(totalEntries * PICKEM_WEEKLY_TOP_PCT))
 
-                for i, (userId, correctCount, totalPicks) in enumerate(weekRows):
+                for i, (userId, correctCount, totalPicks, totalPoints) in enumerate(weekRows):
                     weekRank = i + 1
-                    if correctCount <= 0:
+                    if totalPoints <= 0:
                         continue
                     prize = PICKEM_WEEKLY_PRIZES.get(weekRank)
                     if prize is None and weekRank <= topCutoff and totalEntries >= 4:
@@ -4057,12 +4205,13 @@ class SeasonManager:
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                     from database.models import User
                     leaderboardData = []
-                    for userId, correctCount, totalPicks in weekRows[:10]:
+                    for userId, correctCount, totalPicks, totalPoints in weekRows[:10]:
                         dbUser = session.query(User).filter_by(id=userId).first()
                         username = dbUser.username if dbUser and dbUser.username else f"User {userId}"
                         leaderboardData.append({
                             "userId": userId, "username": username,
                             "correct": correctCount, "total": totalPicks,
+                            "totalPoints": totalPoints,
                         })
                     pickemEvent = {
                         "event": "pickem_results",
@@ -4110,9 +4259,9 @@ class SeasonManager:
                 totalEntries = len(seasonRows)
                 topCutoff = max(3, int(totalEntries * PICKEM_SEASON_TOP_PCT))
 
-                for i, (userId, correctCount, totalPicks) in enumerate(seasonRows):
+                for i, (userId, correctCount, totalPicks, totalPoints) in enumerate(seasonRows):
                     seasonRank = i + 1
-                    if correctCount <= 0:
+                    if totalPoints <= 0:
                         continue
                     prize = PICKEM_SEASON_PRIZES.get(seasonRank)
                     if prize is None and seasonRank <= topCutoff and totalEntries >= 4:

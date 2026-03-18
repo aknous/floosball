@@ -101,7 +101,7 @@ class ConnectionManager:
         
         # Send to all connections in channel
         disconnected = []
-        for connection in self.active_connections[channel]:
+        for connection in list(self.active_connections.get(channel, set())):
             try:
                 await connection.send_json(message)
             except WebSocketDisconnect:

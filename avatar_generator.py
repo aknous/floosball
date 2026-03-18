@@ -5,7 +5,8 @@ Avatars are persisted to disk for reuse across server restarts.
 """
 
 import hashlib
-from typing import Dict, Optional
+import math
+from typing import Dict, List, Optional
 import logging
 import os
 
@@ -97,26 +98,50 @@ class AvatarGenerator:
 
         return pngBytes
 
-    def generateLeagueLogo(self, size: int = 256) -> str:
-        """Generate the Floosball league logo as SVG — blue circle with tilted football."""
+    def generateLeagueLogo(self, size: int = 256, teamColors: Optional[List[str]] = None) -> str:
+        """Generate the Floosball league logo as SVG — pie chart of team colors with football overlay."""
+        cx, cy, r = 16, 16, 16
+
+        if teamColors and len(teamColors) >= 2:
+            sliceCount = len(teamColors)
+            sliceAngle = 360.0 / sliceCount
+            slices = []
+            for i, color in enumerate(teamColors):
+                startDeg = i * sliceAngle - 90  # start from top
+                endDeg = startDeg + sliceAngle
+                startRad = math.radians(startDeg)
+                endRad = math.radians(endDeg)
+                x1 = cx + r * math.cos(startRad)
+                y1 = cy + r * math.sin(startRad)
+                x2 = cx + r * math.cos(endRad)
+                y2 = cy + r * math.sin(endRad)
+                largeArc = 1 if sliceAngle > 180 else 0
+                slices.append(
+                    f'  <path d="M{cx},{cy} L{x1:.2f},{y1:.2f} A{r},{r} 0 {largeArc},1 {x2:.2f},{y2:.2f} Z" fill="{color}"/>'
+                )
+            background = "\n".join(slices)
+        else:
+            background = f'  <circle cx="{cx}" cy="{cy}" r="{r}" fill="#3b82f6"/>'
+
         return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 32 32">
-  <circle cx="16" cy="16" r="16" fill="#3b82f6"/>
+{background}
   <g transform="rotate(-45 16 16)">
     <ellipse cx="16" cy="16" rx="10" ry="6.5" fill="#e2e8f0"/>
-    <line x1="6" y1="16" x2="26" y2="16" stroke="#3b82f6" stroke-width="1.2"/>
-    <line x1="13" y1="13.2" x2="13" y2="18.8" stroke="#3b82f6" stroke-width="1"/>
-    <line x1="16" y1="12.5" x2="16" y2="19.5" stroke="#3b82f6" stroke-width="1"/>
-    <line x1="19" y1="13.2" x2="19" y2="18.8" stroke="#3b82f6" stroke-width="1"/>
+    <line x1="6" y1="16" x2="26" y2="16" stroke="#1e293b" stroke-width="1.2"/>
+    <line x1="13" y1="13.2" x2="13" y2="18.8" stroke="#1e293b" stroke-width="1"/>
+    <line x1="16" y1="12.5" x2="16" y2="19.5" stroke="#1e293b" stroke-width="1"/>
+    <line x1="19" y1="13.2" x2="19" y2="18.8" stroke="#1e293b" stroke-width="1"/>
   </g>
 </svg>'''
 
-    def getLeagueLogoPng(self, size: int = 256) -> bytes:
+    def getLeagueLogoPng(self, size: int = 256, teamColors: Optional[List[str]] = None) -> bytes:
         """Generate or return cached PNG of the league logo."""
-        pngPath = os.path.join(self.cacheDir, f"league_logo_{size}.png")
+        colorHash = hashlib.md5(",".join(teamColors or []).encode()).hexdigest()[:8]
+        pngPath = os.path.join(self.cacheDir, f"league_logo_{size}_{colorHash}.png")
         if os.path.exists(pngPath):
             with open(pngPath, 'rb') as f:
                 return f.read()
-        svg = self.generateLeagueLogo(size)
+        svg = self.generateLeagueLogo(size, teamColors)
         import cairosvg
         pngBytes = cairosvg.svg2png(bytestring=svg.encode('utf-8'), output_width=size, output_height=size)
         try:

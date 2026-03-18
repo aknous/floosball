@@ -12,6 +12,7 @@ import asyncio
 import json
 from datetime import datetime
 
+import os
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
 from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent
@@ -41,8 +42,13 @@ origins = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:5173",  # Vite default
-    "http://floosball.com"
+    "https://floosball.com",
+    "https://www.floosball.com",
 ]
+# Allow additional origins via env var (comma-separated)
+_extraOrigins = os.environ.get('CORS_ORIGINS', '')
+if _extraOrigins:
+    origins.extend([o.strip() for o in _extraOrigins.split(',') if o.strip()])
 
 app.add_middleware(
     CORSMiddleware,
@@ -424,7 +430,7 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
         tertiaryColor = getattr(team, 'tertiaryColor', team.color)
 
         cacheHeaders = {
-            "Cache-Control": "public, max-age=31536000, immutable",
+            "Cache-Control": "public, max-age=3600",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
             "Access-Control-Allow-Headers": "*"
@@ -454,14 +460,18 @@ async def get_league_logo(size: int = Query(default=256, ge=16, le=1024), format
     """Return the Floosball league logo as SVG or PNG."""
     try:
         avatarGen = getAvatarGenerator()
+        teamColors = None
+        if floosball_app and hasattr(floosball_app, 'teamManager'):
+            teamColors = [t.color for t in floosball_app.teamManager.teams if t.color]
         cacheHeaders = {
-            "Cache-Control": "public, max-age=31536000, immutable",
+            "Cache-Control": "public, max-age=3600",
+            "Content-Disposition": "inline",
             "Access-Control-Allow-Origin": "*",
         }
         if format == "png":
-            pngBytes = avatarGen.getLeagueLogoPng(size)
+            pngBytes = avatarGen.getLeagueLogoPng(size, teamColors)
             return Response(content=pngBytes, media_type="image/png", headers=cacheHeaders)
-        svg = avatarGen.generateLeagueLogo(size)
+        svg = avatarGen.generateLeagueLogo(size, teamColors)
         return Response(content=svg, media_type="image/svg+xml", headers=cacheHeaders)
     except Exception as e:
         logger.error(f"Error generating league logo: {e}")
@@ -1372,7 +1382,7 @@ def admin_list_users(q: Optional[str] = Query(default=None),
     """List registered users, optionally filtered by search query."""
     _check_admin_password(x_admin_password)
     from database.connection import get_session
-    from database.models import User, UserCurrency
+    from database.models import User, UserCurrency, Team
 
     session = get_session()
     try:
@@ -1382,17 +1392,33 @@ def admin_list_users(q: Optional[str] = Query(default=None),
             query = query.filter(
                 (User.email.ilike(term)) | (User.username.ilike(term))
             )
-        users = query.order_by(User.id).limit(50).all()
+        users = query.order_by(User.created_at.desc()).limit(100).all()
+
+        # Batch-load currencies and favorite teams
+        userIds = [u.id for u in users]
+        currencies = {c.user_id: c for c in session.query(UserCurrency).filter(UserCurrency.user_id.in_(userIds)).all()} if userIds else {}
+        teamIds = {u.favorite_team_id for u in users if u.favorite_team_id}
+        teams = {t.id: t for t in session.query(Team).filter(Team.id.in_(teamIds)).all()} if teamIds else {}
+
         result = []
         for u in users:
-            currency = session.query(UserCurrency).filter_by(user_id=u.id).first()
+            currency = currencies.get(u.id)
+            favTeam = teams.get(u.favorite_team_id) if u.favorite_team_id else None
             result.append({
                 "id": u.id,
                 "email": u.email,
                 "username": u.username,
                 "floobits": currency.balance if currency else 0,
+                "lifetimeEarned": currency.lifetime_earned if currency else 0,
+                "lifetimeSpent": currency.lifetime_spent if currency else 0,
+                "favoriteTeam": f"{favTeam.city} {favTeam.name}" if favTeam else None,
+                "favoriteTeamId": u.favorite_team_id,
+                "onboarded": u.has_completed_onboarding,
+                "createdAt": u.created_at.isoformat() if u.created_at else None,
+                "isActive": u.is_active,
+                "lastLoginAt": u.last_login_at.isoformat() if u.last_login_at else None,
             })
-        return build_success_response({"users": result})
+        return build_success_response({"users": result, "total": len(result)})
     finally:
         session.close()
 
@@ -4395,68 +4421,75 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
 
 @app.get("/api/pickem/week")
 def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
-    """Get this week's matchups with the user's existing picks (if any)."""
+    """Get this week's matchups with the user's existing picks (if any).
+    Each game has per-game pickability and current multiplier based on quarter.
+    """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
+
+    from constants import PICKEM_QUARTER_MULTIPLIERS
 
     sm = floosball_app.seasonManager
     currentSeason = sm.currentSeason
     if currentSeason is None:
-        return build_success_response({"season": 0, "week": 0, "locked": True, "games": [], "weekSummary": None})
+        return build_success_response({"season": 0, "week": 0, "games": [], "weekSummary": None})
 
     seasonNum = currentSeason.seasonNumber
     week = currentSeason.currentWeek
     schedule = currentSeason.schedule
-    previousWeekSummary = None
-    originalWeek = week
-
-    # If current week is done, pivot to next week's matchups so users
-    # can submit picks during the inter-week gap (before next week starts)
-    if (currentSeason.completedWeekGames is not None
-            and isinstance(week, int)
-            and week + 1 <= len(schedule)):
-        week = week + 1
-        locked = False
-    else:
-        # Determine if picks are locked (games have started or finished)
-        activeGames = currentSeason.activeGames
-        locked = activeGames is not None and any(
-            getattr(g, 'status', None) in (FloosGame.GameStatus.Active, FloosGame.GameStatus.Final)
-            for g in activeGames
-        )
-        # Also locked if completedWeekGames exist (week is over)
-        if currentSeason.completedWeekGames is not None:
-            locked = True
 
     # Build matchups from schedule
     weekGames = []
     if isinstance(week, int) and 0 < week <= len(schedule):
         scheduleGames = schedule[week - 1].get('games', [])
+        activeGames = currentSeason.activeGames
         for i, game in enumerate(scheduleGames):
+            # Use active game object if available (has live status/quarter)
+            liveGame = activeGames[i] if activeGames and i < len(activeGames) else game
+            rawStatus = getattr(liveGame, 'status', None)
+            # Compare by enum value to avoid identity issues across module reloads
+            statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+
+            # Determine per-game pickability and current multiplier
+            if statusVal == 3:  # Final
+                pickable = False
+                currentMultiplier = 0.0
+            elif statusVal == 2:  # Active
+                pickable = True
+                quarter = getattr(liveGame, 'currentQuarter', 1)
+                currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+            else:
+                # Scheduled (1) or not yet set
+                pickable = True
+                currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
             matchup = {
                 "gameIndex": i,
                 "homeTeam": {
-                    "id": game.homeTeam.id,
-                    "name": game.homeTeam.name,
-                    "abbr": game.homeTeam.abbr,
-                    "color": game.homeTeam.color,
-                    "record": f"{game.homeTeam.seasonTeamStats.get('wins', 0)}-{game.homeTeam.seasonTeamStats.get('losses', 0)}",
-                    "elo": getattr(game.homeTeam, 'elo', 1500),
+                    "id": liveGame.homeTeam.id,
+                    "name": liveGame.homeTeam.name,
+                    "abbr": liveGame.homeTeam.abbr,
+                    "color": liveGame.homeTeam.color,
+                    "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
+                    "elo": getattr(liveGame.homeTeam, 'elo', 1500),
                 },
                 "awayTeam": {
-                    "id": game.awayTeam.id,
-                    "name": game.awayTeam.name,
-                    "abbr": game.awayTeam.abbr,
-                    "color": game.awayTeam.color,
-                    "record": f"{game.awayTeam.seasonTeamStats.get('wins', 0)}-{game.awayTeam.seasonTeamStats.get('losses', 0)}",
-                    "elo": getattr(game.awayTeam, 'elo', 1500),
+                    "id": liveGame.awayTeam.id,
+                    "name": liveGame.awayTeam.name,
+                    "abbr": liveGame.awayTeam.abbr,
+                    "color": liveGame.awayTeam.color,
+                    "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
+                    "elo": getattr(liveGame.awayTeam, 'elo', 1500),
                 },
                 "userPick": None,
+                "pointsMultiplier": None,
+                "pickable": pickable,
+                "currentMultiplier": currentMultiplier,
                 "result": None,
             }
             # Attach result if game is final
-            if getattr(game, 'status', None) == FloosGame.GameStatus.Final and getattr(game, 'winningTeam', None):
-                matchup["result"] = {"winnerId": game.winningTeam.id}
+            if statusVal == 3 and getattr(liveGame, 'winningTeam', None):
+                matchup["result"] = {"winnerId": liveGame.winningTeam.id}
             weekGames.append(matchup)
 
     # Overlay user picks if authenticated
@@ -4471,51 +4504,49 @@ def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
             pickMap = {p.game_index: p for p in picks}
             correctCount = 0
             totalResolved = 0
+            totalPoints = 0
             for g in weekGames:
                 pick = pickMap.get(g["gameIndex"])
                 if pick:
                     g["userPick"] = pick.picked_team_id
+                    g["pointsMultiplier"] = pick.points_multiplier
                     if pick.correct is not None:
                         g["result"] = g.get("result") or {}
                         g["result"]["correct"] = pick.correct
+                        g["result"]["pointsEarned"] = pick.points_earned or 0
                         totalResolved += 1
+                        totalPoints += pick.points_earned or 0
                         if pick.correct:
                             correctCount += 1
             if totalResolved > 0:
-                isPerfect = correctCount == totalResolved and totalResolved == len(weekGames)
-                weekSummary = {"correct": correctCount, "total": totalResolved, "perfectWeek": isPerfect}
+                from constants import PICKEM_CLAIRVOYANT_THRESHOLD
+                weekSummary = {
+                    "correct": correctCount,
+                    "total": totalResolved,
+                    "totalPoints": totalPoints,
+                    "clairvoyant": totalPoints >= PICKEM_CLAIRVOYANT_THRESHOLD,
+                }
 
-            # If we pivoted to next week, include previous week's results
-            if originalWeek != week:
-                prevPicks = pickemRepo.getUserPicks(user.id, seasonNum, originalWeek)
-                prevCorrect = sum(1 for p in prevPicks if p.correct)
-                prevResolved = sum(1 for p in prevPicks if p.correct is not None)
-                if prevResolved > 0:
-                    prevGamesCount = len(schedule[originalWeek - 1].get('games', []))
-                    previousWeekSummary = {
-                        "week": originalWeek,
-                        "correct": prevCorrect,
-                        "total": prevResolved,
-                        "perfectWeek": prevCorrect == prevResolved and prevResolved == prevGamesCount,
-                    }
         finally:
             session.close()
 
     return build_success_response({
         "season": seasonNum,
         "week": week,
-        "locked": locked,
         "games": weekGames,
         "weekSummary": weekSummary,
-        "previousWeekSummary": previousWeekSummary,
     })
 
 
 @app.post("/api/pickem/pick")
 def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
-    """Submit or update a single pick."""
+    """Submit or update a single pick. Per-game pickability — games can be picked
+    until they reach Final status. Multiplier is based on game quarter at pick time.
+    """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
+
+    from constants import PICKEM_QUARTER_MULTIPLIERS
 
     gameIndex = body.get("gameIndex")
     pickedTeamId = body.get("pickedTeamId")
@@ -4536,16 +4567,6 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
             and isinstance(week, int)
             and week + 1 <= len(schedule)):
         week = week + 1
-    else:
-        # Check that games haven't started (locked)
-        activeGames = currentSeason.activeGames
-        if activeGames is not None and any(
-            getattr(g, 'status', None) in (FloosGame.GameStatus.Active, FloosGame.GameStatus.Final)
-            for g in activeGames
-        ):
-            raise HTTPException(409, "Picks are locked — games have started")
-        if currentSeason.completedWeekGames is not None:
-            raise HTTPException(409, "Picks are locked — week is over")
 
     # Validate gameIndex
     if week < 1 or week > len(schedule):
@@ -4555,6 +4576,24 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         raise HTTPException(400, f"Invalid gameIndex: {gameIndex}")
 
     game = scheduleGames[gameIndex]
+    # Also check activeGames for live state
+    activeGames = currentSeason.activeGames
+    liveGame = activeGames[gameIndex] if activeGames and gameIndex < len(activeGames) else game
+
+    # Per-game lock: only Final games are unpickable
+    rawStatus = getattr(liveGame, 'status', None)
+    statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+    if statusVal == 3:  # Final
+        raise HTTPException(409, "This game has ended — pick cannot be changed")
+
+    # Determine multiplier based on game quarter
+    if statusVal == 2:  # Active
+        quarter = getattr(liveGame, 'currentQuarter', 1)
+        pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+    else:
+        # Scheduled (pre-game) — full multiplier
+        pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
     homeTeamId = game.homeTeam.id
     awayTeamId = game.awayTeam.id
 
@@ -4566,13 +4605,21 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         pickemRepo = PickEmRepository(session)
-        pick = pickemRepo.submitPick(user.id, seasonNum, week, gameIndex, homeTeamId, awayTeamId, pickedTeamId)
+        pick = pickemRepo.submitPick(
+            user.id, seasonNum, week, gameIndex,
+            homeTeamId, awayTeamId, pickedTeamId,
+            pointsMultiplier=pointsMultiplier,
+        )
         session.commit()
 
         # Count how many picks user has made this week
         allPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
         return build_success_response({
-            "pick": {"gameIndex": pick.game_index, "pickedTeamId": pick.picked_team_id},
+            "pick": {
+                "gameIndex": pick.game_index,
+                "pickedTeamId": pick.picked_team_id,
+                "pointsMultiplier": pick.points_multiplier,
+            },
             "weekProgress": {"picked": len(allPicks), "total": len(scheduleGames)},
         })
     except ValueError as e:
@@ -4600,6 +4647,20 @@ def get_pickem_leaderboard(season: Optional[int] = None):
     seasonNum = season if season is not None else currentSeason.seasonNumber
     week = currentSeason.currentWeek
 
+    # For the weekly leaderboard: if games aren't active AND the current week
+    # has no resolved picks, show the most recent completed week so results
+    # don't disappear between weeks. (When games just finished but the week
+    # hasn't advanced yet, the current week WILL have resolved picks.)
+    weeklyWeek = week
+    if currentSeason.activeGames is None and week > 1:
+        currentWeekResolved = session.query(func.count(PickEmPick.id)).filter(
+            PickEmPick.season == seasonNum,
+            PickEmPick.week == week,
+            PickEmPick.correct.isnot(None),
+        ).scalar()
+        if currentWeekResolved == 0:
+            weeklyWeek = week - 1
+
     from database.connection import get_session
     from database.repositories.pickem_repository import PickEmRepository
     from database.models import User
@@ -4609,7 +4670,7 @@ def get_pickem_leaderboard(season: Optional[int] = None):
 
         def _buildEntries(rows):
             entries = []
-            for rank, (userId, correctCount, totalPicks) in enumerate(rows, 1):
+            for rank, (userId, correctCount, totalPicks, totalPoints) in enumerate(rows, 1):
                 dbUser = session.query(User).filter_by(id=userId).first()
                 username = dbUser.username if dbUser and dbUser.username else f"User {userId}"
                 accuracy = round(correctCount / totalPicks * 100, 1) if totalPicks > 0 else 0
@@ -4619,22 +4680,23 @@ def get_pickem_leaderboard(season: Optional[int] = None):
                     "username": username,
                     "correctCount": correctCount,
                     "totalPicks": totalPicks,
+                    "totalPoints": totalPoints,
                     "accuracy": accuracy,
                 })
             return entries
 
         seasonRows = pickemRepo.getSeasonLeaderboard(seasonNum)
-        weekRows = pickemRepo.getWeekLeaderboard(seasonNum, week)
+        weekRows = pickemRepo.getWeekLeaderboard(seasonNum, weeklyWeek)
 
-        # Enrich season entries with perfect weeks
+        # Enrich season entries with Clairvoyant weeks
         seasonEntries = _buildEntries(seasonRows)
         for entry in seasonEntries:
             stats = pickemRepo.getUserSeasonStats(entry["userId"], seasonNum)
-            entry["perfectWeeks"] = stats["perfectWeeks"]
+            entry["clairvoyantWeeks"] = stats["clairvoyantWeeks"]
 
         return build_success_response({
             "season": {"entries": seasonEntries},
-            "week": {"week": week, "entries": _buildEntries(weekRows)},
+            "week": {"week": weeklyWeek, "entries": _buildEntries(weekRows)},
         })
     finally:
         session.close()
@@ -4671,6 +4733,8 @@ def get_pickem_history(user: _User = Depends(_getCurrentUser)):
                 "awayTeamId": pick.away_team_id,
                 "pickedTeamId": pick.picked_team_id,
                 "correct": pick.correct,
+                "pointsMultiplier": pick.points_multiplier,
+                "pointsEarned": pick.points_earned,
             })
 
         weeks = []
@@ -4678,12 +4742,14 @@ def get_pickem_history(user: _User = Depends(_getCurrentUser)):
             picks = weekMap[w]
             correctCount = sum(1 for p in picks if p["correct"] is True)
             totalResolved = sum(1 for p in picks if p["correct"] is not None)
+            totalPoints = sum(p["pointsEarned"] or 0 for p in picks if p["correct"] is not None)
             weeks.append({
                 "week": w,
                 "picks": picks,
                 "correct": correctCount,
                 "total": totalResolved,
-                "perfectWeek": correctCount == totalResolved and totalResolved > 0 and totalResolved == len(picks),
+                "totalPoints": totalPoints,
+                "clairvoyant": totalPoints >= 96,  # matches PICKEM_CLAIRVOYANT_THRESHOLD
             })
 
         return build_success_response({"weeks": weeks})

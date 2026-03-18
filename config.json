@@ -17,10 +17,10 @@
     },
     "leagues": [
         {
-            "name": "League 1"
+            "name": "Corduroy League"
         },
         {
-            "name": "League 2"
+            "name": "Flannel League"
         }
     ],
     "teams": [
@@ -169,12 +169,12 @@
             "tertiaryColor": "#1DE9B6"
         },
         {
-            "city": "Carolina",
-            "name": "Boil",
-            "abbr": "CAR",
-            "color": "#4A148C",
-            "secondaryColor": "#FF6F00",
-            "tertiaryColor": "#6A1B9A"
+            "city": "Nashville",
+            "name": "Bachelorettes",
+            "abbr": "NSH",
+            "color": "#D4AF37",
+            "secondaryColor": "#9E3D5E",
+            "tertiaryColor": "#D4AF37"
         },
         {
             "city": "Portland",

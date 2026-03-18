@@ -8,8 +8,9 @@ from contextlib import contextmanager
 
 from .models import Base
 
-# Database file path
-DB_DIR = Path(__file__).parent.parent / "data"
+# Database file path — configurable via DATABASE_DIR env var (for Fly.io volume mount)
+_defaultDbDir = Path(__file__).parent.parent / "data"
+DB_DIR = Path(os.environ.get('DATABASE_DIR', str(_defaultDbDir)))
 DB_PATH = DB_DIR / "floosball.db"
 DB_URL = f"sqlite:///{DB_PATH}"
 
@@ -43,6 +44,7 @@ SessionLocal = sessionmaker(
 
 def init_db():
     """Initialize the database by creating all tables."""
+    DB_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _seedPackTypes()
     _seedBetaAllowlist()
@@ -51,6 +53,7 @@ def init_db():
 
 def clear_db():
     """Clear all data from the database by dropping and recreating all tables."""
+    DB_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     _seedPackTypes()

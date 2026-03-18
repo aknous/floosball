@@ -20,6 +20,7 @@ class TimingMode(Enum):
     DEMO = "demo"             # Like FAST but with visible offseason pick delays for UI testing
     TEST_SCHEDULED = "test-scheduled"  # Compressed SCHEDULED: real polling but minutes apart instead of hours
     OFFSEASON_TEST = "offseason-test"  # Fast regular season (no broadcast), interactive offseason
+    CATCHUP = "catchup"                # Backdate season to last Monday, catch up, then behave like SCHEDULED
 
 class TimingManager:
     """Manages timing and delays for different simulation modes"""
@@ -39,6 +40,8 @@ class TimingManager:
             self.delays.update(self._getTestScheduledDelays())
         elif mode == TimingMode.OFFSEASON_TEST:
             self.delays.update(self._getOffseasonTestDelays())
+        elif mode == TimingMode.CATCHUP:
+            self.delays.update(self._getScheduledDelays())
 
         logger.info(f"TimingManager initialized in {mode.value} mode")
     
@@ -138,6 +141,8 @@ class TimingManager:
             self.delays.update(self._getTestScheduledDelays())
         elif mode == TimingMode.OFFSEASON_TEST:
             self.delays.update(self._getOffseasonTestDelays())
+        elif mode == TimingMode.CATCHUP:
+            self.delays.update(self._getScheduledDelays())
         logger.info(f"Timing mode changed to {mode.value}")
     
     def setCustomDelays(self, delays: Dict[str, float]) -> None:
@@ -147,7 +152,7 @@ class TimingManager:
     
     @property
     def _isScheduledMode(self) -> bool:
-        return self.mode in (TimingMode.SCHEDULED, TimingMode.TEST_SCHEDULED)
+        return self.mode in (TimingMode.SCHEDULED, TimingMode.TEST_SCHEDULED, TimingMode.CATCHUP)
 
     async def waitForWeekStart(self, weekStartTime: datetime.datetime) -> None:
         """Wait until week should start based on timing mode"""
@@ -229,7 +234,7 @@ class TimingManager:
 
     async def waitForOffseason(self) -> None:
         """Wait during offseason processing"""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.OFFSEASON_TEST):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.OFFSEASON_TEST, TimingMode.CATCHUP):
             logger.info(f"{self.mode.value} mode: offseason delay {self.delays['offseason']}s")
             await asyncio.sleep(self.delays['offseason'])
         elif self._isScheduledMode:
@@ -255,6 +260,8 @@ class TimingManager:
             await asyncio.sleep(self.delays['season_transition'])
         elif self.mode == TimingMode.TEST_SCHEDULED:
             await asyncio.sleep(self.delays['season_transition'])
+        elif self.mode == TimingMode.CATCHUP:
+            logger.info("CATCHUP mode: starting season immediately (backdated to last Monday)")
 
     @staticmethod
     def _nextMondayUtc(hour: int = 11) -> datetime.datetime:
@@ -270,6 +277,20 @@ class TimingManager:
             if now.hour >= hour:
                 daysAhead = 7
         targetLocal = now.replace(hour=hour, minute=0, second=0, microsecond=0) + datetime.timedelta(days=daysAhead)
+        targetUtc = targetLocal + datetime.timedelta(hours=utcOffset)
+        return targetUtc
+
+    @staticmethod
+    def _lastMondayUtc(hour: int = 11) -> datetime.datetime:
+        """Compute the most recent Monday at the given local hour, returned as UTC."""
+        now = datetime.datetime.now()
+        nowUtc = datetime.datetime.utcnow()
+        utcOffset = round((nowUtc - now).total_seconds() / 3600)
+
+        daysBack = now.weekday()  # Monday=0, so 0 days back on Monday
+        if daysBack == 0 and now.hour < hour:
+            daysBack = 7  # Before target hour on Monday — use previous Monday
+        targetLocal = now.replace(hour=hour, minute=0, second=0, microsecond=0) - datetime.timedelta(days=daysBack)
         targetUtc = targetLocal + datetime.timedelta(hours=utcOffset)
         return targetUtc
 
@@ -325,19 +346,19 @@ class TimingManager:
     # SCHEDULED uses the same in-game delays as SEQUENTIAL so users can watch live.
     async def waitForQuarterBreak(self) -> None:
         """Wait between quarters in a game"""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             logger.debug(f"{self.mode.value} mode: quarter break delay {self.delays['quarter_break']}s")
             await asyncio.sleep(self.delays['quarter_break'])
 
     async def waitForHalftime(self) -> None:
         """Wait during halftime"""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             logger.debug(f"{self.mode.value} mode: halftime delay {self.delays['halftime']}s")
             await asyncio.sleep(self.delays['halftime'])
 
     async def waitBetweenPlays(self) -> None:
         """Wait between individual plays in a game"""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             import random
             delay = random.uniform(self.delays['between_plays'] * 0.6, self.delays['between_plays'] * 1.4)
             logger.debug(f"{self.mode.value} mode: between plays delay {delay:.1f}s")
@@ -345,7 +366,7 @@ class TimingManager:
 
     async def waitAfterKickoff(self) -> None:
         """Brief pause after kickoff broadcast, before first play of new drive."""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             import random
             delay = random.uniform(
                 self.delays.get('after_kickoff', 3.0) * 0.6,
@@ -356,12 +377,12 @@ class TimingManager:
 
     async def waitBetweenOffseasonPicks(self) -> None:
         """Wait between offseason free agency pick broadcasts"""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.DEMO, TimingMode.OFFSEASON_TEST):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.DEMO, TimingMode.OFFSEASON_TEST, TimingMode.CATCHUP):
             await asyncio.sleep(self.delays['offseason_pick'])
 
     async def waitBeforeOnsideResult(self) -> None:
         """Dramatic pause between 'attempts onside kick' announcement and recovery result."""
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             import random
             delay = random.uniform(
                 self.delays.get('onside_kick_result', 2.0) * 0.75,

@@ -62,7 +62,7 @@ EFFECT_CATEGORY = {
     "leg_day": "streak", "automatic": "streak", "hot_hand": "accumulator",
     "momentum": "streak",
     # cross-position (declared by _buildCrossPositionParams)
-    "game_ball": "cross", "spectacle": "cross", "indemnity": "cross",
+    "game_ball": "conditional", "spectacle": "cross", "indemnity": "cross",
     "full_roster": "cross", "all_in": "cross", "diversified": "cross",
     "gold_rush": "cross", "stacked_deck": "cross", "copycat": "cross",
     "chain_reaction": "cross", "bonus_round": "cross", "double_down": "cross",
@@ -350,7 +350,7 @@ EFFECT_TAGLINES = {
     "industrious": "Honest work",
     "mismatch": "Too big, too fast",
     "sniper": "From downtown",
-    "game_ball": "MVP week",
+    "game_ball": "Above and beyond",
     "spectacle": "Career day",
     "indemnity": "Consolation floobits",
     # ── Same-Team Stacking Effects ──
@@ -422,8 +422,8 @@ EFFECT_TOOLTIPS = {
     "feeding_frenzy": "Dinner is served. Floobits when your roster scores enough TDs in a week.",
     "highlight_reel": "Highlight reel material pays. Floobits for every big play your favorite team pulls off.",
     # Conditional (TE)
-    "showoff": "Your {posLabel} showed out this week. FP when your {posLabel} slot outperforms their base rating in a single game.",
-    "flourish": "Your {posLabel} went off. FP when your {posLabel} slot outperforms their base rating in a single game.",
+    "showoff": "Your {posLabel} showed out this week. FP when your {posLabel} slot overperforms expectations in a single game.",
+    "flourish": "Your {posLabel} went off. FP when your {posLabel} slot overperforms expectations in a single game.",
     "bandwagon": "Bandwagoning has never been so rewarding. FPx whenever your favorite team wins.",
     "upset_special": "David vs Goliath energy. FP when your favorite team beats a higher-rated opponent.",
     "believe": "Keep the dream alive. FP as long as your favorite team holds a playoff spot.",
@@ -461,9 +461,9 @@ EFFECT_TOOLTIPS = {
     "industrious": "Honest work deserves honest pay. Floobits scaling with your TE slot's receptions.",
     "mismatch": "They can't cover this guy. FP when your {posLabel} slot scores 2+ TDs in a week.",
     "sniper": "From long range. FP for each field goal your K slot makes from 40+ yards out.",
-    "game_ball": "Game ball material. FP when your {posLabel} slot has an elite game performance.",
-    "spectacle": "Going off. FP that scales with how much your {posLabel} slot outperformed their base rating this week.",
-    "indemnity": "At least you got floobits. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more your {posLabel} slot underperforms their projected score.",
+    "game_ball": "Game ball material. FP when your {posLabel} slot overperforms expectations in a single game.",
+    "spectacle": "Going off. FP that scales with how much your {posLabel} slot overperforms expectations this week.",
+    "indemnity": "At least you got floobits. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more your {posLabel} slot underperforms.",
     # ── Same-Team Stacking Effects ──
     "stack": "Stack attack. FPx when your QB slot and any WR slot play on the same team.",
     "backfield_buddies": "Same backfield, same vibes. FPx when your QB slot and RB play on the same team.",
@@ -573,9 +573,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "industrious": "{perReceptionFloobits} Floobits per reception by your TE slot",
     "mismatch": "+{rewardValue} FP when your {posLabel} slot scores 2+ TDs",
     "sniper": "+{perFgFP} FP per 40+ yard FG by your K slot",
-    "game_ball": "+{rewardValue} FP when your {posLabel} slot has 80+ game rating",
-    "spectacle": "+{perPointFP} FP per game rating point above base for your {posLabel} slot",
-    "indemnity": "+{baseFloobits}F floor + chance of {enhancedFloobits}F. Base chance scales with {posLabel} underperformance points, up to 70% max",
+    "game_ball": "+{rewardValue} FP when your {posLabel} slot overperforms",
+    "spectacle": "+{perPointFP} FP per point your {posLabel} slot overperforms by",
+    "indemnity": "+{baseFloobits}F floor + chance of {enhancedFloobits}F. Chance scales with {posLabel} underperformance, up to 70% max",
     # ── Same-Team Stacking Effects ──
     "stack": "{rewardValue} FPx when QB slot and WR share a team",
     "backfield_buddies": "+{rewardValue} FPx when QB slot and RB share a team",
@@ -717,8 +717,6 @@ def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context, 
 def _buildCrossPositionParams(effectName, playerRating, editionScale):
     """Build params for effects that can appear in any category pool."""
     rn = playerRating - 60
-    if effectName == "game_ball":
-        return {"rewardType": "fp", "rewardValue": round((7 + rn * 0.25) * editionScale, 1)}
     if effectName == "spectacle":
         return {"rewardType": "fp", "perPointFP": round((0.3 + rn * 0.015) * editionScale, 2)}
     if effectName == "indemnity":
@@ -917,6 +915,8 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "rewardValue": round((6 + rn * 0.25) * editionScale, 1)}
     if effectName == "flourish":
         return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
+    if effectName == "game_ball":
+        return {"rewardType": "fp", "rewardValue": round((7 + rn * 0.25) * editionScale, 1)}
     if effectName == "bandwagon":
         return {"rewardType": "mult", "rewardValue": round(1 + (0.15 + rn * 0.008) * editionScale, 2)}
     if effectName == "upset_special":
@@ -1735,7 +1735,7 @@ def _computeAceUpTheSleeve(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeShowoff(primary, ctx, cardPlayerId, eqId):
-    # +FP if player at card's position had a good game (game perf > base rating)
+    # +FP if player at card's position overperformed
     if not ctx.gamePerformanceRatings:
         return EffectResult(equation="Waiting for games to complete")
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
@@ -1746,13 +1746,13 @@ def _computeShowoff(primary, ctx, cardPlayerId, eqId):
     baseRating = ctx.rosterPlayerRatings.get(pid, 60)
     if gamePerfRating > baseRating and gamePerfRating > 0:
         result = _conditionalReward(primary)
-        result.equation = f"game perf {round(gamePerfRating)} > base {round(baseRating)}"
+        result.equation = "Overperformed expectations"
         return result
-    return EffectResult(equation=f"game perf {round(gamePerfRating)} / base {round(baseRating)}")
+    return EffectResult(equation="Did not overperform")
 
 
 def _computeGlowUp(primary, ctx, cardPlayerId, eqId):
-    # FPx if player at card's position had a good game (game perf > base rating)
+    # FP if player at card's position overperformed
     if not ctx.gamePerformanceRatings:
         return EffectResult(equation="Waiting for games to complete")
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
@@ -1763,9 +1763,9 @@ def _computeGlowUp(primary, ctx, cardPlayerId, eqId):
     baseRating = ctx.rosterPlayerRatings.get(pid, 60)
     if gamePerfRating > baseRating and gamePerfRating > 0:
         result = _conditionalReward(primary)
-        result.equation = f"game perf {round(gamePerfRating)} > base {round(baseRating)}"
+        result.equation = "Overperformed expectations"
         return result
-    return EffectResult(equation=f"game perf {round(gamePerfRating)} / base {round(baseRating)}")
+    return EffectResult(equation="Did not overperform")
 
 
 def _computeBandwagon(primary, ctx, cardPlayerId, eqId):
@@ -2266,22 +2266,25 @@ def _computeHotHand(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeGameBall(primary, ctx, cardPlayerId, eqId):
-    """FP when roster player at card position has 80+ game performance rating."""
+    """FP when roster player at card position overperforms their base rating."""
     if not ctx.gamePerformanceRatings:
         return EffectResult(equation="Waiting for games to complete")
-    rewardValue = primary.get("rewardValue", 4)
     pos = ctx.cardPosition or 1
     pids = _getRosterPlayersByPosition(ctx, pos)
-    bestRating = max((ctx.gamePerformanceRatings.get(pid, 0) for pid in pids), default=0)
-    if bestRating >= 80:
-        eq = f"+{rewardValue} FP (game rating {bestRating:.0f} ≥ 80)"
-        return EffectResult(fpBonus=rewardValue, equation=eq)
-    eq = f"Game rating {bestRating:.0f} < 80"
-    return EffectResult(equation=eq)
+    if not pids:
+        return EffectResult(equation="no roster player at position")
+    pid = pids[0]
+    gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
+    baseRating = ctx.rosterPlayerRatings.get(pid, 60)
+    if gamePerfRating > baseRating and gamePerfRating > 0:
+        result = _conditionalReward(primary)
+        result.equation = "Overperformed expectations"
+        return result
+    return EffectResult(equation="Did not overperform")
 
 
 def _computeBoomWeek(primary, ctx, cardPlayerId, eqId):
-    """FP scaling with how much roster player outperformed base rating this week."""
+    """FP scaling with how much roster player overperformed this week."""
     if not ctx.gamePerformanceRatings:
         return EffectResult(equation="Waiting for games to complete")
     pos = ctx.cardPosition or 1
@@ -2294,19 +2297,16 @@ def _computeBoomWeek(primary, ctx, cardPlayerId, eqId):
         if over > bestOver:
             bestOver = over
     if bestOver <= 0:
-        eq = f"No overperformance ({bestOver:.0f} vs base)"
-        return EffectResult(equation=eq)
+        return EffectResult(equation="Did not overperform")
     # New FP path
     perPointFP = primary.get("perPointFP", 0)
     if perPointFP:
         bonus = round(perPointFP * bestOver, 1)
-        eq = f"{perPointFP}/pt × {bestOver:.0f} pts over base = +{bonus} FP"
-        return EffectResult(fpBonus=bonus, equation=eq)
+        return EffectResult(fpBonus=bonus, equation=f"Overperformed — +{bonus} FP")
     # Legacy FPx path
     perPoint = primary.get("perPointOver", 0.02)
     bonus = round(1 + perPoint * bestOver, 2)
-    eq = f"1 + ({perPoint}/pt × {bestOver:.0f} pts over base) = {bonus}"
-    return EffectResult(multBonus=bonus, equation=eq)
+    return EffectResult(multBonus=bonus, equation=f"Overperformed — {bonus}x FP")
 
 
 def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
@@ -2330,9 +2330,8 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
                 worstUnder = under
         if worstUnder > 0:
             floobits = int(perPoint * worstUnder)
-            eq = f"{perPoint}/pt × {worstUnder:.0f} pts under base = {floobits} Floobits"
-            return EffectResult(floobits=floobits, equation=eq)
-        return EffectResult(equation="No underperformance")
+            return EffectResult(floobits=floobits, equation=f"Underperformed — +{floobits} Floobits")
+        return EffectResult(equation="Did not underperform")
     if not ctx.gamePerformanceRatings:
         return EffectResult(equation="Waiting for games to complete")
     pos = ctx.cardPosition or 1
@@ -2345,8 +2344,7 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
         if under > worstUnder:
             worstUnder = under
     if worstUnder <= 0:
-        eq = f"+{baseFloobits}F (base — no underperformance)"
-        return EffectResult(floobits=baseFloobits, equation=eq)
+        return EffectResult(floobits=baseFloobits, equation=f"+{baseFloobits}F — did not underperform")
     baseChance = min(0.70, worstUnder * 0.025 + 0.075)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
@@ -2354,7 +2352,7 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{worstUnder:.0f} pts under", ctx=ctx)
+                   f"+{enhancedFloobits}F", "underperformed", ctx=ctx)
     if not triggered:
         eq = f"+{baseFloobits}F floor — " + eq
     return EffectResult(floobits=floobitsVal, equation=eq,
@@ -2700,6 +2698,8 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
 
 def _computeComebackKid(primary, ctx, cardPlayerId, eqId):
     """FP scaling with deficit overcome when favorite team wins."""
+    if not ctx.favoriteTeamGameFinal:
+        return EffectResult(equation="Waiting for games to complete")
     perPoint = primary.get("perPointFP", 0.5)
     if ctx.favoriteTeamComebackWin and ctx.favoriteTeamLargestDeficit > 0:
         deficit = ctx.favoriteTeamLargestDeficit
@@ -2715,6 +2715,8 @@ def _computeComebackKid(primary, ctx, cardPlayerId, eqId):
 
 def _computeDomination(primary, ctx, cardPlayerId, eqId):
     """Base FP on your favorite team win, big FP bonus on blowout win."""
+    if not ctx.favoriteTeamGameFinal:
+        return EffectResult(equation="Waiting for games to complete")
     baseFP = primary.get("baseFP", 5)
     rewardValue = primary.get("rewardValue", 18)
     threshold = primary.get("marginThreshold", 21)
@@ -2740,6 +2742,8 @@ def _computeDomination(primary, ctx, cardPlayerId, eqId):
 
 def _computeWalkOff(primary, ctx, cardPlayerId, eqId):
     """Base FP on your favorite team win, big FP bonus on walk-off win."""
+    if not ctx.favoriteTeamGameFinal:
+        return EffectResult(equation="Waiting for games to complete")
     baseFP = primary.get("baseFP", 4)
     rewardValue = primary.get("rewardValue", 20)
     if ctx.favoriteTeamWalkOffWin:

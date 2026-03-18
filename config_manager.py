@@ -88,6 +88,17 @@ class ConfigManager:
             if config_path.endswith("config.json"):
                 config_data = ConfigValidator.validate_league_config(config_data)
             
+            # Override sensitive values from env vars when present
+            _envOverrides = {
+                'adminPassword': os.environ.get('ADMIN_PASSWORD'),
+                'clerkJwksUrl': os.environ.get('CLERK_JWKS_URL'),
+                'resendApiKey': os.environ.get('RESEND_API_KEY'),
+                'emailFrom': os.environ.get('EMAIL_FROM'),
+            }
+            for key, val in _envOverrides.items():
+                if val is not None:
+                    config_data[key] = val
+
             # Cache the data
             file_mtime = os.path.getmtime(validated_path)
             cache_entry = CacheEntry(

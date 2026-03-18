@@ -1,0 +1,29 @@
+# Floosball - Production Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core API Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# WebSocket support
+websockets>=12.0
+
+# Database
+SQLAlchemy>=2.0.0
+alembic>=1.12.0
+
+# Auth (Clerk JWT verification via JWKS)
+PyJWT[crypto]>=2.8.0
+python-multipart>=0.0.7
+
+# SVG avatar generation & PNG export
+cairosvg>=2.7.0
+Pillow>=10.0.0
+
+# Game simulation
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# Environment variable management
+python-dotenv>=1.0.0

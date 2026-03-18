@@ -17,6 +17,7 @@ Timing Modes:
     --demo, --timing=demo           Demo mode - fast games, visible offseason pick delays (UI testing)
     --test-scheduled                Compressed scheduled mode - real polling, minutes apart (no WS broadcast)
     --offseason-test                Fast regular season (no broadcast), interactive offseason (3 min FA window, live draft)
+    --catchup, --timing=catchup     Backdate season to last Monday, catch up missed games, then switch to scheduled
 
 Options:
     --fresh                         Clear database and start fresh
@@ -32,10 +33,14 @@ Examples:
     python run_api.py --fresh --test-scheduled --schedule-gap=10
 """
 
+import os
 import sys
 import asyncio
 import uvicorn
+from dotenv import load_dotenv
 from logger_config import get_logger
+
+load_dotenv()  # Load .env file if present
 from service_container import ServiceContainer
 from managers.floosballApplication import FloosballApplication
 from managers.timingManager import TimingMode
@@ -47,14 +52,38 @@ from database.connection import init_db, clear_db
 logger = get_logger("floosball.api_server")
 
 
+def _resolveTimingMode(modeStr: str) -> TimingMode:
+    """Resolve a timing mode string to a TimingMode enum value."""
+    modeStr = modeStr.lower().strip()
+    modeMap = {
+        'fast': TimingMode.FAST,
+        'turbo': TimingMode.TURBO,
+        'sequential': TimingMode.SEQUENTIAL,
+        'slow': TimingMode.SEQUENTIAL,
+        'scheduled': TimingMode.SCHEDULED,
+        'demo': TimingMode.DEMO,
+        'test-scheduled': TimingMode.TEST_SCHEDULED,
+        'offseason-test': TimingMode.OFFSEASON_TEST,
+        'catchup': TimingMode.CATCHUP,
+        'catch-up': TimingMode.CATCHUP,
+    }
+    return modeMap.get(modeStr, TimingMode.FAST)
+
+
 def parse_args():
-    """Parse command line arguments"""
+    """Parse command line arguments, with env var fallbacks for production."""
+    # Start with env var defaults (for containerized deployment)
+    envTiming = os.environ.get('TIMING_MODE', 'fast')
+    envFresh = os.environ.get('FRESH_START', '').lower() in ('1', 'true', 'yes')
+    envGap = int(os.environ.get('SCHEDULE_GAP', '60'))
+
     args = {
-        'timing_mode': TimingMode.FAST,
-        'fresh_start': False,
-        'schedule_gap': 60,
+        'timing_mode': _resolveTimingMode(envTiming),
+        'fresh_start': envFresh,
+        'schedule_gap': envGap,
     }
 
+    # CLI args override env vars
     for arg in sys.argv[1:]:
         if arg.startswith('--timing='):
             mode_str = arg.split('=')[1].lower()
@@ -72,6 +101,8 @@ def parse_args():
                 args['timing_mode'] = TimingMode.TEST_SCHEDULED
             elif mode_str == 'offseason-test':
                 args['timing_mode'] = TimingMode.OFFSEASON_TEST
+            elif mode_str in ('catchup', 'catch-up'):
+                args['timing_mode'] = TimingMode.CATCHUP
         elif arg in ['--timing-fast', '--fast']:
             args['timing_mode'] = TimingMode.FAST
         elif arg in ['--timing-turbo', '--turbo']:
@@ -86,6 +117,8 @@ def parse_args():
             args['timing_mode'] = TimingMode.TEST_SCHEDULED
         elif arg in ['--offseason-test']:
             args['timing_mode'] = TimingMode.OFFSEASON_TEST
+        elif arg in ['--catchup', '--catch-up']:
+            args['timing_mode'] = TimingMode.CATCHUP
         elif arg == '--fresh':
             args['fresh_start'] = True
         elif arg.startswith('--schedule-gap='):
@@ -158,18 +191,19 @@ async def run_server():
     )
     
     # Configure uvicorn
+    port = int(os.environ.get('PORT', '8000'))
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info",
         access_log=True
     )
-    
+
     server = uvicorn.Server(config)
-    
-    logger.info("Starting API server on http://0.0.0.0:8000")
-    logger.info("API documentation: http://localhost:8000/docs")
+
+    logger.info(f"Starting API server on http://0.0.0.0:{port}")
+    logger.info(f"API documentation: http://localhost:{port}/docs")
     logger.info("WebSocket endpoints:")
     logger.info("  - ws://localhost:8000/ws/game/{game_id}")
     logger.info("  - ws://localhost:8000/ws/season")

@@ -79,3 +79,8 @@ data/floosball.db-wal
 
 # Generated avatars
 data/avatars/
+
+# Environment files (secrets)
+.env
+.env.local
+.env.production
