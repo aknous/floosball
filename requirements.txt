@@ -23,6 +23,7 @@ Pillow>=10.0.0
 
 # Game simulation
 numpy>=1.24.0
+scipy>=1.11.0
 matplotlib>=3.7.0
 
 # Environment variable management
