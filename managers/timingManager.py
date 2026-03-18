@@ -7,7 +7,10 @@ import asyncio
 import datetime
 from enum import Enum
 from typing import Optional, Dict, Any
+from zoneinfo import ZoneInfo
 from logger_config import get_logger
+
+EASTERN = ZoneInfo("America/New_York")
 
 logger = get_logger("floosball.timingManager")
 
@@ -265,34 +268,30 @@ class TimingManager:
 
     @staticmethod
     def _nextMondayUtc(hour: int = 11) -> datetime.datetime:
-        """Compute the next Monday at the given local hour, returned as UTC."""
-        now = datetime.datetime.now()
-        nowUtc = datetime.datetime.utcnow()
-        utcOffset = round((nowUtc - now).total_seconds() / 3600)
+        """Compute the next Monday at the given Eastern hour, returned as naive UTC."""
+        nowEt = datetime.datetime.now(EASTERN)
 
         # Find next Monday (weekday 0)
-        daysAhead = (7 - now.weekday()) % 7  # 0=Monday
+        daysAhead = (7 - nowEt.weekday()) % 7  # 0=Monday
         if daysAhead == 0:
             # It's already Monday — if before target hour, use today; otherwise next week
-            if now.hour >= hour:
+            if nowEt.hour >= hour:
                 daysAhead = 7
-        targetLocal = now.replace(hour=hour, minute=0, second=0, microsecond=0) + datetime.timedelta(days=daysAhead)
-        targetUtc = targetLocal + datetime.timedelta(hours=utcOffset)
-        return targetUtc
+        targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) + datetime.timedelta(days=daysAhead)
+        targetUtc = targetEt.astimezone(datetime.timezone.utc)
+        return targetUtc.replace(tzinfo=None)
 
     @staticmethod
     def _lastMondayUtc(hour: int = 11) -> datetime.datetime:
-        """Compute the most recent Monday at the given local hour, returned as UTC."""
-        now = datetime.datetime.now()
-        nowUtc = datetime.datetime.utcnow()
-        utcOffset = round((nowUtc - now).total_seconds() / 3600)
+        """Compute the most recent Monday at the given Eastern hour, returned as naive UTC."""
+        nowEt = datetime.datetime.now(EASTERN)
 
-        daysBack = now.weekday()  # Monday=0, so 0 days back on Monday
-        if daysBack == 0 and now.hour < hour:
+        daysBack = nowEt.weekday()  # Monday=0, so 0 days back on Monday
+        if daysBack == 0 and nowEt.hour < hour:
             daysBack = 7  # Before target hour on Monday — use previous Monday
-        targetLocal = now.replace(hour=hour, minute=0, second=0, microsecond=0) - datetime.timedelta(days=daysBack)
-        targetUtc = targetLocal + datetime.timedelta(hours=utcOffset)
-        return targetUtc
+        targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) - datetime.timedelta(days=daysBack)
+        targetUtc = targetEt.astimezone(datetime.timezone.utc)
+        return targetUtc.replace(tzinfo=None)
 
     async def waitForPlayoffRound(self, roundStartTime: 'datetime.datetime | None' = None) -> None:
         """Wait between playoff rounds"""
