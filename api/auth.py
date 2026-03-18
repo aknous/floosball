@@ -66,8 +66,8 @@ _USERNAME_LASTS = [
 ]
 
 
-def _generateRandomUsername(session) -> str:
-    """Generate a unique random username like 'ThunderFalcon42'."""
+def _generateUsernameCandidate(session) -> str:
+    """Generate a single unique random username like 'CrispyKerfuffle42'."""
     for _ in range(50):
         name = (
             _random.choice(_USERNAME_FIRSTS)
@@ -79,6 +79,27 @@ def _generateRandomUsername(session) -> str:
             return name
     # Extremely unlikely fallback
     return "Player" + str(_random.randint(10000, 99999))
+
+
+def generateUsernameCandidates(session, count: int = 4) -> list[str]:
+    """Generate multiple unique username candidates, each verified against the DB."""
+    candidates = []
+    seen = set()
+    for _ in range(count * 10):  # generous retry budget
+        name = (
+            _random.choice(_USERNAME_FIRSTS)
+            + _random.choice(_USERNAME_LASTS)
+            + str(_random.randint(1, 99))
+        )
+        if name in seen:
+            continue
+        seen.add(name)
+        existing = session.query(User).filter(User.username == name).first()
+        if not existing:
+            candidates.append(name)
+            if len(candidates) >= count:
+                break
+    return candidates
 
 
 STARTER_FLOOBITS = 100
@@ -214,11 +235,10 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
             else:
                 email = email.lower().strip()
 
-            username = _generateRandomUsername(session)
             user = User(
                 clerk_id=clerkUserId,
                 email=email,
-                username=username,
+                username=None,
                 hashed_password="",
             )
             session.add(user)
@@ -229,7 +249,7 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
 
             session.commit()
             session.refresh(user)
-            logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email}, username={username}")
+            logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email} (username pending)")
         else:
             # Existing user — update email if JWT now provides a real one
             jwtEmail = payload.get("email", "")

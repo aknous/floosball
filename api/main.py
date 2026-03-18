@@ -1647,6 +1647,36 @@ def admin_grant_floobits(payload: Dict[str, Any],
         session.close()
 
 
+@app.post("/api/admin/users/{userId}/reroll-username")
+def admin_reroll_username(userId: int, x_admin_password: Optional[str] = Header(None)):
+    """Admin: re-roll a user's username."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from api.auth import _generateUsernameCandidate
+    session = get_session()
+    try:
+        dbUser = session.query(_UserModel).filter(_UserModel.id == userId).first()
+        if not dbUser:
+            raise HTTPException(status_code=404, detail="User not found")
+        oldUsername = dbUser.username
+        newUsername = _generateUsernameCandidate(session)
+        dbUser.username = newUsername
+        session.commit()
+        return build_success_response({
+            "userId": userId,
+            "oldUsername": oldUsername,
+            "newUsername": newUsername,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 from api.auth import getOptionalUser as _getOptionalUser
 from database.models import User as _User
 
@@ -1790,6 +1820,50 @@ def complete_onboarding(user: _User = Depends(_getCurrentUser)):
         dbUser.has_completed_onboarding = True
         session.commit()
         return {"ok": True}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.get("/api/users/me/username-options")
+def get_username_options(user: _User = Depends(_getCurrentUser)):
+    """Return 4 unique username candidates for the user to choose from."""
+    from database.connection import get_session
+    from api.auth import generateUsernameCandidates
+    session = get_session()
+    try:
+        options = generateUsernameCandidates(session, count=4)
+        return {"options": options}
+    finally:
+        session.close()
+
+
+@app.post("/api/users/me/username")
+def set_username(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Set the current user's username (only if not already set)."""
+    from database.connection import get_session
+    chosen = payload.get("username", "").strip()
+    if not chosen:
+        raise HTTPException(status_code=400, detail="Username is required")
+
+    session = get_session()
+    try:
+        dbUser = session.get(_User, user.id)
+        if dbUser.username is not None:
+            raise HTTPException(status_code=400, detail="Username already set")
+
+        # Check uniqueness
+        existing = session.query(_User).filter(_User.username == chosen).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already taken")
+
+        dbUser.username = chosen
+        session.commit()
+        return {"ok": True, "username": chosen}
+    except HTTPException:
+        raise
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=str(e))

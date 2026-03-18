@@ -52,13 +52,33 @@ def init_db():
 
 
 def clear_db():
-    """Clear all data from the database by dropping and recreating all tables."""
+    """Clear game/simulation data while preserving user accounts and beta allowlist."""
+    from sqlalchemy import text
+
     DB_DIR.mkdir(parents=True, exist_ok=True)
-    Base.metadata.drop_all(bind=engine)
+
+    # Ensure all tables exist first
     Base.metadata.create_all(bind=engine)
+
+    # Tables to preserve across fresh starts
+    preserveTables = {"users", "beta_allowlist"}
+
+    session = SessionLocal()
+    try:
+        allTables = [t.name for t in reversed(Base.metadata.sorted_tables)]
+        for tableName in allTables:
+            if tableName not in preserveTables:
+                session.execute(text(f'DELETE FROM "{tableName}"'))
+        session.commit()
+        print(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
     _seedPackTypes()
     _seedBetaAllowlist()
-    print(f"Database cleared and reinitialized at {DB_PATH}")
 
 
 def _seedPackTypes():
