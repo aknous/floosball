@@ -210,10 +210,11 @@ class FloosballApplication:
             resumeFromWeek = 0
             logger.info(f"Starting new simulation - {totalSeasons} seasons")
         
-        # Mark simulation as active
+        # Mark simulation as active (preserve resumeFromWeek so a second
+        # restart before the week loop progresses doesn't lose the checkpoint)
         self._saveSimulationState(
             current_season=seasonsPlayed + 1,
-            current_week=0,
+            current_week=resumeFromWeek,
             in_playoffs=False,
             total_seasons=totalSeasons,
             is_active=True
@@ -225,15 +226,16 @@ class FloosballApplication:
             currentSeason = seasonsPlayed + 1
             logger.info(f"=== SEASON {currentSeason} ===")
             
-            # Update simulation state for this season
+            # Update simulation state for this season (preserve week checkpoint
+            # for the first iteration so a quick re-restart doesn't lose progress)
             self._saveSimulationState(
                 current_season=currentSeason,
-                current_week=0,
+                current_week=resumeFromWeek,
                 in_playoffs=False,
                 total_seasons=totalSeasons,
                 is_active=True
             )
-            
+
             # Start new season
             await self.seasonManager.startNewSeason()
             
