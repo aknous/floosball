@@ -6,7 +6,7 @@ primary_region = "ord"
 [env]
   PORT = "8080"
   DATABASE_DIR = "/data"
-  TIMING_MODE = "catchup"
+  TIMING_MODE = "scheduled"
 
 [http_service]
   internal_port = 8080

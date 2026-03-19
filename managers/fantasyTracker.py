@@ -514,7 +514,12 @@ class FantasyTracker:
                 cardBreakdowns = []
                 eqSummary = {}
 
-                if not hasStoredCurrentWeekBonus and userId in equippedByUser:
+                # Only compute card bonuses when there's actual game data
+                # (live games or DB stats); otherwise we'd calculate against
+                # empty stats between weeks, producing false output.
+                hasWeekData = gamesActive or bool(dbCurrentWeekFullStats)
+
+                if not hasStoredCurrentWeekBonus and userId in equippedByUser and hasWeekData:
                     # Need to compute current week card bonus
                     userEquipped = equippedByUser[userId]
                     cardCalcStats = {}

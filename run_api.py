@@ -23,6 +23,13 @@ Options:
     --fresh                         Clear database and start fresh
     --schedule-gap=N                Seconds between rounds in test-scheduled mode (default 60)
 
+Production (Fly.io):
+    TIMING_MODE env var             Set in fly.toml [env] (default: catchup)
+    /data/.fresh flag file          Touch before deploy for one-shot fresh start:
+                                      fly ssh console -C "touch /data/.fresh"
+                                      fly deploy
+                                    File is auto-deleted on boot — next restart is normal.
+
 Examples:
     python run_api.py --fast
     python run_api.py --turbo --fresh
@@ -76,6 +83,14 @@ def parse_args():
     envTiming = os.environ.get('TIMING_MODE', 'fast')
     envFresh = os.environ.get('FRESH_START', '').lower() in ('1', 'true', 'yes')
     envGap = int(os.environ.get('SCHEDULE_GAP', '60'))
+
+    # Flag file on persistent volume — one-shot fresh start that self-clears
+    freshFlagPath = os.path.join(os.environ.get('DATABASE_DIR', 'data'), '.fresh')
+    if os.path.exists(freshFlagPath):
+        logger.info(f"Fresh start flag file found at {freshFlagPath} — enabling fresh start")
+        envFresh = True
+        os.remove(freshFlagPath)
+        logger.info("Flag file removed — next restart will boot normally")
 
     args = {
         'timing_mode': _resolveTimingMode(envTiming),

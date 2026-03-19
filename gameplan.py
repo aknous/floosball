@@ -11,6 +11,8 @@ adjustDefensiveGameplan(): halftime adjustment based on what opponent's offense 
 import random as _random
 import numpy as np
 
+from constants import RATING_SCALE_MIN, RATING_RANGE
+
 
 # ---------------------------------------------------------------------------
 # Offensive Gameplan
@@ -33,8 +35,8 @@ def generateOffensiveGameplan(coach, offenseTeam, defenseTeam) -> OffensiveGamep
     if coach is None:
         return plan
 
-    accuracy = coach.offensiveMind / 100.0
-    noise = (1.0 - accuracy) * 0.15
+    accuracy = (coach.offensiveMind - RATING_SCALE_MIN) / RATING_RANGE  # 0.0 at 60, 1.0 at 100
+    noise = (1.0 - accuracy) * 0.25
 
     # Evaluate RB vs. opponent run defense
     rb = getattr(offenseTeam, 'rosterDict', {}).get('rb', None)
@@ -62,7 +64,7 @@ def generateOffensiveGameplan(coach, offenseTeam, defenseTeam) -> OffensiveGamep
     total = sum(baseGaps.values())
     plan.gapDistribution = {k: v / total for k, v in baseGaps.items()}
 
-    plan.aggressiveness = coach.aggressiveness / 100.0
+    plan.aggressiveness = (coach.aggressiveness - RATING_SCALE_MIN) / RATING_RANGE  # 0.0–1.0
     return plan
 
 
@@ -86,15 +88,17 @@ def generateDefensiveGameplan(coach, defenseTeam, offenseTeam) -> DefensiveGamep
     if coach is None:
         return plan
 
-    accuracy = coach.defensiveMind / 100.0
-    noise = (1.0 - accuracy) * 0.12
+    accuracy = (coach.defensiveMind - RATING_SCALE_MIN) / RATING_RANGE  # 0.0 at 60, 1.0 at 100
+    noise = (1.0 - accuracy) * 0.20
 
     # Evaluate opponent backfield vs. passing threat
     rb = getattr(offenseTeam, 'rosterDict', {}).get('rb', None)
     qb = getattr(offenseTeam, 'rosterDict', {}).get('qb', None)
 
-    rbThreat = (getattr(rb, 'playerRating', 50) if rb else 50) / 100.0
-    qbThreat = (getattr(qb, 'playerRating', 50) if qb else 50) / 100.0
+    rbRating = getattr(rb, 'playerRating', RATING_SCALE_MIN) if rb else RATING_SCALE_MIN
+    qbRating = getattr(qb, 'playerRating', RATING_SCALE_MIN) if qb else RATING_SCALE_MIN
+    rbThreat = (rbRating - RATING_SCALE_MIN) / RATING_RANGE  # 0.0–1.0
+    qbThreat = (qbRating - RATING_SCALE_MIN) / RATING_RANGE  # 0.0–1.0
 
     baseRunFocus = 0.5 + (rbThreat - qbThreat) * 0.3
     plan.runStopFocus = float(np.clip(
@@ -102,12 +106,13 @@ def generateDefensiveGameplan(coach, defenseTeam, offenseTeam) -> DefensiveGamep
         0.2, 0.8
     ))
 
+    aggrNorm = (coach.aggressiveness - RATING_SCALE_MIN) / RATING_RANGE  # 0.0–1.0
     plan.blitzFrequency = float(np.clip(
-        (coach.aggressiveness / 100.0) * 0.4 + float(np.random.normal(0, noise * 0.5)),
+        aggrNorm * 0.4 + float(np.random.normal(0, noise * 0.5)),
         0.05, 0.5
     ))
 
-    plan.aggressiveness = coach.aggressiveness / 100.0
+    plan.aggressiveness = aggrNorm
     return plan
 
 
@@ -162,12 +167,12 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
 
     # Blitz tendency (random draw each play)
     if _random.random() < blitz:
-        passRushMult += 0.25
-        passDefMult -= 0.20   # man coverage is weaker under blitz
+        passRushMult += 0.35
+        passDefMult -= 0.25   # man coverage is weaker under blitz
 
     # Apply base run/pass focus from gameplan
-    runDefMult += (runFocus - 0.5) * 0.30
-    passDefMult += (0.5 - runFocus) * 0.30
+    runDefMult += (runFocus - 0.5) * 0.50
+    passDefMult += (0.5 - runFocus) * 0.50
 
     return {
         'runDefMult': max(0.5, runDefMult),
@@ -192,7 +197,7 @@ def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict) -> N
     if coach is None or plan is None:
         return
 
-    adaptFactor = (coach.adaptability - 60) / 40.0   # 0.0 at rating 60, 1.0 at 100
+    adaptFactor = (coach.adaptability - RATING_SCALE_MIN) / RATING_RANGE  # 0.0 at 60, 1.0 at 100
 
     ypc = offStats['runYards'] / max(1, offStats['runPlays'])
     ypa = offStats['passYards'] / max(1, offStats['passAttempts'])
@@ -201,15 +206,15 @@ def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict) -> N
     runSignal = max(-1.0, min(1.0, (ypc - 4.0) / 4.0))
     passSignal = max(-1.0, min(1.0, (ypa - 6.0) / 6.0))
 
-    # Shift runPassRatio toward what worked; max shift ±0.15 at full adaptability
-    shift = (runSignal - passSignal) * adaptFactor * 0.15
+    # Shift runPassRatio toward what worked; max shift ±0.25 at full adaptability
+    shift = (runSignal - passSignal) * adaptFactor * 0.25
     plan.runPassRatio = float(np.clip(plan.runPassRatio + shift, 0.25, 0.75))
 
     # If run game was consistently stuffed, diversify away from the overused gap
     if ypc < 3.0 and offStats['runPlays'] >= 5 and adaptFactor > 0.25:
         overusedGap = max(plan.gapDistribution, key=plan.gapDistribution.get)
         newDist = dict(plan.gapDistribution)
-        redirectAmount = adaptFactor * 0.12
+        redirectAmount = adaptFactor * 0.18
         newDist[overusedGap] = max(0.20, newDist[overusedGap] - redirectAmount)
         others = [g for g in newDist if g != overusedGap]
         for g in others:
@@ -227,7 +232,7 @@ def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict) -
     if coach is None or plan is None:
         return
 
-    adaptFactor = (coach.adaptability - 60) / 40.0   # 0.0 at rating 60, 1.0 at 100
+    adaptFactor = (coach.adaptability - RATING_SCALE_MIN) / RATING_RANGE  # 0.0 at 60, 1.0 at 100
 
     oppYPC = oppOffStats['runYards'] / max(1, oppOffStats['runPlays'])
     oppYPA = oppOffStats['passYards'] / max(1, oppOffStats['passAttempts'])
@@ -236,9 +241,9 @@ def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict) -
     passThreat = max(-1.0, min(1.0, (oppYPA - 6.0) / 6.0))
 
     # Shift run/pass focus toward stopping what the opponent did well
-    focusShift = (runThreat - passThreat) * adaptFactor * 0.20
+    focusShift = (runThreat - passThreat) * adaptFactor * 0.30
     plan.runStopFocus = float(np.clip(plan.runStopFocus + focusShift, 0.20, 0.80))
 
     # Blitz more if opponent QB struggled, less if they thrived
-    blitzShift = -passThreat * adaptFactor * 0.10
+    blitzShift = -passThreat * adaptFactor * 0.15
     plan.blitzFrequency = float(np.clip(plan.blitzFrequency + blitzShift, 0.05, 0.50))

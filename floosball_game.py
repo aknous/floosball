@@ -1271,10 +1271,10 @@ class Game:
         self.broadcastGameState(includeLastPlay=False, eventMessage=timeoutEvent)
 
     def _runPassBias(self, gameplan) -> int:
-        """Map runPassRatio (0.25–0.75) to threshold offset (-2 to +2) for batched_randint(1,10)."""
+        """Map runPassRatio (0.25–0.75) to threshold offset (-4 to +4) for batched_randint(1,10)."""
         if gameplan is None:
             return 0
-        return round((gameplan.runPassRatio - 0.5) * 8)
+        return round((gameplan.runPassRatio - 0.5) * 16)
 
     def _estimateFgProbability(self):
         """Estimate FG make probability for the current field position and kicker."""

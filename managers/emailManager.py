@@ -40,6 +40,29 @@ def sendEmail(to: str, subject: str, html: str) -> bool:
         return False
 
 
+def sendAccessApprovedEmail(email: str) -> bool:
+    """Send a notification that beta access has been granted."""
+    subject = "You've been granted access to Floosball"
+    html = """
+    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
+        <h1 style="font-size: 24px; color: #e2e8f0; margin-bottom: 8px;">Welcome to Floosball</h1>
+        <p style="font-size: 16px; color: #94a3b8; line-height: 1.6;">
+            Your request to join the closed beta has been approved. You can now sign in and start playing.
+        </p>
+        <div style="background: #1e293b; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center;">
+            <a href="https://floosball.com" style="color: #3b82f6; font-size: 16px; font-weight: 600; text-decoration: none;">
+                Sign in to Floosball
+            </a>
+        </div>
+        <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
+        <p style="font-size: 11px; color: #475569;">
+            You're receiving this because you requested access to Floosball.
+        </p>
+    </div>
+    """
+    return sendEmail(email, subject, html)
+
+
 def sendPrizeNotification(email: str, rank: int, prize: int, context: str) -> bool:
     """Send a leaderboard prize email."""
     subject = f"You placed #{rank} — {context}"

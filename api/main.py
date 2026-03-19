@@ -1022,11 +1022,14 @@ async def get_season_info():
                         # Scheduled games count as active for display purposes
                         activeGameIds.append(game.id)
         
-        # Include next game start time when games haven't started yet
+        # Include next game start time when no games are actively running
         nextGameStartTime = None
-        gamesStarted = _areGamesStarted()
-        if not gamesStarted and not current_season.isComplete:
-            nextStart = season_mgr._cachedNextGameStart
+        hasActiveGames = any(
+            getattr(g, 'status', None) == FloosGame.GameStatus.Active
+            for g in (current_season.activeGames or [])
+        )
+        if not hasActiveGames and not current_season.isComplete:
+            nextStart = season_mgr.getNextGameStartTime(current_season.currentWeek)
             if nextStart:
                 nextGameStartTime = nextStart.isoformat() + 'Z'
 
@@ -1290,6 +1293,40 @@ async def admin_create_player(payload: Dict[str, Any], x_admin_password: Optiona
     return {"created": created, "unusedNamesRemaining": len(pm.unusedNames)}
 
 
+@app.post("/api/beta/request-access")
+async def request_beta_access(payload: Dict[str, Any]):
+    """Public endpoint — submit a request to join the closed beta."""
+    import re
+    email = (payload.get("email") or "").lower().strip()
+    if not email or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        raise HTTPException(status_code=400, detail="Valid email required")
+
+    from database.connection import get_session
+    from database.models import BetaAllowlist, BetaAccessRequest
+
+    session = get_session()
+    try:
+        # Already on allowlist
+        if session.query(BetaAllowlist).filter_by(email=email).first():
+            return {"status": "already_approved", "message": "This email already has access."}
+
+        # Already requested
+        existing = session.query(BetaAccessRequest).filter_by(email=email).first()
+        if existing:
+            return {"status": existing.status, "message": "Access request already submitted."}
+
+        request = BetaAccessRequest(email=email)
+        session.add(request)
+        session.commit()
+        logger.info(f"Beta access request from {email}")
+        return {"status": "pending", "message": "Request submitted."}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/admin/beta/allowlist")
 async def admin_get_beta_allowlist(x_admin_password: Optional[str] = Header(default=None)):
     """List all emails on the beta allowlist."""
@@ -1374,6 +1411,102 @@ async def admin_remove_beta_email(email: str, x_admin_password: Optional[str] = 
         session.close()
 
     return {"removed": email}
+
+
+@app.get("/api/admin/beta/requests")
+async def admin_get_beta_requests(x_admin_password: Optional[str] = Header(default=None)):
+    """List pending beta access requests."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import BetaAccessRequest
+
+    session = get_session()
+    try:
+        requests = session.query(BetaAccessRequest).filter_by(
+            status='pending'
+        ).order_by(BetaAccessRequest.requested_at.asc()).all()
+        return {
+            "requests": [
+                {
+                    "id": r.id,
+                    "email": r.email,
+                    "status": r.status,
+                    "requestedAt": r.requested_at.isoformat() if r.requested_at else None,
+                }
+                for r in requests
+            ]
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/admin/beta/requests/{requestId}/approve")
+async def admin_approve_beta_request(requestId: int, x_admin_password: Optional[str] = Header(default=None)):
+    """Approve a beta access request — adds email to allowlist and sends notification."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import BetaAccessRequest, BetaAllowlist
+    from managers.emailManager import sendAccessApprovedEmail
+
+    session = get_session()
+    try:
+        request = session.query(BetaAccessRequest).filter_by(id=requestId).first()
+        if not request:
+            raise HTTPException(status_code=404, detail="Request not found")
+        if request.status != 'pending':
+            raise HTTPException(status_code=400, detail=f"Request already {request.status}")
+
+        request.status = 'approved'
+        request.reviewed_at = datetime.utcnow()
+
+        # Add to allowlist if not already there
+        if not session.query(BetaAllowlist).filter_by(email=request.email).first():
+            session.add(BetaAllowlist(email=request.email))
+
+        session.commit()
+        logger.info(f"Beta access approved for {request.email}")
+
+        # Send notification email (non-blocking, failures are logged)
+        sendAccessApprovedEmail(request.email)
+
+        return {"email": request.email, "status": "approved"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/admin/beta/requests/{requestId}/deny")
+async def admin_deny_beta_request(requestId: int, x_admin_password: Optional[str] = Header(default=None)):
+    """Deny a beta access request."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import BetaAccessRequest
+
+    session = get_session()
+    try:
+        request = session.query(BetaAccessRequest).filter_by(id=requestId).first()
+        if not request:
+            raise HTTPException(status_code=404, detail="Request not found")
+        if request.status != 'pending':
+            raise HTTPException(status_code=400, detail=f"Request already {request.status}")
+
+        request.status = 'denied'
+        request.reviewed_at = datetime.utcnow()
+        session.commit()
+        logger.info(f"Beta access denied for {request.email}")
+
+        return {"email": request.email, "status": "denied"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 
 @app.get("/api/admin/users")

@@ -256,6 +256,11 @@ class SeasonManager:
             playerManager = self.serviceContainer.getService('player_manager')
             if playerManager:
                 playerManager.loadCurrentSeasonStats(self.currentSeason.seasonNumber)
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if fantasyTracker:
+                fantasyTracker.restoreWeekFP(
+                    self.currentSeason.seasonNumber, resumeFromWeek
+                )
             # Clean up orphaned game data from any interrupted week
             # (the next week will replay from scratch, generating new records)
             self._cleanupOrphanedWeekGames(
@@ -417,6 +422,12 @@ class SeasonManager:
             # Keep a reference so the API can still serve them until next week.
             self.currentSeason.completedWeekGames = self.currentSeason.activeGames
             self.currentSeason.activeGames = None
+
+            # Cache next game start time immediately so countdown is available
+            # before _onWeekComplete finishes its DB processing
+            nextStart = self.getNextGameStartTime(self.currentSeason.currentWeek)
+            if nextStart:
+                self._cachedNextGameStart = nextStart
 
             # Notify about week completion (for state saving)
             await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
@@ -1912,37 +1923,34 @@ class SeasonManager:
             gap = self.timingManager.scheduleGap
             return self._testScheduleAnchor + datetime.timedelta(seconds=week * gap)
 
-        dateNow = datetime.datetime.now()
-        dateNowUtc = datetime.datetime.utcnow()
-        if dateNow.day == dateNowUtc.day:
-            utcOffset = dateNowUtc.hour - dateNow.hour
-        elif dateNowUtc.day > dateNow.day:
-            utcOffset = (dateNowUtc.hour + 24) - dateNow.hour
-        elif dateNow.day > dateNowUtc.day:
-            utcOffset = dateNowUtc.hour - (dateNow.hour + 24)
+        from zoneinfo import ZoneInfo
 
+        etZone = ZoneInfo('America/New_York')
+
+        # Hours are in Eastern time
         startTimeHoursList = [12, 13, 14, 15, 16, 17, 18]
-        startTimeHour = startTimeHoursList[week % 7]
-        adjustedHour = (startTimeHour + utcOffset) % 24
 
         if week > 28:
             # Playoffs: anchored to season start date, all 4 rounds on day 4 (Fri).
             # Regular season uses days 0–3 (Mon–Thu).  Saturday is for offseason/FA.
-            # Round 1 → 12 PM, Round 2 → 1 PM, League Championship → 2 PM, Floos Bowl → 3 PM
+            # Round 1 → 12 PM ET, Round 2 → 1 PM ET, etc.
             playoffRound = week - 28  # 1-based: 1, 2, 3, 4
             playoffHours = {1: 12, 2: 13, 3: 14, 4: 15}
-            playoffHour = playoffHours.get(playoffRound, 12)
-            adjustedHour = (playoffHour + utcOffset) % 24
+            etHour = playoffHours.get(playoffRound, 12)
             seasonStart = self.currentSeason.startDate if self.currentSeason else now
             targetDate = (seasonStart + datetime.timedelta(days=4)).date()
         else:
             # Regular season: 28 rounds across 4 game days (7 rounds/day), anchored to
             # the season's actual start date instead of "next Thursday"
+            etHour = startTimeHoursList[week % 7]
             dayNumber = math.floor(week / 7)  # 0–3
             seasonStart = self.currentSeason.startDate if self.currentSeason else now
             targetDate = (seasonStart + datetime.timedelta(days=dayNumber)).date()
 
-        return datetime.datetime(targetDate.year, targetDate.month, targetDate.day, adjustedHour)
+        # Build Eastern datetime and convert to naive UTC
+        targetEt = datetime.datetime(targetDate.year, targetDate.month, targetDate.day, etHour, tzinfo=etZone)
+        targetUtc = targetEt.astimezone(datetime.timezone.utc)
+        return targetUtc.replace(tzinfo=None)
 
     def getNextGameStartTime(self, currentWeek: int) -> 'datetime.datetime | None':
         """Return the start time of the next week's games, or None if no next week.

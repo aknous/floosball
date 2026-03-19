@@ -688,6 +688,20 @@ class BetaAllowlist(Base):
         return f"<BetaAllowlist(email='{self.email}')>"
 
 
+class BetaAccessRequest(Base):
+    """Tracks requests from users who want access to the closed beta."""
+    __tablename__ = "beta_access_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), default='pending', nullable=False)  # pending | approved | denied
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<BetaAccessRequest(email='{self.email}', status='{self.status}')>"
+
+
 class UserNotification(Base):
     """In-app notifications for users (leaderboard prizes, team bonuses, etc.)."""
     __tablename__ = "user_notifications"
