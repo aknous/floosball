@@ -1303,11 +1303,12 @@ class Game:
             and self.offensiveTeam is self.otFirstPossTeam
         )
 
-        # High-probability FG (>80%) — kick immediately in sudden death or
-        # on the second team's possession, but on first possession only as
-        # a 4th-down fallback (play for TD on downs 1–3).
+        # High-probability FG (>80%) — kick immediately if it wins/takes lead.
+        # When a FG only ties (down by exactly 3) or it's the first possession,
+        # play for TD on downs 1–3 and only kick as a 4th-down fallback.
+        fgOnlyTies = (scoreDiff == -3)
         if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= 0.80:
-            if not isFirstPoss or self.down == 4:
+            if self.down == 4 or (not isFirstPoss and not fgOnlyTies):
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -4124,7 +4125,9 @@ class Game:
         Returns: {'home': float, 'away': float} percentages (0-100)
         """
         # Get total seconds remaining in game
-        if self.currentQuarter == 1:
+        if self.currentQuarter <= 0:
+            total_seconds = 3600  # Pre-game: full game remaining
+        elif self.currentQuarter == 1:
             total_seconds = self.gameClockSeconds + (3 * 900)  # Q1 + 3 more quarters
         elif self.currentQuarter == 2:
             total_seconds = self.gameClockSeconds + (2 * 900)  # Q2 + 2 more quarters

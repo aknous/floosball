@@ -420,6 +420,17 @@ class GameResponseBuilder(ResponseBuilder):
                 return 0.0 if side == 'home' else 100.0
             else:
                 return 50.0
+
+        # For scheduled games, recalculate from current team ELO — the stored
+        # value is stale (captured when the season schedule was generated).
+        isScheduled = hasattr(game.status, 'name') and game.status.name == 'Scheduled'
+        if isScheduled and hasattr(game, 'homeTeam') and hasattr(game, 'awayTeam'):
+            import math
+            homeElo = getattr(game.homeTeam, 'elo', 1500) or 1500
+            awayElo = getattr(game.awayTeam, 'elo', 1500) or 1500
+            homeWp = 100.0 / (1 + math.pow(10, (awayElo - homeElo) / 400))
+            return round(homeWp, 1) if side == 'home' else round(100.0 - homeWp, 1)
+
         storedWp = game.homeTeamWinProbability if side == 'home' else game.awayTeamWinProbability
         return round(storedWp, 1) if storedWp is not None else 50.0
 

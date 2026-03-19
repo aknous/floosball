@@ -335,6 +335,9 @@ class SeasonManager:
 
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
+                # Refresh ELO from current team values (stale since schedule creation)
+                self.currentSeason.activeGames[game].homeTeamElo = self.currentSeason.activeGames[game].homeTeam.elo
+                self.currentSeason.activeGames[game].awayTeamElo = self.currentSeason.activeGames[game].awayTeam.elo
                 self.currentSeason.activeGames[game].calculateWinProbability()
 
             # Add league highlight for week starting
@@ -349,15 +352,20 @@ class SeasonManager:
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
 
-            # Auto-lock all equipped cards and unlocked rosters at game start
+            # Auto-carry-forward equipped cards for all users, then lock
             try:
                 from database.connection import get_session as _getSession
                 from database.repositories.card_repositories import EquippedCardRepository
                 from database.models import FantasyRoster
                 lockSession = _getSession()
-                EquippedCardRepository(lockSession).lockAllForWeek(
-                    self.currentSeason.seasonNumber, self.currentSeason.currentWeek
-                )
+                seasonNum = self.currentSeason.seasonNumber
+                currentWeek = self.currentSeason.currentWeek
+                equippedRepo = EquippedCardRepository(lockSession)
+                if currentWeek > 1:
+                    self._carryForwardEquippedCards(
+                        lockSession, equippedRepo, seasonNum, currentWeek
+                    )
+                equippedRepo.lockAllForWeek(seasonNum, currentWeek)
                 # Auto-lock rosters that have all slots filled
                 tracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
                 unlocked = lockSession.query(FantasyRoster).filter_by(
@@ -786,6 +794,62 @@ class SeasonManager:
 
         # Broadcast final leaderboard with persisted card bonuses
         self._broadcastLeaderboardUpdate()
+
+    def _carryForwardEquippedCards(self, session, equippedRepo, season: int, currentWeek: int) -> None:
+        """Carry forward equipped cards from the most recent week for users who don't have any yet."""
+        from database.models import EquippedCard, UserCard, CardTemplate
+        from sqlalchemy import func
+
+        # Find users who already have rows for this week — skip them
+        usersWithRows = {
+            row[0] for row in
+            session.query(EquippedCard.user_id)
+            .filter_by(season=season, week=currentWeek)
+            .distinct()
+            .all()
+        }
+
+        # Find all users who had equipped cards in ANY previous week this season
+        allEquippedUsers = {
+            row[0] for row in
+            session.query(EquippedCard.user_id)
+            .filter(EquippedCard.season == season, EquippedCard.week < currentWeek)
+            .distinct()
+            .all()
+        }
+
+        needsCarry = allEquippedUsers - usersWithRows
+        if not needsCarry:
+            return
+
+        carried = 0
+        for userId in needsCarry:
+            # Find the most recent week with equipped cards
+            for lookback in range(currentWeek - 1, 0, -1):
+                prevEquipped = equippedRepo.getByUserWeek(userId, season, lookback)
+                if prevEquipped:
+                    for prev in prevEquipped:
+                        userCard = session.get(UserCard, prev.user_card_id)
+                        if not userCard:
+                            continue
+                        template = session.get(CardTemplate, userCard.card_template_id)
+                        if not template or template.season_created != season:
+                            continue
+                        prevStreak = getattr(prev, 'streak_count', 1) or 1
+                        equippedRepo.save(EquippedCard(
+                            user_id=userId,
+                            season=season,
+                            week=currentWeek,
+                            slot_number=prev.slot_number,
+                            user_card_id=prev.user_card_id,
+                            locked=False,
+                            streak_count=prevStreak,
+                        ))
+                    carried += 1
+                    break
+        if carried:
+            session.flush()
+            logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
 
     def _grantRosterSwaps(self, season: int) -> None:
         """Grant 1 swap to all locked rosters.

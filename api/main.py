@@ -2407,10 +2407,15 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
 
-    # Validate games not active
+    # Validate games not actively in progress (Scheduled games during countdown are OK)
     sm = floosball_app.seasonManager
     if sm.currentSeason and sm.currentSeason.activeGames:
-        raise HTTPException(status_code=409, detail="Cannot swap while games are active")
+        gamesInProgress = any(
+            hasattr(g, 'status') and hasattr(g.status, 'name') and g.status.name == 'Active'
+            for g in sm.currentSeason.activeGames
+        )
+        if gamesInProgress:
+            raise HTTPException(status_code=409, detail="Cannot swap while games are active")
 
     # Build valid slots — include FLEX if user has champion card or temp_flex power-up
     validSlots = set(_VALID_SLOTS)
@@ -3233,11 +3238,15 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         equippedRepo = EquippedCardRepository(session)
         equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
-        # Auto-carry forward: if no cards equipped this week, copy from previous week
+        # Auto-carry forward: if no cards equipped this week, find the most recent week that has them
         if not equipped and currentWeek > 1:
             # If games are active, lockWeek() already ran — auto-carried cards must also be locked
             gamesActive = _areGamesStarted()
-            prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek - 1)
+            prevEquipped = []
+            for lookback in range(currentWeek - 1, 0, -1):
+                prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, lookback)
+                if prevEquipped:
+                    break
             for prev in prevEquipped:
                 # Verify card still exists and is active season
                 userCard = session.get(UserCard, prev.user_card_id)
@@ -4119,8 +4128,9 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
              and t["targetPlayerId"] == req.targetPlayerId),
             {"votes": 1}
         )
-        threshold = GmManager.calculateThreshold(engagedFans, req.voteType)
-        probability = GmManager.calculateProbability(targetTally["votes"], threshold)
+        gm = GmManager(session)
+        threshold = gm.calculateThreshold(engagedFans, req.voteType)
+        probability = gm.calculateProbability(targetTally["votes"], threshold)
 
         return build_success_response({
             "voteId": vote.id,
@@ -4159,10 +4169,11 @@ def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
         engagedFans = voteRepo.getEngagedVoterCount(teamId, currentSeason)
 
         # Enrich with threshold/probability
+        gm = GmManager(session)
         enriched = []
         for t in tallies:
-            threshold = GmManager.calculateThreshold(engagedFans, t["voteType"])
-            probability = GmManager.calculateProbability(t["votes"], threshold)
+            threshold = gm.calculateThreshold(engagedFans, t["voteType"])
+            probability = gm.calculateProbability(t["votes"], threshold)
             enriched.append({
                 **t,
                 "threshold": threshold,
