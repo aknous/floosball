@@ -1029,7 +1029,11 @@ async def get_season_info():
             for g in (current_season.activeGames or [])
         )
         if not hasActiveGames and not current_season.isComplete:
-            nextStart = season_mgr.getNextGameStartTime(current_season.currentWeek)
+            # Prefer cached value: correctly set to current week's start (before games)
+            # or next week's start (after games complete)
+            nextStart = season_mgr._cachedNextGameStart
+            if not nextStart:
+                nextStart = season_mgr.getNextGameStartTime(current_season.currentWeek)
             if nextStart:
                 nextGameStartTime = nextStart.isoformat() + 'Z'
 
