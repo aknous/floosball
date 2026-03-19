@@ -261,6 +261,11 @@ class SeasonManager:
                 fantasyTracker.restoreWeekFP(
                     self.currentSeason.seasonNumber, resumeFromWeek
                 )
+            # Pre-set countdown cache so the API has the correct start time
+            # immediately (before the loop reaches the next week)
+            nextScheduleIdx = resumeFromWeek  # 0-indexed: schedule[N] = week N+1
+            if nextScheduleIdx < len(self.currentSeason.schedule):
+                self._cachedNextGameStart = self.currentSeason.schedule[nextScheduleIdx]['startTime']
             # Clean up orphaned game data from any interrupted week
             # (the next week will replay from scratch, generating new records)
             self._cleanupOrphanedWeekGames(
