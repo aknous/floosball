@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import os
 from logger_config import get_logger
@@ -711,7 +711,7 @@ async def get_current_games():
             game_dict = GameResponseBuilder.buildGameWithProbabilities(game)
             
             # Add current game state fields
-            game_dict['startTime'] = datetime.timestamp(game.startTime)
+            game_dict['startTime'] = game.startTime.replace(tzinfo=timezone.utc).timestamp()
             game_dict['status'] = game.status.name
             game_dict['isHalftime'] = game.isHalftime
             game_dict['isOvertime'] = game.isOvertime
@@ -797,7 +797,7 @@ async def get_game_by_id(game_id: int):
         game_dict = GameResponseBuilder.buildGameWithProbabilities(game)
         
         # Add current game state fields
-        game_dict['startTime'] = datetime.timestamp(game.startTime)
+        game_dict['startTime'] = game.startTime.replace(tzinfo=timezone.utc).timestamp()
         game_dict['status'] = game.status.name
         game_dict['isHalftime'] = game.isHalftime
         game_dict['isOvertime'] = game.isOvertime

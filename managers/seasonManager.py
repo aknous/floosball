@@ -151,6 +151,8 @@ class SeasonManager:
             self.setTimingMode(TimingMode.OFFSEASON_TEST)
         elif mode_str in ('catchup', 'catch-up'):
             self.setTimingMode(TimingMode.CATCHUP)
+        elif mode_str in ('fast-catchup', 'fast_catchup'):
+            self.setTimingMode(TimingMode.FAST_CATCHUP)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -172,9 +174,9 @@ class SeasonManager:
 
         # CATCHUP mode: backdate season start to last Monday so schedule anchors to the past
         from managers.timingManager import TimingMode, TimingManager
-        if self.timingManager.mode == TimingMode.CATCHUP:
+        if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
             self.currentSeason.startDate = TimingManager._lastMondayUtc(hour=11)
-            logger.info(f"CATCHUP mode: season start backdated to {self.currentSeason.startDate.isoformat()}")
+            logger.info(f"{self.timingManager.mode.value} mode: season start backdated to {self.currentSeason.startDate.isoformat()}")
 
         # Clear previous season data
         self._clearSeasonData()
@@ -195,6 +197,10 @@ class SeasonManager:
 
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
+
+        # Re-provision starter packs for users who lost them in a fresh start
+        # (users table is preserved but currency/cards are cleared)
+        self._reprovisionExistingUsers()
 
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
     
@@ -304,9 +310,9 @@ class SeasonManager:
                     logger.info(f"Week {self.currentSeason.currentWeek}: past scheduled time — entering catch-up mode")
                 elif not isBehindSchedule and self.timingManager.catchingUp:
                     logger.info(f"Week {self.currentSeason.currentWeek}: back on schedule — resuming normal timing")
-                    if self.timingManager.mode == TimingMode.CATCHUP:
-                        self.timingManager.mode = TimingMode.SCHEDULED
-                        logger.info("CATCHUP complete — switched to SCHEDULED mode")
+                    if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
+                        self.timingManager.setMode(TimingMode.SCHEDULED)
+                        logger.info(f"Catch-up complete — switched to SCHEDULED mode")
                 self.timingManager.catchingUp = isBehindSchedule
 
             # Cache the game start time so REST API returns a stable value on refresh
@@ -2751,6 +2757,30 @@ class SeasonManager:
 
         logger.info("Offseason activities complete")
     
+    def _reprovisionExistingUsers(self) -> None:
+        """Re-grant starter floobits and cards to existing users who lost them in a fresh start."""
+        try:
+            from database.connection import get_session
+            from database.models import User, UserCurrency
+            from api.auth import _provisionStarterPack
+            session = get_session()
+            usersWithoutCurrency = (
+                session.query(User)
+                .outerjoin(UserCurrency, User.id == UserCurrency.user_id)
+                .filter(UserCurrency.user_id.is_(None))
+                .all()
+            )
+            if not usersWithoutCurrency:
+                session.close()
+                return
+            for user in usersWithoutCurrency:
+                _provisionStarterPack(session, user)
+            session.commit()
+            session.close()
+            logger.info(f"Re-provisioned starter packs for {len(usersWithoutCurrency)} existing user(s)")
+        except Exception as e:
+            logger.warning(f"Could not re-provision starter packs: {e}")
+
     def _generateCardTemplates(self, seasonNumber: int) -> None:
         """Generate card templates for all active players for a season.
 

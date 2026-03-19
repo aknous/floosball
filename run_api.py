@@ -73,6 +73,8 @@ def _resolveTimingMode(modeStr: str) -> TimingMode:
         'offseason-test': TimingMode.OFFSEASON_TEST,
         'catchup': TimingMode.CATCHUP,
         'catch-up': TimingMode.CATCHUP,
+        'fast-catchup': TimingMode.FAST_CATCHUP,
+        'fast_catchup': TimingMode.FAST_CATCHUP,
     }
     return modeMap.get(modeStr, TimingMode.FAST)
 
@@ -118,6 +120,8 @@ def parse_args():
                 args['timing_mode'] = TimingMode.OFFSEASON_TEST
             elif mode_str in ('catchup', 'catch-up'):
                 args['timing_mode'] = TimingMode.CATCHUP
+            elif mode_str in ('fast-catchup', 'fast_catchup'):
+                args['timing_mode'] = TimingMode.FAST_CATCHUP
         elif arg in ['--timing-fast', '--fast']:
             args['timing_mode'] = TimingMode.FAST
         elif arg in ['--timing-turbo', '--turbo']:
@@ -134,6 +138,8 @@ def parse_args():
             args['timing_mode'] = TimingMode.OFFSEASON_TEST
         elif arg in ['--catchup', '--catch-up']:
             args['timing_mode'] = TimingMode.CATCHUP
+        elif arg == '--fast-catchup':
+            args['timing_mode'] = TimingMode.FAST_CATCHUP
         elif arg == '--fresh':
             args['fresh_start'] = True
         elif arg.startswith('--schedule-gap='):
