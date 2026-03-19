@@ -797,6 +797,7 @@ class TeamManager:
                     team.seasonTeamStats['streak'] = dbStats.streak or 0
                     team.seasonTeamStats['scoreDiff'] = dbStats.score_differential or 0
                     team.seasonTeamStats['elo'] = dbStats.elo or team.seasonTeamStats.get('elo', 1500)
+                    team.elo = team.seasonTeamStats['elo']
                     team.seasonTeamStats['madePlayoffs'] = dbStats.made_playoffs
                     if dbStats.offense_stats:
                         team.seasonTeamStats['Offense'].update(dbStats.offense_stats)

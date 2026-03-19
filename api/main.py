@@ -4099,10 +4099,10 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
             raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
 
-        # Escalating cost: base * 2^(votes already cast for this type)
+        # Escalating cost: base * 2^(votes already cast for this specific target)
         baseCost = GM_VOTE_COST[req.voteType]
-        typeCount = counts["perType"].get(req.voteType, 0)
-        cost = baseCost * (2 ** typeCount)
+        targetCount = counts["perTarget"].get(targetKey, 0)
+        cost = baseCost * (2 ** targetCount)
         currencyRepo = CurrencyRepository(session)
         result = currencyRepo.spendFunds(
             user.id, cost, "gm_vote",
