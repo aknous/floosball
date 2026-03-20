@@ -637,8 +637,8 @@ def runTimeoutTests():
                          clockRunning=False, homeTOs=3, awayTOs=2),
                 expectTimeout=False)
 
-    timeoutTest("Q4  trailing -7   2:30  2 TOs  running      → no TO (clock > 120 sec)",
-                makeGame(down=2, ytg=10, quarter=4, clock=150,
+    timeoutTest("Q4  trailing -7   6:00  2 TOs  running      → no TO (clock > 300 sec)",
+                makeGame(down=2, ytg=10, quarter=4, clock=360,
                          homeScore=14, awayScore=7, offIsHome=False,
                          clockRunning=True, homeTOs=3, awayTOs=2),
                 expectTimeout=False)
@@ -715,9 +715,9 @@ def runFourthDownTests():
                    PlayType.Punt)
 
     # Leading, in FG range, not Q4 → FG
-    fourthDownTest("Leading  +7  Q2  4th & 5  yte=28            → FG",
+    fourthDownTest("Leading  +7  Q2  4th & 5  yte=25            → FG",
                    makeGame(down=4, ytg=5, quarter=2, clock=400,
-                            homeScore=7, awayScore=0, yardsToEndzone=28),
+                            homeScore=7, awayScore=0, yardsToEndzone=25),
                    PlayType.FieldGoal)
 
     # Leading, in FG range, Q4 <5min → FG
@@ -743,10 +743,10 @@ def runFourthDownTests():
                             homeScore=0, awayScore=7, yardsToEndzone=45),
                    PlayType.Pass, 'medium')
 
-    fourthDownTest("Trailing -7  Q4  4th & 10  yte=45            → Pass/long",
-                   makeGame(down=4, ytg=10, quarter=4, clock=300,
+    fourthDownTest("Trailing -7  Q4  1:30  4th & 10  yte=45       → Pass/medium",
+                   makeGame(down=4, ytg=10, quarter=4, clock=90,
                             homeScore=0, awayScore=7, yardsToEndzone=45),
-                   PlayType.Pass, 'long')
+                   PlayType.Pass, 'medium')
 
     # Trailing Q4 deficit > 16, clock < 300 → always long
     fourthDownTest("Trailing -21  Q4  4:00  4th & 8  yte=45     → Pass/long (desperation)",
@@ -795,19 +795,19 @@ def runFourthDownTests():
                       homeScore=7, awayScore=0, yardsToEndzone=48,
                       offCoach=makeCoach(80, 80, 80)))
 
-    # Trailing, in FG range, yte 26-35, Q3 → 90% FG, 10% medium pass
-    probTest("Trailing -7  Q3  4th & 5  yte=30  (expect ~90% FG)",
+    # Trailing, in FG range, Q3 → 90% FG, 10% medium pass
+    probTest("Trailing -7  Q3  4th & 5  yte=25  (expect ~90% FG)",
              makeGame(down=4, ytg=5, quarter=3, clock=400,
-                      homeScore=0, awayScore=7, yardsToEndzone=30))
+                      homeScore=0, awayScore=7, yardsToEndzone=25))
 
-    # Even, yte 21-35, ytg > 2 → 85% FG, 15% medium pass
-    probTest("Even  Q2  4th & 5  yte=28  (expect ~85% FG)",
+    # Even, in FG range, ytg > 2 → 70% FG
+    probTest("Even  Q2  4th & 5  yte=25  (expect ~70% FG)",
              makeGame(down=4, ytg=5, quarter=2, clock=400,
-                      homeScore=0, awayScore=0, yardsToEndzone=28))
+                      homeScore=0, awayScore=0, yardsToEndzone=25))
 
-    # Trailing deficit ≤ 16, Q4 clock<480, ytg 4-8 → 80% medium, 20% punt
-    probTest("Trailing -10  Q4  7:30  4th & 7  yte=45  (expect ~80% Pass/medium)",
-             makeGame(down=4, ytg=7, quarter=4, clock=400,
+    # Trailing deficit ≤ 16, Q4 clock ≤ 300, ytg 4-8 → mostly medium pass
+    probTest("Trailing -10  Q4  4:30  4th & 7  yte=45  (expect ~60% Pass)",
+             makeGame(down=4, ytg=7, quarter=4, clock=270,
                       homeScore=0, awayScore=10, yardsToEndzone=45))
 
     print()

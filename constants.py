@@ -45,7 +45,7 @@ NORMALIZATION_FACTOR = 100
 # Game clock
 QUARTER_SECONDS = 900           # 15 minutes per quarter
 KNEEL_DRAIN_SECONDS = 40        # Clock seconds consumed by a kneel play
-SPIKE_CLOCK_THRESHOLD = 45      # Seconds remaining that triggers a spike consideration
+SPIKE_CLOCK_THRESHOLD = 120     # Seconds remaining that triggers a spike consideration
 TIMEOUT_CLOCK_THRESHOLD = 120   # Seconds remaining that triggers timeout / end-of-half FG logic
 
 # Field & scoring rules

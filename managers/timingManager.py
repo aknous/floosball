@@ -164,19 +164,24 @@ class TimingManager:
         return self.mode == TimingMode.FAST_CATCHUP and self.catchingUp
 
     async def waitForWeekStart(self, weekStartTime: datetime.datetime) -> None:
-        """Wait until week should start based on timing mode"""
+        """Wait until week should start based on timing mode.
+
+        In SCHEDULED mode the week begins 15 minutes before game time so
+        users still have time to view the previous week's results.
+        """
         if self._isFastCatchingUp:
             return
         if self._isScheduledMode:
-            # Wait for actual scheduled time
+            # Start the week 15 minutes before games kick off
+            weekRolloverTime = weekStartTime - datetime.timedelta(minutes=15)
             now = datetime.datetime.utcnow()
-            timeToStart = weekStartTime - now
+            timeToStart = weekRolloverTime - now
 
             if timeToStart.total_seconds() > 0:
-                logger.info(f"Waiting {timeToStart.total_seconds():.1f}s for scheduled week start")
+                logger.info(f"Waiting {timeToStart.total_seconds():.1f}s for scheduled week start (15 min before games)")
 
                 # Check periodically if it's time to start
-                while datetime.datetime.utcnow() < weekStartTime:
+                while datetime.datetime.utcnow() < weekRolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
 
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
@@ -239,9 +244,7 @@ class TimingManager:
         if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: post-week delay {self.delays['week_end_wait']}s")
             await asyncio.sleep(self.delays['week_end_wait'])
-        elif self._isScheduledMode:
-            # Shorter delay for scheduled mode since timing is handled by schedule
-            await asyncio.sleep(self.delays['week_end_wait'] / 4)
+        # SCHEDULED: no fixed delay — waitForWeekStart handles the 15-min pre-game buffer
 
     async def waitBetweenGames(self) -> None:
         """Wait between individual games"""

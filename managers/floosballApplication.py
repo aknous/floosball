@@ -246,17 +246,23 @@ class FloosballApplication:
             # Handle offseason
             await self.seasonManager.handleOffseason()
 
-            # Wait between seasons (SCHEDULED: polls until Monday; others: fixed delay)
-            await self.seasonManager.timingManager.waitBetweenSeasons()
-
-            # Update season counter
+            # Finalize season: increment counter and save all state immediately
+            # so a restart during the between-seasons wait doesn't replay the season.
             seasonsPlayed += 1
             gameState = self.serviceContainer.getService('game_state')
             gameState.setState('seasonsPlayed', seasonsPlayed)
-            
-            # Save state after each season
             await self._saveSeasonState()
-            
+            self._saveSimulationState(
+                current_season=seasonsPlayed + 1,
+                current_week=0,
+                in_playoffs=False,
+                total_seasons=totalSeasons,
+                is_active=True
+            )
+
+            # Wait between seasons (SCHEDULED: polls until Monday; others: fixed delay)
+            await self.seasonManager.timingManager.waitBetweenSeasons()
+
             # Move to next season
             self.seasonManager.advanceToNextSeason()
         

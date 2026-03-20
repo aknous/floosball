@@ -1176,32 +1176,59 @@ class Game:
             return 0.5
         return max(0.0, min(1.0, (coach.clockManagement - 60) / 40))
 
+    def _isGarbageTime(self, scoreDiff: int) -> bool:
+        """Check if the deficit is too large to realistically overcome.
+
+        When True, trailing teams should stop hurrying up, spiking, and
+        burning timeouts — the game is effectively decided.
+        """
+        if scoreDiff >= 0:
+            return False
+        deficit = abs(scoreDiff)
+        q = self.currentQuarter
+        if q <= 2:
+            return False  # first half — plenty of time
+        secs = self.gameClockSeconds
+        if q == 3:
+            return deficit > 35   # 5 TDs with a full quarter ahead
+        # Q4: scale by time remaining
+        if secs > 300:
+            return deficit > 28   # 4 TDs in 5+ min
+        if secs > 120:
+            return deficit > 21   # 3 TDs in 2-5 min
+        return deficit > 16       # 2+ scores in under 2 min
+
     def _shouldTargetSideline(self, scoreDiff: int, coach) -> bool:
         """Decide whether this pass should target the sideline to stop the clock.
 
         Only fires when trailing/tied in Q2 or Q4. Probability scales with
-        time urgency and coach clock management quality.
+        time urgency, timeout availability, and coach clock management quality.
         """
         if scoreDiff > 0 or self.currentQuarter not in (2, 4):
+            return False
+        if self._isGarbageTime(scoreDiff):
             return False
 
         clockIQ = self._coachClockIQ(coach)
         secs = self.gameClockSeconds
+        isHome = (self.offensiveTeam == self.homeTeam)
+        timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
+        noTimeouts = (timeoutsLeft == 0)
 
-        # Base probability by time urgency
-        if secs < 120:
-            baseProb = 0.70
+        # Base probability by time urgency — higher when no timeouts
+        if secs < 60:
+            baseProb = 0.85 if noTimeouts else 0.70
+        elif secs < 120:
+            baseProb = 0.75 if noTimeouts else 0.55
         elif secs < 300:
             baseProb = 0.40
         else:
             baseProb = 0.15
 
-        # Coach quality: bad coaches barely use sideline targeting
-        coachScale = 0.3 + 0.7 * clockIQ
+        # Coach quality: even bad coaches know to throw sideline when desperate
+        coachScale = 0.4 + 0.6 * clockIQ
 
-        # Reduce if team has timeouts available and plenty of time
-        isHome = (self.offensiveTeam == self.homeTeam)
-        timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
+        # Reduce if team has plenty of timeouts and time
         if timeoutsLeft >= 2 and secs > 120:
             baseProb *= 0.5
 
@@ -1227,11 +1254,16 @@ class Game:
         self.broadcastGameState(includeLastPlay=False, eventMessage=timeoutEvent)
 
     def _checkDefensiveTimeout(self):
-        """Defense calls timeout to stop the clock when trailing and the offense is milking clock."""
+        """Defense calls timeout to stop the clock when trailing and the offense is milking clock.
+
+        Q4: triggers up to 5 min out with urgency scaling; under 2 min uses original high-urgency logic.
+        Q2: triggers under 60 sec (moderate, end-of-half is less critical).
+        """
         if self.currentQuarter not in (2, 4):
             return
         if not self.clockRunning:
             return
+        secs = self.gameClockSeconds
         # Determine if the defensive team is trailing
         defIsHome = (self.defensiveTeam == self.homeTeam)
         defScore = self.homeScore if defIsHome else self.awayScore
@@ -1239,22 +1271,32 @@ class Game:
         if defScore >= offScore:
             return  # defense is winning or tied — no need
         deficit = offScore - defScore
-        # Don't waste timeouts in an unwinnable game.
-        # Under 60 sec: max 1 score (8 pts).  60-120 sec: max 2 scores (16 pts).
-        maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
-        if deficit > maxComebackPts:
+        # Don't waste timeouts in an unwinnable game
+        defScoreDiff = defScore - offScore  # negative when trailing
+        if self._isGarbageTime(defScoreDiff):
             return
         defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
         if defTimeouts <= 0:
             return
-        # Q4: under 2 min; Q2: under 30 sec (less aggressive at end of half)
-        threshold = TIMEOUT_CLOCK_THRESHOLD if self.currentQuarter == 4 else 30
-        if self.gameClockSeconds > threshold:
+        # Time window: Q4 up to 5 min; Q2 up to 60 sec
+        threshold = 300 if self.currentQuarter == 4 else 60
+        if secs > threshold:
             return
-        # Coach quality check — bad defensive coaches may not call timeout (floor 50%)
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
-        if _random.random() >= 0.5 + 0.5 * defGameIQ:
+        # Urgency-based timeout probability
+        if self.currentQuarter == 4 and secs <= TIMEOUT_CLOCK_THRESHOLD:
+            # Under 2 min: high urgency (original behavior)
+            toChance = 0.5 + 0.5 * defGameIQ
+        elif self.currentQuarter == 4:
+            # 2-5 min: scale by time urgency and deficit size
+            urgency = (300 - secs) / 180  # 0→1 as time decreases toward 2 min
+            deficitScale = min(1.0, deficit / 14)
+            toChance = urgency * deficitScale * (0.3 + 0.5 * defGameIQ)
+        else:
+            # Q2: moderate urgency
+            toChance = 0.4 + 0.4 * defGameIQ
+        if _random.random() >= toChance:
             return
         # Call timeout
         if defIsHome:
@@ -1397,11 +1439,14 @@ class Game:
         # Set sideline targeting for any pass plays called in this method
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
-        # Don't punt from own territory if trailing in Q4 under 60 sec — should go for it
-        # Bad coaches may still punt here (floor 50%)
+        # Deep own territory: default punt, but override if trailing late in Q4
+        # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
-            isLateGameDesperation = (self.currentQuarter == 4 and scoreDiff < 0
-                                     and self.gameClockSeconds < 60)
+            isLateGameDesperation = (
+                (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 150)
+                or (self.currentQuarter == 2 and scoreDiff <= 0
+                    and self.gameClockSeconds < 60 and self.yardsToSafety > 50)
+            )
             if not isLateGameDesperation:
                 self.play.playType = PlayType.Punt
                 return
@@ -1516,10 +1561,13 @@ class Game:
 
         elif scoreDiff < 0:
             deficit = abs(scoreDiff)
+            secs = self.gameClockSeconds
             if self.currentQuarter == 4:
-                # Under 60 sec trailing: should go for it, but bad coaches may punt
                 gameIQ = self._coachClockIQ(coach)
-                if self.gameClockSeconds < 60 and _random.random() < 0.5 + 0.5 * gameIQ:
+
+                # Under 2.5 min: must go for it — punting is conceding
+                if secs < 150:
+                    # Bad coaches may pick the wrong play tier, but they still go for it
                     if self.yardsToFirstDown <= 3:
                         self.play.passPlay(self._selectPassPlay('short'))
                     elif self.yardsToFirstDown <= 10:
@@ -1527,33 +1575,54 @@ class Game:
                     else:
                         self.play.passPlay(self._selectPassPlay('long'))
                     return
-                if deficit <= 8:
-                    if self.yardsToFirstDown <= 3:
-                        self.play.passPlay(self._selectPassPlay('short'))
-                        return
-                    elif self.yardsToFirstDown <= 8:
-                        self.play.passPlay(self._selectPassPlay('medium'))
-                        return
-                    else:
-                        self.play.passPlay(self._selectPassPlay('long'))
-                        return
-                elif deficit <= 16 and self.gameClockSeconds < 480:
-                    if self.yardsToFirstDown <= 3:
-                        self.play.passPlay(self._selectPassPlay('short'))
-                        return
-                    elif self.yardsToFirstDown <= 8:
-                        x = batched_randint(1, 10)
-                        if x <= 8:
+
+                # 2.5–5 min: go for it based on deficit and distance
+                if secs <= 300:
+                    if deficit <= 8:
+                        # Down 1 score: go for it on short/medium yardage
+                        if self.yardsToFirstDown <= 3:
+                            self.play.passPlay(self._selectPassPlay('short'))
+                            return
+                        elif self.yardsToFirstDown <= 8:
                             self.play.passPlay(self._selectPassPlay('medium'))
                             return
-                    else:
-                        x = batched_randint(1, 10)
-                        if x <= 6:
-                            self.play.passPlay(self._selectPassPlay('long'))
+                        else:
+                            # Long yardage: good coaches go for it, bad coaches punt
+                            if _random.random() < 0.3 + 0.5 * gameIQ:
+                                self.play.passPlay(self._selectPassPlay('long'))
+                                return
+                    elif deficit <= 16:
+                        if self.yardsToFirstDown <= 3:
+                            self.play.passPlay(self._selectPassPlay('short'))
                             return
-                elif deficit > 16 and self.gameClockSeconds < 300:
-                    self.play.passPlay(self._selectPassPlay('long'))
+                        elif self.yardsToFirstDown <= 5:
+                            if _random.random() < 0.5 + 0.3 * gameIQ:
+                                self.play.passPlay(self._selectPassPlay('medium'))
+                                return
+                        else:
+                            if _random.random() < 0.3 + 0.3 * gameIQ:
+                                self.play.passPlay(self._selectPassPlay('long'))
+                                return
+                    else:
+                        # Down 17+: always go for it
+                        self.play.passPlay(self._selectPassPlay('long'))
+                        return
+
+                # 5+ min: standard trailing behavior
+                if deficit <= 8 and self.yardsToFirstDown <= 2:
+                    self.play.passPlay(self._selectPassPlay('short'))
                     return
+
+            # Q2 two-minute drill: go for it past midfield with under 60 sec
+            elif self.currentQuarter == 2 and secs < 60 and self.yardsToSafety > 50:
+                if self.yardsToFirstDown <= 3:
+                    self.play.passPlay(self._selectPassPlay('short'))
+                elif self.yardsToFirstDown <= 10:
+                    self.play.passPlay(self._selectPassPlay('medium'))
+                else:
+                    self.play.passPlay(self._selectPassPlay('long'))
+                return
+
             elif self.currentQuarter == 3 and deficit <= 8 and self.yardsToFirstDown <= 2:
                 self.play.passPlay(self._selectPassPlay('short'))
                 return
@@ -1715,6 +1784,18 @@ class Game:
             weights['medium'] *= 1 + (1.2 - 1) * sit
             weights['long'] *= 1 + (1.4 - 1) * sit
 
+        # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
+        if q == 2 and scoreDiff < 0 and secs < 120:
+            weights['run'] *= 1 + (0.3 - 1) * sit        # cut runs significantly
+            weights['short'] *= 1 + (1.2 - 1) * sit      # slight short boost
+            weights['medium'] *= 1 + (1.4 - 1) * sit     # moderate medium boost
+            weights['long'] *= 1 + (1.6 - 1) * sit       # less extreme than Q4
+
+        # Q2 end-of-half: leading team milks clock into halftime
+        if q == 2 and scoreDiff > 0 and secs < 120:
+            weights['run'] *= 1 + (1.4 - 1) * sit        # run-heavy
+            weights['long'] *= 1 + (0.5 - 1) * sit       # avoid risky deep shots
+
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
             weights['run'] *= 1.3; weights['long'] *= 0.2
@@ -1855,20 +1936,37 @@ class Game:
                     elif _random.random() < 0.6 + 0.4 * gameIQ:
                         self.play.playType = PlayType.FieldGoal
                         return
-            # Spike: Q4 or Q2, clock running, no timeouts, trailing/tied, ≤45 sec
+            # Spike: Q2/Q4, clock running, no timeouts, trailing/tied
+            # Urgency scales with remaining time — almost always spike under 30s,
+            # less likely at 90s+ (sometimes better to just run a play)
+            secs = self.gameClockSeconds
             if (self.currentQuarter in (2, 4) and self.clockRunning
-                    and self.gameClockSeconds <= SPIKE_CLOCK_THRESHOLD
-                    and timeoutsLeft == 0 and scoreDiff <= 0):
-                # Bad coaches may fail to spike and just run a normal play (floor 50%)
-                if _random.random() < 0.5 + 0.5 * gameIQ:
+                    and secs <= SPIKE_CLOCK_THRESHOLD
+                    and timeoutsLeft == 0 and scoreDiff <= 0
+                    and not self._isGarbageTime(scoreDiff)):
+                if secs <= 30:
+                    spikeChance = 0.7 + 0.3 * gameIQ
+                else:
+                    spikeChance = (0.3 + 0.4 * gameIQ) * (1 - secs / 150)
+                if _random.random() < spikeChance:
                     self.play.spike()
                     return
-            # Call timeout (offense): Q4 or Q2, trailing/tied, clock running, timeouts available
+            # Call timeout (offense): trailing/tied, clock running, timeouts available
+            # Q4: expanded window to 5 min — urgency scales with deficit and time
+            # Q2: standard 2-min window
             if (self.currentQuarter in (2, 4) and scoreDiff <= 0 and self.clockRunning
-                    and timeoutsLeft > 0 and self.gameClockSeconds <= TIMEOUT_CLOCK_THRESHOLD):
-                # Bad coaches may forget to call timeout (floor 50%)
-                if _random.random() < 0.5 + 0.5 * gameIQ:
-                    self._callTimeout(isHome)
+                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
+                toWindow = 300 if self.currentQuarter == 4 else TIMEOUT_CLOCK_THRESHOLD
+                if secs <= toWindow:
+                    if secs <= TIMEOUT_CLOCK_THRESHOLD:
+                        # Under 2 min: high urgency (original behavior)
+                        toChance = 0.5 + 0.5 * gameIQ
+                    else:
+                        # 2-5 min (Q4 only): scale by deficit — bigger hole = more urgent
+                        deficitScale = min(1.0, abs(scoreDiff) / 16)
+                        toChance = (0.2 + 0.5 * gameIQ) * deficitScale
+                    if _random.random() < toChance:
+                        self._callTimeout(isHome)
                 # fall through — still need to call a play
 
         # Overtime
@@ -3823,18 +3921,24 @@ class Game:
             scoreDiff = self.awayScore - self.homeScore
         
         # Situational adjustments
-        if self.gameClockSeconds < 300 and scoreDiff < 0:  # Trailing with <5 min
+        secs = self.gameClockSeconds
+        q = self.currentQuarter
+        garbageTime = self._isGarbageTime(scoreDiff)
+
+        # Q4 (or Q2 end-of-half) trailing: hurry-up (skip if garbage time)
+        if q == 4 and secs < TIMEOUT_CLOCK_THRESHOLD and scoreDiff < 0 and not garbageTime:
+            baseTime = 12  # Fast tempo — under 2 min, must score
+        elif q == 2 and secs < TIMEOUT_CLOCK_THRESHOLD and scoreDiff < 0:
+            baseTime = 15  # Q2 end-of-half hurry-up (slightly less desperate)
+        elif (q >= 3) and secs < 300 and scoreDiff < 0 and not garbageTime:
             if scoreDiff <= -8:  # Down by 2+ scores
                 baseTime = 15  # Hurry-up offense
             else:
                 baseTime = 25  # Faster pace
-        elif self.gameClockSeconds < 300 and scoreDiff > 8:  # Winning by 2+ scores
+        elif secs < 300 and scoreDiff > 8:  # Winning by 2+ scores
             baseTime = 40  # Burn clock
-        elif self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD:  # Under 2 minutes
-            if scoreDiff < 0:  # Trailing
-                baseTime = 12  # Fast tempo
-            elif scoreDiff > 0:  # Leading
-                baseTime = 38  # Milk clock
+        elif secs < TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:  # Under 2 min, leading
+            baseTime = 38  # Milk clock
         
         # Add variance
         return baseTime + batched_randint(-3, 3)
