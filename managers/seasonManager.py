@@ -543,7 +543,10 @@ class SeasonManager:
                 else:
                     await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
 
-        # Reset catch-up flag after regular season completes
+        # Catch-up is done — switch to SCHEDULED so playoffs run at normal speed
+        if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
+            self.timingManager.setMode(TimingMode.SCHEDULED)
+            logger.info("Catch-up complete at end of regular season — switched to SCHEDULED mode")
         self.timingManager.catchingUp = False
 
     async def _simulatePlayoffs(self) -> None:
@@ -4294,6 +4297,12 @@ class SeasonManager:
             PICKEM_WEEKLY_TOP_PCT_PRIZE,
         )
 
+        # Display label: "Week 14" for regular season, playoff round name for weeks 29+
+        if week > 28:
+            weekLabel = self.currentSeason.currentWeekText or f'Playoffs Round {week - 28}'
+        else:
+            weekLabel = f'Week {week}'
+
         # Get the just-completed games
         completedGames = self.currentSeason.completedWeekGames
         if not completedGames:
@@ -4325,12 +4334,12 @@ class SeasonManager:
                     if reward > 0:
                         currencyRepo.addFunds(
                             userId, reward, 'pickem_correct',
-                            description=f'Week {week}: {totalPoints} pts ({correctCount}/{totalPicks} correct)',
+                            description=f'{weekLabel}: {totalPoints} pts ({correctCount}/{totalPicks} correct)',
                             season=season, week=week,
                         )
 
                     # 3. Notify each user
-                    title = f'Week {week} Prognostications'
+                    title = f'{weekLabel} Prognostications'
                     if isClairvoyant:
                         body = f'CLAIRVOYANT! {totalPoints} pts ({correctCount}/{totalPicks} correct) — +{reward} Floobits'
                     elif correctCount > 0:
@@ -4360,13 +4369,13 @@ class SeasonManager:
                         continue
                     currencyRepo.addFunds(
                         userId, prize, 'pickem_leaderboard_weekly',
-                        description=f'Week {week} Prognostications #{weekRank}',
+                        description=f'{weekLabel} Prognostications #{weekRank}',
                         season=season, week=week,
                     )
                     notifRepo.create(
                         userId, 'pickem_leaderboard_weekly',
-                        f'Week {week} Prognostications Leaderboard',
-                        f'You placed #{weekRank} on the Week {week} Prognostications leaderboard! +{prize} Floobits',
+                        f'{weekLabel} Prognostications Leaderboard',
+                        f'You placed #{weekRank} on the {weekLabel} Prognostications leaderboard! +{prize} Floobits',
                         data={'season': season, 'week': week, 'rank': weekRank, 'prize': prize},
                     )
                     logger.info(f"Pick-em weekly prize: user {userId} #{weekRank} = {prize} Floobits")

@@ -315,28 +315,33 @@ class TimingManager:
         return targetUtc.replace(tzinfo=None)
 
     async def waitForPlayoffRound(self, roundStartTime: 'datetime.datetime | None' = None) -> None:
-        """Wait between playoff rounds"""
+        """Wait between playoff rounds.
+        In SCHEDULED mode, rolls over 15 min early (like regular season) so
+        matchups are visible before kickoff."""
         if self._isFastCatchingUp:
             return
         if self._isScheduledMode and roundStartTime:
+            rolloverTime = roundStartTime - datetime.timedelta(minutes=15)
             now = datetime.datetime.utcnow()
-            if now < roundStartTime:
-                logger.info(f"Waiting {(roundStartTime - now).total_seconds():.1f}s for playoff round start")
-                while datetime.datetime.utcnow() < roundStartTime:
+            if now < rolloverTime:
+                logger.info(f"Waiting {(rolloverTime - now).total_seconds():.1f}s for playoff round rollover (15 min before start)")
+                while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: playoff round delay {self.delays['playoff_round']}s")
             await asyncio.sleep(self.delays['playoff_round'])
 
     async def waitForChampionship(self, roundStartTime: 'datetime.datetime | None' = None) -> None:
-        """Wait for championship game start"""
+        """Wait for championship game start.
+        In SCHEDULED mode, rolls over 15 min early so matchups are visible."""
         if self._isFastCatchingUp:
             return
         if self._isScheduledMode and roundStartTime:
+            rolloverTime = roundStartTime - datetime.timedelta(minutes=15)
             now = datetime.datetime.utcnow()
-            if now < roundStartTime:
-                logger.info(f"Waiting {(roundStartTime - now).total_seconds():.1f}s for championship start")
-                while datetime.datetime.utcnow() < roundStartTime:
+            if now < rolloverTime:
+                logger.info(f"Waiting {(rolloverTime - now).total_seconds():.1f}s for championship rollover (15 min before start)")
+                while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: championship delay {self.delays['championship']}s")
