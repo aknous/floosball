@@ -692,6 +692,10 @@ async def get_current_games():
                 teamLeagueName[team.id] = league.name
 
         for game in displayGames:
+            # All playoff games are inherently featured — skip the designation
+            if getattr(game, 'gameType', '') == 'playoff':
+                game.isFeatured = False
+                continue
             homeElo = getattr(game, 'homeTeamElo', getattr(game.homeTeam, 'elo', 1500))
             awayElo = getattr(game, 'awayTeamElo', getattr(game.awayTeam, 'elo', 1500))
             homePos = teamLeaguePos.get(game.homeTeam.id, 99)
@@ -4658,12 +4662,57 @@ def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
         return build_success_response({"season": 0, "week": 0, "games": [], "weekSummary": None})
 
     seasonNum = currentSeason.seasonNumber
-    week = currentSeason.currentWeek
+    week = sm._getPickemWeek()
     schedule = currentSeason.schedule
+    playoffRound = getattr(currentSeason, 'currentPlayoffRound', None)
 
-    # Build matchups from schedule
+    # Build matchups — during playoffs use activeGames/completedWeekGames directly
     weekGames = []
-    if isinstance(week, int) and 0 < week <= len(schedule):
+    if playoffRound:
+        displayGames = currentSeason.activeGames or currentSeason.completedWeekGames or []
+        for i, liveGame in enumerate(displayGames):
+            rawStatus = getattr(liveGame, 'status', None)
+            statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+
+            if statusVal == 3:
+                pickable = False
+                currentMultiplier = 0.0
+            elif statusVal == 2:
+                pickable = True
+                quarter = getattr(liveGame, 'currentQuarter', 1)
+                currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+            else:
+                pickable = True
+                currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
+            matchup = {
+                "gameIndex": i,
+                "homeTeam": {
+                    "id": liveGame.homeTeam.id,
+                    "name": liveGame.homeTeam.name,
+                    "abbr": liveGame.homeTeam.abbr,
+                    "color": liveGame.homeTeam.color,
+                    "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
+                    "elo": getattr(liveGame.homeTeam, 'elo', 1500),
+                },
+                "awayTeam": {
+                    "id": liveGame.awayTeam.id,
+                    "name": liveGame.awayTeam.name,
+                    "abbr": liveGame.awayTeam.abbr,
+                    "color": liveGame.awayTeam.color,
+                    "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
+                    "elo": getattr(liveGame.awayTeam, 'elo', 1500),
+                },
+                "userPick": None,
+                "pointsMultiplier": None,
+                "pickable": pickable,
+                "currentMultiplier": currentMultiplier,
+                "result": None,
+            }
+            if statusVal == 3 and getattr(liveGame, 'winningTeam', None):
+                matchup["result"] = {"winnerId": liveGame.winningTeam.id}
+            weekGames.append(matchup)
+    elif isinstance(week, int) and 0 < week <= len(schedule):
         scheduleGames = schedule[week - 1].get('games', [])
         activeGames = currentSeason.activeGames
         for i, game in enumerate(scheduleGames):
@@ -4753,9 +4802,12 @@ def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
         finally:
             session.close()
 
+    weekText = currentSeason.currentWeekText if playoffRound else f'Week {week}'
+
     return build_success_response({
         "season": seasonNum,
         "week": week,
+        "weekText": weekText,
         "games": weekGames,
         "weekSummary": weekSummary,
     })
@@ -4782,26 +4834,36 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         raise HTTPException(400, "No active season")
 
     seasonNum = currentSeason.seasonNumber
-    week = currentSeason.currentWeek
+    week = sm._getPickemWeek()
     schedule = currentSeason.schedule
+    playoffRound = getattr(currentSeason, 'currentPlayoffRound', None)
 
-    # If current week is done, accept picks for next week
-    if (currentSeason.completedWeekGames is not None
-            and isinstance(week, int)
-            and week + 1 <= len(schedule)):
-        week = week + 1
+    # Determine the list of games for validation
+    if playoffRound:
+        displayGames = currentSeason.activeGames or currentSeason.completedWeekGames or []
+        if gameIndex < 0 or gameIndex >= len(displayGames):
+            raise HTTPException(400, f"Invalid gameIndex: {gameIndex}")
+        liveGame = displayGames[gameIndex]
+        totalGames = len(displayGames)
+    else:
+        # If current week is done, accept picks for next week
+        if (currentSeason.completedWeekGames is not None
+                and isinstance(week, int)
+                and week + 1 <= len(schedule)):
+            week = week + 1
 
-    # Validate gameIndex
-    if week < 1 or week > len(schedule):
-        raise HTTPException(400, "No games this week")
-    scheduleGames = schedule[week - 1].get('games', [])
-    if gameIndex < 0 or gameIndex >= len(scheduleGames):
-        raise HTTPException(400, f"Invalid gameIndex: {gameIndex}")
+        # Validate gameIndex
+        if week < 1 or week > len(schedule):
+            raise HTTPException(400, "No games this week")
+        scheduleGames = schedule[week - 1].get('games', [])
+        if gameIndex < 0 or gameIndex >= len(scheduleGames):
+            raise HTTPException(400, f"Invalid gameIndex: {gameIndex}")
 
-    game = scheduleGames[gameIndex]
-    # Also check activeGames for live state
-    activeGames = currentSeason.activeGames
-    liveGame = activeGames[gameIndex] if activeGames and gameIndex < len(activeGames) else game
+        game = scheduleGames[gameIndex]
+        # Also check activeGames for live state
+        activeGames = currentSeason.activeGames
+        liveGame = activeGames[gameIndex] if activeGames and gameIndex < len(activeGames) else game
+        totalGames = len(scheduleGames)
 
     # Per-game lock: only Final games are unpickable
     rawStatus = getattr(liveGame, 'status', None)
@@ -4817,8 +4879,8 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         # Scheduled (pre-game) — full multiplier
         pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
 
-    homeTeamId = game.homeTeam.id
-    awayTeamId = game.awayTeam.id
+    homeTeamId = liveGame.homeTeam.id
+    awayTeamId = liveGame.awayTeam.id
 
     if pickedTeamId not in (homeTeamId, awayTeamId):
         raise HTTPException(400, "pickedTeamId must be home or away team")
@@ -4843,7 +4905,7 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
                 "pickedTeamId": pick.picked_team_id,
                 "pointsMultiplier": pick.points_multiplier,
             },
-            "weekProgress": {"picked": len(allPicks), "total": len(scheduleGames)},
+            "weekProgress": {"picked": len(allPicks), "total": totalGames},
         })
     except ValueError as e:
         session.rollback()
@@ -4868,7 +4930,7 @@ def get_pickem_leaderboard(season: Optional[int] = None):
         return build_success_response({"season": {"entries": []}, "week": {"week": 0, "entries": []}})
 
     seasonNum = season if season is not None else currentSeason.seasonNumber
-    week = currentSeason.currentWeek
+    week = sm._getPickemWeek()
 
     from sqlalchemy import func
     from database.connection import get_session

@@ -240,12 +240,15 @@ class SeasonManager:
         self._processEndOfRegularSeason()
 
         # Award fantasy season prizes now (before playoffs) so users see final results
-        logger.info("Awarding season-end fantasy & pick-em prizes")
+        logger.info("Awarding season-end fantasy prizes")
         self._awardSeasonEndPrizes(self.currentSeason.seasonNumber)
-        self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
 
-        # Simulate playoffs
+        # Simulate playoffs (pick-em continues through playoffs)
         await self._simulatePlayoffs()
+
+        # Award pick-em season prizes after playoffs so all rounds are included
+        logger.info("Awarding pick-em season prizes")
+        self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
         
         # Close game stats file
         self._closeGameStatsFile()
@@ -2316,7 +2319,7 @@ class SeasonManager:
                         newGame.isRegularSeasonGame = False
                         newGame.calculateWinProbability()
                         gamesList.append(newGame)
-                        playoffGamesTasks.append(self._simulatePlayoffGame(newGame))
+                        playoffGamesTasks.append(self._simulatePlayoffGame(newGame, len(playoffGamesTasks)))
                         newGame.leagueHighlights = self.currentSeason.leagueHighlights
                         hiSeed += 1
                         lowSeed -= 1
@@ -2331,7 +2334,6 @@ class SeasonManager:
                 else:
                     self.currentWeek = 'Playoffs Round {}'.format(x+1)
                     self.currentWeekText = 'Playoffs Round {}'.format(x+1)
-                await self.timingManager.waitForPlayoffRound(roundStartTime)
             else:
                 floosbowlTeams = []
                 for league in self.leagueManager.leagues:
@@ -2340,7 +2342,7 @@ class SeasonManager:
                     team.leagueChampion = True
                 list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
                 newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1], timingManager=self.timingManager)
-                
+
                 # Assign unique integer ID and metadata
                 self._gameIdCounter += 1
                 newGame.id = self._gameIdCounter
@@ -2348,36 +2350,48 @@ class SeasonManager:
                 newGame.playoffRound = currentRound
                 newGame.gameNumber = gameNumber
                 newGame.gameType = 'playoff'
-                
+
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.startTime = roundStartTime
                 newGame.isRegularSeasonGame = False
                 newGame.calculateWinProbability()
                 playoffGamesList.append(newGame)
-                playoffGamesTasks.append(self._simulatePlayoffGame(newGame))
+                playoffGamesTasks.append(self._simulatePlayoffGame(newGame, 0))
                 newGame.leagueHighlights = self.currentSeason.leagueHighlights
                 self.currentWeek = 'Floos Bowl'
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
-                await self.timingManager.waitForChampionship(roundStartTime)
 
+            # Track playoff round so pick-em can use virtual week numbers (29+)
+            self.currentSeason.currentPlayoffRound = currentRound
+
+            # Update season state and broadcast BEFORE waiting, so matchups
+            # are visible during the countdown (especially overnight gaps)
             self.currentSeason.activeGames = playoffGamesList
-            self.currentSeason.completedWeekGames = None  # Clear previous round's finished games
+            self.currentSeason.completedWeekGames = None
             self.currentSeason.currentWeekText = self.currentWeekText
             self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
+            self._cachedNextGameStart = roundStartTime
 
-            # Games are about to start — clear cached countdown
-            self._cachedNextGameStart = None
-
-            # Broadcast playoff round start so the frontend updates the week label
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                nextStartIso = roundStartTime.isoformat() + 'Z' if roundStartTime else None
                 await broadcaster.broadcast_season_event(SeasonEvent.weekStart(
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=28 + currentRound,
                     games=[],
                     weekText=self.currentWeekText,
+                    nextGameStartTime=nextStartIso,
                 ))
+
+            # Wait for game time
+            if x < numOfRounds - 1:
+                await self.timingManager.waitForPlayoffRound(roundStartTime)
+            else:
+                await self.timingManager.waitForChampionship(roundStartTime)
+
+            # Games are about to start — clear cached countdown
+            self._cachedNextGameStart = None
 
             # Lock equipped cards for playoff week
             try:
@@ -2415,6 +2429,9 @@ class SeasonManager:
             # Keep a reference so the API can still serve them until next round.
             self.currentSeason.completedWeekGames = self.currentSeason.activeGames
             self.currentSeason.activeGames = None
+
+            # Resolve pick-em weekly prizes for this playoff round
+            self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
@@ -2516,7 +2533,7 @@ class SeasonManager:
                     broadcaster.broadcast_sync('season', weekEndEvent)
             
     
-    async def _simulatePlayoffGame(self, game: FloosGame.Game) -> None:
+    async def _simulatePlayoffGame(self, game: FloosGame.Game, gameIndex: int = -1) -> None:
         """Simulate a single playoff game"""
 
         try:
@@ -2577,7 +2594,11 @@ class SeasonManager:
             # Check for records
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
-            
+
+            # Resolve pick-em picks for this playoff game
+            if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):
+                self._resolvePickEmGame(gameIndex, gameInstance)
+
         except Exception as e:
             logger.error(f"Error simulating playoff game: {e}")
             return None
@@ -4229,10 +4250,19 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _getPickemWeek(self) -> int:
+        """Return the effective week number for pick-em storage.
+        Regular season: currentWeek (1-28). Playoffs: 28 + playoffRound (29-32)."""
+        playoffRound = getattr(self.currentSeason, 'currentPlayoffRound', None)
+        if playoffRound:
+            return 28 + playoffRound
+        week = self.currentSeason.currentWeek
+        return week if isinstance(week, int) else 0
+
     def _resolvePickEmGame(self, gameIndex: int, game) -> None:
         """Resolve pick-em picks for a single game immediately when it ends."""
         season = self.currentSeason.seasonNumber
-        week = self.currentSeason.currentWeek
+        week = self._getPickemWeek()
         winner = getattr(game, 'winningTeam', None)
         if winner is None:
             return
