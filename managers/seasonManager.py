@@ -233,6 +233,11 @@ class SeasonManager:
         # End-of-regular-season cleanup (unequip cards, etc.)
         self._processEndOfRegularSeason()
 
+        # Award fantasy season prizes now (before playoffs) so users see final results
+        logger.info("Awarding season-end fantasy & pick-em prizes")
+        self._awardSeasonEndPrizes(self.currentSeason.seasonNumber)
+        self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
+
         # Simulate playoffs
         await self._simulatePlayoffs()
         
@@ -261,7 +266,7 @@ class SeasonManager:
                 teamManager.loadSeasonTeamStats(self.currentSeason.seasonNumber)
             playerManager = self.serviceContainer.getService('player_manager')
             if playerManager:
-                playerManager.loadCurrentSeasonStats(self.currentSeason.seasonNumber)
+                playerManager.loadCurrentSeasonStats(self.currentSeason.seasonNumber, currentWeek=resumeFromWeek)
             fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
             if fantasyTracker:
                 fantasyTracker.restoreWeekFP(
@@ -342,7 +347,7 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 )
                 broadcaster.broadcast_sync('season', week_event)
-            weekSetupTime = weekStartTime - datetime.timedelta(minutes=10)
+            weekSetupTime = weekStartTime - datetime.timedelta(minutes=15)
             self.currentSeason.activeGames = week['games']
             self.currentSeason.completedWeekGames = None  # Clear previous week's finished games
 
@@ -2610,12 +2615,9 @@ class SeasonManager:
             self.currentSeason.currentWeek = 'Offseason'
             self.currentSeason.currentWeekText = 'Offseason'
 
-        # STEP 0: Award season-end prizes immediately after Floosbowl
-        # Users receive Floobits before the FA window so they can spend them on ballots
-        logger.info("Step 0: Awarding season-end prizes")
+        # Season-end prizes already awarded at end of regular season (before playoffs).
+        # Process user season transitions (All-Pro grants, etc.)
         self._processUserSeasonTransitions()
-        self._awardSeasonEndPrizes(self.currentSeason.seasonNumber)
-        self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
 
         # Wait for offseason timing (5 min in scheduled mode)
         await self.timingManager.waitForOffseason()
@@ -3729,11 +3731,16 @@ class SeasonManager:
         self.currentSeason.mvp = mvpResult
         logger.info(f"Season {self.currentSeason.seasonNumber} MVP: {mvpResult['name']} ({mvpResult['position']}, {mvpResult['team']}) — z-score: {mvpResult['zScore']}")
 
-        # Broadcast MVP announcement
-        if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and SeasonEvent:
-            await broadcaster.broadcast_season_event(
-                SeasonEvent.mvpAnnouncement(mvpResult, self.currentSeason.seasonNumber)
-            )
+        # Add to league highlight feed and broadcast
+        mvpText = f"Season {self.currentSeason.seasonNumber} MVP: {mvpResult['name']} ({mvpResult['position']}, {mvpResult['team']})"
+        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': mvpText}})
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            if LeagueNewsEvent:
+                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(mvpText))
+            if SeasonEvent:
+                await broadcaster.broadcast_season_event(
+                    SeasonEvent.mvpAnnouncement(mvpResult, self.currentSeason.seasonNumber)
+                )
 
     # ─── Season Transition ──────────────────────────────────────────────────────
 
@@ -4124,6 +4131,16 @@ class SeasonManager:
             session = get_session()
             try:
                 currencyRepo = CurrencyRepository(session)
+
+                # Idempotency: skip if already awarded for this season
+                from database.models import CurrencyTransaction
+                alreadyAwarded = session.query(CurrencyTransaction.id).filter_by(
+                    transaction_type='leaderboard_season', season=completedSeason
+                ).first()
+                if alreadyAwarded:
+                    logger.info(f"Season {completedSeason} fantasy prizes already awarded — skipping")
+                    session.close()
+                    return
                 from database.repositories.notification_repository import NotificationRepository
                 notifRepo = NotificationRepository(session)
 
@@ -4358,6 +4375,16 @@ class SeasonManager:
 
             session = get_session()
             try:
+                # Idempotency: skip if already awarded for this season
+                from database.models import CurrencyTransaction
+                alreadyAwarded = session.query(CurrencyTransaction.id).filter_by(
+                    transaction_type='pickem_leaderboard_season', season=completedSeason
+                ).first()
+                if alreadyAwarded:
+                    logger.info(f"Season {completedSeason} pick-em prizes already awarded — skipping")
+                    session.close()
+                    return
+
                 pickemRepo = PickEmRepository(session)
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)

@@ -1016,7 +1016,7 @@ class PlayerManager:
             'activeKs': len(self.activeKs)
         }
     
-    def loadCurrentSeasonStats(self, seasonNumber: int) -> None:
+    def loadCurrentSeasonStats(self, seasonNumber: int, currentWeek: int = 28) -> None:
         """Restore player.seasonStatsDict from PlayerSeasonStats DB rows for an in-progress season.
 
         Called on mid-season resume so the simulation picks up with correct per-player
@@ -1044,11 +1044,17 @@ class PlayerManager:
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
                 }
+                # Restore the direct gamesPlayed attribute used by MVP/All-Pro eligibility
+                player.gamesPlayed = row.games_played or 0
                 # Keep StatTracker pointing at the restored dict so stats accumulated
                 # during subsequent games go to the right place.
                 player.stat_tracker.season_stats_dict = player.seasonStatsDict
                 restored += 1
             logger.info(f"Restored season {seasonNumber} stats for {restored} players")
+            # Recompute seasonPerformanceRating from restored stats so MVP/All-Pro
+            # selection works correctly on resume.
+            if restored > 0:
+                self.calculatePerformanceRatings(currentWeek=currentWeek)
         except Exception as e:
             logger.error(f"Failed to restore player season stats: {e}")
 
@@ -1303,7 +1309,7 @@ class PlayerManager:
                                 player_id=player.id,
                                 season=current_season,
                                 team_id=player.teamId if hasattr(player, 'teamId') else None,
-                                games_played=season_dict.get('gamesPlayed', 0),
+                                games_played=getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0),
                                 fantasy_points=season_dict.get('fantasyPoints', 0),
                                 # Denormalized passing stats
                                 passing_yards=s_passing.get('yards', 0),
@@ -1333,7 +1339,7 @@ class PlayerManager:
                             self.db_session.add(db_season_stats)
                         else:
                             db_season_stats.team_id = player.teamId if hasattr(player, 'teamId') else None
-                            db_season_stats.games_played = season_dict.get('gamesPlayed', 0)
+                            db_season_stats.games_played = getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0)
                             db_season_stats.fantasy_points = season_dict.get('fantasyPoints', 0)
                             # Update denormalized passing stats
                             db_season_stats.passing_yards = s_passing.get('yards', 0)
@@ -1589,7 +1595,6 @@ class PlayerManager:
         
         # QB Performance Rating System
         activeQbsWithStats = [qb for qb in self.activeQbs if qb.seasonStatsDict.get('passing', {}).get('yards', 0) > 0]
-        
         if activeQbsWithStats:
             def _pass(qb, key):
                 return qb.seasonStatsDict.get('passing', {}).get(key, 0)
@@ -2006,7 +2011,7 @@ class PlayerManager:
 
         return ratings
 
-    def _computeMvpCandidates(self, minGamesPlayed: int = 10) -> List[Dict[str, Any]]:
+    def _computeMvpCandidates(self) -> List[Dict[str, Any]]:
         """Compute MVP scores using pooled-std z-scores of performance rating.
 
         Each position uses its own mean (comparing within peers) but all
@@ -2035,7 +2040,7 @@ class PlayerManager:
         for position, players in positionGroups.items():
             eligible = [p for p in players
                         if getattr(p, 'seasonPerformanceRating', 0) > 0
-                        and getattr(p, 'gamesPlayed', 0) >= minGamesPlayed]
+                        and hasattr(p, 'team') and p.team != 'Free Agent']
             if len(eligible) < 2:
                 continue
             ratings = [p.seasonPerformanceRating for p in eligible]
@@ -2074,18 +2079,18 @@ class PlayerManager:
         candidates.sort(key=lambda x: x['zScore'], reverse=True)
         return candidates
 
-    def selectMVP(self, minGamesPlayed: int = 10) -> Optional[Dict[str, Any]]:
+    def selectMVP(self) -> Optional[Dict[str, Any]]:
         """Select the MVP — the candidate with the highest z-score."""
-        candidates = self._computeMvpCandidates(minGamesPlayed)
+        candidates = self._computeMvpCandidates()
         if not candidates:
             return None
         mvp = dict(candidates[0])
         mvp.pop('player', None)
         return mvp
 
-    def getMvpRankings(self, limit: int = 10, minGamesPlayed: int = 1) -> List[Dict[str, Any]]:
+    def getMvpRankings(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get top MVP candidates ranked by z-score for the dashboard."""
-        candidates = self._computeMvpCandidates(minGamesPlayed)
+        candidates = self._computeMvpCandidates()
         results = []
         for rank, c in enumerate(candidates[:limit], 1):
             entry = dict(c)
