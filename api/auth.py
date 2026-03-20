@@ -40,6 +40,17 @@ _USERNAME_FIRSTS = [
     "Leftover", "Recalled", "Overtime", "Scrambled", "Knockoff",
     "Secondhand", "Unhinged", "Bedazzled", "Municipal", "Decoy",
     "Tactical", "Offshore", "Bootcamp", "Clearance",
+    # Expanded II
+    "Counterfeit", "Derelict", "Makeshift", "Undercover", "Stranded",
+    "Smoked", "Grizzled", "Smuggled", "Mothballed", "Prototype",
+    "Generic", "Irregular", "Drafted", "Rebooted", "Cardboard",
+    "Corduroy", "Thermos", "Turnip", "Custard", "Sourdough",
+    "Burlap", "Disputed", "Dormant", "Stealthy", "Pilfered",
+    "Fossilized", "Misplaced", "Nomadic", "Freelance", "Ransacked",
+    "Fugitive", "Sketchy", "Crooked", "Placebo", "Decaf",
+    "Standby", "Borrowed", "Stray", "Rented", "Botched",
+    "Crunchy", "Soggy", "Tepid", "Stuffy", "Musty",
+    "Gnarled", "Wobbly", "Janky", "Clunky", "Grimy",
 ]
 
 _USERNAME_LASTS = [
@@ -63,6 +74,17 @@ _USERNAME_LASTS = [
     "Lollygag", "Monkeyshine", "Noodleberg", "Fumblerooski",
     "Puddinpop", "Scuttlebutt", "Slapstick", "Butterfumble",
     "Trampoline", "Collywobble", "Boondoggle", "Whodunnit",
+    # Expanded II
+    "Crankshaw", "Mudflap", "Thudsworth", "Bonkerton", "Plunkett",
+    "Grumbleton", "Stumpton", "Crumbles", "Clodhopper", "Turnbuckle",
+    "Hogwash", "Codswallop", "Balderdash", "Poppycock", "Flimflam",
+    "Riffraff", "Skullduggery", "Chicanery", "Treachery", "Quibble",
+    "Shambles", "Bungle", "Fumbles", "Bloopers", "Guffaw",
+    "Snafu", "Hootenanny", "Ruckus", "Fracas", "Hubbub",
+    "Mudslinger", "Dropkick", "Brickhouse", "Sledgehammer", "Anvil",
+    "Crowbar", "Pickaxe", "Sandbag", "Haymaker", "Uppercut",
+    "Corkscrew", "Wrenchford", "Crankshaft", "Sprocket", "Gasket",
+    "Gearbox", "Camshaft", "Flywheel", "Axlegrease", "Dipstick",
 ]
 
 

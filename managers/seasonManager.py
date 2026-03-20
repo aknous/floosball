@@ -189,6 +189,9 @@ class SeasonManager:
                 scheduleLoaded = self._loadScheduleFromDatabase(seasonNumber)
                 if not scheduleLoaded:
                     logger.warning("Schedule load from database failed — falling back to fresh generation")
+                else:
+                    # Restore the original startDate so playoff scheduling aligns
+                    self._restoreSeasonStartDate(seasonNumber)
         if not scheduleLoaded:
             self.createSchedule()
         
@@ -202,8 +205,11 @@ class SeasonManager:
         # (users table is preserved but currency/cards are cleared)
         self._reprovisionExistingUsers()
 
+        # Persist season record early so startDate survives restarts
+        self._saveSeasonToDatabase()
+
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
-    
+
     async def runSeasonSimulation(self, resumeFromWeek: int = 0) -> None:
         """Run full season simulation.
 
@@ -228,7 +234,7 @@ class SeasonManager:
 
         # Select MVP and All-Pro based on regular season performance
         await self._selectSeasonMVP()
-        self._selectSeasonAllPro()
+        await self._selectSeasonAllPro()
 
         # End-of-regular-season cleanup (unequip cards, etc.)
         self._processEndOfRegularSeason()
@@ -1928,6 +1934,18 @@ class SeasonManager:
         self.currentSeason.schedule = [weekMap[w] for w in sorted(weekMap)]
         logger.info(f"Loaded {len(rows)} games ({len(weekMap)} weeks) from DB for season {seasonNumber}")
         return True
+
+    def _restoreSeasonStartDate(self, seasonNumber: int) -> None:
+        """Restore startDate from the DB so playoff/week scheduling stays anchored
+        to the original season start rather than the current restart time."""
+        try:
+            from database.models import Season as DBSeason
+            dbSeason = self.db_session.query(DBSeason).filter_by(season_number=seasonNumber).first()
+            if dbSeason and dbSeason.start_date:
+                self.currentSeason.startDate = dbSeason.start_date
+                logger.info(f"Restored season start date from DB: {dbSeason.start_date.isoformat()}")
+        except Exception as e:
+            logger.warning(f"Could not restore season start date: {e}")
 
     def getWeekStartTime(self, now:datetime.datetime, week:int):
         from managers.timingManager import TimingMode
@@ -4427,7 +4445,7 @@ class SeasonManager:
 
     # ─── Awards ────────────────────────────────────────────────────────────────
 
-    def _selectSeasonAllPro(self) -> None:
+    async def _selectSeasonAllPro(self) -> None:
         """Select All-Pro players — top performer at each position from the current season."""
         candidates = self.playerManager._computeMvpCandidates()
         if not candidates:
@@ -4435,6 +4453,7 @@ class SeasonManager:
             return
 
         # Group by position, take the top candidate per position
+        positionOrder = ['QB', 'RB', 'WR', 'TE', 'K']
         bestByPosition: dict = {}
         for c in candidates:
             pos = c['position']
@@ -4442,10 +4461,30 @@ class SeasonManager:
                 bestByPosition[pos] = c
 
         allProIds = {c['id'] for c in bestByPosition.values()}
-        allProNames = [f"{c['name']} ({c['position']})" for c in bestByPosition.values()]
-
         self.currentSeason.allProPlayerIds = allProIds
+
+        # Build broadcast-safe list (no player objects), ordered by position
+        allProList = []
+        for pos in positionOrder:
+            if pos in bestByPosition:
+                entry = dict(bestByPosition[pos])
+                entry.pop('player', None)
+                allProList.append(entry)
+        self.currentSeason.allPro = allProList
+
+        allProNames = [f"{c['name']} ({c['position']})" for c in allProList]
         logger.info(f"Season {self.currentSeason.seasonNumber} All-Pro: {', '.join(allProNames)}")
+
+        # Add to league highlight feed and broadcast
+        allProText = f"Season {self.currentSeason.seasonNumber} All-Pro Team: {', '.join(allProNames)}"
+        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': allProText}})
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            if LeagueNewsEvent:
+                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(allProText))
+            if SeasonEvent:
+                await broadcaster.broadcast_season_event(
+                    SeasonEvent.allProAnnouncement(allProList, self.currentSeason.seasonNumber)
+                )
     
     def _updateStandings(self) -> None:
         """Update league standings"""

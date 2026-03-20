@@ -1046,6 +1046,7 @@ async def get_season_info():
             'completed_games': completedGameIds,
             'champion': TeamResponseBuilder.buildBasicTeamDict(current_season.champion) if current_season.champion else None,
             'mvp': current_season.mvp if hasattr(current_season, 'mvp') and current_season.mvp else None,
+            'allPro': current_season.allPro if hasattr(current_season, 'allPro') and current_season.allPro else None,
             'next_game_start_time': nextGameStartTime,
         })
     
@@ -4869,6 +4870,12 @@ def get_pickem_leaderboard(season: Optional[int] = None):
     seasonNum = season if season is not None else currentSeason.seasonNumber
     week = currentSeason.currentWeek
 
+    from sqlalchemy import func
+    from database.connection import get_session
+    from database.repositories.pickem_repository import PickEmRepository
+    from database.models import User, PickEmPick
+    session = get_session()
+
     # For the weekly leaderboard: if games aren't active AND the current week
     # has no resolved picks, show the most recent completed week so results
     # don't disappear between weeks. (When games just finished but the week
@@ -4882,11 +4889,6 @@ def get_pickem_leaderboard(season: Optional[int] = None):
         ).scalar()
         if currentWeekResolved == 0:
             weeklyWeek = week - 1
-
-    from database.connection import get_session
-    from database.repositories.pickem_repository import PickEmRepository
-    from database.models import User
-    session = get_session()
     try:
         pickemRepo = PickEmRepository(session)
 
