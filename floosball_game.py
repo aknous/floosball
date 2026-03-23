@@ -32,7 +32,7 @@ from constants import (
     RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER, FIELD_LENGTH,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
-    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_REASONABLE_RATIO, YARDS_TO_FIRST_DOWN,
+    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_MIN_ATTEMPT_PROB, YARDS_TO_FIRST_DOWN,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     RECEIVER_MATCHUP_SCALE,
@@ -115,58 +115,82 @@ class PlayResult(enum.Enum):
     Interception = 'Interception'
 
 
-shortRunList =  [
-                    'runs',
-                    'dives',
-                    'dashes',
-                    'plunges',
-                    'powers ahead',
-                    'squeezes through',
-                    'churns ahead',
-                    'falls forward',
-                    'fights for',
-                    'sneaks through',
-                    'punches it through',
-                    'muscles ahead',
+# ── Inside run descriptions (A-gap, B-gap) ──
+shortRunInsideList = [
+                    'dives up the middle for',
+                    'plunges inside for',
+                    'powers ahead for',
+                    'squeezes through the line for',
+                    'churns ahead for',
+                    'falls forward for',
+                    'fights through traffic for',
+                    'punches it inside for',
+                    'muscles up the gut for',
+                    'pushes through the pile for',
                 ]
 
-midRunList =    [
-                    'runs',
-                    'races',
-                    'rumbles',
-                    'breaks through',
-                    'busts through',
-                    'powers through',
-                    'cuts through',
-                    'slices through',
-                    'barrels through',
-                    'plows through',
-                    'grinds for',
-                    'charges for',
-                    'bounces outside for',
-                    'finds a crease for',
+midRunInsideList = [
+                    'runs up the middle for',
+                    'barrels through the line for',
+                    'powers through the gap for',
+                    'plows through the middle for',
+                    'grinds up the gut for',
+                    'charges through the line for',
+                    'finds a crease inside for',
                     'threads the gap for',
+                    'slices through the line for',
+                    'rumbles through the middle for',
+                    'busts through the line for',
                     'drags defenders for',
                 ]
 
-longRunList =   [
-                    'runs',
-                    'streaks',
-                    'explodes',
-                    'sprints',
-                    'races',
-                    'breaks out',
-                    'busts out',
-                    'breaks free for',
-                    'rips off',
-                    'blazes through for',
-                    'gallops for',
-                    'goes untouched for',
-                    'turns on the jets for',
-                    'hits the open field for',
-                    'bolts for',
-                    'takes off for',
-                    'outruns the defense for',
+longRunInsideList = [
+                    'explodes through the line for',
+                    'bursts through the middle for',
+                    'breaks through the pile for',
+                    'goes untouched up the gut for',
+                    'rips through the line for',
+                    'blazes through the middle for',
+                    'hits a huge hole for',
+                    'gallops through the line for',
+                    'takes off through the gap for',
+                ]
+
+# ── Outside run descriptions (C-gap, bounce) ──
+shortRunOutsideList = [
+                    'runs off tackle for',
+                    'dashes outside for',
+                    'cuts to the edge for',
+                    'sneaks around the end for',
+                    'gets to the corner for',
+                    'squeezes outside for',
+                    'fights to the edge for',
+                    'turns the corner for',
+                ]
+
+midRunOutsideList = [
+                    'bounces outside for',
+                    'races to the edge for',
+                    'cuts outside for',
+                    'sweeps around the end for',
+                    'breaks to the outside for',
+                    'turns the corner for',
+                    'gets to the sideline for',
+                    'slips outside for',
+                    'runs wide for',
+                    'beats the edge for',
+                ]
+
+longRunOutsideList = [
+                    'breaks free around the edge for',
+                    'sprints to the outside for',
+                    'races down the sideline for',
+                    'turns the corner and takes off for',
+                    'outruns the defense to the edge for',
+                    'streaks down the sideline for',
+                    'explodes around the end for',
+                    'hits the open field outside for',
+                    'bolts to the sideline for',
                 ]
 
 lossRunList =   [
@@ -364,12 +388,16 @@ interceptionList = [
                 ]
 
 # Throw away — args: (passer.name,)
-throwAwayList = [
-                    '{} throws the ball away, incomplete',
+throwAwayPressureList = [
                     '{} senses pressure and throws it away',
+                    '{} escapes pressure and dumps it out of bounds',
+                    '{} throws it away under duress',
+                ]
+throwAwayCoverageList = [
+                    '{} throws the ball away, incomplete',
                     '{} can\'t find anyone, throws it out of bounds',
                     '{} discards it, incomplete',
-                    '{} escapes pressure and dumps it out of bounds',
+                    '{} finds no one open, throws it away',
                 ]
 
 passPlayBook = {
@@ -1331,12 +1359,51 @@ class Game:
             fgProb = min(0.96, fgProb + 0.10)
         return max(0.05, min(0.96, fgProb))
 
+    def _coachFgThreshold(self, coach):
+        """Compute the minimum FG probability a coach requires before attempting.
+
+        Aggressive coaches tolerate lower probabilities (attempt longer FGs).
+        Conservative coaches demand higher confidence before sending the kicker out.
+        The kicker's in-game performance also shifts the threshold — recent misses
+        make coaches more cautious, while a perfect day builds trust.
+        """
+        baseThreshold = FG_MIN_ATTEMPT_PROB  # 0.20
+
+        # ── Coach aggressiveness ──
+        # aggrNorm: -1 (conservative) to +1 (aggressive)
+        aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+        # Aggressive: lowers threshold (will try longer FGs)
+        # Conservative: raises threshold (wants higher confidence)
+        aggrShift = aggrNorm * 0.08
+        threshold = baseThreshold - aggrShift
+
+        # ── Kicker in-game performance ──
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker:
+            kStats = kicker.gameStatsDict.get('kicking', {})
+            att = kStats.get('fgAtt', 0)
+            made = kStats.get('fgs', 0)
+            misses = att - made
+            if att > 0:
+                if misses > 0:
+                    # Each miss raises the threshold — coach loses trust
+                    # Scaled so 1 miss = +0.04, 2 misses = +0.07, 3+ = +0.09
+                    perfPenalty = min(0.09, misses * 0.04 - (misses - 1) * 0.005)
+                    threshold += perfPenalty
+                elif made >= 2:
+                    # Perfect day with 2+ makes — coach trusts the kicker more
+                    perfBonus = min(0.04, made * 0.015)
+                    threshold -= perfBonus
+
+        return max(0.10, min(0.35, threshold))
+
     def _otPlayCaller(self, scoreDiff: int):
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
+        coach = getattr(self.offensiveTeam, 'coach', None)
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
-        fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
         fgProb = self._estimateFgProbability()
+        fgThreshold = self._coachFgThreshold(coach)
 
         # First OT possession: a FG doesn't win — the other team gets a
         # guaranteed possession to respond. Play for TD on early downs.
@@ -1355,9 +1422,8 @@ class Game:
                 return
 
         if self.down == 4:
-            reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
-            # Kick FG on 4th if in reasonable range and it ties or wins
-            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
+            # Kick FG on 4th if probability is reasonable and it ties or wins
+            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= fgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -1402,23 +1468,21 @@ class Game:
                     return
 
         # Downs 1–3 in OT
-        coach = getattr(self.offensiveTeam, 'coach', None)
         targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
         # Tied and in FG range: consider kicking now or playing conservatively.
         # On first possession, a FG just gives the opponent a chance to respond —
         # push for TD instead of settling for 3.
-        reasonableFg = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
-        fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
-        inFgRange = self.yardsToEndzone <= kickerMaxFg and fgDist <= reasonableFg
+        inFgRange = self.yardsToEndzone <= kickerMaxFg and fgProb >= fgThreshold
         if scoreDiff == 0 and inFgRange:
             if isFirstPoss:
                 # First possession — play aggressively for TD, protect ball
                 weights = {'run': 40.0, 'short': 30.0, 'medium': 25.0, 'long': 5.0}
+                self.play.insights['_otWeights'] = weights
                 self._executeWeightedPlay(weights, targetSideline=targetSideline)
                 return
-            # How easy is this FG? 1.0 = chip shot, 0.0 = at max range
-            fgEase = max(0.0, (reasonableFg - fgDist) / reasonableFg) if reasonableFg > 0 else 0.0
+            # How easy is this FG? Use probability directly (0.96 = chip shot, threshold = max range)
+            fgEase = max(0.0, (fgProb - fgThreshold) / (0.96 - fgThreshold))
             clockIQ = self._coachClockIQ(coach)
             # Chance to kick FG now — scales with proximity, down, and coach IQ
             downBase = {1: 0.05, 2: 0.15, 3: 0.40}.get(self.down, 0.05)
@@ -1428,10 +1492,12 @@ class Game:
                 return
             # Otherwise play conservatively — runs and short passes to protect the ball
             weights = {'run': 55.0, 'short': 30.0, 'medium': 15.0, 'long': 0.0}
+            self.play.insights['_otWeights'] = weights
             self._executeWeightedPlay(weights, targetSideline=targetSideline)
             return
 
         weights = self._computePlayWeights(scoreDiff, coach)
+        self.play.insights['_otWeights'] = weights
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
@@ -1450,23 +1516,39 @@ class Game:
             if not isLateGameDesperation:
                 self.play.playType = PlayType.Punt
                 return
-            gameIQ = self._coachClockIQ(coach)
-            if _random.random() >= 0.5 + 0.5 * gameIQ:
-                # Bad coach punts in desperation — terrible decision
-                self.play.playType = PlayType.Punt
-                return
+            # Under 60 seconds trailing: NEVER punt — no time to get ball back
+            if not (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 60):
+                gameIQ = self._coachClockIQ(coach)
+                if _random.random() >= 0.5 + 0.5 * gameIQ:
+                    # Bad coach punts in desperation — terrible decision
+                    self.play.playType = PlayType.Punt
+                    return
 
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerMaxDistance = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
-        reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
-        fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
-        inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgDistance <= reasonableMax
+        fgProb = self._estimateFgProbability()
+        fgThreshold = self._coachFgThreshold(coach)
+        inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold
 
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
         goForItThreshold = max(1, min(9, round(4 + aggrNorm * 3)))
 
+        # ── Record 4th down context ──
+        self.play.insights['fourthDown'] = {
+            'fgProbability': round(fgProb * 100, 1),
+            'fgThreshold': round(fgThreshold * 100, 1),
+            'inFgRange': inFieldGoalRange,
+            'goForItThreshold': goForItThreshold,
+            'yardsToEndzone': self.yardsToEndzone,
+            'coachAggr': coach.aggressiveness if coach else None,
+        }
+
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
+                # Leading with little time: burn clock, don't risk a FG miss
+                if self.gameClockSeconds <= 40:
+                    self.play.kneel()
+                    return
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
                     self.play.playType = PlayType.FieldGoal
                     return
@@ -1481,7 +1563,18 @@ class Game:
             if inFieldGoalRange and self.yardsToEndzone <= 35:
                 self.play.playType = PlayType.FieldGoal
                 return
-            if self.yardsToFirstDown == 1 and self.yardsToSafety > 45:
+            # Deep in opponent territory: go for it on short yardage instead of punting
+            if self.yardsToEndzone <= 40 and self.yardsToFirstDown <= 3:
+                # Inside 40: almost always go for it on 4th and short
+                threshold = max(1, min(9, round(6 + aggrNorm * 3)))
+                x = batched_randint(1, 10)
+                if x <= threshold:
+                    if self.yardsToFirstDown <= 1:
+                        self.play.runPlay()
+                    else:
+                        self.play.passPlay(self._selectPassPlay('short'))
+                    return
+            elif self.yardsToFirstDown <= 1 and self.yardsToSafety > 45:
                 x = batched_randint(1, 10)
                 if x <= max(1, min(9, round(3 + aggrNorm * 3))):
                     self.play.runPlay()
@@ -1718,6 +1811,28 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
 
+    def _getBasePlayWeights(self) -> dict:
+        """Return raw down/distance base weights before any modifier layers."""
+        ytg = self.yardsToFirstDown
+        if self.down == 1:
+            return {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 15.0}
+        elif self.down == 2:
+            if ytg <= 4:
+                return {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0}
+            elif ytg <= 9:
+                return {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 15.0}
+            else:
+                return {'run': 20.0, 'short': 20.0, 'medium': 30.0, 'long': 30.0}
+        else:
+            if ytg <= 3:
+                return {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0}
+            elif ytg <= 5:
+                return {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0}
+            elif ytg <= 12:
+                return {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 25.0}
+            else:
+                return {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 70.0}
+
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""
         ytg = self.yardsToFirstDown
@@ -1884,21 +1999,46 @@ class Game:
 
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
-        play = _random.choices(
+        playCall = _random.choices(
             ['run', 'short', 'medium', 'long'],
             weights=[weights['run'], weights['short'], weights['medium'], weights['long']]
         )[0]
-        if play == 'run':
+
+        self.play.insights['playCall'] = playCall
+
+        if playCall == 'run':
             self.play.runPlay()
         else:
             self.play.targetSideline = targetSideline
-            self.play.passPlay(self._selectPassPlay(play))
+            self.play.passPlay(self._selectPassPlay(playCall))
 
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
         coach = getattr(self.offensiveTeam, 'coach', None)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
+
+        # ── Record situation insights (all play types) ──
+        self.play.insights['situation'] = {
+            'gamePressure': round(self.gamePressure),
+            'momentum': round(self.momentum, 1),
+            'momentumTeam': (self.homeTeam.abbr if self.momentum > MOMENTUM_DISPLAY_THRESHOLD
+                             else self.awayTeam.abbr if self.momentum < -MOMENTUM_DISPLAY_THRESHOLD
+                             else None),
+            'offenseAbbr': self.offensiveTeam.abbr,
+        }
+
+        # ── Snapshot pre-play composure for all potential key players ──
+        prePlayComposure = {}
+        roster = self.offensiveTeam.rosterDict
+        for pos in ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']:
+            p = roster.get(pos)
+            if p:
+                prePlayComposure[id(p)] = {
+                    'confidence': round(p.gameAttributes.confidenceModifier, 3),
+                    'determination': round(p.gameAttributes.determinationModifier, 3),
+                }
+        self.play.insights['_prePlayComposure'] = prePlayComposure
 
         # Clock management — evaluated before any play selection on downs 1-3
         if self.down <= 3:
@@ -1915,6 +2055,13 @@ class Game:
                 freeKneels = availableKneels - toadKneels
                 drainableSeconds = toadKneels * 4 + freeKneels * KNEEL_DRAIN_SECONDS
                 if drainableSeconds >= self.gameClockSeconds:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'kneel',
+                        'reason': 'Can drain remaining clock with kneels',
+                        'clockRemaining': self.gameClockSeconds,
+                        'drainableSeconds': drainableSeconds,
+                        'oppTimeouts': oppTimeouts,
+                    }
                     self.play.kneel()
                     return
             # Coach game-management quality gates all situational decisions below.
@@ -1927,13 +2074,20 @@ class Game:
                     and self.gameClockSeconds <= 30):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
-                reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
-                fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
+                despFgProb = self._estimateFgProbability()
                 if self.yardsToEndzone <= kickerMax:
-                    # Only attempt very long FGs if there's truly no time for another play
-                    if fgDistance > reasonableMax and self.gameClockSeconds > 8:
+                    # Low-probability long FG: try to get closer if time allows
+                    despThreshold = self._coachFgThreshold(coach)
+                    if despFgProb < despThreshold and self.gameClockSeconds > 8:
                         pass  # Skip — try to get closer first
                     elif _random.random() < 0.6 + 0.4 * gameIQ:
+                        self.play.insights['clockMgmt'] = {
+                            'decision': 'desperationFG',
+                            'reason': 'Trailing by 3 or less, little time left',
+                            'clockRemaining': self.gameClockSeconds,
+                            'fgProbability': round(despFgProb * 100, 1),
+                            'coachClockIQ': round(gameIQ, 2),
+                        }
                         self.play.playType = PlayType.FieldGoal
                         return
             # Spike: Q2/Q4, clock running, no timeouts, trailing/tied
@@ -1949,6 +2103,13 @@ class Game:
                 else:
                     spikeChance = (0.3 + 0.4 * gameIQ) * (1 - secs / 150)
                 if _random.random() < spikeChance:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'spike',
+                        'reason': 'Stop clock, no timeouts available',
+                        'clockRemaining': secs,
+                        'spikeChance': round(spikeChance * 100, 1),
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
                     self.play.spike()
                     return
             # Call timeout (offense): trailing/tied, clock running, timeouts available
@@ -1966,41 +2127,134 @@ class Game:
                         deficitScale = min(1.0, abs(scoreDiff) / 16)
                         toChance = (0.2 + 0.5 * gameIQ) * deficitScale
                     if _random.random() < toChance:
+                        self.play.insights['clockMgmt'] = {
+                            'decision': 'timeout',
+                            'reason': 'Stop clock while trailing/tied',
+                            'clockRemaining': secs,
+                            'timeoutsLeft': timeoutsLeft,
+                            'coachClockIQ': round(gameIQ, 2),
+                        }
                         self._callTimeout(isHome)
                 # fall through — still need to call a play
 
         # Overtime
         if self.currentQuarter == 5:
             self._otPlayCaller(scoreDiff)
+            # Record coach insights for OT (situation + composure already recorded above)
+            otWeights = self.play.insights.pop('_otWeights', None)
+            targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+            coachInsights = {
+                'coachAggr': coach.aggressiveness if coach else None,
+                'coachOffMind': coach.offensiveMind if coach else None,
+                'coachAdapt': coach.adaptability if coach else None,
+                'clockIQ': round(self._coachClockIQ(coach), 2),
+                'targetSideline': targetSideline,
+                'isOvertime': True,
+                'isSecondHalf': True,
+                'offenseAbbr': self.offensiveTeam.abbr,
+                'defenseAbbr': self.defensiveTeam.abbr,
+            }
+            if otWeights:
+                otTotal = sum(otWeights.values())
+                coachInsights['playWeights'] = {k: round(v / otTotal * 100) for k, v in otWeights.items()} if otTotal > 0 else otWeights
+            offPlan = self.homeOffGameplan if isHome else self.awayOffGameplan
+            defPlan = self.awayDefGameplan if isHome else self.homeDefGameplan
+            if offPlan is not None:
+                coachInsights['gameplan'] = {
+                    'runPassRatio': round(offPlan.runPassRatio, 2),
+                    'gapDistribution': {k: round(v * 100) for k, v in offPlan.gapDistribution.items()},
+                    'aggressiveness': round(offPlan.aggressiveness, 2),
+                }
+            if defPlan is not None:
+                defCoach = getattr(self.defensiveTeam, 'coach', None)
+                coachInsights['oppDefense'] = {
+                    'runStopFocus': round(defPlan.runStopFocus, 2),
+                    'blitzFrequency': round(defPlan.blitzFrequency, 2),
+                    'aggressiveness': round(defPlan.aggressiveness, 2),
+                    'coachDefMind': defCoach.defensiveMind if defCoach else None,
+                    'coachAdapt': defCoach.adaptability if defCoach else None,
+                    'coachAggr': defCoach.aggressiveness if defCoach else None,
+                }
+            self.play.insights['coach'] = coachInsights
             return
 
         # End-of-half / end-of-game FG attempts — compute kicker range once
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
 
-        # End-of-half FG attempt (only if reasonable distance)
-        reasonableMax = round(kicker.maxFgDistance * FG_REASONABLE_RATIO) if kicker else 0
+        # End-of-half FG attempt (only if reasonable probability)
+        endGameFgProb = self._estimateFgProbability()
+        endGameFgThreshold = self._coachFgThreshold(coach)
         if self.currentQuarter == 2 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
-            fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
-            if self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
+            if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
 
         # End-of-game FG attempt (tied, leading by ≤3, or trailing by ≤3)
         if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
-            fgDistance = self.yardsToEndzone + FG_SNAP_DISTANCE
-            if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and fgDistance <= reasonableMax:
+            if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
 
         # 4th down
         if self.down == 4:
             self._fourthDownCaller(scoreDiff, coach, isHome)
+            # Record decision after the fact
+            if 'fourthDown' in self.play.insights:
+                pt = self.play.playType
+                if pt == PlayType.Punt:
+                    decision = 'punt'
+                elif pt == PlayType.FieldGoal:
+                    decision = 'fieldGoal'
+                else:
+                    decision = 'goForIt'
+                self.play.insights['fourthDown']['decision'] = decision
             return
 
         # Downs 1–3: weighted probability sampling
         weights = self._computePlayWeights(scoreDiff, coach)
         targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+
+        # ── Record coach insights (downs 1-3 only) ──
+        def _normalizeWeights(w):
+            t = sum(w.values())
+            return {k: round(v / t * 100) for k, v in w.items()} if t > 0 else w
+
+        coachInsights = {
+            'playWeights': _normalizeWeights(weights),
+            'baseWeights': _normalizeWeights(self._getBasePlayWeights()),
+            'coachAggr': coach.aggressiveness if coach else None,
+            'coachOffMind': coach.offensiveMind if coach else None,
+            'coachAdapt': coach.adaptability if coach else None,
+            'clockIQ': round(self._coachClockIQ(coach), 2),
+            'targetSideline': targetSideline,
+        }
+
+        # Gameplan context — what both coaches planned pre-game (and adjusted at halftime)
+        offPlan = self.homeOffGameplan if isHome else self.awayOffGameplan
+        defPlan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if offPlan is not None:
+            coachInsights['gameplan'] = {
+                'runPassRatio': round(offPlan.runPassRatio, 2),
+                'gapDistribution': {k: round(v * 100) for k, v in offPlan.gapDistribution.items()},
+                'aggressiveness': round(offPlan.aggressiveness, 2),
+            }
+        if defPlan is not None:
+            defCoach = getattr(self.defensiveTeam, 'coach', None)
+            coachInsights['oppDefense'] = {
+                'runStopFocus': round(defPlan.runStopFocus, 2),
+                'blitzFrequency': round(defPlan.blitzFrequency, 2),
+                'aggressiveness': round(defPlan.aggressiveness, 2),
+                'coachDefMind': defCoach.defensiveMind if defCoach else None,
+                'coachAdapt': defCoach.adaptability if defCoach else None,
+                'coachAggr': defCoach.aggressiveness if defCoach else None,
+            }
+        coachInsights['isSecondHalf'] = self.currentQuarter >= 3
+        coachInsights['offenseAbbr'] = self.offensiveTeam.abbr
+        coachInsights['defenseAbbr'] = self.defensiveTeam.abbr
+
+        self.play.insights['coach'] = coachInsights
+
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
@@ -2026,8 +2280,104 @@ class Game:
 
     def formatPlayText(self):
         self._evaluateClutchChoke()
+
+        # ── Player insights: capture involved players' state after play execution ──
+        play = self.play
+        involvedPlayers = []
+        if play.playType == PlayType.Run and play.runner:
+            involvedPlayers.append(play.runner)
+            # TE blocker on run plays
+            teBl = self.offensiveTeam.rosterDict.get('te')
+            if teBl and teBl not in involvedPlayers:
+                involvedPlayers.append(teBl)
+        elif play.playType == PlayType.Pass:
+            if play.passer:
+                involvedPlayers.append(play.passer)
+            if play.receiver:
+                involvedPlayers.append(play.receiver)
+        elif play.playType == PlayType.FieldGoal and hasattr(play, 'kicker') and play.kicker:
+            involvedPlayers.append(play.kicker)
+
+        prePlayComposure = play.insights.pop('_prePlayComposure', {})
+        if involvedPlayers:
+            play.insights['players'] = []
+            for p in involvedPlayers:
+                pre = prePlayComposure.get(id(p), {})
+                preCon = pre.get('confidence', 0)
+                preDet = pre.get('determination', 0)
+                postCon = round(p.gameAttributes.confidenceModifier, 3)
+                postDet = round(p.gameAttributes.determinationModifier, 3)
+                # Drift = how far this player has moved from their pre-game baseline
+                baseConf = p.attributes.confidenceModifier
+                baseDet = p.attributes.determinationModifier
+                confDrift = round(postCon - baseConf, 3)
+                detDrift = round(postDet - baseDet, 3)
+                # Use the actual pressure modifier applied during the play, not a fresh roll
+                if play.playType == PlayType.Run and hasattr(play, 'runner') and play.runner is p:
+                    actualMod = round(play.keyPressureMod, 2)
+                elif play.playType == PlayType.Pass and hasattr(play, 'passer') and play.passer is p:
+                    actualMod = round(play.qbPressureMod, 2)
+                elif play.playType == PlayType.Pass and hasattr(play, 'receiver') and play.receiver is p:
+                    actualMod = round(play.rcvPressureMod, 2)
+                elif play.playType == PlayType.FieldGoal and hasattr(play, 'kicker') and play.kicker is p:
+                    actualMod = round(play.keyPressureMod, 2)
+                else:
+                    actualMod = None  # non-key player, no stored modifier
+
+                playerEntry = {
+                    'name': p.name,
+                    'position': p.position.name if hasattr(p, 'position') else None,
+                    'confidence': round(postCon, 2),
+                    'determination': round(postDet, 2),
+                    'confidenceChange': round(postCon - preCon, 3),
+                    'determinationChange': round(postDet - preDet, 3),
+                    'confidenceDrift': confDrift,
+                    'determinationDrift': detDrift,
+                    'pressureMod': actualMod,
+                }
+
+                # Pressure profile: show how this player's mental makeup interacts
+                # with the current game pressure (probability zones + what rolled)
+                normPressure = min(100, max(0, self.gamePressure)) / 100.0
+                if normPressure >= 0.3:
+                    ph = getattr(p.attributes, 'pressureHandling', 0)
+                    cf = getattr(p.attributes, 'clutchFactor', 0)
+                    if ph >= 0:
+                        overChance = 15 + (ph * 4.5)
+                        noEffChance = 70 - (ph * 4)
+                    else:
+                        overChance = 15 + (ph * 0.5)
+                        noEffChance = 70 + (ph * 4)
+                    # High-pressure compression of no-effect zone
+                    if normPressure >= 0.7:
+                        compFactor = (normPressure - 0.7) / 0.3
+                        noEffReduction = noEffChance * 0.5 * compFactor
+                        noEffChance -= noEffReduction
+                        overChance += noEffReduction * 0.5
+                    underChance = 100 - overChance - noEffChance
+                    # What actually happened to this player under pressure
+                    if actualMod is not None and actualMod > 0:
+                        pressureOutcome = 'rose'
+                    elif actualMod is not None and actualMod < 0:
+                        pressureOutcome = 'crumbled'
+                    else:
+                        pressureOutcome = 'steady'
+                    playerEntry['pressureProfile'] = {
+                        'pressureHandling': ph,
+                        'clutchFactor': cf,
+                        'riseChance': round(overChance),
+                        'steadyChance': round(noEffChance),
+                        'crumbleChance': round(underChance),
+                        'outcome': pressureOutcome,
+                    }
+
+                play.insights['players'].append(playerEntry)
+
         text = None
         if self.play.playType is PlayType.Run:
+            # Select description list based on gap type
+            runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
+            isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
                 if self.play.isFumbleLost:
                     text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.abbr)
@@ -2037,11 +2387,14 @@ class Game:
                 if self.play.yardage <= 0:
                     text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
                 elif self.play.yardage > 0 and self.play.yardage <= 3:
-                    text = '{} {} for {} yards'.format(self.play.runner.name, choice(shortRunList), self.play.yardage)
+                    runList = shortRunOutsideList if isOutside else shortRunInsideList
+                    text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                 elif self.play.yardage > 3 and self.play.yardage <= 9:
-                    text = '{} {} for {} yards'.format(self.play.runner.name, choice(midRunList), self.play.yardage)
+                    runList = midRunOutsideList if isOutside else midRunInsideList
+                    text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                 elif self.play.yardage >= 10:
-                    text = '{} {} for {} yards'.format(self.play.runner.name, choice(longRunList), self.play.yardage)
+                    runList = longRunOutsideList if isOutside else longRunInsideList
+                    text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
         elif self.play.playType is PlayType.Pass:
             if self.play.isSack:
                 if self.play.isFumble:
@@ -2083,7 +2436,9 @@ class Game:
                     else:
                         text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
                 elif self.play.passType is PassType.throwAway:
-                    text = choice(throwAwayList).format(self.play.passer.name)
+                    protDiff = self.play.insights.get('pass', {}).get('protectionDiff', 0)
+                    taList = throwAwayPressureList if protDiff < -5 else throwAwayCoverageList
+                    text = choice(taList).format(self.play.passer.name)
                 else:
                     if self.play.passIsDropped:
                         text = choice(midDropList).format(self.play.passer.name, self.play.receiver.name)
@@ -2109,71 +2464,97 @@ class Game:
     def _evaluateClutchChoke(self):
         """Evaluate whether the current play qualifies as a clutch or choke moment.
 
-        Clutch = big moments: TDs, FGs, big gainers, 4th down conversions.
-        Choke = costly mistakes only: turnovers, missed FGs, failed critical downs.
-        Both require high game pressure, meaningful player modifier, and WPA impact.
+        Reserved for truly pivotal late-game plays:
+        - Clutch: go-ahead/game-winning scores, 4th down conversions when driving
+          to tie or win, big plays that keep a late comeback alive.
+        - Choke: turnovers that hand the game away, missed FGs that could have
+          tied/won, drops that kill a critical drive.
+
+        Must be Q4 or OT, game within reach, and pass the WPA gate (applied
+        later in broadcastGameState). The player's pressure modifier is context,
+        not a gate — a game-winning FG in OT is clutch regardless of the
+        kicker's mental roll.
         """
         play = self.play
         if play.gamePressure < CLUTCH_PRESSURE_THRESHOLD:
             return
 
+        # Must be Q4 or overtime — early-game plays are not clutch/choke
+        if self.currentQuarter < 4:
+            return
+
+        # Game must be within reach
+        isHome = (self.offensiveTeam == self.homeTeam)
+        offScore = self.homeScore if isHome else self.awayScore
+        defScore = self.awayScore if isHome else self.homeScore
+        scoreDiff = offScore - defScore  # positive = offense leading (post-play)
+
+        # For scoring plays, the score has already been updated — compute pre-play diff
+        scoredPoints = 0
+        if play.isFgGood:
+            scoredPoints = 3
+        elif play.isTd:
+            scoredPoints = 6  # TD itself (PAT hasn't happened yet)
+        prePlayScoreDiff = scoreDiff - scoredPoints
+
+        # Let the WPA gate filter blowouts — no hard cutoff here
+        # (a play in a 21-point game will have minimal WPA and get filtered)
+
         # For pass plays, determine key player based on outcome
         if play.playType == PlayType.Pass:
             if play.isPassCompletion or play.isTd:
-                # Completion: credit whichever of QB/receiver had larger positive mod
-                if play.rcvPressureMod > play.qbPressureMod and play.rcvPressureMod >= CLUTCH_MODIFIER_THRESHOLD:
+                if play.rcvPressureMod > play.qbPressureMod:
                     play.keyPressureMod = play.rcvPressureMod
                     play.clutchPlayerName = play.receiver.name if play.receiver else ''
                 else:
                     play.keyPressureMod = play.qbPressureMod
                     play.clutchPlayerName = play.passer.name if play.passer else ''
             elif play.passIsDropped:
-                # Drop: receiver choked
                 play.keyPressureMod = play.rcvPressureMod
                 play.clutchPlayerName = play.receiver.name if play.receiver else ''
             else:
-                # INT, sack, incomplete: QB responsibility
                 play.keyPressureMod = play.qbPressureMod
                 play.clutchPlayerName = play.passer.name if play.passer else ''
 
-        # In extreme pressure moments, lower the modifier bar — the situation
-        # itself defines clutch/choke, not just the player's roll
-        if play.gamePressure >= 80:
-            pressureScale = 0.5
-        elif play.gamePressure >= 65:
-            pressureScale = 0.75
-        else:
-            pressureScale = 1.0
-
-        adjustedClutchThreshold = CLUTCH_MODIFIER_THRESHOLD * pressureScale
-        adjustedChokeThreshold = CHOKE_MODIFIER_THRESHOLD * pressureScale
-
-        meetsClutchThreshold = play.keyPressureMod >= adjustedClutchThreshold
-        meetsChokeThreshold = play.keyPressureMod <= -adjustedChokeThreshold
-
-        if not (meetsClutchThreshold or meetsChokeThreshold):
-            return
-
-        # Clutch: scoring plays, big gainers, 4th down conversions
-        isPositiveOutcome = (
-            play.isTd
-            or play.isFgGood
-            or (play.isPassCompletion and play.yardage >= 20)
-            or (play.playType == PlayType.Run and play.yardage >= 15)
-            or (getattr(play, 'down', 0) == 4 and play.playResult == PlayResult.FirstDown)
+        # ── Clutch: plays that save or win the game ──
+        # Scoring play when trailing or tied BEFORE the score (go-ahead / tying / winning)
+        isGoAheadScore = (play.isTd or play.isFgGood) and prePlayScoreDiff <= 0
+        # 4th down conversion when trailing or tied (kept the dream alive)
+        is4thDownHero = (
+            getattr(play, 'down', 0) == 4
+            and play.playResult == PlayResult.FirstDown
+            and scoreDiff <= 0
         )
-        # Choke: only truly costly mistakes — turnovers, missed FGs, failed critical downs
-        isNegativeOutcome = (
-            play.isInterception
-            or play.isFumbleLost
-            or play.playResult == PlayResult.TurnoverOnDowns
-            or (play.playType == PlayType.FieldGoal and not play.isFgGood)
-            or (play.passIsDropped and getattr(play, 'down', 0) >= 3)
+        # Big play keeping a close game alive (either direction)
+        isBigGainer = (
+            ((play.isPassCompletion and play.yardage >= 20)
+             or (play.playType == PlayType.Run and play.yardage >= 15))
+            and abs(scoreDiff) <= 7
         )
 
-        if meetsClutchThreshold and isPositiveOutcome:
+        # ── Choke: plays that squander a chance to win or hand the game away ──
+        # Turnover in a close game (leading, tied, OR trailing within a score)
+        isGiveaway = (
+            (play.isInterception or play.isFumbleLost
+             or play.playResult == PlayResult.TurnoverOnDowns)
+            and abs(scoreDiff) <= 7
+        )
+        # Missed FG when it could have tied or taken the lead (not when already leading)
+        isMissedKick = (
+            play.playType == PlayType.FieldGoal
+            and not play.isFgGood
+            and prePlayScoreDiff <= 0
+        )
+        # Critical drop on 3rd/4th down in a close game
+        isCriticalDrop = (
+            play.passIsDropped
+            and getattr(play, 'down', 0) >= 3
+            and abs(scoreDiff) <= 7
+        )
+
+        if isGoAheadScore or is4thDownHero or isBigGainer:
             play.isClutchPlay = True
-        elif meetsChokeThreshold and isNegativeOutcome:
+        elif isGiveaway or isMissedKick or isCriticalDrop:
             play.isChokePlay = True
 
     def _accumulateOffenseStats(self, team, score):
@@ -3773,6 +4154,7 @@ class Game:
                     'isClutchPlay': getattr(playObj, 'isClutchPlay', False),
                     'isChokePlay': getattr(playObj, 'isChokePlay', False),
                     'isMomentumShift': getattr(playObj, 'isMomentumShift', False),
+                    'insights': getattr(playObj, 'insights', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
             # Store WP data on the Play object so it persists in gameFeed references
@@ -3821,8 +4203,9 @@ class Game:
                 'isClutchPlay': getattr(self.play, 'isClutchPlay', False),
                 'isChokePlay': getattr(self.play, 'isChokePlay', False),
                 'isMomentumShift': getattr(self.play, 'isMomentumShift', False),
+                'insights': getattr(self.play, 'insights', None),
             }
-        
+
         # Determine possession team abbreviation and booleans
         possessionAbbr = None
         homeTeamPoss = False
@@ -3945,34 +4328,32 @@ class Game:
     
     def calculatePlayDuration(self, playType: PlayType, isInBounds: bool = True) -> int:
         """
-        Calculate time consumed during play execution (snap to whistle).
-        For clock-stopping plays, includes time for officials to spot ball and restart.
+        Calculate time consumed during play execution (snap to whistle only).
+        Only game-clock time: if the play stops the clock, we only count the
+        seconds the ball was actually live.
         """
         if playType == PlayType.Run:
-            if isInBounds:
-                return batched_randint(4, 6)  # Clock runs
-            else:
-                return batched_randint(3, 5) + 10  # Out of bounds + spot time
-        
+            return batched_randint(4, 6)
+
         elif playType == PlayType.Pass:
             if self.play.isPassCompletion and isInBounds:
-                return batched_randint(3, 6)  # Completion in bounds, clock runs
+                return batched_randint(4, 7)  # Completion in bounds — catch + tackle
             elif self.play.isPassCompletion and not isInBounds:
-                return batched_randint(3, 5) + 10  # Out of bounds + spot time
+                return batched_randint(3, 5)  # Catch near sideline, clock stops
             elif self.play.isSack:
                 return batched_randint(3, 5)  # Sack, clock runs
             else:  # Incomplete
-                return batched_randint(2, 3) + 10  # Incomplete + spot time
-        
+                return batched_randint(2, 4)  # Ball in air + hit ground, clock stops
+
         elif playType == PlayType.FieldGoal or playType == PlayType.Punt:
-            return 5 + 15  # Kick + reset time
-        
+            return batched_randint(4, 6)  # Snap + kick
+
         elif playType == PlayType.Spike:
             return 3  # Quick spike
-        
+
         elif playType == PlayType.Kneel:
             return 4  # Snap to knee-down; play clock drain handled separately
-        
+
         return 5  # Default
 
     def _shouldOnsideKick(self) -> bool:
@@ -4533,6 +4914,7 @@ class Play():
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
+        self.insights = {}              # Play insights dict — populated during execution
 
     def fieldGoalTry(self):
         self.game.gamePressure = self.game.calculateGamePressure()
@@ -4617,6 +4999,23 @@ class Play():
                 self.kicker.gameStatsDict['kicking']['longest'] = yardsToFG
         else:
             self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
+
+        # ── FG Insights ──
+        self.insights['fg'] = {
+            'distance': yardsToFG,
+            'baseProbability': round(baseProbability * 100, 1),
+            'finalProbability': probability,
+            'kickerRating': self.kicker.gameAttributes.overallRating,
+            'kickerName': self.kicker.name,
+            'pressureAdj': self.keyPressureMod,
+            'gamePressure': round(self.game.gamePressure),
+            'roll': x,
+            'isGood': self.isFgGood,
+        }
+        if normalizedPressure >= 0.3:
+            self.insights['fg']['mentalScore'] = round(mentalScore, 2)
+            self.insights['fg']['boostChance'] = boostChance
+            self.insights['fg']['neutralChance'] = neutralChance
 
         if yardsToFG <= 20:
             if self.isFgGood:
@@ -4895,6 +5294,11 @@ class Play():
                 self.game.awayHalfRunPlays += 1
 
         blockerRating = blocker.attributes.blocking if blocker else 50
+        # Mental state: frustrated TE blocks sloppily, locked-in TE sustains blocks
+        # Scale by /15 to match pass blocking drift (raw drift is ±12-50, too large for 0-100 scale)
+        if blocker:
+            blockerRating += self._mentalDrift(blocker) / 15
+            blockerRating = max(30, min(100, blockerRating))
         gapList = []
         for gapType in ['A-gap', 'B-gap', 'C-gap', 'bounce']:
             quality = self.calculateGapQuality(
@@ -4920,14 +5324,18 @@ class Play():
         # STAGE 3: Execute run through selected gap
         # Gap quality affects initial yards (like throw quality affects completion)
         gapQuality = selectedGap['actualQuality']  # Use actual, not perceived
-        
+
         # Calculate offensive strength with pressure modifier
-        rbPowerRating = (self.runner.attributes.power * 1.5 + 
-                        self.runner.attributes.agility * 1.2 + 
+        rbPowerRating = (self.runner.attributes.power * 1.5 +
+                        self.runner.attributes.agility * 1.2 +
                         self.runner.attributes.playMakingAbility * 0.8 +
                         self.runner.attributes.xFactor * 0.5) / 4
-        
-        stage1Offense = ((rbPowerRating * 0.8) + (blockerRating * 0.2)) + runnerPressureMod
+
+        # Mental state: RB in rhythm hits holes harder, frustrated RB is tentative
+        # Scale by /15 to keep drift within ±1-3 on the rating scale
+        rbPowerRating += self._mentalDrift(self.runner) / 15
+
+        stage1Offense = ((rbPowerRating * 0.65) + (blockerRating * 0.35)) + runnerPressureMod
         
         # Adjust offense rating based on gap quality
         # Good gap quality = better chance for yards
@@ -4940,15 +5348,15 @@ class Play():
         else:
             stage1MaxYards = self.yardsToEndzone + 5
         
-        stage1Yardages = np.arange(0, stage1MaxYards + 1)
-        
-        # Boost offensive production - division by 2.5 instead of 3.5, plus more base yards
-        mean_stage1 = ((adjustedOffense - self.defense.defenseRunCoverageRating) / 2.5) + 2.5
-        mean_stage1 = min(stage1MaxYards + 1, max(0, mean_stage1))
-        
-        relative_strength = ((adjustedOffense * 2) - self.defense.defenseRunCoverageRating) / 100
-        absolute_skill = (adjustedOffense + self.defense.defenseRunCoverageRating) / 200
-        std_dev_stage1 = max(1, (stage1MaxYards + 1 - 0) / 4 * (1 + relative_strength) * absolute_skill)
+        stage1Yardages = np.arange(-2, stage1MaxYards + 1)
+
+        # Mean yardage: baseline 3.0 for even matchups, shifted by rating differential
+        # Divisor 4.0 moderates matchup sensitivity (prevents elite RBs from 10+ avg)
+        mean_stage1 = ((adjustedOffense - self.defense.defenseRunCoverageRating) / 4.0) + 3.0
+        mean_stage1 = min(stage1MaxYards + 1, max(-1, mean_stage1))
+
+        ratingDifferential = (adjustedOffense - self.defense.defenseRunCoverageRating) / 100
+        std_dev_stage1 = max(1.5, 2.75 * (1.0 + ratingDifferential))
         
         # Create Gaussian curve for initial yards
         stage1Curve = np.exp(-((stage1Yardages - mean_stage1) ** 2) / (2 * std_dev_stage1 ** 2))
@@ -4958,7 +5366,7 @@ class Play():
         self.yardage = stage1YardsGained
         
         # STAGE 4: Breakaway potential (second level)
-        if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * 0.5:
+        if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * 0.4:
             self.runner.updateInGameConfidence(.015)
             
             # Calculate breakaway potential (speed/agility focused) - BOOSTED
@@ -4967,14 +5375,15 @@ class Play():
                             self.runner.attributes.playMakingAbility * 0.8 +
                             self.runner.attributes.xFactor * 0.5) / 4) + runnerPressureMod
             
-            offenseContribution2 = (2.0 * stage2Offense) / 100  # was 1.5
-            defenseContribution = 0.2 * self.defense.defenseRunCoverageRating / 100  # was 0.3
-            stage2DecayRate = round(0.06 + 0.1 * (np.exp(defenseContribution) - offenseContribution2), 3)  # was 0.08
-            
+            # Decay rate: higher = fewer second-level yards
+            # Even matchup ~0.35 (avg ~2.5 yds), elite offense ~0.20, weak offense ~0.50
+            ratingDiff = stage2Offense - self.defense.defenseRunCoverageRating
+            stage2DecayRate = max(0.12, min(0.55, 0.35 - ratingDiff * 0.006))
+
             if self.yardsToEndzone >= 10:
                 stage2MaxYards = 10
             else:
-                stage2MaxYards = self.yardsToEndzone + 5
+                stage2MaxYards = self.yardsToEndzone + 3
             
             stage2Yardages = np.arange(0, stage2MaxYards + 1)
             stage2Curve = np.exp(-stage2DecayRate * stage2Yardages)
@@ -4984,12 +5393,15 @@ class Play():
             self.yardage += stage2YardsGained
 
         # STAGE 5: Breakaway (open field) — when RB gets past second level
-        if self.yardage >= 8 and self.yardage < self.yardsToEndzone:
+        if self.yardage >= 6 and self.yardage < self.yardsToEndzone:
             speedRating = (self.runner.attributes.speed * 2 +
                           self.runner.attributes.agility +
                           self.runner.attributes.playMakingAbility) / 4
-            # 3–15% chance based on speed (60–100 range)
-            breakawayChance = max(3, min(15, (speedRating - 60) * 0.3 + 3))
+            # Execution bonus: clean gap = easier breakaway
+            execBonus = 0
+            if gapQuality >= 65:
+                execBonus += 5 + (gapQuality - 65) * 0.15
+            breakawayChance = max(3, min(25, (speedRating - 60) * 0.3 + 3 + execBonus))
             if batched_randint(1, 100) <= breakawayChance:
                 remainingYards = self.yardsToEndzone - self.yardage
                 breakawayYards = min(remainingYards, int(np.random.exponential(15)))
@@ -5027,10 +5439,35 @@ class Play():
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
         
+        # ── Record run execution insights ──
+        self.insights['run'] = {
+            'designedGap': designedGapType,
+            'selectedGap': selectedGap['type'],
+            'gapQualities': {g['type']: round(g['quality']) for g in gapList},
+            'gapQualityUsed': round(gapQuality),
+            'rbVision': self.runner.attributes.vision,
+            'rbDiscipline': self.runner.attributes.discipline,
+            'runnerRating': round(rbPowerRating),
+            'runnerPressureMod': round(runnerPressureMod, 1),
+            'blockerRating': round(blockerRating),
+            'blockerName': blocker.name if blocker else None,
+            'blockingVsDefense': round(blockerRating - effectiveRunDef, 1),
+            'effectiveRunDef': round(effectiveRunDef),
+            'offenseVsDefense': round(adjustedOffense - self.defense.defenseRunCoverageRating, 1),
+            'stage1Yards': stage1YardsGained,
+            'fumbleRisk': round(100 - fumbleThreshold),
+            'isFumble': self.isFumble,
+        }
+        self.insights['defense'] = {
+            'runDefMult': round(scheme['runDefMult'], 2),
+            'passDefMult': round(scheme['passDefMult'], 2),
+            'passRushMult': round(scheme['passRushMult'], 2),
+        }
+
         # Clamp yardage to endzone
         if self.yardage > self.yardsToEndzone:
             self.yardage = self.yardsToEndzone
-        
+
         # Determine if run went out of bounds (for clock management)
         if selectedGap['type'] == 'C-gap' or selectedGap['type'] == 'bounce':
             # Outside runs more likely to go out of bounds
@@ -5064,43 +5501,54 @@ class Play():
         Returns probability (0-100) that QB gets sacked.
         """
         # Calculate pass rush differential (defense rush vs offensive protection)
-        # Boost blocking modifier impact significantly (multiply by 12)
-        qbProtection = qbMobility + (blockingModifier * 12)
+        # blockingModifier per player is 0-6; combined TE+RB typically 3-8
+        qbProtection = qbMobility + (blockingModifier * 4)
         rushDifferential = defensePassRush - qbProtection
-        
+
         # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
-        rushDifferential += (dropbackDepth - 1) * 2  # Reduced from 3 to 2
-        
-        # Base sack rate at even matchup (differential = 0) is ~2% (was 5%)
+        rushDifferential += (dropbackDepth - 1) * 2
+
+        # Base sack rate at even matchup (differential = 0) is ~3%
         # Logistic function: probability increases smoothly with rush advantage
-        baseSackRate = 2.0
-        steepness = 0.06  # Reduced from 0.10 for even gentler curve
+        baseSackRate = 3.0
+        steepness = 0.15
         
         # Shift the curve so 0 differential = baseSackRate
         probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
         
         return max(0.5, min(15, probability))  # Reduced max from 25% to 15%, min from 1% to 0.5%
     
-    def calculatePressureImpact(self, defensePassRush: int, qbAccuracy: int, blockingModifier: int) -> float:
+    def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
         Calculate throw quality degradation from defensive pressure.
-        Returns degradation factor (0.6 to 1.0) where lower = more disruption.
+        Uses the same rushDifferential as sack probability for consistency.
+        Positive rushDifferential = defense winning, negative = good protection.
+        Returns degradation factor (0.65 to 1.0) where lower = more disruption.
         """
-        # Calculate pressure differential
-        qbPressureResistance = (qbAccuracy * 0.7) + blockingModifier
-        pressureDifferential = defensePassRush - qbPressureResistance
-        
-        # Use exponential decay for degradation
-        # High pressure differential = more degradation
-        # Formula: 1.0 - (maxDegradation * (1 / (1 + exp(-steepness * differential))))
-        maxDegradation = 0.4  # Maximum 40% quality loss
+        # Logistic degradation: smooth curve centered at 0 (even matchup)
+        # At even matchup: ~20% degradation (baseline pressure always exists)
+        # At rushDiff +15: ~35% degradation (heavy pressure)
+        # At rushDiff -15: ~5% degradation (clean pocket)
+        maxDegradation = 0.35
         steepness = 0.12
-        
-        degradationAmount = maxDegradation * (1 / (1 + np.exp(-steepness * pressureDifferential)))
+
+        degradationAmount = maxDegradation * (1 / (1 + np.exp(-steepness * rushDifferential)))
         degradationFactor = 1.0 - degradationAmount
-        
-        return max(0.6, min(1.0, degradationFactor))  # Between 60% and 100% quality
-    
+
+        return max(0.65, min(1.0, degradationFactor))
+
+    def _mentalDrift(self, player, baseWeight=2, driftWeight=25):
+        """Calculate mental state effect from base personality + in-game drift.
+        Base personality (±2 each) provides moderate persistent influence.
+        In-game drift (small increments from TDs, drops, momentum) is amplified
+        to create visible frustration/flow state effects during the game.
+        """
+        baseConf = player.attributes.confidenceModifier
+        baseDet = player.attributes.determinationModifier
+        confDrift = player.gameAttributes.confidenceModifier - baseConf
+        detDrift = player.gameAttributes.determinationModifier - baseDet
+        return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
+
     def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
         """
         Stage 1: Calculate how open a receiver is on a scale of 0-100.
@@ -5108,29 +5556,55 @@ class Play():
         - 0-30: Well covered
         - 30-60: Partially open
         - 60-100: Wide open
+
+        Route quality is dynamic per play — affected by game pressure,
+        defensive coverage intensity, receiver mental state, and natural variance.
+        Disciplined receivers are more consistent; frustrated or pressured ones slip.
         """
-        receiverSkill = receiver.gameAttributes.routeRunning
-        
+        baseRouteRunning = receiver.gameAttributes.routeRunning
+
+        # --- Dynamic route quality modifiers ---
+
+        # 1. Game pressure: receiver's mental composure under pressure
+        pressureMod = receiver.attributes.getPressureModifier(self.game.gamePressure)
+        pressureEffect = pressureMod * 5  # ±5 points
+
+        # 2. Coverage disruption: elite defenses physically contest routes
+        #    Defense 60 = no effect, 90 = up to -6 points
+        coverageDisruption = -max(0, (defensePassCoverage - 60) * 0.2)
+
+        # 3. Mental state: base personality + amplified in-game drift (frustration / momentum)
+        # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale
+        mentalEffect = self._mentalDrift(receiver) / 15
+
+        # 4. Per-play variance: even elite receivers occasionally run a sloppy route
+        #    Discipline tightens the spread (high disc = ±4, low disc = ±8)
+        routeVariance = np.random.normal(0, max(4, 10 - receiver.attributes.discipline / 15))
+
+        effectiveRouteRunning = baseRouteRunning + pressureEffect + coverageDisruption + mentalEffect + routeVariance
+        effectiveRouteRunning = max(30, min(100, effectiveRouteRunning))
+
         # Create Gaussian distribution for openness based on skill differential
-        skillDifferential = receiverSkill - defensePassCoverage
-        
+        skillDifferential = effectiveRouteRunning - defensePassCoverage
+
         # Mean openness shifts based on skill differential
         meanOpenness = 50 + (skillDifferential / 2)  # Range roughly 30-70
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
-        
+
         # Standard deviation - better receivers have more consistent separation
-        stdDev = max(10, 25 - (receiverSkill / 10))
-        
+        stdDev = max(10, 25 - (effectiveRouteRunning / 10))
+
         # Sample from Gaussian and clamp to 0-100
         openness = np.random.normal(meanOpenness, stdDev)
-        return max(0, min(100, openness))
+        return max(0, min(100, openness)), round(effectiveRouteRunning)
     
-    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int):
+    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False):
         """
         Stage 2: QB finds and selects a receiver based on vision and discipline.
         High vision = accurately perceives receiver openness
         Low vision = distorted perception (sees receivers as more/less open than they are)
         High discipline = won't throw to covered receivers
+        mustThrow = desperation: QB must attempt a throw (4th down trailing, time expiring, etc.)
         Returns: (selectedTarget, willThrowAway)
         """
         # Calculate how accurately QB perceives openness
@@ -5182,6 +5656,9 @@ class Play():
                     return (target, False)
         
         # No suitable receiver found - throw away or force it
+        if mustThrow:
+            # Desperation: QB must attempt a throw (4th down trailing, time expiring)
+            return (sortedTargets[0], False)
         if qbDiscipline >= 80:
             return (None, True)  # Throw away
         elif batched_randint(1, 100) <= qbDiscipline:
@@ -5190,7 +5667,7 @@ class Play():
             # Force throw to what QB thinks is least covered
             return (sortedTargets[0], False)
     
-    def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, defensePassRush: int, blockingModifier: int, qbPressureMod: float) -> float:
+    def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
         """
         Stage 3: Calculate throw quality (0-100) based on QB skill, pass type, and pressure.
         Higher quality = easier to catch, less likely to be intercepted
@@ -5198,7 +5675,12 @@ class Play():
         """
         # Base accuracy from QB
         baseAccuracy = (qbAccuracy + qbXFactor) / 2 + qbPressureMod
-        
+
+        # Mental state: QB in rhythm throws sharper, rattled QB throws errant
+        # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale
+        mentalEffect = self._mentalDrift(self.passer) / 15
+        baseAccuracy += mentalEffect
+
         # Pass type difficulty modifier
         passTypeDifficulty = {
             PassType.short: 1.0,     # Easiest
@@ -5207,58 +5689,82 @@ class Play():
             PassType.hailMary: 0.5   # Extremely difficult
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
-        
-        # Calculate pressure impact using smooth degradation curve
-        pressureDegradation = self.calculatePressureImpact(
-            defensePassRush,
-            qbAccuracy,
-            blockingModifier
-        )
-        
+
+        # Calculate pressure impact from same rushDifferential used for sacks
+        pressureDegradation = self.calculatePressureImpact(rushDifferential)
+
         # Apply all modifiers
         throwQuality = baseAccuracy * difficultyMod * pressureDegradation
-        
+
         # Add natural variance
         throwQuality += batched_randint(-10, 10)
-        
+
         return max(5, min(100, throwQuality))
     
-    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float) -> dict:
+    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float) -> dict:
         """
-        Stage 4: Calculate catch probability and interception risk.
-        Returns: {'catchProb': float, 'intProb': float, 'dropProb': float}
+        Two-phase catch model:
+        Phase 1 (Contact): Can the receiver physically get their hands on the ball?
+            - Good throws are easy to reach; bad throws require high reach
+            - Defenders in coverage can deflect/disrupt
+        Phase 2 (Secure): Given contact, does the receiver catch the ball?
+            - Primarily hands-driven
+            - Contested catches and bad throws are harder to secure
         """
         adjustedHands = receiverHands + receiverPressureMod
-        
-        # Good throws are easier to catch
-        # Openness matters more for bad throws
+
+        # PHASE 1: Contact — can the receiver get their hands on it?
         if throwQuality >= 70:
-            # Good throw - mostly about hands
-            baseCatchProb = adjustedHands * 0.9
+            # Good throw — hits the receiver, reach barely matters
+            baseContact = 90 + (throwQuality - 70) * 0.33  # 90-100
+            reachFactor = receiverReach * 0.05  # 3-5 bonus
         elif throwQuality >= 50:
-            # Decent throw - hands + openness both matter
-            baseCatchProb = (adjustedHands * 0.6) + (receiverOpenness * 0.3)
+            # Decent throw — slightly off, reach helps
+            baseContact = 55 + (throwQuality - 50) * 1.75  # 55-90
+            reachFactor = (receiverReach - 60) * 0.4  # 0-16
         else:
-            # Bad throw - need to be open AND skilled
-            baseCatchProb = (adjustedHands * 0.4) + (receiverOpenness * 0.4)
-        
-        # Defense can contest catches on covered receivers
-        defenseFactor = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100)
-        
-        catchProb = baseCatchProb * (1 - defenseFactor * 0.5)
-        
-        # Interception probability (bad throws to covered receivers)
+            # Bad throw — way off target, reach is critical
+            baseContact = 10 + throwQuality * 0.9  # 10-55
+            reachFactor = (receiverReach - 60) * 0.7  # 0-28
+
+        # Defenders in coverage can deflect/disrupt before receiver reaches
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 20
+        contactProb = min(98, max(5, baseContact + reachFactor - coverageDisruption))
+
+        # PHASE 2: Secure — given contact, do they catch it?
+        baseSecure = adjustedHands * 0.85 + 10
+
+        # Contested catches are harder to secure
+        if receiverOpenness < 40:
+            contestPenalty = (40 - receiverOpenness) * 0.35
+            baseSecure -= contestPenalty
+
+        # Bad throws are harder to secure even when reached
+        if throwQuality < 50:
+            throwDifficulty = (50 - throwQuality) * 0.35
+            baseSecure -= throwDifficulty
+
+        secureProb = min(97, max(15, baseSecure))
+
+        # COMBINED: catch = contact AND secure
+        catchProb = (contactProb * secureProb) / 100
+
+        # INT probability — bad throws to covered receivers get picked
         intProb = 0
         if throwQuality < 50 and receiverOpenness < 50:
             intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
-        
-        # Drop probability (good throw, but receiver bobbles it)
-        dropProb = max(0, (100 - baseCatchProb) * (defensePassCoverage / 200))
-        
+
+        # Drop probability — receiver gets hands on it but doesn't secure
+        # Only a fraction of non-secured contacts are visible "drops" (rest are deflections)
+        nonsecuredContact = (contactProb / 100) * (100 - secureProb)
+        dropProb = nonsecuredContact * 0.5
+
         return {
-            'catchProb': min(95, max(5, catchProb)),
-            'intProb': min(25, max(0, intProb)),
-            'dropProb': min(30, max(0, dropProb))
+            'contactProb': round(min(98, max(5, contactProb)), 1),
+            'secureProb': round(min(97, max(15, secureProb)), 1),
+            'catchProb': round(min(95, max(3, catchProb)), 1),
+            'intProb': round(min(25, max(0, intProb)), 1),
+            'dropProb': round(min(30, max(0, dropProb)), 1),
         }
     
     def calculatePassYardage(self, passType, throwQuality: float) -> int:
@@ -5268,9 +5774,9 @@ class Play():
         """
         # Base mean and std dev for each pass type - BOOSTED for better offense
         passTypeParams = {
-            PassType.short: {'mean': 6.0, 'stdDev': 2.5},    # was 4.5, 2.0
-            PassType.medium: {'mean': 14, 'stdDev': 4.0},    # was 11, 3.5
-            PassType.long: {'mean': 25, 'stdDev': 6},        # was 20, 5
+            PassType.short: {'mean': 3.5, 'stdDev': 1.5},
+            PassType.medium: {'mean': 11, 'stdDev': 3.5},
+            PassType.long: {'mean': 22, 'stdDev': 5},
             PassType.hailMary: {'mean': 50, 'stdDev': 10}
         }
         
@@ -5298,16 +5804,23 @@ class Play():
         self.receiver: FloosPlayer.PlayerWR = None
         self.selectedTarget = None
         self.blockingModifier = 0
+        self.rushDifferential = 0
         self.passType = None
+        self.passBlockers = []  # Track who's blocking for insights
 
         if passPlayBook[playKey]['targets']['te'] is None:
             te = self.offense.rosterDict['te']
             if te is not None:
-                self.blockingModifier += te.attributes.blockingModifier
+                # Mental drift affects pass blocking (scaled to 0-6 modifier range)
+                teDrift = self._mentalDrift(te) / 15
+                self.blockingModifier += te.attributes.blockingModifier + teDrift
+                self.passBlockers.append(te)
         if passPlayBook[playKey]['targets']['rb'] is None:
             rb = self.offense.rosterDict['rb']
             if rb is not None:
-                self.blockingModifier += rb.attributes.blockingModifier
+                rbDrift = self._mentalDrift(rb) / 15
+                self.blockingModifier += rb.attributes.blockingModifier + rbDrift
+                self.passBlockers.append(rb)
 
         # Get per-play defensive scheme multipliers
         isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
@@ -5342,7 +5855,29 @@ class Play():
         )
         
         sackRoll = batched_randint(1, 100)
+
+        # ── Record pass base insights (before sack/completion branching) ──
+        # rushDifferential is what feeds the sack logistic curve AND pressure impact:
+        # negative = good protection, positive = pressure getting through
+        dropbackDepth = passPlayBook[playKey]['dropback'].value
+        rushDifferential = round(effectivePassRush - (qbMobility + (self.blockingModifier * 4)) + (dropbackDepth - 1) * 2)
+        self.rushDifferential = rushDifferential
+        self.insights['pass'] = {
+            'sackProbability': round(sackProbability, 1),
+            'sackRoll': sackRoll,
+            'effectivePassRush': round(effectivePassRush),
+            'effectivePassDef': round(effectivePassDef),
+            'blockingModifier': round(self.blockingModifier, 1),
+            'protectionDiff': -rushDifferential,
+        }
+        self.insights['defense'] = {
+            'runDefMult': round(scheme['runDefMult'], 2),
+            'passDefMult': round(scheme['passDefMult'], 2),
+            'passRushMult': round(scheme['passRushMult'], 2),
+        }
+
         if sackRoll <= sackProbability:
+            self.insights['pass']['wasSacked'] = True
             # Sack yardage using exponential distribution (most 3-7 yards, occasional 10+)
             rushAdvantage = max(0, self.defense.defensePassRushRating - qbMobility) / 20
             sackYardages = np.arange(0, 16)
@@ -5382,19 +5917,32 @@ class Play():
             for key in targets.keys():
                 if targets[key] is not None:
                     receiver = self.offense.rosterDict[key]
-                    openness = self.calculateReceiverOpenness(receiver, effectivePassDef)
+                    openness, routeQuality = self.calculateReceiverOpenness(receiver, effectivePassDef)
                     receiverStatusDict = {
                         'receiver': receiver,
                         'openness': openness,
+                        'routeQuality': routeQuality,
                         'route': targets[key]
                     }
                     targetList.append(receiverStatusDict)
             
             # STAGE 2: QB selects target based on vision and discipline
+            # Desperation: QB must force a throw when throwing away would end the drive
+            # or the game unfavorably (4th down while trailing, time expiring while trailing)
+            isTrailing = (self.offense == self.game.homeTeam and self.game.homeScore < self.game.awayScore) or \
+                         (self.offense == self.game.awayTeam and self.game.awayScore < self.game.homeScore)
+            isTied = self.game.homeScore == self.game.awayScore
+            isFourthDown = self.game.down == 4
+            isTimeExpiring = self.game.gameClockSeconds <= 30
+            isLateGame = self.game.currentQuarter >= 4
+            mustThrow = isFourthDown and (isTrailing or (isTied and self.game.currentQuarter >= 5))
+            if not mustThrow and isLateGame and isTimeExpiring and isTrailing:
+                mustThrow = True
             selectedTarget, willThrowAway = self.selectPassTarget(
                 targetList,
                 self.passer.attributes.vision,
-                self.passer.gameAttributes.discipline
+                self.passer.gameAttributes.discipline,
+                mustThrow=mustThrow
             )
             
             if willThrowAway or selectedTarget is None:
@@ -5424,6 +5972,20 @@ class Play():
 
             # Handle throw away
             if self.passType == PassType.throwAway:
+                self.insights['pass']['wasSacked'] = False
+                self.insights['pass']['throwAway'] = True
+                self.insights['pass']['targets'] = [
+                    {
+                        'position': t['receiver'].position.name,
+                        'name': t['receiver'].name,
+                        'openness': round(t['openness']),
+                        'routeQuality': t.get('routeQuality', 0),
+                        'reach': getattr(t['receiver'].gameAttributes, 'reach', 0),
+                        'route': t['route'].name if hasattr(t['route'], 'name') else str(t['route']),
+                        'isSelected': False,
+                    }
+                    for t in targetList
+                ]
                 self.yardage = 0
                 self.passer.addMissedPass(self.game.isRegularSeasonGame)
             else:
@@ -5439,8 +6001,7 @@ class Play():
                     self.passType,
                     self.passer.gameAttributes.accuracy,
                     self.passer.gameAttributes.xFactor,
-                    self.defense.defensePassRushRating,
-                    self.blockingModifier,
+                    self.rushDifferential,
                     qbPressureMod
                 )
 
@@ -5448,10 +6009,33 @@ class Play():
                 if self.targetSideline:
                     throwQuality = max(5, throwQuality * 0.90)
 
+                # ── Record pass target + throw insights ──
+                self.insights['pass']['wasSacked'] = False
+                self.insights['pass']['qbVision'] = self.passer.attributes.vision
+                self.insights['pass']['targets'] = [
+                    {
+                        'position': t['receiver'].position.name,
+                        'name': t['receiver'].name,
+                        'openness': round(t.get('actualOpenness', t['openness'])),
+                        'routeQuality': t.get('routeQuality', 0),
+                        'reach': getattr(t['receiver'].gameAttributes, 'reach', 0),
+                        'route': t['route'].name if hasattr(t['route'], 'name') else str(t['route']),
+                        'isSelected': (selectedTarget is not None and t['receiver'] is selectedTarget['receiver']),
+                    }
+                    for t in targetList
+                ]
+                self.insights['pass']['throwQuality'] = round(throwQuality)
+                self.insights['pass']['qbPressureMod'] = round(qbPressureMod, 1)
+                self.insights['pass']['rcvPressureMod'] = round(receiverPressureMod, 1)
+                self.insights['pass']['rcvHands'] = self.receiver.gameAttributes.hands
+                self.insights['pass']['rcvReach'] = getattr(self.receiver.gameAttributes, 'reach', 0)
+                self.insights['pass']['rcvRouteRunning'] = self.selectedTarget.get('routeQuality', self.receiver.gameAttributes.routeRunning)
+
                 # STAGE 4: Calculate catch probability and outcome
                 catchProbs = self.calculateCatchProbability(
                     throwQuality,
                     self.receiver.gameAttributes.hands,
+                    getattr(self.receiver.gameAttributes, 'reach', 70),
                     self.selectedTarget['openness'],
                     self.defense.defensePassCoverageRating,
                     receiverPressureMod
@@ -5471,7 +6055,15 @@ class Play():
 
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
-                
+
+                # ── Record catch probability insights ──
+                self.insights['pass']['contactProbability'] = round(catchProbs['contactProb'])
+                self.insights['pass']['secureProbability'] = round(catchProbs['secureProb'])
+                self.insights['pass']['catchProbability'] = round(catchProbs['catchProb'])
+                self.insights['pass']['intProbability'] = round(catchProbs['intProb'])
+                self.insights['pass']['dropProbability'] = round(catchProbs['dropProb'])
+                self.insights['pass']['outcomeRoll'] = outcomeRoll
+
                 # Check for interception first (bad throw to covered receiver)
                 if outcomeRoll <= catchProbs['intProb']:
                     self.yardage = randint(-5, 10)
@@ -5517,38 +6109,59 @@ class Play():
                         else:
                             yacCap = 15
                             decayMult = 1.0
+
+                        # Throw quality affects YAC — bad throws can't be caught in stride
+                        if throwQuality >= 80:
+                            throwYacMult = 1.0     # Caught in stride
+                        elif throwQuality >= 60:
+                            throwYacMult = 0.7     # Had to adjust
+                        elif throwQuality >= 40:
+                            throwYacMult = 0.4     # Reaching/stretching
+                        else:
+                            throwYacMult = 0.15    # Lucky to hold on
+                        yacCap = max(1, int(yacCap * throwYacMult))
+
                         yacMaxYards = min(yacCap, self.yardsToEndzone - passYards)
-                        
+
                         if yacMaxYards > 0:
                             yacYardages = np.arange(0, yacMaxYards + 1)
-                            
+
                             # YAC decay rate based on receiver vs defense
                             yacOffense = receiverYACRating + receiverPressureMod
                             yacDefense = self.defense.defensePassCoverageRating
-                            yacDecayRate = max(0.08, 0.20 + 0.005 * (yacDefense - yacOffense))
+                            yacDecayRate = max(0.10, 0.18 + 0.005 * (yacDefense - yacOffense))
                             yacDecayRate *= decayMult
 
                             # Exponential decay curve for YAC
                             yacCurve = np.exp(-yacDecayRate * yacYardages)
                             yacCurve /= np.sum(yacCurve)
-                            
+
                             yac = int(np.random.choice(yacYardages, p=yacCurve))
 
                         # YAC breakaway — receiver beats last defender
-                        if yac >= 5 and (passYards + yac) < self.yardsToEndzone:
+                        if yac >= 7 and (passYards + yac) < self.yardsToEndzone:
                             rcvSpeed = (self.receiver.gameAttributes.speed * 2 +
                                        self.receiver.gameAttributes.agility +
                                        self.receiver.gameAttributes.playMakingAbility) / 4
-                            breakChance = max(3, min(15, (rcvSpeed - 60) * 0.3 + 3))
+                            # Execution bonus: good throw + open receiver = easier breakaway
+                            execBonus = 0
+                            if throwQuality >= 75:
+                                execBonus += 5
+                            if self.selectedTarget['openness'] >= 70:
+                                execBonus += 5
+                            breakChance = max(3, min(25, (rcvSpeed - 60) * 0.3 + 3 + execBonus))
                             if batched_randint(1, 100) <= breakChance:
                                 remYards = self.yardsToEndzone - passYards - yac
-                                yac += min(remYards, int(np.random.exponential(15)))
+                                yac += min(remYards, int(np.random.exponential(10)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
                         yac = self.yardsToEndzone - passYards
                         self.yardage = self.yardsToEndzone
-                    
+
+                    self.insights['pass']['airYards'] = passYards
+                    self.insights['pass']['yac'] = yac
+
                     # Determine if receiver went out of bounds (for clock management)
                     if self.targetSideline:
                         # Sideline route: high OOB base rates

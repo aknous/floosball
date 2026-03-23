@@ -50,7 +50,7 @@ TIMEOUT_CLOCK_THRESHOLD = 120   # Seconds remaining that triggers timeout / end-
 
 # Field & scoring rules
 FG_SNAP_DISTANCE = 17           # Yards added to line-of-scrimmage for snap + hold on FG attempts
-FG_REASONABLE_RATIO = 0.85      # Fraction of kicker's maxFgDistance coaches will attempt (e.g., 0.85 * 70 = 59 for elite kicker)
+FG_MIN_ATTEMPT_PROB = 0.20      # Coaches attempt FG if estimated make probability >= 20% (replaces hard ratio cutoff)
 YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 

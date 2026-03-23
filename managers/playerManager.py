@@ -351,10 +351,17 @@ class PlayerManager:
             
             # Load attributes from related table
             if db_player.attributes:
+                import numpy as np
                 attrs = db_player.attributes
                 player.attributes.overallRating = attrs.overall_rating
                 player.attributes.speed = attrs.speed
                 player.attributes.hands = attrs.hands
+                if attrs.reach and attrs.reach > 0:
+                    player.attributes.reach = attrs.reach
+                else:
+                    # Backfill reach for pre-existing players using physical seed
+                    physicalSeed = (attrs.overall_rating + 60) / 2
+                    player.attributes.reach = int(np.clip(np.random.normal(physicalSeed, 8), 60, 100))
                 player.attributes.agility = attrs.agility
                 player.attributes.power = attrs.power
                 player.attributes.armStrength = attrs.arm_strength
@@ -363,6 +370,10 @@ class PlayerManager:
                 player.attributes.skillRating = attrs.skill_rating
                 player.attributes.potentialSpeed = attrs.potential_speed
                 player.attributes.potentialHands = attrs.potential_hands
+                if attrs.potential_reach and attrs.potential_reach > 0:
+                    player.attributes.potentialReach = attrs.potential_reach
+                else:
+                    player.attributes.potentialReach = int(np.clip(player.attributes.reach + np.random.randint(-5, 11), 60, 100))
                 player.attributes.potentialAgility = attrs.potential_agility
                 player.attributes.potentialPower = attrs.potential_power
                 player.attributes.potentialArmStrength = attrs.potential_arm_strength
@@ -1163,6 +1174,7 @@ class PlayerManager:
                             overall_rating=attrs.overallRating,
                             speed=attrs.speed,
                             hands=attrs.hands,
+                            reach=attrs.reach,
                             agility=attrs.agility,
                             power=attrs.power,
                             arm_strength=attrs.armStrength,
@@ -1171,6 +1183,7 @@ class PlayerManager:
                             skill_rating=attrs.skillRating,
                             potential_speed=attrs.potentialSpeed,
                             potential_hands=attrs.potentialHands,
+                            potential_reach=attrs.potentialReach,
                             potential_agility=attrs.potentialAgility,
                             potential_power=attrs.potentialPower,
                             potential_arm_strength=attrs.potentialArmStrength,
@@ -1201,6 +1214,7 @@ class PlayerManager:
                         db_attrs.overall_rating = attrs.overallRating
                         db_attrs.speed = attrs.speed
                         db_attrs.hands = attrs.hands
+                        db_attrs.reach = attrs.reach
                         db_attrs.agility = attrs.agility
                         db_attrs.power = attrs.power
                         db_attrs.arm_strength = attrs.armStrength
@@ -1209,6 +1223,7 @@ class PlayerManager:
                         db_attrs.skill_rating = attrs.skillRating
                         db_attrs.potential_speed = attrs.potentialSpeed
                         db_attrs.potential_hands = attrs.potentialHands
+                        db_attrs.potential_reach = attrs.potentialReach
                         db_attrs.potential_agility = attrs.potentialAgility
                         db_attrs.potential_power = attrs.potentialPower
                         db_attrs.potential_arm_strength = attrs.potentialArmStrength

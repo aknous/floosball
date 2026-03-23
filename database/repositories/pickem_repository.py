@@ -179,6 +179,17 @@ class PickEmRepository:
             if total == totalGames and correct == totalGames
         ]
 
+    def unresolvePicksByWeek(self, season: int, week: int) -> int:
+        """Reset resolved picks for a week back to unresolved (for replay safety).
+        Preserves users' picks but allows fresh resolution with new game outcomes."""
+        count = self.session.query(PickEmPick).filter(
+            PickEmPick.season == season,
+            PickEmPick.week == week,
+            PickEmPick.correct.isnot(None),
+        ).update({PickEmPick.correct: None, PickEmPick.points_earned: None})
+        self.session.flush()
+        return count
+
     def getUserHistory(self, userId: int, season: int) -> List[PickEmPick]:
         """Get all picks for a user in a season, ordered by week and game index."""
         return self.session.query(PickEmPick).filter_by(

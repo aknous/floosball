@@ -16,12 +16,13 @@ Timing Modes:
     --scheduled, --timing=scheduled     Real-time scheduling
     --demo, --timing=demo           Demo mode - fast games, visible offseason pick delays (UI testing)
     --test-scheduled                Compressed scheduled mode - real polling, minutes apart (no WS broadcast)
+    --playoff-test                  Fast regular season + compressed scheduled playoffs (with broadcasting)
     --offseason-test                Fast regular season (no broadcast), interactive offseason (3 min FA window, live draft)
     --catchup, --timing=catchup     Backdate season to last Monday, catch up missed games, then switch to scheduled
 
 Options:
     --fresh                         Clear database and start fresh
-    --schedule-gap=N                Seconds between rounds in test-scheduled mode (default 60)
+    --schedule-gap=N                Seconds between rounds in test-scheduled/playoff-test mode (default 60)
 
 Production (Fly.io):
     TIMING_MODE env var             Set in fly.toml [env] (default: catchup)
@@ -38,6 +39,7 @@ Examples:
     python run_api.py --demo --fresh
     python run_api.py --fresh --test-scheduled
     python run_api.py --fresh --test-scheduled --schedule-gap=10
+    python run_api.py --fresh --playoff-test --schedule-gap=45
 """
 
 import os
@@ -70,6 +72,7 @@ def _resolveTimingMode(modeStr: str) -> TimingMode:
         'scheduled': TimingMode.SCHEDULED,
         'demo': TimingMode.DEMO,
         'test-scheduled': TimingMode.TEST_SCHEDULED,
+        'playoff-test': TimingMode.PLAYOFF_TEST,
         'offseason-test': TimingMode.OFFSEASON_TEST,
         'catchup': TimingMode.CATCHUP,
         'catch-up': TimingMode.CATCHUP,
@@ -116,6 +119,8 @@ def parse_args():
                 args['timing_mode'] = TimingMode.DEMO
             elif mode_str == 'test-scheduled':
                 args['timing_mode'] = TimingMode.TEST_SCHEDULED
+            elif mode_str == 'playoff-test':
+                args['timing_mode'] = TimingMode.PLAYOFF_TEST
             elif mode_str == 'offseason-test':
                 args['timing_mode'] = TimingMode.OFFSEASON_TEST
             elif mode_str in ('catchup', 'catch-up'):
@@ -134,6 +139,8 @@ def parse_args():
             args['timing_mode'] = TimingMode.DEMO
         elif arg in ['--test-scheduled']:
             args['timing_mode'] = TimingMode.TEST_SCHEDULED
+        elif arg in ['--playoff-test']:
+            args['timing_mode'] = TimingMode.PLAYOFF_TEST
         elif arg in ['--offseason-test']:
             args['timing_mode'] = TimingMode.OFFSEASON_TEST
         elif arg in ['--catchup', '--catch-up']:

@@ -153,6 +153,9 @@ class SeasonManager:
             self.setTimingMode(TimingMode.CATCHUP)
         elif mode_str in ('fast-catchup', 'fast_catchup'):
             self.setTimingMode(TimingMode.FAST_CATCHUP)
+        elif mode_str == 'playoff-test':
+            self.timingManager.scheduleGap = scheduleGap
+            self.setTimingMode(TimingMode.PLAYOFF_TEST)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -1454,6 +1457,73 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Failed to clean up orphaned week games: {e}")
 
+    def _cleanupOrphanedPlayoffData(self, season: int) -> None:
+        """Clean up stale playoff data so replaying playoffs is safe on restart.
+
+        Resets team playoff state, deletes orphaned Game/PlayerStats records,
+        unresolves pick-em picks, and removes duplicate prize transactions.
+        This is a no-op on first run (nothing to clean up).
+        """
+        # A. Reset team playoff state to prevent stacked modifiers and stale flags
+        teamManager = self.serviceContainer.getService('team_manager')
+        for team in teamManager.teams:
+            team.eliminated = False
+            team.leagueChampion = False
+            team.pressureModifier = 1.0
+
+        # B. Clear freeAgencyOrder — it gets rebuilt during playoffs
+        self.currentSeason.freeAgencyOrder = []
+
+        if not DB_IMPORTS_AVAILABLE or not USE_DATABASE:
+            return
+
+        try:
+            from database.connection import get_session as _getSession
+            from database.models import CurrencyTransaction
+            from database.repositories.pickem_repository import PickEmRepository
+
+            session = _getSession()
+
+            # C. Delete orphaned playoff Game + GamePlayerStats records
+            orphanedGames = session.query(DBGame).filter_by(
+                season=season, is_playoff=True
+            ).all()
+            if orphanedGames:
+                gameIds = [g.id for g in orphanedGames]
+                statsDeleted = session.query(DBGamePlayerStats).filter(
+                    DBGamePlayerStats.game_id.in_(gameIds)
+                ).delete(synchronize_session='fetch')
+                for g in orphanedGames:
+                    session.delete(g)
+                logger.info(
+                    f"Cleaned up {len(orphanedGames)} orphaned playoff games and "
+                    f"{statsDeleted} player stat records for S{season}"
+                )
+
+            # D. Unresolve pick-em picks for playoff weeks (29-32)
+            pickemRepo = PickEmRepository(session)
+            totalUnresolved = 0
+            for playoffWeek in range(29, 33):
+                totalUnresolved += pickemRepo.unresolvePicksByWeek(season, playoffWeek)
+            if totalUnresolved:
+                logger.info(f"Unresolved {totalUnresolved} playoff pick-em picks for S{season}")
+
+            # E. Delete currency transactions for playoff weeks to prevent double prizes
+            txDeleted = session.query(CurrencyTransaction).filter(
+                CurrencyTransaction.season == season,
+                CurrencyTransaction.week >= 29,
+                CurrencyTransaction.transaction_type.in_([
+                    'pickem_correct', 'pickem_leaderboard_weekly'
+                ]),
+            ).delete(synchronize_session='fetch')
+            if txDeleted:
+                logger.info(f"Deleted {txDeleted} orphaned playoff pick-em transactions for S{season}")
+
+            session.commit()
+            session.close()
+        except Exception as e:
+            logger.warning(f"Failed to clean up orphaned playoff data: {e}")
+
     def _notifyExpiredPowerups(self, season: int, currentWeek: int) -> None:
         """Send notifications and clean up when Accession/Conscription power-ups expire."""
         if not DB_IMPORTS_AVAILABLE or not USE_DATABASE or currentWeek <= 1:
@@ -1963,6 +2033,16 @@ class SeasonManager:
             gap = self.timingManager.scheduleGap
             return self._testScheduleAnchor + datetime.timedelta(seconds=week * gap)
 
+        # PLAYOFF_TEST: regular season gets no scheduling (returns now);
+        # playoffs use compressed real scheduling from a playoff-start anchor
+        if self.timingManager.mode == TimingMode.PLAYOFF_TEST:
+            if week > 28:
+                gap = self.timingManager.scheduleGap
+                anchor = getattr(self, '_testPlayoffAnchor', datetime.datetime.utcnow())
+                return anchor + datetime.timedelta(seconds=(week - 28) * gap)
+            else:
+                return now  # Already past → no wait
+
         from zoneinfo import ZoneInfo
 
         etZone = ZoneInfo('America/New_York')
@@ -2181,7 +2261,10 @@ class SeasonManager:
     
     async def _simulatePlayoffRounds(self) -> None:
         """Simulate all playoff rounds"""
-        
+
+        # Clean up stale data from any previous playoff run (safe no-op on first run)
+        self._cleanupOrphanedPlayoffData(self.currentSeason.seasonNumber)
+
         playoffDict = {}
         playoffTeams = {}
         playoffsByeTeams = {}
@@ -2273,6 +2356,13 @@ class SeasonManager:
         import floosball_methods as FloosMethods
         numOfRounds = FloosMethods.getPower(2, len(self.leagueManager.teams)/2)
 
+        # PLAYOFF_TEST: set anchor for compressed scheduling and enable playoff waits
+        from managers.timingManager import TimingMode
+        if self.timingManager.mode == TimingMode.PLAYOFF_TEST:
+            self._testPlayoffAnchor = datetime.datetime.utcnow()
+            self.timingManager.playoffPhase = True
+            logger.info(f"PLAYOFF_TEST: playoff anchor set, gap={self.timingManager.scheduleGap}s between rounds")
+
         for x in range(numOfRounds):
 
             playoffGamesDict = {}
@@ -2282,7 +2372,7 @@ class SeasonManager:
             currentRound = x + 1
             gameNumber = 1
             roundStartTime = self.getWeekStartTime(datetime.datetime.utcnow(), 28 + currentRound)
-
+            logger.info(f"Playoff round {currentRound}: startTime={roundStartTime.isoformat()}, now={datetime.datetime.utcnow().isoformat()}, mode={self.timingManager.mode.value}")
 
             if x < numOfRounds - 1:
                 for league in self.leagueManager.leagues:
@@ -2332,10 +2422,10 @@ class SeasonManager:
                     playoffGamesList.extend(gamesList)
 
                 if currentRound == numOfRounds - 1:
-                    self.currentWeek = 'League Championship'
+                    self.currentWeek = 28 + currentRound
                     self.currentWeekText = 'League Championship'
                 else:
-                    self.currentWeek = 'Playoffs Round {}'.format(x+1)
+                    self.currentWeek = 28 + currentRound
                     self.currentWeekText = 'Playoffs Round {}'.format(x+1)
             else:
                 floosbowlTeams = []
@@ -2361,7 +2451,7 @@ class SeasonManager:
                 playoffGamesList.append(newGame)
                 playoffGamesTasks.append(self._simulatePlayoffGame(newGame, 0))
                 newGame.leagueHighlights = self.currentSeason.leagueHighlights
-                self.currentWeek = 'Floos Bowl'
+                self.currentWeek = 28 + currentRound
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
@@ -2369,13 +2459,23 @@ class SeasonManager:
             # Track playoff round so pick-em can use virtual week numbers (29+)
             self.currentSeason.currentPlayoffRound = currentRound
 
-            # Update season state and broadcast BEFORE waiting, so matchups
-            # are visible during the countdown (especially overnight gaps)
+            # Cache countdown time so REST API can serve it during the wait.
+            # Previous round's completedWeekGames stays visible until rollover.
+            self._cachedNextGameStart = roundStartTime
+
+            # Wait for rollover (15 min / scaled gap before start)
+            # Previous round's completed game data remains visible during this wait.
+            if x < numOfRounds - 1:
+                await self.timingManager.waitForPlayoffRound(roundStartTime)
+            else:
+                await self.timingManager.waitForChampionship(roundStartTime)
+
+            # Rollover: show new matchups, clear previous round's completed data
             self.currentSeason.activeGames = playoffGamesList
             self.currentSeason.completedWeekGames = None
+            self.currentSeason.currentWeek = self.currentWeek
             self.currentSeason.currentWeekText = self.currentWeekText
             self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
-            self._cachedNextGameStart = roundStartTime
 
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                 nextStartIso = roundStartTime.isoformat() + 'Z' if roundStartTime else None
@@ -2387,11 +2487,8 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 ))
 
-            # Wait for game time
-            if x < numOfRounds - 1:
-                await self.timingManager.waitForPlayoffRound(roundStartTime)
-            else:
-                await self.timingManager.waitForChampionship(roundStartTime)
+            # Wait for exact game start time
+            await self.timingManager.waitForGamesStart(roundStartTime)
 
             # Games are about to start — clear cached countdown
             self._cachedNextGameStart = None
@@ -2534,8 +2631,10 @@ class SeasonManager:
                         nextGameStartTime=nextStartIso,
                     )
                     broadcaster.broadcast_sync('season', weekEndEvent)
-            
-    
+
+        # Clear PLAYOFF_TEST phase flag
+        self.timingManager.playoffPhase = False
+
     async def _simulatePlayoffGame(self, game: FloosGame.Game, gameIndex: int = -1) -> None:
         """Simulate a single playoff game"""
 
@@ -2654,7 +2753,7 @@ class SeasonManager:
 
         # Set offseason status
         if self.currentSeason:
-            self.currentSeason.currentWeek = 'Offseason'
+            self.currentSeason.currentWeek = 0
             self.currentSeason.currentWeekText = 'Offseason'
 
         # Season-end prizes already awarded at end of regular season (before playoffs).
@@ -3758,6 +3857,12 @@ class SeasonManager:
         winner = candidates[0]
         mvpPlayer = winner['player']
 
+        # Idempotency: skip if already awarded this season (replay safety)
+        existingAwards = getattr(mvpPlayer, 'mvpAwards', [])
+        if any(a.get('Season') == self.currentSeason.seasonNumber for a in existingAwards):
+            logger.info(f"MVP already selected for S{self.currentSeason.seasonNumber}, skipping")
+            return
+
         # Award MVP to the player
         if not hasattr(mvpPlayer, 'mvpAwards'):
             mvpPlayer.mvpAwards = []
@@ -4649,7 +4754,7 @@ class SeasonManager:
             else:
                 db_season.current_week = self.currentSeason.currentWeek if isinstance(self.currentSeason.currentWeek, int) else 1
                 db_season.playoffs_started = getattr(self.currentSeason, 'playoffsStarted', False)
-                db_season.end_date = datetime.now()
+                db_season.end_date = datetime.datetime.now()
             
             # Set champion team ID
             if hasattr(self.currentSeason, 'champion') and self.currentSeason.champion:

@@ -247,6 +247,10 @@ class CardManager:
             if player.id in existingPlayerIds:
                 continue
 
+            # Only create rookie templates for actual rookies (just generated this offseason)
+            if getattr(player, 'seasonsPlayed', 1) > 0:
+                continue
+
             rating = getattr(player, 'playerRating', None)
             if rating is None:
                 continue

@@ -166,16 +166,18 @@ class PlayerAttributes(Base):
     overall_rating: Mapped[int] = mapped_column(Integer)
     speed: Mapped[int] = mapped_column(Integer)
     hands: Mapped[int] = mapped_column(Integer)
+    reach: Mapped[int] = mapped_column(Integer, default=0)
     agility: Mapped[int] = mapped_column(Integer)
     power: Mapped[int] = mapped_column(Integer)
     arm_strength: Mapped[int] = mapped_column(Integer)
     accuracy: Mapped[int] = mapped_column(Integer)
     leg_strength: Mapped[int] = mapped_column(Integer)
     skill_rating: Mapped[int] = mapped_column(Integer)
-    
+
     # Potential attributes
     potential_speed: Mapped[int] = mapped_column(Integer)
     potential_hands: Mapped[int] = mapped_column(Integer)
+    potential_reach: Mapped[int] = mapped_column(Integer, default=0)
     potential_agility: Mapped[int] = mapped_column(Integer)
     potential_power: Mapped[int] = mapped_column(Integer)
     potential_arm_strength: Mapped[int] = mapped_column(Integer)

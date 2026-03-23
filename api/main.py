@@ -850,6 +850,7 @@ async def get_game_by_id(game_id: int):
                                 'isClutchPlay': getattr(play_data, 'isClutchPlay', False),
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
                                 'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
+                                'insights': getattr(play_data, 'insights', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:

@@ -25,14 +25,16 @@ class TimingMode(Enum):
     OFFSEASON_TEST = "offseason-test"  # Fast regular season (no broadcast), interactive offseason
     CATCHUP = "catchup"                # Backdate season to last Monday, catch up, then behave like SCHEDULED
     FAST_CATCHUP = "fast-catchup"      # Like CATCHUP but skips ALL delays during catch-up (instant sim)
+    PLAYOFF_TEST = "playoff-test"      # FAST regular season + compressed scheduled playoffs (with broadcasting)
 
 class TimingManager:
     """Manages timing and delays for different simulation modes"""
     
     def __init__(self, mode: TimingMode = TimingMode.FAST, scheduleGap: int = 60):
         self.mode = mode
-        self.scheduleGap = scheduleGap  # seconds between rounds in TEST_SCHEDULED mode
+        self.scheduleGap = scheduleGap  # seconds between rounds in TEST_SCHEDULED / PLAYOFF_TEST mode
         self.catchingUp = False  # When True, week-level waits use SEQUENTIAL delays for catch-up
+        self.playoffPhase = False  # Set by seasonManager when playoffs begin (for PLAYOFF_TEST)
         self.delays = self._getDefaultDelays()
         if mode == TimingMode.TURBO:
             self.delays.update(self._getTurboDelays())
@@ -46,6 +48,8 @@ class TimingManager:
             self.delays.update(self._getOffseasonTestDelays())
         elif mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
             self.delays.update(self._getScheduledDelays())
+        elif mode == TimingMode.PLAYOFF_TEST:
+            self.delays.update(self._getPlayoffTestDelays())
 
         logger.info(f"TimingManager initialized in {mode.value} mode")
     
@@ -132,6 +136,13 @@ class TimingManager:
             'season_transition': 10.0,
         }
 
+    def _getPlayoffTestDelays(self) -> Dict[str, float]:
+        """Playoff-test overrides: FAST regular season, compressed scheduled playoffs.
+        Regular season has no delays; playoffs use real polling with scheduleGap spacing."""
+        return {
+            'daily_check': 2.0,        # Fast polling during playoff waits
+        }
+
     def setMode(self, mode: TimingMode) -> None:
         """Change timing mode"""
         self.mode = mode
@@ -147,6 +158,8 @@ class TimingManager:
             self.delays.update(self._getOffseasonTestDelays())
         elif mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
             self.delays.update(self._getScheduledDelays())
+        elif mode == TimingMode.PLAYOFF_TEST:
+            self.delays.update(self._getPlayoffTestDelays())
         logger.info(f"Timing mode changed to {mode.value}")
     
     def setCustomDelays(self, delays: Dict[str, float]) -> None:
@@ -232,6 +245,15 @@ class TimingManager:
 
                     while datetime.datetime.utcnow() < weekStartTime:
                         await asyncio.sleep(self.delays['daily_check'])
+
+        elif self.mode == TimingMode.PLAYOFF_TEST and self.playoffPhase:
+            # During playoffs: wait for exact scheduled start time
+            now = datetime.datetime.utcnow()
+            if now < weekStartTime:
+                timeToStart = weekStartTime - now
+                logger.info(f"PLAYOFF_TEST: waiting {timeToStart.total_seconds():.1f}s for playoff games to start")
+                while datetime.datetime.utcnow() < weekStartTime:
+                    await asyncio.sleep(self.delays['daily_check'])
 
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: games start delay {self.delays['game_announcement']}s")
@@ -327,6 +349,15 @@ class TimingManager:
                 logger.info(f"Waiting {(rolloverTime - now).total_seconds():.1f}s for playoff round rollover (15 min before start)")
                 while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
+        elif self.mode == TimingMode.PLAYOFF_TEST and roundStartTime:
+            # Scaled rollover: 1/3 of gap before start (e.g. 20s before with gap=60)
+            rolloverSec = max(5, self.scheduleGap / 3)
+            rolloverTime = roundStartTime - datetime.timedelta(seconds=rolloverSec)
+            now = datetime.datetime.utcnow()
+            if now < rolloverTime:
+                logger.info(f"PLAYOFF_TEST: waiting {(rolloverTime - now).total_seconds():.1f}s for rollover ({rolloverSec:.0f}s before start)")
+                while datetime.datetime.utcnow() < rolloverTime:
+                    await asyncio.sleep(self.delays['daily_check'])
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
             logger.info(f"{self.mode.value} mode: playoff round delay {self.delays['playoff_round']}s")
             await asyncio.sleep(self.delays['playoff_round'])
@@ -341,6 +372,14 @@ class TimingManager:
             now = datetime.datetime.utcnow()
             if now < rolloverTime:
                 logger.info(f"Waiting {(rolloverTime - now).total_seconds():.1f}s for championship rollover (15 min before start)")
+                while datetime.datetime.utcnow() < rolloverTime:
+                    await asyncio.sleep(self.delays['daily_check'])
+        elif self.mode == TimingMode.PLAYOFF_TEST and roundStartTime:
+            rolloverSec = max(5, self.scheduleGap / 3)
+            rolloverTime = roundStartTime - datetime.timedelta(seconds=rolloverSec)
+            now = datetime.datetime.utcnow()
+            if now < rolloverTime:
+                logger.info(f"PLAYOFF_TEST: waiting {(rolloverTime - now).total_seconds():.1f}s for championship rollover ({rolloverSec:.0f}s before start)")
                 while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
         elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):

@@ -209,7 +209,14 @@ class PlayerDevelopment:
             attributes.agility,
             PlayerDevelopment._applyDevBias(rule_set[agi_level], devBias),
             getattr(attributes, 'potentialAgility', MAX_ATTRIBUTE_VALUE))
-    
+
+        # Reach develops for all skill positions (WR/TE/RB)
+        reachLevel = PlayerDevelopment.get_attribute_level(getattr(attributes, 'reach', 0))
+        attributes.reach = PlayerDevelopment.apply_attribute_change(
+            getattr(attributes, 'reach', 0),
+            PlayerDevelopment._applyDevBias(rule_set[reachLevel], devBias),
+            getattr(attributes, 'potentialReach', MAX_ATTRIBUTE_VALUE))
+
     @staticmethod
     def develop_kicker_attributes(attributes: Any, x_factor_tier: XFactorTier,
                                    is_prime: bool, devBias: int = 0) -> None:
@@ -273,7 +280,8 @@ class PlayerDevelopment:
             elif position_type in ["RB", "WR", "TE"]:
                 original_values.update({
                     'speed': player.attributes.speed,
-                    'agility': player.attributes.agility
+                    'agility': player.attributes.agility,
+                    'reach': getattr(player.attributes, 'reach', 0),
                 })
                 if position_type == "RB":
                     original_values['power'] = player.attributes.power

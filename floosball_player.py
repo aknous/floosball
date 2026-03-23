@@ -384,6 +384,7 @@ class PlayerAttributes:
         #physical attributes
         self.speed = 0
         self.hands = 0
+        self.reach = 0
         self.agility = 0
         self.power = 0
         self.armStrength = 0
@@ -393,6 +394,7 @@ class PlayerAttributes:
 
         self.potentialSpeed = 0
         self.potentialHands = 0
+        self.potentialReach = 0
         self.potentialAgility = 0
         self.potentialPower = 0
         self.potentialArmStrength = 0
@@ -537,14 +539,20 @@ class PlayerAttributes:
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.hands = np.random.normal(physicalSeed, stdDev)
             self.hands = int(np.clip(self.hands, 60, 100))
+            self.reach = np.random.normal(physicalSeed, stdDev)
+            self.reach = int(np.clip(self.reach, 60, 100))
         elif position is Position.WR:
             self.hands = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.reach = np.random.normal(physicalSeed, stdDev)
+            self.reach = int(np.clip(self.reach, 60, 100))
         elif position is Position.TE:
             self.hands = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.power = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
+            self.reach = np.random.normal(physicalSeed, stdDev)
+            self.reach = int(np.clip(self.reach, 60, 100))
         elif position is Position.K:
             self.legStrength = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.accuracy = int(skillValList.pop(randint(0, len(skillValList)) - 1))
@@ -645,11 +653,14 @@ class PlayerRB(Player):
 
         self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
         self.attributes.potentialPower = self.attributes.power + randint(0,30)
+        self.attributes.potentialReach = self.attributes.reach + randint(0,30)
         self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
         if self.attributes.potentialSpeed > 100:
             self.attributes.potentialSpeed = 100
         if self.attributes.potentialPower > 100:
             self.attributes.potentialPower = 100
+        if self.attributes.potentialReach > 100:
+            self.attributes.potentialReach = 100
         if self.attributes.potentialAgility > 100:
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialPower*1.2) + (self.attributes.potentialSpeed*1.3) + (self.attributes.potentialAgility*.5))/3)
@@ -684,11 +695,14 @@ class PlayerWR(Player):
 
         self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
         self.attributes.potentialHands = self.attributes.hands + randint(0,30)
+        self.attributes.potentialReach = self.attributes.reach + randint(0,30)
         self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
         if self.attributes.potentialSpeed > 100:
             self.attributes.potentialSpeed = 100
         if self.attributes.potentialHands > 100:
             self.attributes.potentialHands = 100
+        if self.attributes.potentialReach > 100:
+            self.attributes.potentialReach = 100
         if self.attributes.potentialAgility > 100:
             self.attributes.potentialAgility = 100
         self.attributes.potentialSkillRating = round(((self.attributes.potentialHands*1.2) + (self.attributes.potentialSpeed*1.3) + (self.attributes.potentialAgility*.5))/3)
@@ -722,10 +736,13 @@ class PlayerTE(Player):
         self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialHands = self.attributes.hands + randint(0,30)
+        self.attributes.potentialReach = self.attributes.reach + randint(0,30)
         self.attributes.potentialPower = self.attributes.power + randint(0,30)
         self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
         if self.attributes.potentialHands > 100:
             self.attributes.potentialHands = 100
+        if self.attributes.potentialReach > 100:
+            self.attributes.potentialReach = 100
         if self.attributes.potentialPower > 100:
             self.attributes.potentialPower = 100
         if self.attributes.potentialAgility > 100:

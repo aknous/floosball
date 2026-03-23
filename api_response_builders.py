@@ -157,12 +157,12 @@ class PlayerResponseBuilder(ResponseBuilder):
                 'att2': 'Hands',
                 'att2Value': player.attributes.hands,
                 'att2stars': PlayerResponseBuilder.calculateStarRating(player.attributes.hands),
-                'att3': 'Agility',
-                'att3Value': player.attributes.agility,
-                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.agility),
+                'att3': 'Reach',
+                'att3Value': player.attributes.reach,
+                'att3stars': PlayerResponseBuilder.calculateStarRating(player.attributes.reach),
                 'att1PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialSpeed),
                 'att2PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialHands),
-                'att3PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialAgility)
+                'att3PotStars': PlayerResponseBuilder.calculateStarRating(player.attributes.potentialReach)
             })
         elif pos == 'TE':
             attr_dict.update({
