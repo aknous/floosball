@@ -52,30 +52,25 @@ def init_db():
 
 
 def clear_db():
-    """Clear game/simulation data while preserving user accounts and beta allowlist."""
-    from sqlalchemy import text
+    """Clear game/simulation data while preserving user accounts and beta allowlist.
 
+    Drops and recreates non-preserved tables so schema changes (new columns,
+    altered types) are picked up — SQLAlchemy create_all() skips existing tables.
+    """
     DB_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Ensure all tables exist first
-    Base.metadata.create_all(bind=engine)
 
     # Tables to preserve across fresh starts
     preserveTables = {"users", "beta_allowlist"}
 
-    session = SessionLocal()
-    try:
-        allTables = [t.name for t in reversed(Base.metadata.sorted_tables)]
-        for tableName in allTables:
-            if tableName not in preserveTables:
-                session.execute(text(f'DELETE FROM "{tableName}"'))
-        session.commit()
-        print(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+    # Drop all non-preserved tables (reverse dependency order), then recreate
+    tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
+                    if t.name not in preserveTables]
+    if tablesToDrop:
+        Base.metadata.drop_all(bind=engine, tables=tablesToDrop)
+
+    # Recreate all tables (create_all is safe — skips existing preserved tables)
+    Base.metadata.create_all(bind=engine)
+    print(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
     _seedPackTypes()
     _seedBetaAllowlist()
