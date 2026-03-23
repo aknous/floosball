@@ -1820,6 +1820,140 @@ def admin_reroll_username(userId: int, x_admin_password: Optional[str] = Header(
         session.close()
 
 
+@app.get("/api/admin/monitor")
+async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
+    """Admin: comprehensive monitoring dashboard data"""
+    _check_admin_password(x_admin_password)
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    tm = floosball_app.teamManager
+    season = sm.currentSeason
+    timing = sm.timingManager
+
+    # Load simulation state from DB (for lastSaved timestamp)
+    simState = floosball_app._loadSimulationState()
+
+    # Use LIVE runtime state for phase detection (DB state can be stale)
+    liveWeek = getattr(season, 'currentWeek', 0) if season else 0
+    liveWeekText = getattr(season, 'currentWeekText', None) if season else None
+    liveSeasonNum = getattr(season, 'seasonNumber', 0) if season else 0
+    liveComplete = getattr(season, 'isComplete', False) if season else False
+
+    # Check for active games in progress
+    from floosball_game import GameStatus as _GameStatus
+    activeCount = 0
+    scheduledCount = 0
+    finalCount = 0
+    if season and season.activeGames:
+        for g in season.activeGames:
+            if g.status == _GameStatus.Active:
+                activeCount += 1
+            elif g.status == _GameStatus.Final:
+                finalCount += 1
+            else:
+                scheduledCount += 1
+
+    hasLiveGames = activeCount > 0 or scheduledCount > 0
+
+    # Determine phase from live state
+    phase = "unknown"
+    if not season:
+        phase = "inactive"
+    elif liveWeekText == 'Offseason':
+        phase = "offseason"
+    elif liveComplete and not hasLiveGames:
+        phase = "between_seasons"
+    elif hasLiveGames or (liveWeek > 0 and not liveComplete):
+        # Check playoffs from live season state
+        inPlayoffs = bool(season.playoffBracket)
+        if inPlayoffs:
+            phase = "playoffs"
+        else:
+            phase = "regular_season"
+    elif liveWeek == 0 and not hasLiveGames:
+        phase = "between_seasons"
+    else:
+        phase = "regular_season"
+
+    # Deploy safety — only safe when truly between seasons with no activity
+    deploySafe = phase in ("between_seasons", "inactive")
+    if deploySafe:
+        deployReason = "Safe to deploy — simulation is between seasons" if phase == "between_seasons" else "Safe to deploy — simulation is inactive"
+    elif phase == "offseason":
+        deployReason = "Not safe — offseason in progress (FA draft / training)"
+    elif phase == "playoffs":
+        playoffRound = simState.get('playoff_round', 'unknown') if simState else 'unknown'
+        deployReason = f"Not safe — playoffs in progress ({playoffRound} round)"
+    elif phase == "regular_season":
+        deployReason = f"Not safe — regular season in progress ({liveWeekText or 'Week ' + str(liveWeek)})"
+    else:
+        deployReason = "Not safe — simulation state unknown"
+
+    # Total / completed game counts from schedule
+    totalGames = 0
+    completedGames = 0
+    if season and season.schedule:
+        for roundGames in season.schedule:
+            for key, game in roundGames.items():
+                totalGames += 1
+                if game.status == _GameStatus.Final:
+                    completedGames += 1
+
+    # Champion info
+    championName = None
+    if season and season.champion:
+        championName = getattr(season.champion, 'name', None)
+
+    # MVP info
+    mvpName = None
+    if season and season.mvp:
+        mvpName = season.mvp.get('name', None)
+
+    return build_success_response({
+        "deploySafety": {
+            "safe": deploySafe,
+            "reason": deployReason,
+        },
+        "simulation": {
+            "isActive": simState.get('is_active', False) if simState else False,
+            "phase": phase,
+            "lastSaved": simState.get('last_saved').isoformat() + 'Z' if simState and simState.get('last_saved') else None,
+        },
+        "season": {
+            "seasonNumber": liveSeasonNum,
+            "currentWeek": liveWeek,
+            "currentWeekText": liveWeekText,
+            "inPlayoffs": phase == "playoffs",
+            "playoffRound": simState.get('playoff_round', None) if simState else None,
+            "isComplete": liveComplete,
+            "champion": championName,
+            "mvp": mvpName,
+            "totalGames": totalGames,
+            "completedGames": completedGames,
+        },
+        "liveGames": {
+            "active": activeCount,
+            "scheduled": scheduledCount,
+            "final": finalCount,
+        },
+        "timing": {
+            "mode": timing.mode.value if timing else None,
+            "catchingUp": getattr(timing, 'catchingUp', False) if timing else False,
+        },
+        "counts": {
+            "teams": len(tm.teams) if tm else 0,
+            "activePlayers": len(pm.activePlayers) if pm else 0,
+            "freeAgents": len(pm.freeAgents) if pm else 0,
+            "retiredPlayers": len(pm.retiredPlayers) if pm else 0,
+            "hallOfFame": len(pm.hallOfFame) if pm else 0,
+        },
+        "websockets": ws_manager.get_stats(),
+    })
+
+
 from api.auth import getOptionalUser as _getOptionalUser
 from database.models import User as _User
 

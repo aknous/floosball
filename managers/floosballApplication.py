@@ -222,10 +222,10 @@ class FloosballApplication:
         
         logger.info(f"Simulating {totalSeasons - seasonsPlayed} seasons")
         
-        while seasonsPlayed < totalSeasons:
+        while True:
             currentSeason = seasonsPlayed + 1
             logger.info(f"=== SEASON {currentSeason} ===")
-            
+
             # Update simulation state for this season (preserve week checkpoint
             # for the first iteration so a quick re-restart doesn't lose progress)
             self._saveSimulationState(
@@ -238,7 +238,7 @@ class FloosballApplication:
 
             # Start new season
             await self.seasonManager.startNewSeason()
-            
+
             # Run season simulation (this will update state as it progresses)
             await self.seasonManager.runSeasonSimulation(resumeFromWeek=resumeFromWeek)
             resumeFromWeek = 0  # Only skip weeks for the first (resumed) season
@@ -265,18 +265,6 @@ class FloosballApplication:
 
             # Move to next season
             self.seasonManager.advanceToNextSeason()
-        
-        # Mark simulation as complete
-        self._saveSimulationState(
-            current_season=totalSeasons,
-            current_week=0,
-            in_playoffs=False,
-            total_seasons=totalSeasons,
-            is_active=False
-        )
-        
-        # Final save and cleanup
-        await self._completeFinalSimulation()
         
         logger.info("League simulation complete")
     
