@@ -104,14 +104,19 @@ class CardCalcContext:
     season: int = 0
     weekNumber: int = 0
     gamesActive: bool = False  # True during live games, False at week end
-    chanceBonus: float = 0.0  # Sum of Providence + innate synergy + Fortunate modifier
+    chanceBonus: float = 0.0  # Sum of Providence + Catalyst + innate synergy + Fortunate modifier
     chanceCardCount: int = 0  # Number of chance cards in hand (for synergy effects)
+    hasAdvantage: bool = False  # Advantage card: roll twice, take better result
     kickerSeasonFgMisses: int = 0  # Season-long kicker FG misses (for Good Neighbor)
 
     # Streak card infrastructure
     streakCardCount: int = 0  # Number of streak cards in hand (for synergy effects)
     activeStreakCount: int = 0  # Number of season streak cards whose condition is met this week
     liveStreakConditionsMet: Dict[int, bool] = field(default_factory=dict)  # eqId → conditionMet this game
+
+    # Eminence: per-position league avg FP/game and per-player season FP/game
+    positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
+    playerSeasonFPPerGame: Dict[int, float] = field(default_factory=dict)  # playerId → FP/game
 
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
@@ -307,14 +312,77 @@ _TRADEOFF_EFFECTS = frozenset({
 })
 
 
+def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
+    """Compute per-position league average FP/game and per-player FP/game.
+
+    Returns (positionAvgFPs, playerSeasonFPPerGame):
+        positionAvgFPs: {pos(1-5) → float}
+        playerSeasonFPPerGame: {playerId → float}
+
+    Only uses completed games (final status) from weeks prior to currentWeek.
+    Player.position is 1-based (QB=1, RB=2, WR=3, TE=4, K=5).
+    """
+    from database.models import GamePlayerStats as GPSModel, Game, Player
+    from collections import defaultdict
+
+    if currentWeek < 3:
+        return {}, {}
+
+    # Get all player stats from completed games this season (prior weeks)
+    rows = (
+        session.query(GPSModel.player_id, GPSModel.fantasy_points, Player.position)
+        .join(Game, GPSModel.game_id == Game.id)
+        .join(Player, GPSModel.player_id == Player.id)
+        .filter(Game.season == season, Game.week < currentWeek, Game.status == 'final')
+        .all()
+    )
+
+    # Accumulate per-player and per-position
+    playerTotals = defaultdict(lambda: [0.0, 0])  # playerId → [totalFP, gameCount]
+    posTotals = defaultdict(lambda: [0.0, 0])  # pos(1-based) → [totalFP, playerGames]
+    for playerId, fp, pos in rows:
+        # Player.position is 1-based (QB=1, RB=2, WR=3, TE=4, K=5)
+        playerTotals[playerId][0] += (fp or 0)
+        playerTotals[playerId][1] += 1
+        if pos:
+            posTotals[pos][0] += (fp or 0)
+            posTotals[pos][1] += 1
+
+    playerSeasonFPPerGame = {
+        pid: round(total / count, 2)
+        for pid, (total, count) in playerTotals.items() if count > 0
+    }
+    positionAvgFPs = {
+        pos: round(total / count, 2)
+        for pos, (total, count) in posTotals.items() if count > 0
+    }
+
+    return positionAvgFPs, playerSeasonFPPerGame
+
+
+class _AdvantageRNG:
+    """Wraps an RNG so .random() returns the better of two rolls (lower = better for chance cards)."""
+    def __init__(self, rng: _random.Random):
+        self._rng = rng
+
+    def random(self) -> float:
+        r1 = self._rng.random()
+        r2 = self._rng.random()
+        return min(r1, r2)
+
+
 def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _random.Random:
     """Create a deterministic RNG seeded by user+season+week+card.
 
     Same card in same week always produces the same roll.
+    When Advantage is active, returns a wrapper that rolls twice and takes the better result.
     """
     seedStr = f"{ctx.userId}-{ctx.season}-{ctx.weekNumber}-{userCardId}-{seedExtra}"
     seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
-    return _random.Random(seedHash)
+    rng = _random.Random(seedHash)
+    if getattr(ctx, 'hasAdvantage', False):
+        return _AdvantageRNG(rng)
+    return rng
 
 
 def _computeCardPass(
@@ -510,15 +578,29 @@ def calculateWeekCardBonuses(
         ctx.equippedCardOutputTypes.append(ec.get("outputType", "fp"))
         ctx.equippedCardEffectNames.append(ec.get("effectName", ""))
 
-    # Pre-scan for chance card synergy + Providence amplifier
+    # Pre-scan for chance card synergy, Providence amplifier, Advantage, and Catalyst
     chanceCardCount = 0
     for eq in equippedCards:
         ec = eq.user_card.card_template.effect_config or {}
+        effectName = ec.get("effectName", "")
         if ec.get("isChanceAmplifier"):
             chanceAmp = ec.get("primary", {}).get("chanceBonus", 0)
             ctx.chanceBonus += chanceAmp
         if ec.get("isChanceEffect"):
             chanceCardCount += 1
+        if effectName == "advantage":
+            ctx.hasAdvantage = True
+        if effectName == "catalyst":
+            primary = ec.get("primary", {})
+            fpPer1Pct = primary.get("fpPer1Pct", 12)
+            baseline = primary.get("baseline", 55)
+            maxBoost = primary.get("maxBoost", 0.10)
+            rosterFP = ctx.weekRawFP
+            if rosterFP > baseline:
+                boost = min(maxBoost, (rosterFP - baseline) / fpPer1Pct / 100)
+            else:
+                boost = 0.0
+            ctx.chanceBonus += boost
     ctx.chanceCardCount = chanceCardCount
     # Innate chance synergy: each chance card boosts all others by +0.04
     if chanceCardCount > 1:

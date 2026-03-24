@@ -606,10 +606,48 @@ class FantasyTracker:
                         self._breakdownToDict(b)
                         for b in calcResult.cardBreakdowns
                     ]
+                    # Build hand synergy summary from calcCtx
+                    chanceAmplifiers = []
+                    for eq in userEquipped:
+                        ec = eq.user_card.card_template.effect_config or {}
+                        eName = ec.get("effectName", "")
+                        primary = ec.get("primary", {})
+                        if eName == "providence" and primary.get("chanceBonus"):
+                            chanceAmplifiers.append({"name": "Providence", "bonus": round(primary["chanceBonus"], 2)})
+                        elif eName == "catalyst":
+                            fpPer1Pct = primary.get("fpPer1Pct", 12)
+                            baseline = primary.get("baseline", 55)
+                            maxBoost = primary.get("maxBoost", 0.10)
+                            if weekRawFP > baseline:
+                                catBoost = min(maxBoost, (weekRawFP - baseline) / fpPer1Pct / 100)
+                            else:
+                                catBoost = 0.0
+                            chanceAmplifiers.append({"name": "Catalyst", "bonus": round(catBoost, 2)})
+                    # External chance bonuses (Fortune's Favor, fortunate modifier)
+                    if calcCtx.activeModifier == "fortunate":
+                        chanceAmplifiers.append({"name": "Fortunate", "bonus": 0.15})
+                    handSynergies = {
+                        "chance": {
+                            "count": calcCtx.chanceCardCount,
+                            "innateBonus": round((calcCtx.chanceCardCount - 1) * 0.04, 2) if calcCtx.chanceCardCount > 1 else 0,
+                            "amplifiers": chanceAmplifiers,
+                            "totalBonus": round(calcCtx.chanceBonus, 2),
+                            "hasAdvantage": calcCtx.hasAdvantage,
+                        },
+                        "streak": {
+                            "count": calcCtx.streakCardCount,
+                            "activeCount": calcCtx.activeStreakCount,
+                        },
+                        "match": {
+                            "count": sum(1 for b in calcResult.cardBreakdowns if b.matchMultiplied),
+                            "total": len(calcResult.cardBreakdowns),
+                        },
+                    }
                     eqSummary = {
                         "weekRawFP": round(weekRawFP, 1),
                         "totalBonusFP": round(calcResult.totalBonusFP, 2),
                         "multFactors": [round(f, 2) for f in calcResult.multFactors],
+                        "handSynergies": handSynergies,
                     }
                 elif hasStoredCurrentWeekBonus:
                     stored = userWeekBonuses[currentWeek]
@@ -1055,6 +1093,10 @@ class FantasyTracker:
                 if effectName in STREAK_CONFIGS and not STREAK_CONFIGS[effectName].get("isWeekly", False):
                     liveStreakConditionsMet[eq.id] = False
 
+        # Eminence: position pace data (cached per-week, cheap to compute)
+        from managers.cardEffectCalculator import computeEminenceData
+        positionAvgFPs, playerSeasonFPPerGame = computeEminenceData(session, season, currentWeek)
+
         return CardCalcContext(
             userId=userId,
             season=season,
@@ -1094,6 +1136,8 @@ class FantasyTracker:
             activeModifier=activeModifier,
             unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
             liveStreakConditionsMet=liveStreakConditionsMet,
+            positionAvgFPs=positionAvgFPs,
+            playerSeasonFPPerGame=playerSeasonFPPerGame,
         )
 
     def _evaluateLiveStreakConditions(

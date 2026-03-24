@@ -70,6 +70,10 @@ EFFECT_CATEGORY = {
     "fortitude": "cross", "immaculate": "cross",
     # same-team / game-outcome (map to their builder)
     "hometown_hero": "floobits",
+    # escalating / pace effects
+    "crescendo": "flat_fp", "eminence": "multiplier", "traverse": "flat_fp",
+    # chance synergy
+    "advantage": "meta", "catalyst": "floobits",
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -252,6 +256,13 @@ EFFECT_DISPLAY_NAMES = {
     "jackpot": "Jackpot",
     "fortitude": "Fortitude",
     "immaculate": "Immaculate",
+    # ── Escalating / Pace Effects ──
+    "crescendo": "Crescendo",
+    "eminence": "Eminence",
+    "traverse": "Traverse",
+    # ── Chance Synergy Effects ──
+    "advantage": "Advantage",
+    "catalyst": "Catalyst",
 }
 
 # ─── Three-Tier Description System ───────────────────────────────────────────
@@ -286,9 +297,9 @@ EFFECT_TAGLINES = {
     "ace_up_the_sleeve": "Your WRs hit the mark",
     # Multiplier (QB)
     "big_deal": "Kind of a big deal",
-    "cornucopia": "TDs go brrr",
+    "cornucopia": "Every touchdown compounds",
     "luminary": "Your {posLabel} runs the show",
-    "squire": "Your {posLabel}'s hype man",
+    "squire": "Your {posLabel}'s biggest fan",
     "babysitter": "Carrying the team",
     "martyr": "Embrace the tank",
     "juggernaut": "I'M THE JUGGERNAUT",
@@ -296,7 +307,7 @@ EFFECT_TAGLINES = {
     "loyalty_program": "Rewards member",
     "underdog": "Nothing to lose",
     "stockpiler": "Saving for a rainy day",
-    "providence": "Fortune favors the faithful",
+    "providence": "A little something extra",
     "house_money": "Playing with profit",
     "locomotive": "Unstoppable after the catch",
     # Floobits (RB)
@@ -315,7 +326,7 @@ EFFECT_TAGLINES = {
     "flourish": "Your {posLabel} went off",
     "bandwagon": "Your team wins, you win",
     "upset_special": "Giant slayer",
-    "believe": "Playoff vibes only",
+    "believe": "Playoff or bust",
     "schadenfreude": "Your {posLabel}'s team lost",
     "due": "They're due",
     "reclamation": "Fixer's bonus",
@@ -342,7 +353,7 @@ EFFECT_TAGLINES = {
     "goal_line_vulture": "Opportunistic scavenging",
     "possession": "Catch everything",
     "trebuchet": "Going deep",
-    "double_trouble": "Both WRs eating",
+    "double_trouble": "Both WRs showed up",
     "slippery": "Can't bring me down",
     "jailbreak": "Breaking tackles, breaking records",
     "safety_blanket": "Reliable target",
@@ -375,18 +386,25 @@ EFFECT_TAGLINES = {
     "bonus_round": "Everyone showed up",
     "double_down": "High risk, high reward",
     "last_resort": "The ultimate insurance",
-    "high_roller": "Fortune favors the bold",
+    "high_roller": "Degenerate strategy",
     "jackpot": "Stars aligned",
     "fortitude": "Persistence is a virtue",
     "immaculate": "A blemish-free record",
+    # ── Escalating / Pace Effects ──
+    "crescendo": "Keep missing, it only gets easier",
+    "eminence": "Stats don't lie",
+    "traverse": "Are we there yet?",
+    # ── Chance Synergy Effects ──
+    "advantage": "Double or nothing (minus the nothing)",
+    "catalyst": "Points in, luck out",
 }
 
 EFFECT_TOOLTIPS = {
     # Flat FP (WR)
     "freebie": "It pays to show up. Bonus FP every week just for having this card equipped.",
-    "entourage": "Squad goals. Bonus FP for each high-rated player on your roster.",
+    "entourage": "Strength in numbers. Bonus FP for each high-rated player on your roster.",
     "touchdown_pinata": "Every house call fills the piñata. Bonus FP per roster TD.",
-    "scrappy": "Somebody's gotta believe in them. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more low-rated players are on your roster.",
+    "scrappy": "Somebody has to believe in them. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more low-rated players are on your roster.",
     "honor_roll": "Good grades get rewarded. Bonus FP for each roster player putting up a solid score.",
     "three_pointer": "Three points for them, bonus for you. FP for every kicker FG.",
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
@@ -396,18 +414,18 @@ EFFECT_TOOLTIPS = {
     "spotlight_moment": "When your {posLabel} finds the endzone, you cash in. FP whenever your {posLabel} slot scores a TD. For WR, either slot counts.",
     "ace_up_the_sleeve": "Your WRs put in the work. Bonus FP when your WR slots hit a combined stat threshold.",
     # Multiplier (QB)
-    "big_deal": "Get that bag. Flat FPx on your total score.",
-    "cornucopia": "Touchdowns go brrr. FPx that stacks per roster TD.",
+    "big_deal": "Show me the money. Flat FPx on your total score.",
+    "cornucopia": "Every touchdown compounds. FPx that stacks per roster TD.",
     "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your {posLabel} slot earns.",
     "squire": "The crowd goes wild. FP that stacks with each TD your {posLabel} slot scores.",
-    "babysitter": "Someone's gotta carry. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
+    "babysitter": "Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
     "martyr": "Pain builds character (and FP). Guaranteed FP floor plus a chance at enhanced FP. Odds increase the further your favorite team's ELO drops below the league average.",
     "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's win streak.",
     "resplendent": "When they're hot, they're HOT. FP per overperforming roster player.",
     "loyalty_program": "Set it and forget it. FP that grows each week your roster doesn't change.",
-    "underdog": "The worse they are, the harder this slaps. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
+    "underdog": "The worse they are, the better the odds. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
     "stockpiler": "Patience pays. FPx that grows with each unused roster swap you're sitting on.",
-    "providence": "A quiet blessing. Small FPx bonus plus increased odds on all chance cards in your hand. Chance cards also naturally boost each other — the more you equip, the better all their odds.",
+    "providence": "A little extra on the side. Small FPx bonus plus increased odds on all chance cards in your hand. Chance cards also naturally boost each other — the more you equip, the better all their odds.",
     "house_money": "Upset city. FP that builds every time your favorite team wins as an underdog.",
     "locomotive": "When your WRs rack up serious YAC, your whole week gets a bonus. FP if WR slots combine for 35+ YAC.",
     # Floobits (RB)
@@ -422,14 +440,14 @@ EFFECT_TOOLTIPS = {
     "feeding_frenzy": "Dinner is served. Floobits when your roster scores enough TDs in a week.",
     "highlight_reel": "Highlight reel material pays. Floobits for every big play your favorite team pulls off.",
     # Conditional (TE)
-    "showoff": "Your {posLabel} showed out this week. FP when your {posLabel} slot overperforms expectations in a single game.",
+    "showoff": "Your {posLabel} had a career day. FP when your {posLabel} slot overperforms expectations in a single game.",
     "flourish": "Your {posLabel} went off. FP when your {posLabel} slot overperforms expectations in a single game.",
     "bandwagon": "Bandwagoning has never been so rewarding. FPx whenever your favorite team wins.",
-    "upset_special": "David vs Goliath energy. FP when your favorite team beats a higher-rated opponent.",
+    "upset_special": "Giant killer. FP when your favorite team beats a higher-rated opponent.",
     "believe": "Keep the dream alive. FP as long as your favorite team holds a playoff spot.",
     "schadenfreude": "You feel bad about it. But also... free points. FP when your {posLabel} slot's team loses.",
     "due": "Redemption tastes sweet. FP when your favorite team snaps a losing streak of 3+ games.",
-    "reclamation": "Someone's gotta fix this mess. FP when most of your roster is underperforming.",
+    "reclamation": "Someone has to fix this mess. FP when most of your roster is underperforming.",
     "pedigree": "Good breeding shows. FP with a bonus when your favorite team's ELO reaches elite status (1600+).",
     # Streak (K) — streak cards boost each other's growth when stacked
     "couch_potato": "Just sit there. Literally. FP that grows every week this card stays equipped. Stacking streak cards accelerates all their growth.",
@@ -447,7 +465,7 @@ EFFECT_TOOLTIPS = {
     # ── New Position-Based Effects ──
     "gunslinger": "Let it fly. FP that scales with how many passing yards your QB slot racks up.",
     "air_raid": "Death from above. Floobits for each passing TD your QB slot throws.",
-    "workhorse": "Workhorse backs get the bag. FP scaling with your RB slot's rushing attempts.",
+    "workhorse": "Workhorse backs get rewarded. FP scaling with your RB slot's rushing attempts.",
     "expedition": "Yards are yards. FP that scales with how many rushing yards your RB slot gains.",
     "stampede": "Get rolling. Base FPx always, enhanced FPx when your RB slot hits 75+ rushing yards.",
     "goal_line_vulture": "Vulture season. Floobits for every rushing TD your RB slot punches in.",
@@ -466,8 +484,8 @@ EFFECT_TOOLTIPS = {
     "indemnity": "At least you got floobits. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more your {posLabel} slot underperforms.",
     # ── Same-Team Stacking Effects ──
     "stack": "Stack attack. FPx when your QB slot and any WR slot play on the same team.",
-    "backfield_buddies": "Same backfield, same vibes. FPx when your QB slot and RB play on the same team.",
-    "homer": "Rep your squad. FP scaling with how many of your roster players play on your favorite team.",
+    "backfield_buddies": "Same backfield, double the payoff. FPx when your QB slot and RB play on the same team.",
+    "homer": "Loyalty has its perks. FP scaling with how many of your roster players play on your favorite team.",
     "hometown_hero": "Full stack activated. Floobits when 3 or more of your roster players share the same team.",
     "connection": "Real-life connections pay off. Floobits per TD scored by a roster player who shares a team with another roster player.",
     "team_chemistry": "Good chemistry lifts all boats. Floobits that grow with the number of same-team pairs on your roster.",
@@ -490,6 +508,13 @@ EFFECT_TOOLTIPS = {
     "jackpot": "The ultimate payoff. Massive FP bonus when every chance card in your hand hits its enhanced payout. More chance cards means a harder jackpot to hit — but a bigger floor thanks to innate synergy.",
     "fortitude": "The resolute are rewarded. FPx that scales with how many of your streak cards have active streaks. The more streaks you keep alive, the stronger this gets.",
     "immaculate": "Not a single blemish on the record. Massive FP bonus when every streak card in your hand has an active streak. Maintaining perfection has its privileges.",
+    # ── Escalating / Pace Effects ──
+    "crescendo": "Miss enough and eventually you can't miss. Each TD your {posLabel} slot scores rolls for a one-time bonus — miss it and the odds go up. For K, triggers on field goals instead.",
+    "eminence": "Good players get paid more. Shocking. FPx scales with how far above the position average your player is performing. Active from week 3.",
+    "traverse": "Rack up yards, roll the dice. At game end, your {posLabel} slot's yardage determines the odds of a one-time bonus. More yards, better odds.",
+    # ── Chance Synergy Effects ──
+    "advantage": "Loaded dice. Every chance card in your hand rolls twice, keeping the better result.",
+    "catalyst": "Turn raw production into better odds. The more FP your roster earns, the higher the chance boost applied to all your chance cards. Also pays a small Floobits dividend.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -598,10 +623,17 @@ EFFECT_DETAIL_TEMPLATES = {
     "bonus_round": "+{rewardValue} FP when 4+ of your other cards triggered",
     "double_down": "{rewardValue} FPx, but zeroes your highest card's bonus",
     "last_resort": "+{baseFP} FP floor + chance of {enhancedFP} FP. Base chance 15% per failed card, up to 70% max",
-    "high_roller": "{perCardMult} FPx per chance card that triggered enhanced",
+    "high_roller": "{perCardMult} FPx per chance card that hits",
     "jackpot": "+{rewardValue} FP when all chance cards in hand hit enhanced",
     "fortitude": "{perCardMult} FPx per active streak card in your hand",
     "immaculate": "+{rewardValue} FP when all season streak cards have active streaks",
+    # ── Escalating / Pace Effects ──
+    "crescendo": "+{baseFP} FP floor + chance of {bonusFP} FP. Starts at {baseChance}%, +{chanceStep}% per miss. Triggers once per week",
+    "eminence": "+{bonusPerFP} FPx per FP/game above position pace (max {maxMult}x)",
+    "traverse": "+{baseFP} FP floor + chance of {bonusFP} FP at game end. +{chancePerStep}% per {yardStep} yards by your {posLabel} slot",
+    # ── Chance Synergy Effects ──
+    "advantage": "All chance cards roll twice, keep the better result",
+    "catalyst": "+1% chance per {fpPer1Pct} roster FP above {baseline}. Max +{maxBoostDisplay}%. {baseFloobits} Floobits base",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -644,23 +676,33 @@ SHARED_EFFECT_POOL = [
     ("bonus_round", 3), ("double_down", 2),
     ("last_resort", 2), ("high_roller", 3), ("jackpot", 2),
     ("fortitude", 3), ("immaculate", 2),
+    # escalating / pace
+    ("eminence", 5),
+    # chance synergy
+    ("advantage", 3), ("catalyst", 4),
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
-    1: [("gunslinger", 6), ("air_raid", 6), ("stack", 5), ("backfield_buddies", 5)],
-    2: [("workhorse", 6), ("expedition", 6), ("stampede", 5), ("goal_line_vulture", 6)],
+    1: [("gunslinger", 6), ("air_raid", 6), ("stack", 5), ("backfield_buddies", 5),
+        ("crescendo", 5), ("traverse", 5)],
+    2: [("workhorse", 6), ("expedition", 6), ("stampede", 5), ("goal_line_vulture", 6),
+        ("crescendo", 5), ("traverse", 5)],
     3: [("possession", 6), ("trebuchet", 5), ("double_trouble", 5),
         ("slippery", 6), ("jailbreak", 5), ("locomotive", 4),
-        ("ace_up_the_sleeve", 6)],
-    4: [("safety_blanket", 6), ("monolith", 5), ("industrious", 5)],
+        ("ace_up_the_sleeve", 6), ("crescendo", 5), ("traverse", 5)],
+    4: [("safety_blanket", 6), ("monolith", 5), ("industrious", 5),
+        ("traverse", 5)],
     5: [("three_pointer", 6), ("sniper", 5), ("leg_day", 4),
-        ("automatic", 4), ("on_fire", 7), ("hot_hand", 5)],
+        ("automatic", 4), ("on_fire", 7), ("hot_hand", 5),
+        ("crescendo", 5)],
 }
 
 # Effects excluded from certain positions (dead cards)
 # TD-dependent effects are dead on K (kickers never score TDs)
 POSITION_EXCLUDED_EFFECTS = {
-    5: {"spotlight_moment", "squire", "cha_ching", "mismatch", "double_trouble"},
+    4: {"crescendo"},  # TE: too few TDs for escalating mechanic
+    5: {"spotlight_moment", "squire", "cha_ching", "mismatch", "double_trouble",
+        "traverse"},  # K: no meaningful yardage
 }
 
 # ─── Streak Configuration ────────────────────────────────────────────────────
@@ -805,6 +847,22 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"perFgFP": round((5 + rn * 0.2) * editionScale, 1)}
     if effectName == "squire":
         return {"perTdFP": round((4 + rn * 0.15) * editionScale, 1)}
+    # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
+    if effectName == "crescendo":
+        # Position-specific tuning set at compute time; params store rarity-scaled values
+        return {"baseFP": round((1.0 + rn * 0.04) * editionScale, 1),
+                "bonusFP": round((8.0 + rn * 0.3) * editionScale, 1),
+                "baseChance": 15, "chanceStep": 12,  # QB defaults; compute overrides per position
+                "isChanceEffect": True}
+    # ── Yardage chance: Traverse (end-of-game roll scaled by yards)
+    if effectName == "traverse":
+        return {"baseFP": round((0.5 + rn * 0.03) * editionScale, 1),
+                "bonusFP": round((7.0 + rn * 0.25) * editionScale, 1),
+                "baseChance": 5, "chancePerStep": 8, "yardStep": 50, "yardType": "passing",
+                "isChanceEffect": True}
+    # ── Meta: Advantage (no direct payout, enables roll-twice on all chance cards)
+    if effectName == "advantage":
+        return {"isAdvantage": True}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(2 * editionScale, 1)}
 
 
@@ -865,6 +923,11 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         return {"rewardValue": round(1 + (0.15 + rn * 0.008) * editionScale, 2)}
     if effectName == "backfield_buddies":
         return {"rewardValue": round((0.15 + rn * 0.008) * editionScale, 2)}
+    # ── Pace multiplier: Eminence (FPx from season pace above position avg)
+    if effectName == "eminence":
+        return {"rewardType": "mult",
+                "bonusPerFP": round((0.015 + rn * 0.0008) * editionScale, 3),
+                "maxMult": min(1.50, round(1 + (0.12 + rn * 0.004) * editionScale, 2))}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.2 * editionScale, 1)}
 
 
@@ -905,6 +968,19 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "industrious":
         return {"perReceptionFloobits": int(round((3 + rn * 0.15) * editionScale))}
+    # ── Catalyst: dynamic chance boost from roster FP + small floobits base
+    if effectName == "catalyst":
+        # Edition scaling: higher editions = lower FP threshold, lower baseline, higher max
+        # Base:     12 FP/1%, baseline 55, max 10%
+        # Diamond:  7 FP/1%, baseline 30, max 20%
+        fpPer1Pct = max(7, int(round(12 - 1.25 * (editionScale - 1))))
+        baseline = max(30, int(round(55 - 8.33 * (editionScale - 1))))
+        maxBoostPct = min(20, int(round(10 + 3.33 * (editionScale - 1))))
+        baseFloobits = int(round((3 + rn * 0.15) * editionScale))
+        return {"fpPer1Pct": fpPer1Pct, "baseline": baseline,
+                "maxBoost": maxBoostPct / 100, "maxBoostDisplay": maxBoostPct,
+                "baseFloobits": baseFloobits,
+                "isChanceAmplifier": True}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"floobits": int(round(5 * editionScale))}
 
 
@@ -1052,7 +1128,7 @@ _MULT_EFFECTS = frozenset({
     "cornucopia", "providence",
     "full_roster", "all_in", "chain_reaction",
     "double_down", "high_roller", "fortitude",
-    "stacked_deck",
+    "stacked_deck", "eminence",
 })
 
 def _deriveOutputType(category: str, effectName: str, primary: dict) -> str:
@@ -1098,6 +1174,25 @@ def rebuildPrimaryParams(effectName: str, playerRating: int, editionScale: float
     return result if result else {"baseFP": round(2 * editionScale, 1)}
 
 
+# ─── Position-Specific Tuning (used by both buildEffectConfig and compute) ───
+
+# Crescendo: (baseChance%, chanceStep%) per position
+_CRESCENDO_POSITION_TUNING = {
+    1: (15, 12),   # QB: 2-4 TDs/game, lower start
+    2: (30, 20),   # RB: 0-2 TDs/game, needs higher start
+    3: (30, 20),   # WR: 0-2 TDs/game, same as RB
+    5: (25, 20),   # K:  2-3 FGs/game, middle ground
+}
+
+# Traverse: (yardStep, chancePerStep%, yardType) per position
+_TRAVERSE_POSITION_TUNING = {
+    1: (50, 8, "passing"),    # QB: 200-350 pass yds/game
+    2: (15, 8, "rushing"),    # RB: 40-100 rush yds/game
+    3: (15, 8, "receiving"),  # WR: 40-100 rec yds/game
+    4: (15, 8, "receiving"),  # TE: 30-70 rec yds/game
+}
+
+
 # ─── Config Builder ──────────────────────────────────────────────────────────
 
 def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=None,
@@ -1140,6 +1235,17 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     if primary is None:
         primary = {"baseFP": round(2 * editionScale, 1)}
     primary["posLabel"] = POSITION_LABELS.get(position, "??")
+
+    # Position-specific param overrides for effects with per-position tuning
+    if effectName == "crescendo" and position in _CRESCENDO_POSITION_TUNING:
+        baseChance, chanceStep = _CRESCENDO_POSITION_TUNING[position]
+        primary["baseChance"] = baseChance
+        primary["chanceStep"] = chanceStep
+    if effectName == "traverse" and position in _TRAVERSE_POSITION_TUNING:
+        yardStep, chancePerStep, yardType = _TRAVERSE_POSITION_TUNING[position]
+        primary["yardStep"] = yardStep
+        primary["chancePerStep"] = chancePerStep
+        primary["yardType"] = yardType
 
     conditionals = POSITION_CONDITIONALS.get(position, [])
     conditional = conditionals[0] if conditionals else None
@@ -2359,6 +2465,197 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
 
+# ── Escalating / Pace Effects ────────────────────────────────────────────────
+
+def _getPositionTds(ctx, position: int) -> int:
+    """Get TDs relevant to position from roster stats."""
+    stats = _getRosterStatsAtPosition(ctx, position)
+    if position == 1:  # QB — passing TDs
+        return stats.get("passing_stats", {}).get("tds", 0) if isinstance(stats.get("passing_stats"), dict) else 0
+    if position == 2:  # RB — rushing TDs
+        return stats.get("rushing_stats", {}).get("runTds", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
+    if position == 3:  # WR — receiving TDs
+        return stats.get("receiving_stats", {}).get("rcvTds", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
+    if position == 5:  # K — FGs made
+        fgMade, _, _, _ = _getKickerFgStats(ctx)
+        return fgMade
+    return 0
+
+
+def _getPositionYards(ctx, position: int) -> int:
+    """Get yards relevant to position from roster stats."""
+    stats = _getRosterStatsAtPosition(ctx, position)
+    if position == 1:  # QB — passing yards
+        return stats.get("passing_stats", {}).get("passYards", 0) if isinstance(stats.get("passing_stats"), dict) else 0
+    if position == 2:  # RB — rushing yards
+        return stats.get("rushing_stats", {}).get("runYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
+    if position in (3, 4):  # WR/TE — receiving yards
+        return stats.get("receiving_stats", {}).get("rcvYards", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
+    return 0
+
+
+def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
+    """Escalating chance per TD/FG, one-time bonus per week.
+
+    Each TD (or FG for K) rolls with increasing odds. First miss bumps the
+    chance for the next trigger. Resets after hitting once.
+    """
+    from managers.cardEffectCalculator import _chanceRoll
+    baseFP = primary.get("baseFP", 1.0)
+    bonusFP = primary.get("bonusFP", 8.0)
+    pos = ctx.cardPosition or 1
+    baseChance, chanceStep = _CRESCENDO_POSITION_TUNING.get(pos, (20, 15))
+
+    triggerLabel = "FGs" if pos == 5 else "TDs"
+    triggers = _getPositionTds(ctx, pos)
+
+    if triggers <= 0:
+        eq = f"+{baseFP} FP floor — 0 {triggerLabel}"
+        return EffectResult(fpBonus=baseFP, equation=eq)
+
+    # During live games, show current escalated chance without rolling
+    if getattr(ctx, 'gamesActive', False):
+        currentBase = (baseChance + (triggers - 1) * chanceStep) / 100.0
+        totalWithBonus = min(0.95, currentBase + ctx.chanceBonus)
+        eq = _chanceEq(currentBase, ctx.chanceBonus, totalWithBonus, False,
+                       "pending", f"{triggers} {triggerLabel}", ctx=ctx)
+        return EffectResult(fpBonus=baseFP, equation=eq)
+
+    # At week end: simulate sequential rolls per trigger
+    rng = _chanceRoll(ctx, eqId)
+    hit = False
+    hitOnTrigger = 0
+    for i in range(triggers):
+        chance = min(0.95, (baseChance + i * chanceStep) / 100.0 + ctx.chanceBonus)
+        roll = rng.random()
+        if roll <= chance:
+            hit = True
+            hitOnTrigger = i + 1
+            break
+
+    fp = bonusFP if hit else baseFP
+    finalBase = (baseChance + (hitOnTrigger - 1 if hit else triggers - 1) * chanceStep) / 100.0
+    finalChance = min(0.95, finalBase + ctx.chanceBonus)
+    if hit:
+        bonusStr = f"+{ctx.chanceBonus:.0%}" if ctx.chanceBonus > 0 else ""
+        pctStr = f"({finalBase:.0%}{bonusStr})" if bonusStr else f"{finalChance:.0%}"
+        eq = f"{triggers} {triggerLabel} · hit on #{hitOnTrigger} {pctStr} → +{bonusFP} FP"
+    else:
+        bonusStr = f"+{ctx.chanceBonus:.0%}" if ctx.chanceBonus > 0 else ""
+        pctStr = f"({finalBase:.0%}{bonusStr})" if bonusStr else f"{finalChance:.0%}"
+        eq = f"+{baseFP} FP floor — {triggers} {triggerLabel} · maxed at {pctStr} · missed"
+    return EffectResult(fpBonus=fp, equation=eq,
+                        chanceRoll=round(rng.random(), 4), chanceThreshold=round(finalChance, 4), chanceTriggered=hit)
+
+
+def _computeEminence(primary, ctx, cardPlayerId, eqId):
+    """FPx multiplier based on player's FP/game pace vs position average.
+
+    Active from week 3 onward. Below pace = 1.0x (no penalty).
+    Uses positionAvgFPs and playerSeasonFPPerGame from context.
+    """
+    bonusPerFP = primary.get("bonusPerFP", 0.02)
+    maxMult = primary.get("maxMult", 1.18)
+    weekNum = getattr(ctx, 'weekNumber', 0)
+
+    if weekNum < 3:
+        return EffectResult(multBonus=1.0, equation="1.00x FPx — inactive until week 3")
+
+    pos = ctx.cardPosition or 1
+    posAvg = getattr(ctx, 'positionAvgFPs', {}).get(pos, 0.0)
+    # Find the roster player at this position to look up their FP/game
+    pids = _getRosterPlayersByPosition(ctx, pos)
+    playerAvg = 0.0
+    if pids:
+        fpMap = getattr(ctx, 'playerSeasonFPPerGame', {})
+        playerAvg = max(fpMap.get(pid, 0.0) for pid in pids)
+
+    if posAvg <= 0:
+        return EffectResult(multBonus=1.0, equation="1.00x FPx — no position data yet")
+
+    abovePace = playerAvg - posAvg
+    if abovePace <= 0:
+        eq = f"1.00x FPx — {abovePace:+.1f} below pace ({playerAvg:.1f} vs {posAvg:.1f} avg)"
+        return EffectResult(multBonus=1.0, equation=eq)
+
+    mult = min(maxMult, round(1.0 + abovePace * bonusPerFP, 2))
+    eq = f"{mult:.2f}x FPx — {abovePace:+.1f} above pace ({playerAvg:.1f} vs {posAvg:.1f} avg)"
+    return EffectResult(multBonus=mult, equation=eq)
+
+
+def _computeTraverse(primary, ctx, cardPlayerId, eqId):
+    """End-of-game chance roll where odds scale with player yardage.
+
+    Formula: baseChance + (yards / yardStep) * chancePerStep, capped at 95%.
+    Single roll at game end.
+    """
+    from managers.cardEffectCalculator import _chanceRoll
+    baseFP = primary.get("baseFP", 0.5)
+    bonusFP = primary.get("bonusFP", 7.0)
+    pos = ctx.cardPosition or 1
+    yardStep, chancePerStep, yardType = _TRAVERSE_POSITION_TUNING.get(pos, (50, 8, "passing"))
+
+    yards = _getPositionYards(ctx, pos)
+    steps = int(yards // yardStep)
+    baseChance = (primary.get("baseChance", 5) + steps * chancePerStep) / 100.0
+    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+
+    if getattr(ctx, 'gamesActive', False):
+        eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, False,
+                       "pending", f"{yards} {yardType} yds", ctx=ctx)
+        return EffectResult(fpBonus=baseFP, equation=eq)
+
+    rng = _chanceRoll(ctx, eqId)
+    roll = rng.random()
+    triggered = roll <= totalChance
+    fp = bonusFP if triggered else baseFP
+
+    eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
+                   f"+{bonusFP} FP", f"{yards} {yardType} yds", ctx=ctx)
+    if not triggered:
+        eq = f"+{baseFP} FP floor — " + eq
+    return EffectResult(fpBonus=fp, equation=eq,
+                        chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
+
+
+# ── Chance Synergy Effects ───────────────────────────────────────────────────
+
+def _computeAdvantage(primary, ctx, cardPlayerId, eqId):
+    """Pure meta effect — no direct payout.
+
+    The actual mechanic (roll-twice) is handled in _chanceRoll via ctx.hasAdvantage,
+    set during the pre-scan in calculateWeekCardBonuses. This compute function
+    just reports the status.
+    """
+    chanceCount = ctx.chanceCardCount
+    if chanceCount > 0:
+        eq = f"Active · {chanceCount} chance card{'s' if chanceCount != 1 else ''} rolling with advantage"
+    else:
+        eq = "No chance cards equipped — dormant"
+    return EffectResult(equation=eq)
+
+
+def _computeCatalyst(primary, ctx, cardPlayerId, eqId):
+    """Dynamic chance boost from roster FP + small floobits base.
+
+    Boost = (rosterFP - baseline) / fpPer1Pct / 100, capped at maxBoost.
+    Also pays a flat floobits dividend.
+    """
+    fpPer1Pct = primary.get("fpPer1Pct", 12)
+    baseline = primary.get("baseline", 55)
+    maxBoost = primary.get("maxBoost", 0.10)
+    baseFloobits = primary.get("baseFloobits", 3)
+    rosterFP = ctx.weekRawFP
+
+    if rosterFP > baseline:
+        boost = min(maxBoost, (rosterFP - baseline) / fpPer1Pct / 100)
+    else:
+        boost = 0.0
+
+    eq = f"{rosterFP:.1f} roster FP · +{boost:.1%} chance boost · {baseFloobits}F"
+    return EffectResult(floobits=baseFloobits, equation=eq)
+
+
 # ── Same-Team Stacking Effects ───────────────────────────────────────────────
 
 def _getSameTeamGroups(ctx) -> Dict[int, List[int]]:
@@ -2588,9 +2885,9 @@ def _computeHighRoller(primary, ctx, cardPlayerId, eqId):
     chanceTriggered = sum(1 for b in breakdowns if b.chanceTriggered)
     if chanceTriggered > 0:
         bonus = round(1 + perCardMult * chanceTriggered, 2)
-        eq = f"1 + ({perCardMult} × {chanceTriggered} chance hits) = {bonus}x"
+        eq = f"1 + ({perCardMult} x {chanceTriggered} chance hit{'s' if chanceTriggered != 1 else ''}) = {bonus}x"
         return EffectResult(multBonus=bonus, equation=eq)
-    eq = "No chance cards triggered enhanced"
+    eq = "No chance cards hit"
     return EffectResult(equation=eq)
 
 
@@ -2841,6 +3138,13 @@ EFFECT_REGISTRY = {
     "game_ball": _computeGameBall,
     "spectacle": _computeBoomWeek,
     "indemnity": _computeDudInsurance,
+    # ── Escalating / Pace Effects ──
+    "crescendo": _computeCrescendo,
+    "eminence": _computeEminence,
+    "traverse": _computeTraverse,
+    # ── Chance Synergy Effects ──
+    "advantage": _computeAdvantage,
+    "catalyst": _computeCatalyst,
     # ── Same-Team Stacking Effects ──
     "stack": _computeStack,
     "backfield_buddies": _computeBackfieldBuddies,

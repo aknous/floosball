@@ -332,6 +332,12 @@ class SeasonManager:
                         logger.info(f"Catch-up complete — switched to SCHEDULED mode")
                 self.timingManager.catchingUp = isBehindSchedule
 
+            # Wait for rollover BEFORE clearing previous week's results.
+            # In scheduled mode this keeps completedWeekGames visible until
+            # 15 minutes before the next game start.
+            weekSetupTime = weekStartTime - datetime.timedelta(minutes=15)
+            await self.timingManager.waitForWeekSetup(weekSetupTime)
+
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
                 self._cachedNextGameStart = weekStartTime
@@ -340,6 +346,10 @@ class SeasonManager:
                 delays = self.timingManager.delays
                 gap = delays.get('week_start_wait', 30) + delays.get('game_announcement', 30)
                 self._cachedNextGameStart = datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
+
+            # NOW clear previous week and set up new week
+            self.currentSeason.activeGames = week['games']
+            self.currentSeason.completedWeekGames = None
 
             # Broadcast week start event
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -359,12 +369,6 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 )
                 broadcaster.broadcast_sync('season', week_event)
-            weekSetupTime = weekStartTime - datetime.timedelta(minutes=15)
-            self.currentSeason.activeGames = week['games']
-            self.currentSeason.completedWeekGames = None  # Clear previous week's finished games
-
-            # Wait for week setup time
-            await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
@@ -1076,6 +1080,10 @@ class SeasonManager:
                 except Exception:
                     pass
 
+                # Eminence: position pace data (same for all users)
+                from managers.cardEffectCalculator import computeEminenceData
+                positionAvgFPs, playerSeasonFPPerGame = computeEminenceData(session, season, week)
+
                 # ─── Process each user ───────────────────────────────────────
                 for userId, userEquipped in byUser.items():
                     roster = session.query(FantasyRoster).filter_by(
@@ -1260,6 +1268,8 @@ class SeasonManager:
                         rosterPlayerNames=rosterPlayerNames,
                         activeModifier=userModifier,
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+                        positionAvgFPs=positionAvgFPs,
+                        playerSeasonFPPerGame=playerSeasonFPPerGame,
                     )
 
                     # Populate streak conditions for breakdown display

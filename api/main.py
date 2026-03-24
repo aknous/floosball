@@ -3688,6 +3688,12 @@ def setEquippedCards(
         # Track previously equipped cards before clearing
         previousEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
+        # Build streak count lookup so re-equipped cards keep their streak
+        prevStreakByCardId = {
+            prev.user_card_id: getattr(prev, 'streak_count', 1) or 1
+            for prev in previousEquipped
+        }
+
         # Clear existing and set new
         equippedRepo.deleteByUserWeek(user.id, currentSeason, currentWeek)
         for c in req.cards:
@@ -3698,6 +3704,7 @@ def setEquippedCards(
                 slot_number=c.slotNumber,
                 user_card_id=c.userCardId,
                 locked=False,
+                streak_count=prevStreakByCardId.get(c.userCardId, 1),
             ))
 
         # All-Pro swap bonuses — only apply when roster is locked

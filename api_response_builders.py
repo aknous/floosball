@@ -406,7 +406,7 @@ class GameResponseBuilder(ResponseBuilder):
             'winningTeam': game.winningTeam.name if game.winningTeam else None,
             'isUpsetAlert': getattr(game, 'isUpsetAlert', False),
             'isFeatured': getattr(game, 'isFeatured', False),
-            'gameStats': game._buildGameStatsSnapshot() if hasattr(game, '_buildGameStatsSnapshot') else None,
+            'gameStats': game._buildGameStatsSnapshot() if hasattr(game, '_buildGameStatsSnapshot') and getattr(game.status, 'name', '') != 'Scheduled' else None,
         }
 
     @staticmethod

@@ -3546,7 +3546,14 @@ class Game:
                             self.play.scoreChange = True
                             self.play.homeTeamScore = self.homeScore
                             self.play.awayTeamScore = self.awayScore
-                            
+                            self.clockRunning = False  # Clock stops after safety
+
+                            self.formatPlayText()
+                            self.highlights.insert(0, {'play': self.play})
+                            self.leagueHighlights.insert(0, {'play': self.play})
+                            self.gameFeed.insert(0, {'play': self.play})
+                            self.broadcastGameState(includeLastPlay=True)
+
                             # Broadcast score update
                             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                                 event = GameEvent.scoreUpdate(
@@ -3556,14 +3563,15 @@ class Game:
                                     scoringPlay={'type': 'safety', 'team': self.defensiveTeam.abbr}
                                 )
                                 broadcaster.broadcast_sync(self.id, event)
-                            
+
                             # Check if OT should end after score
                             if self.checkOvertimeEnd():
                                 break
-                            
+
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                             self._pendingPossessionChange = True
                             self._pendingKickoff = True
+                            lastPlayFormatted = True
                             break
 
                     elif self.play.yardage < self.yardsToFirstDown:
