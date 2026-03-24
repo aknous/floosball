@@ -3684,8 +3684,8 @@ class Game:
         self.gameDict['winningTeam'] = self.winningTeam.name
         self.gameDict['losingTeam'] = self.losingTeam.name
         self.saveGameData()
-        self.homeTeam.getAverages()
-        self.awayTeam.getAverages()
+        self.homeTeam.getAverages(season=self.seasonNumber)
+        self.awayTeam.getAverages(season=self.seasonNumber)
         self.winningTeam.updateRating()
         self.losingTeam.updateRating()
         finalWp = self.calculateWinProbability()  # Now returns 100/0 since isGameOver() is True

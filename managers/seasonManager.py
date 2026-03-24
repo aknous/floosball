@@ -351,6 +351,9 @@ class SeasonManager:
             self.currentSeason.activeGames = week['games']
             self.currentSeason.completedWeekGames = None
 
+            # Free play-by-play memory from all prior completed games
+            self._cleanupCompletedGameMemory(excludeGames=week['games'])
+
             # Broadcast week start event
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                 nextStartIso = self._cachedNextGameStart.isoformat() + 'Z' if self._cachedNextGameStart else None
@@ -1432,6 +1435,47 @@ class SeasonManager:
         dbRow.away_ints       = aDef.get('ints')
         dbRow.away_fum_rec    = aDef.get('fumRec')
 
+    def _cleanupCompletedGameMemory(self, excludeGames=None):
+        """Free play-by-play data from completed games to reduce memory usage.
+
+        After a week's games are no longer served by the API (i.e., the next
+        week has started and completedWeekGames is cleared), the full play
+        feed, highlights, and Play object references are no longer needed.
+        Game summary data (scores, teams, status) is preserved so
+        /api/games/{id} still returns basic info.
+
+        Args:
+            excludeGames: set of game objects to skip (e.g., current active/completed games)
+        """
+        if not self.currentSeason or not self.currentSeason.schedule:
+            return
+
+        excludeSet = set(excludeGames) if excludeGames else set()
+        cleaned = 0
+
+        for weekEntry in self.currentSeason.schedule:
+            games = weekEntry.get('games', [])
+            for game in games:
+                if game in excludeSet:
+                    continue
+                # Only clean finished games
+                if not hasattr(game, 'status') or game.status.name != 'Final':
+                    continue
+                feedLen = len(getattr(game, 'gameFeed', []))
+                if feedLen == 0:
+                    continue  # already cleaned
+                game.gameFeed = []
+                game.highlights = []
+                # Break the shared reference to season.leagueHighlights
+                game.leagueHighlights = None
+                # Clear the current Play object (holds player refs + insights)
+                if hasattr(game, 'play'):
+                    game.play = None
+                cleaned += 1
+
+        if cleaned > 0:
+            logger.info(f"Memory cleanup: cleared play-by-play data from {cleaned} completed games")
+
     def _cleanupOrphanedWeekGames(self, season: int, week: int) -> None:
         """Remove Game + GamePlayerStats records left behind by an interrupted week.
 
@@ -2486,6 +2530,9 @@ class SeasonManager:
             self.currentSeason.currentWeek = self.currentWeek
             self.currentSeason.currentWeekText = self.currentWeekText
             self.currentSeason.schedule.append({'startTime': roundStartTime, 'games': playoffGamesList})
+
+            # Free play-by-play memory from all prior completed games
+            self._cleanupCompletedGameMemory(excludeGames=playoffGamesList)
 
             if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
                 nextStartIso = roundStartTime.isoformat() + 'Z' if roundStartTime else None
@@ -3834,10 +3881,11 @@ class SeasonManager:
         """Update weekly statistics and averages for teams and players"""
         # Update team averages (matches original)
         teamManager = self.serviceContainer.getService('team_manager')
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else None
         if teamManager:
             for team in teamManager.teams:
                 if hasattr(team, 'getAverages'):
-                    team.getAverages()
+                    team.getAverages(season=seasonNum)
         
         # Sync stats dicts for all active players (postgameChanges is called per-game in floosball_game.py)
         for player in self.playerManager.activePlayers:

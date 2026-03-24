@@ -186,79 +186,95 @@ class Team:
 
         self.updateRating()
 
-    def getAverages(self):
-        from floosball_game import Game, GameStatus
-        offenseRunTdsList = []
-        offensePassTdsList = []
-        offenseTdsList = []
-        offenseFgsList = []
-        offensePtsList = []
-        offensePassYardsList = []
-        offenseRunYardsList = []
-        offenseTotalYardsList = []
-        defenseSacksList = []
-        defenseIntsList = []
-        defenseFumRecList = []
-        defensePassYardsAlwdList = []
-        defenseRunYardsAlwdList = []
-        defenseTotalYardsAlwdList = []
-        defenseRunTdsAlwdList = []
-        defensePassTdsAlwdList = []
-        defenseTotalTdsAlwdList = []
-        defensePtsAlwdList = []
+    def getAverages(self, season=None):
+        """Compute season averages from the database Game table.
 
-        for game in self.schedule:
-            game: Game
-            if game.status is GameStatus.Final and game.gameDict.get('gameStats'):
-                if game.homeTeam.name == self.name:
-                    offenseStatsDict = game.gameDict['gameStats']['homeTeam']['offense']
-                    defenseStatsDict = game.gameDict['gameStats']['homeTeam']['defense']
-                else:
-                    offenseStatsDict = game.gameDict['gameStats']['awayTeam']['offense']
-                    defenseStatsDict = game.gameDict['gameStats']['awayTeam']['defense']
-                offenseRunTdsList.append(offenseStatsDict['runTds'])
-                offensePassTdsList.append(offenseStatsDict['passTds'])
-                offenseTdsList.append(offenseStatsDict['tds'])
-                offenseRunYardsList.append(offenseStatsDict['rushYards'])
-                offensePassYardsList.append(offenseStatsDict['passYards'])
-                offenseTotalYardsList.append(offenseStatsDict['totalYards'])
-                offenseFgsList.append(offenseStatsDict['fgs'])
-                offensePtsList.append(offenseStatsDict['score'])
+        Queries completed games for this team and aggregates offensive/defensive
+        stats.  This avoids holding Game objects in memory after week completion.
 
-                defenseSacksList.append(defenseStatsDict['sacks'])
-                defenseIntsList.append(defenseStatsDict['ints'])
-                defenseFumRecList.append(defenseStatsDict['fumRec'])
-                defensePassYardsAlwdList.append(defenseStatsDict['passYardsAlwd'])
-                defenseRunYardsAlwdList.append(defenseStatsDict['runYardsAlwd'])
-                defenseTotalYardsAlwdList.append(defenseStatsDict['totalYardsAlwd'])
-                defenseRunTdsAlwdList.append(defenseStatsDict['runTdsAlwd'])
-                defensePassTdsAlwdList.append(defenseStatsDict['passTdsAlwd'])
-                defenseTotalTdsAlwdList.append(defenseStatsDict['tdsAlwd'])
-                defensePtsAlwdList.append(defenseStatsDict['ptsAlwd'])
-            elif game.status is GameStatus.Scheduled:
-                break
+        Args:
+            season: Season number to query. If None, queries all seasons.
+        """
+        try:
+            from database.connection import get_session
+            from database.repositories.game_repository import GameRepository
+        except ImportError:
+            return  # DB not available
 
-        # Calculate averages, using 0 for empty lists to prevent "mean requires at least one data point" errors
-        self.seasonTeamStats['Offense']['avgRunYards'] = round(statistics.mean(offenseRunYardsList),2) if offenseRunYardsList else 0
-        self.seasonTeamStats['Offense']['avgPassYards'] = round(statistics.mean(offensePassYardsList),2) if offensePassYardsList else 0
-        self.seasonTeamStats['Offense']['avgYards'] = round(statistics.mean(offenseTotalYardsList),2) if offenseTotalYardsList else 0
-        self.seasonTeamStats['Offense']['avgRunTds'] = round(statistics.mean(offenseRunTdsList),2) if offenseRunTdsList else 0
-        self.seasonTeamStats['Offense']['avgPassTds'] = round(statistics.mean(offensePassTdsList),2) if offensePassTdsList else 0
-        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2) if offenseTdsList else 0
-        self.seasonTeamStats['Offense']['avgTds'] = round(statistics.mean(offenseTdsList),2) if offenseTdsList else 0
-        self.seasonTeamStats['Offense']['avgFgs'] = round(statistics.mean(offenseFgsList),2) if offenseFgsList else 0
-        self.seasonTeamStats['Offense']['avgPts'] = round(statistics.mean(offensePtsList),2) if offensePtsList else 0
+        session = get_session()
+        try:
+            rows = GameRepository(session).get_team_games(self.id, season=season)
+            offRushYards, offPassYards, offTotalYards = [], [], []
+            offRushTds, offPassTds, offTds, offFgs, offPts = [], [], [], [], []
+            defSacks, defInts, defFumRec = [], [], []
+            defPassYardsAlwd, defRunYardsAlwd, defTotalYardsAlwd = [], [], []
+            defRunTdsAlwd, defPassTdsAlwd, defTotalTdsAlwd, defPtsAlwd = [], [], [], []
 
-        self.seasonTeamStats['Defense']['avgSacks'] = round(statistics.mean(defenseSacksList),2) if defenseSacksList else 0
-        self.seasonTeamStats['Defense']['avgInts'] = round(statistics.mean(defenseIntsList),2) if defenseIntsList else 0
-        self.seasonTeamStats['Defense']['avgFumRec'] = round(statistics.mean(defenseFumRecList),2) if defenseFumRecList else 0
-        self.seasonTeamStats['Defense']['avgPassYardsAlwd'] = round(statistics.mean(defensePassYardsAlwdList),2) if defensePassYardsAlwdList else 0
-        self.seasonTeamStats['Defense']['avgRunYardsAlwd'] = round(statistics.mean(defenseRunYardsAlwdList),2) if defenseRunYardsAlwdList else 0
-        self.seasonTeamStats['Defense']['avgYardsAlwd'] = round(statistics.mean(defenseTotalYardsAlwdList),2) if defenseTotalYardsAlwdList else 0
-        self.seasonTeamStats['Defense']['avgPassTdsAlwd'] = round(statistics.mean(defensePassTdsAlwdList),2) if defensePassTdsAlwdList else 0
-        self.seasonTeamStats['Defense']['avgRunTdsAlwd'] = round(statistics.mean(defenseRunTdsAlwdList),2) if defenseRunTdsAlwdList else 0
-        self.seasonTeamStats['Defense']['avgTdsAlwd'] = round(statistics.mean(defenseTotalTdsAlwdList),2) if defenseTotalTdsAlwdList else 0
-        self.seasonTeamStats['Defense']['avgPtsAlwd'] = round(statistics.mean(defensePtsAlwdList),2) if defensePtsAlwdList else 0
+            for g in rows:
+                if g.status != 'final':
+                    continue
+                # Determine home/away perspective
+                isHome = (g.home_team_id == self.id)
+                # Offense columns
+                rushYds = (g.home_rush_yards if isHome else g.away_rush_yards) or 0
+                passYds = (g.home_pass_yards if isHome else g.away_pass_yards) or 0
+                rushTds = (g.home_rush_tds if isHome else g.away_rush_tds) or 0
+                passTds = (g.home_pass_tds if isHome else g.away_pass_tds) or 0
+                fgs     = (g.home_fgs if isHome else g.away_fgs) or 0
+                pts     = (g.home_score if isHome else g.away_score) or 0
+                offRushYards.append(rushYds)
+                offPassYards.append(passYds)
+                offTotalYards.append(rushYds + passYds)
+                offRushTds.append(rushTds)
+                offPassTds.append(passTds)
+                offTds.append(rushTds + passTds)
+                offFgs.append(fgs)
+                offPts.append(pts)
+                # Defense columns (opponent's offense = our defense allowed)
+                dRushYds = (g.away_rush_yards if isHome else g.home_rush_yards) or 0
+                dPassYds = (g.away_pass_yards if isHome else g.home_pass_yards) or 0
+                dRushTds = (g.away_rush_tds if isHome else g.home_rush_tds) or 0
+                dPassTds = (g.away_pass_tds if isHome else g.home_pass_tds) or 0
+                dSacks   = (g.home_sacks if isHome else g.away_sacks) or 0
+                dInts    = (g.home_ints if isHome else g.away_ints) or 0
+                dFumRec  = (g.home_fum_rec if isHome else g.away_fum_rec) or 0
+                dPts     = (g.away_score if isHome else g.home_score) or 0
+                defSacks.append(dSacks)
+                defInts.append(dInts)
+                defFumRec.append(dFumRec)
+                defPassYardsAlwd.append(dPassYds)
+                defRunYardsAlwd.append(dRushYds)
+                defTotalYardsAlwd.append(dRushYds + dPassYds)
+                defRunTdsAlwd.append(dRushTds)
+                defPassTdsAlwd.append(dPassTds)
+                defTotalTdsAlwd.append(dRushTds + dPassTds)
+                defPtsAlwd.append(dPts)
+
+            # Helper for safe mean
+            def _avg(lst):
+                return round(statistics.mean(lst), 2) if lst else 0
+
+            self.seasonTeamStats['Offense']['avgRunYards']  = _avg(offRushYards)
+            self.seasonTeamStats['Offense']['avgPassYards'] = _avg(offPassYards)
+            self.seasonTeamStats['Offense']['avgYards']     = _avg(offTotalYards)
+            self.seasonTeamStats['Offense']['avgRunTds']    = _avg(offRushTds)
+            self.seasonTeamStats['Offense']['avgPassTds']   = _avg(offPassTds)
+            self.seasonTeamStats['Offense']['avgTds']       = _avg(offTds)
+            self.seasonTeamStats['Offense']['avgFgs']       = _avg(offFgs)
+            self.seasonTeamStats['Offense']['avgPts']       = _avg(offPts)
+
+            self.seasonTeamStats['Defense']['avgSacks']       = _avg(defSacks)
+            self.seasonTeamStats['Defense']['avgInts']        = _avg(defInts)
+            self.seasonTeamStats['Defense']['avgFumRec']      = _avg(defFumRec)
+            self.seasonTeamStats['Defense']['avgPassYardsAlwd'] = _avg(defPassYardsAlwd)
+            self.seasonTeamStats['Defense']['avgRunYardsAlwd']  = _avg(defRunYardsAlwd)
+            self.seasonTeamStats['Defense']['avgYardsAlwd']     = _avg(defTotalYardsAlwd)
+            self.seasonTeamStats['Defense']['avgPassTdsAlwd']   = _avg(defPassTdsAlwd)
+            self.seasonTeamStats['Defense']['avgRunTdsAlwd']    = _avg(defRunTdsAlwd)
+            self.seasonTeamStats['Defense']['avgTdsAlwd']       = _avg(defTotalTdsAlwd)
+            self.seasonTeamStats['Defense']['avgPtsAlwd']       = _avg(defPtsAlwd)
+        finally:
+            session.close()
 
     def assignPlayerNumber(self, player):
         numberToAssign = player.preferredNumber

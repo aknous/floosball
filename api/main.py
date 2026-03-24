@@ -1896,8 +1896,9 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
     totalGames = 0
     completedGames = 0
     if season and season.schedule:
-        for roundGames in season.schedule:
-            for key, game in roundGames.items():
+        for roundEntry in season.schedule:
+            games = roundEntry.get('games', [])
+            for game in games:
                 totalGames += 1
                 if game.status == _GameStatus.Final:
                     completedGames += 1
@@ -1911,6 +1912,28 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
     mvpName = None
     if season and season.mvp:
         mvpName = season.mvp.get('name', None)
+
+    # Memory usage
+    import resource, os
+    rusage = resource.getrusage(resource.RUSAGE_SELF)
+    rssMb = round(rusage.ru_maxrss / (1024 * 1024), 1)  # macOS reports bytes
+    # Linux reports KB — detect platform
+    import platform
+    if platform.system() == 'Linux':
+        rssMb = round(rusage.ru_maxrss / 1024, 1)
+
+    # Count in-memory game objects and their play data
+    scheduleGames = 0
+    gamesWithPlays = 0
+    totalPlays = 0
+    if season and season.schedule:
+        for weekEntry in season.schedule:
+            for g in weekEntry.get('games', []):
+                scheduleGames += 1
+                feedLen = len(getattr(g, 'gameFeed', []))
+                if feedLen > 0:
+                    gamesWithPlays += 1
+                    totalPlays += feedLen
 
     return build_success_response({
         "deploySafety": {
@@ -1949,6 +1972,13 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
             "freeAgents": len(pm.freeAgents) if pm else 0,
             "retiredPlayers": len(pm.retiredPlayers) if pm else 0,
             "hallOfFame": len(pm.hallOfFame) if pm else 0,
+        },
+        "memory": {
+            "rssMb": rssMb,
+            "scheduleGames": scheduleGames,
+            "gamesWithPlays": gamesWithPlays,
+            "totalPlaysInMemory": totalPlays,
+            "pid": os.getpid(),
         },
         "websockets": ws_manager.get_stats(),
     })
