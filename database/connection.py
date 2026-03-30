@@ -71,6 +71,60 @@ def _runPendingMigrations():
     finally:
         conn.close()
 
+    # One-time data backfill: reconstruct PlayerSeasonStats.team_id from GamePlayerStats
+    _backfillPlayerSeasonTeamIds()
+
+
+def _backfillPlayerSeasonTeamIds():
+    """Fill in NULL team_id on player_season_stats using game_player_stats records.
+
+    For each row with team_id IS NULL, find the team the player appeared on most
+    frequently in that season's games. Idempotent — skips rows that already have a team_id.
+    """
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        # Check if there are any rows to fix
+        result = conn.execute(text(
+            "SELECT COUNT(*) FROM player_season_stats WHERE team_id IS NULL"
+        ))
+        nullCount = result.scalar()
+        if nullCount == 0:
+            return
+
+        print(f"  Backfill: fixing {nullCount} player_season_stats rows with NULL team_id")
+
+        # For each NULL row, find the most common team_id from that player's game stats
+        # in that season. Uses a correlated subquery with GROUP BY to pick the mode.
+        conn.execute(text("""
+            UPDATE player_season_stats
+            SET team_id = (
+                SELECT gps.team_id
+                FROM game_player_stats gps
+                JOIN games g ON gps.game_id = g.id
+                WHERE gps.player_id = player_season_stats.player_id
+                  AND g.season = player_season_stats.season
+                GROUP BY gps.team_id
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+            )
+            WHERE team_id IS NULL
+        """))
+        conn.commit()
+
+        # Report results
+        result = conn.execute(text(
+            "SELECT COUNT(*) FROM player_season_stats WHERE team_id IS NULL"
+        ))
+        remaining = result.scalar()
+        fixed = nullCount - remaining
+        print(f"  Backfill: fixed {fixed} rows, {remaining} still NULL (no game data)")
+    except Exception as e:
+        conn.rollback()
+        print(f"  Backfill warning: {e}")
+    finally:
+        conn.close()
+
 
 def clear_db():
     """Clear game/simulation data while preserving user accounts and beta allowlist.

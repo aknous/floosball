@@ -1349,11 +1349,14 @@ class PlayerManager:
                         s_receiving = season_dict.get('receiving') or {}
                         s_defense = season_dict.get('defense') or {}
                         
+                        # Get team ID from player's team object
+                        playerTeamId = player.team.id if hasattr(player, 'team') and hasattr(player.team, 'id') else None
+
                         if db_season_stats is None:
                             db_season_stats = PlayerSeasonStats(
                                 player_id=player.id,
                                 season=current_season,
-                                team_id=player.teamId if hasattr(player, 'teamId') else None,
+                                team_id=playerTeamId,
                                 games_played=getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0),
                                 fantasy_points=season_dict.get('fantasyPoints', 0),
                                 # Denormalized passing stats
@@ -1383,7 +1386,7 @@ class PlayerManager:
                             )
                             self.db_session.add(db_season_stats)
                         else:
-                            db_season_stats.team_id = player.teamId if hasattr(player, 'teamId') else None
+                            db_season_stats.team_id = playerTeamId
                             db_season_stats.games_played = getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0)
                             db_season_stats.fantasy_points = season_dict.get('fantasyPoints', 0)
                             # Update denormalized passing stats

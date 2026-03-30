@@ -5056,10 +5056,15 @@ class SeasonManager:
         
         # Save season to database
         self._saveSeasonToDatabase()
-        
+
         # Save team season stats to database
         self._saveTeamSeasonStatsToDatabase()
-        
+
+        # Final player data save (captures playoff stats that weekly saves missed)
+        playerManager = self.serviceContainer.getService('player_manager')
+        if playerManager:
+            playerManager.savePlayerData()
+
         # Save championships to Championship table
         self._saveChampionshipsToDatabase()
         
