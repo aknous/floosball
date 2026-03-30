@@ -1233,6 +1233,15 @@ class TeamManager:
             coach.id = dbCoach.id
             coach.name = dbCoach.name
             coach.seasonsCoached = dbCoach.seasons_coached
+            # Backfill seasonsCoached if it was never incremented (pre-fix data)
+            if coach.seasonsCoached == 0:
+                from database.models import Season as DBSeason
+                latestSeason = self.db_session.query(DBSeason).order_by(DBSeason.season_number.desc()).first()
+                if latestSeason and latestSeason.season_number > 1:
+                    coach.seasonsCoached = latestSeason.season_number - 1
+                    dbCoach.seasons_coached = coach.seasonsCoached
+                    self.db_session.commit()
+                    self.logger.info(f"Backfilled {coach.name} seasonsCoached to {coach.seasonsCoached}")
             coach.offensiveMind = dbCoach.offensive_mind
             coach.defensiveMind = dbCoach.defensive_mind
             coach.adaptability = dbCoach.adaptability
