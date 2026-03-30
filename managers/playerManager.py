@@ -293,15 +293,21 @@ class PlayerManager:
             
             # Set loaded players as active players
             self.activePlayers = loaded_players
-            
+
+            # Persist any backfilled seasonsPlayed/serviceTime values
+            try:
+                self.db_session.commit()
+            except Exception:
+                self.db_session.rollback()
+
             # Rebuild position lists from loaded players
             self.rebuildPositionLists()
-            
+
             # Organize players by position and assign tiers
             self.sortPlayersByPosition()
-            
+
             # Note: Players will be assigned to teams later after teams are loaded
-            
+
             logger.info(f"Successfully loaded {len(loaded_players)} players from database")
             return True
             
@@ -338,6 +344,19 @@ class PlayerManager:
             player.preferredNumber = db_player.preferred_number
             player.team = db_player.team_id
             player.seasonsPlayed = db_player.seasons_played
+            # Backfill seasonsPlayed if never incremented (pre-fix data)
+            if player.seasonsPlayed == 0:
+                from database.models import PlayerSeasonStats as DBPlayerSeasonStats
+                actualSeasons = self.db_session.query(DBPlayerSeasonStats).filter(
+                    DBPlayerSeasonStats.player_id == player.id,
+                    DBPlayerSeasonStats.games_played > 0
+                ).count()
+                if actualSeasons > 0:
+                    player.seasonsPlayed = actualSeasons
+                    db_player.seasons_played = actualSeasons
+                    self._updatePlayerServiceTime(player)
+                    db_player.service_time = player.serviceTime.name
+                    logger.debug(f"Backfilled {player.name} seasonsPlayed={actualSeasons}, serviceTime={player.serviceTime.name}")
             player.term = db_player.term
             player.termRemaining = db_player.term_remaining
             player.capHit = db_player.cap_hit

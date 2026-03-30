@@ -3333,9 +3333,10 @@ class SeasonManager:
                 if player is None:
                     continue
                 
-                # Note: service time is updated in _handlePlayerSeasonProgression based on seasonsPlayed
-                # Don't update it here to avoid overwriting the correct logic
-                
+                # Increment seasons played and update service time rank
+                player.seasonsPlayed += 1
+                self.playerManager._updatePlayerServiceTime(player)
+
                 # Decrement contract term
                 player.termRemaining -= 1
                 
