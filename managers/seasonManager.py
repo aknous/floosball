@@ -201,6 +201,9 @@ class SeasonManager:
         # Initialize season stats
         self._initializeSeasonStats()
 
+        # Restore reigning champion flag from previous season
+        self._restoreReigningChampion(seasonNumber)
+
         # Load funding tiers from previous season (affects morale during games)
         self._loadTeamFundingTiers(seasonNumber)
 
@@ -4663,6 +4666,26 @@ class SeasonManager:
         for rec in records:
             tierCounts[rec.funding_tier] = tierCounts.get(rec.funding_tier, 0) + 1
         logger.info(f"Funding tiers assigned for season {season} (fair share: {fairShare:.0f}F): {tierCounts}")
+
+    def _restoreReigningChampion(self, currentSeason: int) -> None:
+        """Restore the floosbowlChampion flag on the team that won last season."""
+        previousSeason = currentSeason - 1
+        if previousSeason < 1:
+            return
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import Season as DBSeason
+            prevDbSeason = self.db_session.query(DBSeason).filter_by(season_number=previousSeason).first()
+            if prevDbSeason and prevDbSeason.champion_team_id:
+                teamManager = self.serviceContainer.getService('team_manager')
+                if teamManager:
+                    champTeam = teamManager.getTeamById(prevDbSeason.champion_team_id)
+                    if champTeam:
+                        champTeam.floosbowlChampion = True
+                        logger.info(f"Restored reigning champion: {champTeam.city} {champTeam.name}")
+        except Exception as e:
+            logger.error(f"Failed to restore reigning champion: {e}")
 
     def _loadTeamFundingTiers(self, currentSeason: int) -> None:
         """Load funding tiers from the previous completed season onto runtime team objects."""
