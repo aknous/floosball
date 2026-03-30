@@ -334,14 +334,49 @@ async def get_team(team_id: int):
         team_dict['regularSeasonChampions'] = getattr(team, 'regularSeasonChampions', [])
         team_dict['floosbowlChampionships'] = team.floosbowlChampionships
         team_dict['allTimeStats'] = team.allTimeTeamStats
-        # Build history: current season stats + archived past seasons
+        # Build history: current season stats + past seasons from DB
         import copy as _copy
         currentStats = _copy.deepcopy(team.seasonTeamStats)
         # Ensure current season number is set (defaults to 0 in teamStatsDict)
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and hasattr(sm, 'currentSeason') and sm.currentSeason else 1
         if currentStats.get('season', 0) == 0:
-            sm = floosball_app.seasonManager if floosball_app else None
-            currentStats['season'] = sm.currentSeason.seasonNumber if sm and hasattr(sm, 'currentSeason') and sm.currentSeason else 1
-        team_dict['history'] = [currentStats] + (team.statArchive or [])
+            currentStats['season'] = currentSeasonNum
+
+        # Load past season history from DB (statArchive is runtime-only)
+        pastSeasons = []
+        try:
+            from database.connection import get_session
+            from database.models import TeamSeasonStats as DBTeamSeasonStats
+            dbSession = get_session()
+            pastRows = dbSession.query(DBTeamSeasonStats).filter(
+                DBTeamSeasonStats.team_id == team.id,
+                DBTeamSeasonStats.season < currentSeasonNum
+            ).order_by(DBTeamSeasonStats.season.desc()).all()
+            for row in pastRows:
+                pastEntry = {
+                    'season': row.season,
+                    'elo': row.elo or 1500,
+                    'overallRating': 0,
+                    'wins': row.wins,
+                    'losses': row.losses,
+                    'winPerc': row.win_percentage or 0.0,
+                    'streak': row.streak or 0,
+                    'scoreDiff': row.score_differential or 0,
+                    'madePlayoffs': row.made_playoffs,
+                    'leagueChamp': row.league_champion,
+                    'floosbowlChamp': row.floosball_champion,
+                    'topSeed': row.top_seed,
+                    'Offense': row.offense_stats or {},
+                    'Defense': row.defense_stats or {},
+                }
+                pastSeasons.append(pastEntry)
+            dbSession.close()
+        except Exception:
+            # Fallback to runtime archive if DB query fails
+            pastSeasons = team.statArchive or []
+
+        team_dict['history'] = [currentStats] + pastSeasons
         team_dict['coach'] = _buildCoachDict(team)
 
         # Roster

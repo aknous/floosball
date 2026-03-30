@@ -3156,17 +3156,15 @@ class SeasonManager:
             logger.warning(f"Rookie card template generation failed: {e}")
 
     def _processUserSeasonTransitions(self) -> None:
-        """Apply pending favorite team changes, finalize scores, and carry rosters forward."""
+        """Apply pending favorite team changes and finalize fantasy scores."""
         from database.connection import get_session
         from database.models import (
-            User, FantasyRoster, FantasyRosterPlayer, PlayerSeasonStats, Player,
+            User, FantasyRoster, PlayerSeasonStats,
         )
 
         completedSeason = self.currentSeason.seasonNumber if self.currentSeason else None
         if completedSeason is None:
             return
-
-        nextSeason = completedSeason + 1
         session = get_session()
         try:
             # Promote pending favorite teams
@@ -3195,48 +3193,8 @@ class SeasonManager:
                 roster.total_points = totalPoints
                 logger.info(f"Fantasy roster {roster.id} (user {roster.user_id}): finalized at {totalPoints:.1f} pts")
 
-            # Carry rosters forward: clone locked rosters into new season
-            # Only carry forward players who are still on a team (not retired)
-            activePlayerIds = {
-                p.id for p in self.playerManager.activePlayers
-            }
-
-            carriedCount = 0
-            for oldRoster in lockedRosters:
-                # Check if new season roster already exists (idempotent)
-                existingNew = session.query(FantasyRoster).filter_by(
-                    user_id=oldRoster.user_id, season=nextSeason
-                ).first()
-                if existingNew:
-                    continue
-
-                newRoster = FantasyRoster(
-                    user_id=oldRoster.user_id,
-                    season=nextSeason,
-                    is_locked=False,
-                    total_points=0.0,
-                    card_bonus_points=0.0,
-                    swaps_available=0,
-                )
-                session.add(newRoster)
-                session.flush()  # Get newRoster.id
-
-                for rp in oldRoster.players:
-                    if rp.player_id not in activePlayerIds:
-                        continue  # Skip retired players
-                    newRp = FantasyRosterPlayer(
-                        roster_id=newRoster.id,
-                        player_id=rp.player_id,
-                        slot=rp.slot,
-                        points_at_lock=0.0,
-                    )
-                    session.add(newRp)
-
-                carriedCount += 1
-                logger.info(f"Carried forward roster for user {oldRoster.user_id} to season {nextSeason}")
-
-            if carriedCount:
-                logger.info(f"Carried {carriedCount} rosters forward to season {nextSeason}")
+            # Rosters are NOT carried forward — users start each season fresh
+            logger.info(f"Finalized {len(lockedRosters)} fantasy rosters for season {completedSeason}")
 
             session.commit()
         except Exception as e:
@@ -5399,10 +5357,12 @@ class SeasonManager:
                 team.seasonTeamStats['elo'] = getattr(team, 'elo', 1500)
                 team.seasonTeamStats['overallRating'] = getattr(team, 'overallRating', 80)
                 
-                # Archive the stats
+                # Archive the stats (skip empty defaults with no game data)
                 if not hasattr(team, 'statArchive'):
                     team.statArchive = []
-                team.statArchive.insert(0, team.seasonTeamStats.copy())
+                hasGameData = team.seasonTeamStats.get('wins', 0) > 0 or team.seasonTeamStats.get('losses', 0) > 0
+                if hasGameData:
+                    team.statArchive.insert(0, team.seasonTeamStats.copy())
                 
                 # Reset season stats
                 import floosball_team as FloosTeam

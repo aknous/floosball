@@ -754,8 +754,9 @@ class TeamManager:
                 current_elo = team.seasonTeamStats.get('elo', getattr(team, 'elo', 1500))
                 current_rating = team.seasonTeamStats.get('overallRating', getattr(team, 'overallRating', 80))
                 
-                # Archive current stats if they exist
-                if hasattr(team, 'statArchive') and team.seasonTeamStats:
+                # Archive current stats if they have real game data (skip empty defaults)
+                hasGameData = team.seasonTeamStats.get('wins', 0) > 0 or team.seasonTeamStats.get('losses', 0) > 0
+                if hasattr(team, 'statArchive') and team.seasonTeamStats and hasGameData:
                     team.statArchive.insert(0, copy.deepcopy(team.seasonTeamStats))
                 
                 # Properly restore the full structure from teamStatsDict

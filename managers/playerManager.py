@@ -468,10 +468,16 @@ class PlayerManager:
         if contract_fixes > 0:
             logger.info(f"Fixed contract state for {contract_fixes} players during team assignment")
         
+        faCount = 0
         for player in self.activePlayers:
             if not hasattr(player, 'team') or player.team is None:
+                # Player has no team — mark as free agent
+                player.team = 'Free Agent'
+                if player not in self.freeAgents:
+                    self.freeAgents.append(player)
+                    faCount += 1
                 continue
-                
+
             # player.team may be an integer (freshly loaded from DB) or a Team
             # object (already resolved in a previous assignPlayersToTeams call).
             if isinstance(player.team, int):
@@ -479,14 +485,14 @@ class PlayerManager:
             else:
                 team_id = getattr(player.team, 'id', None)
             team = team_lookup.get(team_id)
-            
+
             if not team:
                 logger.warning(f"Player {player.name} has team_id {team_id} but team not found")
                 continue
-            
+
             # Determine which roster position to fill based on player's position
             position = player.position.value
-            
+
             if position == 1:  # QB
                 team.rosterDict['qb'] = player
                 player.team = team  # Update player's team reference
@@ -514,8 +520,8 @@ class PlayerManager:
                 team.rosterDict['k'] = player
                 player.team = team  # Update player's team reference
                 assigned_count += 1
-        
-        logger.info(f"Assigned {assigned_count} players to team rosters")
+
+        logger.info(f"Assigned {assigned_count} players to team rosters, {faCount} free agents identified")
     
     def loadNameLists(self, config: Dict[str, Any]) -> None:
         """Load player name lists from database, initializing from config if needed"""
