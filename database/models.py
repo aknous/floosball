@@ -367,6 +367,29 @@ class TeamSeasonStats(Base):
         return f"<TeamSeasonStats(team_id={self.team_id}, season={self.season}, W-L={self.wins}-{self.losses})>"
 
 
+class TeamFunding(Base):
+    """Team funding table - tracks season-by-season patronage from user taxes."""
+    __tablename__ = "team_funding"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_funding: Mapped[int] = mapped_column(Integer, default=0)
+    carried_funding: Mapped[int] = mapped_column(Integer, default=0)
+    effective_funding: Mapped[int] = mapped_column(Integer, default=0)
+    funding_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    tier_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "season", name="uq_team_funding_season"),
+        Index("idx_team_funding_team", "team_id"),
+        Index("idx_team_funding_season", "season"),
+    )
+
+    def __repr__(self):
+        return f"<TeamFunding(team_id={self.team_id}, season={self.season}, tier={self.funding_tier}, effective={self.effective_funding})>"
+
+
 class Game(Base):
     """Game table - stores game metadata and scores."""
     __tablename__ = "games"
@@ -511,6 +534,8 @@ class Season(Base):
     current_week: Mapped[int] = mapped_column(Integer, default=1)
     playoffs_started: Mapped[bool] = mapped_column(Boolean, default=False)
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
+    mvp_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Indexes
@@ -748,7 +773,7 @@ class CardTemplate(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
-    edition: Mapped[str] = mapped_column(String(20), nullable=False)  # base, holographic, prismatic, gold, chrome, diamond
+    edition: Mapped[str] = mapped_column(String(20), nullable=False)  # base, holographic, prismatic, diamond
     season_created: Mapped[int] = mapped_column(Integer, nullable=False)
     is_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
     classification: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # rookie, mvp, champion, all_pro, or compound e.g. mvp_champion

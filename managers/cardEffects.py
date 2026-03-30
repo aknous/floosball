@@ -1,5 +1,5 @@
 """
-Card Effects — shared-pool effect system with 90+ named variants.
+Card Effects — shared-pool effect system with 100+ named variants.
 
 Effects are drawn from a shared pool available to all positions, plus small
 position-exclusive pools for effects that reference position-specific stats
@@ -8,7 +8,8 @@ position-exclusive pools for effects that reference position-specific stats
 Each effect retains its natural category (flat_fp, multiplier, floobits,
 conditional, streak, cross) for param building and output-type derivation.
 
-Edition scales power (Base 1.0x → Diamond 4.0x) and adds secondary effects (Holo+).
+Edition IS the effect tier — each effect belongs to exactly one edition
+(base, holographic, prismatic, diamond). No power scaling or secondary bonuses.
 """
 
 import random
@@ -28,7 +29,7 @@ EFFECT_CATEGORY = {
     # flat_fp
     "freebie": "flat_fp", "entourage": "flat_fp", "touchdown_pinata": "flat_fp",
     "scrappy": "flat_fp", "honor_roll": "flat_fp", "garbage_time": "flat_fp",
-    "loyalty_bonus": "flat_fp", "windfall": "flat_fp",
+    "loyalty_bonus": "flat_fp", "windfall": "floobits",
     "spotlight_moment": "flat_fp", "possession": "flat_fp", "ace_up_the_sleeve": "flat_fp",
     "slippery": "flat_fp", "jailbreak": "flat_fp", "homer": "flat_fp",
     "three_pointer": "flat_fp", "safety_blanket": "flat_fp",
@@ -41,7 +42,7 @@ EFFECT_CATEGORY = {
     "house_money": "flat_fp", "locomotive": "flat_fp", "gunslinger": "flat_fp",
     "air_raid": "floobits", "trebuchet": "flat_fp", "double_trouble": "flat_fp",
     "stampede": "multiplier",
-    "stack": "multiplier", "backfield_buddies": "multiplier",
+    "stack": "multiplier", "backfield_buddies": "multiplier", "rising_tide": "multiplier",
     # floobits
     "allowance": "floobits", "cha_ching": "floobits", "piggy_bank": "floobits",
     "good_neighbor": "floobits", "consolation_prize": "floobits", "rock_bottom": "floobits",
@@ -78,47 +79,61 @@ EFFECT_CATEGORY = {
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
 
-# ─── Edition Power Scaling ───────────────────────────────────────────────────
+# ─── Effect → Edition Tier Mapping ─────────────────────────────────────────
+# Each effect belongs to exactly one edition tier. Edition IS the rarity signal —
+# a Radiant card is exciting because it has a Radiant-tier effect, not because of
+# power scaling. No more multiplied base effects.
 
-EDITION_POWER_SCALES = {
-    'base': 1.0,
-    'chrome': 1.5,
-    'holographic': 2.0,
-    'gold': 2.5,
-    'prismatic': 3.0,
-    'diamond': 4.0,
+EFFECT_EDITION_TIER = {
+    # ── BASE (32) — Simple, reliable, always produces value ──
+    "freebie": "base", "entourage": "base", "touchdown_pinata": "base",
+    "honor_roll": "base", "garbage_time": "base", "windfall": "base",
+    "resplendent": "base", "three_pointer": "base", "hot_hand": "base",
+    "big_deal": "base", "bandwagon": "base",
+    "allowance": "base", "piggy_bank": "base", "buy_low": "base", "trust_fund": "base",
+    "showoff": "base", "flourish": "base", "schadenfreude": "base",
+    "believe": "base", "reclamation": "base",
+    "gunslinger": "base", "workhorse": "base", "expedition": "base",
+    "possession": "base", "slippery": "base", "safety_blanket": "base",
+    "sniper": "base", "industrious": "base", "air_raid": "base",
+    "goal_line_vulture": "base",
+    "homer": "base",
+
+    # ── HOLOGRAPHIC (28) — Conditional, team-composition, position thresholds ──
+    "spotlight_moment": "holographic", "squire": "holographic", "monolith": "holographic",
+    "mismatch": "holographic", "upset_special": "holographic", "due": "holographic",
+    "pedigree": "holographic", "spectacle": "holographic", "game_ball": "holographic",
+    "jailbreak": "holographic",
+    "cornucopia": "holographic", "luminary": "holographic", "stampede": "holographic",
+    "stack": "holographic", "backfield_buddies": "holographic",
+    "cha_ching": "holographic", "feeding_frenzy": "holographic",
+    "highlight_reel": "holographic", "connection": "holographic",
+    "team_chemistry": "holographic", "hometown_hero": "holographic",
+    "loyalty_bonus": "holographic", "loyalty_program": "holographic",
+    "juggernaut": "holographic",
+    "ace_up_the_sleeve": "holographic", "trebuchet": "holographic",
+    "double_trouble": "holographic", "locomotive": "holographic", "rising_tide": "holographic",
+
+    # ── PRISMATIC (33) — Chance-based, streaks, game-outcome, build-around ──
+    "scrappy": "prismatic", "babysitter": "prismatic", "martyr": "prismatic", "underdog": "prismatic",
+    "good_neighbor": "prismatic", "consolation_prize": "prismatic", "rock_bottom": "prismatic",
+    "indemnity": "prismatic", "crescendo": "prismatic", "traverse": "prismatic",
+    "couch_potato": "prismatic", "complacency": "prismatic", "snowball_fight": "prismatic",
+    "bandwagon_express": "prismatic", "on_fire": "prismatic", "momentum": "prismatic",
+    "gravy_train": "prismatic", "fairweather_fan": "prismatic", "leg_day": "prismatic",
+    "automatic": "prismatic", "touchdown_jackpot": "prismatic", "odometer": "prismatic",
+    "comeback_kid": "prismatic", "domination": "prismatic", "walk_off": "prismatic",
+    "stockpiler": "prismatic", "house_money": "prismatic", "eminence": "prismatic",
+    "all_in": "prismatic", "diversified": "prismatic", "gold_rush": "prismatic",
+    "bonus_round": "prismatic", "last_resort": "prismatic",
+
+    # ── DIAMOND (12) — Meta-defining, synergy-enabling, hand-shaping ──
+    "providence": "diamond", "catalyst": "diamond", "advantage": "diamond",
+    "high_roller": "diamond", "jackpot": "diamond",
+    "fortitude": "diamond", "immaculate": "diamond",
+    "full_roster": "diamond", "stacked_deck": "diamond", "copycat": "diamond",
+    "chain_reaction": "diamond", "double_down": "diamond",
 }
-
-# Secondary effects per edition (static, not affected by match bonus)
-EDITION_SECONDARY = {
-    'base': None,
-    'chrome': {"flatFP": 15, "floobits": 0, "mult": 0},
-    'holographic': {"flatFP": 0, "floobits": 0, "mult": 1.4},     # FPx factor
-    'gold': {"flatFP": 0, "floobits": 12, "mult": 0},
-    'prismatic': None,   # Generated by buildPrismaticSecondary()
-    'diamond': {"flatFP": 15, "floobits": 15, "mult": 1.5},       # All 3 types
-}
-
-# Prismatic gets random 2 of 3 bonus types
-_PRISMATIC_SECONDARY_OPTIONS = [
-    {"flatFP": 10, "floobits": 0, "mult": 0},      # +FP
-    {"flatFP": 0, "floobits": 12, "mult": 0},      # +Floobits
-    {"flatFP": 0, "floobits": 0, "mult": 1.35},    # FPx factor
-]
-
-
-def buildPrismaticSecondary() -> dict:
-    """Generate prismatic secondary by picking 2 of 3 bonus types."""
-    picks = random.sample(_PRISMATIC_SECONDARY_OPTIONS, 2)
-    multProduct = 1.0
-    for p in picks:
-        if p["mult"] > 1:
-            multProduct *= p["mult"]
-    return {
-        "flatFP": sum(p["flatFP"] for p in picks),
-        "floobits": sum(p["floobits"] for p in picks),
-        "mult": round(multProduct, 2) if multProduct > 1 else 0,
-    }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
 
@@ -176,6 +191,7 @@ EFFECT_DISPLAY_NAMES = {
     "providence": "Providence",
     "house_money": "House Money",
     "locomotive": "Locomotive",
+    "rising_tide": "Rising Tide",
     # Floobits (RB)
     "allowance": "Allowance",
     "cha_ching": "Cha-Ching",
@@ -291,7 +307,7 @@ EFFECT_TAGLINES = {
     "three_pointer": "Cash money kicks",
     "garbage_time": "Participation trophies",
     "loyalty_bonus": "Faithful fan rewards",
-    "windfall": "Hidden gems",
+    "windfall": "Cashing in on talent",
     "complacency": "Stop tinkering",
     "spotlight_moment": "Your {posLabel} delivers",
     "ace_up_the_sleeve": "Your WRs hit the mark",
@@ -310,6 +326,7 @@ EFFECT_TAGLINES = {
     "providence": "A little something extra",
     "house_money": "Playing with profit",
     "locomotive": "Unstoppable after the catch",
+    "rising_tide": "Lifts all boats",
     # Floobits (RB)
     "allowance": "Weekly pocket money",
     "cha_ching": "Your {posLabel} scores, you profit",
@@ -409,7 +426,7 @@ EFFECT_TOOLTIPS = {
     "three_pointer": "Three points for them, bonus for you. FP for every kicker FG.",
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
-    "windfall": "They believed before you did. Bonus FP per overperforming roster player.",
+    "windfall": "When your players ball out, you get paid. Floobits per overperforming roster player.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Resets if you make a swap. Stacking streak cards accelerates growth.",
     "spotlight_moment": "When your {posLabel} finds the endzone, you cash in. FP whenever your {posLabel} slot scores a TD. For WR, either slot counts.",
     "ace_up_the_sleeve": "Your WRs put in the work. Bonus FP when your WR slots hit a combined stat threshold.",
@@ -425,9 +442,10 @@ EFFECT_TOOLTIPS = {
     "loyalty_program": "Set it and forget it. FP that grows each week your roster doesn't change.",
     "underdog": "The worse they are, the better the odds. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
     "stockpiler": "Patience pays. FPx that grows with each unused roster swap you're sitting on.",
-    "providence": "A little extra on the side. Small FPx bonus plus increased odds on all chance cards in your hand. Chance cards also naturally boost each other — the more you equip, the better all their odds.",
+    "providence": "Small FPx bonus plus increased odds on all chance cards in your hand. Equipping multiple chance cards further improves all their odds.",
     "house_money": "Upset city. FP that builds every time your favorite team wins as an underdog.",
     "locomotive": "When your WRs rack up serious YAC, your whole week gets a bonus. FP if WR slots combine for 35+ YAC.",
+    "rising_tide": "A rising tide lifts all boats. FPx that grows with each roster player outperforming their rating.",
     # Floobits (RB)
     "allowance": "Don't spend it all in one place. Free Floobits every week just for existing.",
     "cha_ching": "Your {posLabel}'s endzone is your cash register. Floobits for every TD your {posLabel} slot scores.",
@@ -458,7 +476,7 @@ EFFECT_TOOLTIPS = {
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
     "odometer": "Miles and miles of yards. FP ticking up per chunk of roster yards, resets weekly.",
-    "leg_day": "Never skip it. FP growing each week your K slot nails a 35+ yard FG. Streak holds through bye weeks. Stacking streak cards accelerates growth.",
+    "leg_day": "Never skip it. FP growing each week your K slot nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week your K slot goes perfect on FGs. Resets on a miss. Stacking streak cards accelerates growth.",
     "hot_hand": "Feed the hot hand. FP scales with how many FGs your K slot makes each week.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 75 FP. Resets if they don't. Stacking streak cards accelerates growth.",
@@ -527,7 +545,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "three_pointer": "+{perFgFP} FP for every FG your K slot makes",
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP equal to your favorite team's win streak",
-    "windfall": "+{perPlayerFP} FP per overperforming roster player",
+    "windfall": "+{perPlayerFloobits}F per overperforming roster player",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged. Resets on swap",
     "spotlight_moment": "+{rewardValue} FP when your {posLabel} slot scores a TD. WR counts both slots combined",
     "ace_up_the_sleeve": "+{rewardValue} FP if your WR slots combine for {threshold}+ {statDisplay}",
@@ -543,9 +561,10 @@ EFFECT_DETAIL_TEMPLATES = {
     "juggernaut": "{baseXMult} FPx, grows by {growthPerWin} per your favorite team's win streak",
     "underdog": "+{baseFP} FP floor + chance of {enhancedFP} FP. Base chance scales with your favorite team's ELO below league average, up to 75% max",
     "stockpiler": "{perSwapXMult} FPx per unused roster swap",
-    "providence": "{baseMult}x base + {chanceBonus} chance boost to all chance cards",
+    "providence": "{baseMult}x FPx + {chanceBonus} chance boost to all chance cards",
     "house_money": "+{baseFP} FP base, +{perUpsetFP} per your favorite team's upset wins this season",
     "locomotive": "+{rewardValue} FP if your WR slots combine for 35+ YAC",
+    "rising_tide": "1.0 + {perPlayerMult} FPx per overperforming roster player (max {maxMult}x)",
     # Floobits (RB)
     "allowance": "{floobits} Floobits per week",
     "cha_ching": "{perTdFloobits} Floobits per {posLabel} slot TD",
@@ -577,7 +596,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "bandwagon_express": "+{baseReward} FP, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
     "touchdown_jackpot": "{baseReward} Floobits on 1st TD, +{growthPerTick} more per TD after. Resets weekly",
     "odometer": "+{baseReward} FP at {yardsPerTick} yds, reward grows by {growthPerTick} every {yardsPerTick} yds. Resets weekly",
-    "leg_day": "+{baseReward} FP, +{growthPerTick} per consecutive 35+ yd FG week. Holds through bye weeks. Each other streak card adds +1 bonus tick",
+    "leg_day": "+{baseReward} FP, +{growthPerTick} per consecutive 35+ yd FG week. Each other streak card adds +1 bonus tick",
     "automatic": "+{baseReward} FP, +{growthPerTick} per consecutive perfect FG week. Resets on a miss. Each other streak card adds +1 bonus tick",
     "hot_hand": "+{perFGFP} FP per FG made by your K slot this week",
     "momentum": "{baseReward} FPx, +{growthPerTick} per consecutive week roster scores 75+ FP. Resets if under 75. Each other streak card adds +1 bonus tick",
@@ -642,59 +661,59 @@ EFFECT_DETAIL_TEMPLATES = {
 
 SHARED_EFFECT_POOL = [
     # flat_fp effects
-    ("freebie", 10), ("entourage", 8), ("touchdown_pinata", 8), ("scrappy", 7),
-    ("honor_roll", 7), ("garbage_time", 5), ("loyalty_bonus", 5),
-    ("windfall", 5), ("homer", 5),
+    "freebie", "entourage", "touchdown_pinata", "scrappy",
+    "honor_roll", "garbage_time", "loyalty_bonus",
+    "windfall", "homer",
     # multiplier effects
-    ("big_deal", 10), ("cornucopia", 8), ("babysitter", 6),
-    ("martyr", 5), ("juggernaut", 6), ("resplendent", 5),
-    ("loyalty_program", 4), ("underdog", 5), ("stockpiler", 6),
-    ("providence", 4), ("house_money", 5),
+    "big_deal", "cornucopia", "babysitter",
+    "martyr", "juggernaut", "resplendent",
+    "loyalty_program", "underdog", "stockpiler",
+    "providence", "house_money", "rising_tide",
     # floobits effects
-    ("allowance", 10), ("cha_ching", 8), ("piggy_bank", 7),
-    ("good_neighbor", 6), ("consolation_prize", 6), ("rock_bottom", 5),
-    ("buy_low", 5), ("trust_fund", 4),
-    ("feeding_frenzy", 6), ("highlight_reel", 4),
+    "allowance", "cha_ching", "piggy_bank",
+    "good_neighbor", "consolation_prize", "rock_bottom",
+    "buy_low", "trust_fund",
+    "feeding_frenzy", "highlight_reel",
     # conditional effects
-    ("showoff", 7), ("flourish", 6), ("bandwagon", 8), ("upset_special", 5),
-    ("believe", 6), ("schadenfreude", 5), ("due", 4), ("reclamation", 5),
-    ("pedigree", 5), ("mismatch", 5),
+    "showoff", "flourish", "bandwagon", "upset_special",
+    "believe", "schadenfreude", "due", "reclamation",
+    "pedigree", "mismatch",
     # streak effects
-    ("couch_potato", 10), ("gravy_train", 7), ("snowball_fight", 8),
-    ("fairweather_fan", 7), ("bandwagon_express", 5), ("touchdown_jackpot", 6),
-    ("odometer", 5), ("complacency", 5), ("momentum", 5),
+    "couch_potato", "gravy_train", "snowball_fight",
+    "fairweather_fan", "bandwagon_express", "touchdown_jackpot",
+    "odometer", "complacency", "momentum",
     # position-keyed (generic concept, adapts to card position)
-    ("luminary", 7), ("squire", 7), ("spotlight_moment", 7),
+    "luminary", "squire", "spotlight_moment",
     # cross-position
-    ("game_ball", 4), ("spectacle", 3), ("indemnity", 3),
+    "game_ball", "spectacle", "indemnity",
     # same-team / game-outcome
-    ("hometown_hero", 4), ("connection", 5), ("team_chemistry", 5),
-    ("comeback_kid", 4), ("domination", 4), ("walk_off", 3),
+    "hometown_hero", "connection", "team_chemistry",
+    "comeback_kid", "domination", "walk_off",
     # card-to-card
-    ("full_roster", 4), ("all_in", 3), ("diversified", 4), ("gold_rush", 4),
-    ("stacked_deck", 4), ("copycat", 3), ("chain_reaction", 3),
-    ("bonus_round", 3), ("double_down", 2),
-    ("last_resort", 2), ("high_roller", 3), ("jackpot", 2),
-    ("fortitude", 3), ("immaculate", 2),
+    "full_roster", "all_in", "diversified", "gold_rush",
+    "stacked_deck", "copycat", "chain_reaction",
+    "bonus_round", "double_down",
+    "last_resort", "high_roller", "jackpot",
+    "fortitude", "immaculate",
     # escalating / pace
-    ("eminence", 5),
+    "eminence",
     # chance synergy
-    ("advantage", 3), ("catalyst", 4),
+    "advantage", "catalyst",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
-    1: [("gunslinger", 6), ("air_raid", 6), ("stack", 5), ("backfield_buddies", 5),
-        ("crescendo", 5), ("traverse", 5)],
-    2: [("workhorse", 6), ("expedition", 6), ("stampede", 5), ("goal_line_vulture", 6),
-        ("crescendo", 5), ("traverse", 5)],
-    3: [("possession", 6), ("trebuchet", 5), ("double_trouble", 5),
-        ("slippery", 6), ("jailbreak", 5), ("locomotive", 4),
-        ("ace_up_the_sleeve", 6), ("crescendo", 5), ("traverse", 5)],
-    4: [("safety_blanket", 6), ("monolith", 5), ("industrious", 5),
-        ("traverse", 5)],
-    5: [("three_pointer", 6), ("sniper", 5), ("leg_day", 4),
-        ("automatic", 4), ("on_fire", 7), ("hot_hand", 5),
-        ("crescendo", 5)],
+    1: ["gunslinger", "air_raid", "stack", "backfield_buddies",
+        "crescendo", "traverse"],
+    2: ["workhorse", "expedition", "stampede", "goal_line_vulture",
+        "crescendo", "traverse"],
+    3: ["possession", "trebuchet", "double_trouble",
+        "slippery", "jailbreak", "locomotive",
+        "ace_up_the_sleeve", "crescendo", "traverse"],
+    4: ["safety_blanket", "monolith", "industrious",
+        "traverse"],
+    5: ["three_pointer", "sniper", "leg_day",
+        "automatic", "on_fire", "hot_hand",
+        "crescendo"],
 }
 
 # Effects excluded from certain positions (dead cards)
@@ -825,7 +844,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "loyalty_bonus":
         return {"perStreakFP": round((3.0 + rn * 0.12) * editionScale, 1)}
     if effectName == "windfall":
-        return {"perPlayerFP": round((2.5 + rn * 0.10) * editionScale, 1)}
+        return {"perPlayerFloobits": round((5 + rn * 0.20) * editionScale)}
     if effectName == "spotlight_moment":
         return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
     if effectName == "ace_up_the_sleeve":
@@ -905,6 +924,9 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "house_money":
         return {"baseFP": round((3 + rn * 0.12) * editionScale, 1),
                 "perUpsetFP": round((3 + rn * 0.12) * editionScale, 1)}
+    if effectName == "rising_tide":
+        return {"perPlayerMult": round((0.04 + rn * 0.002) * editionScale, 3),
+                "maxMult": round(1 + (0.20 + rn * 0.008) * editionScale, 2)}
     if effectName == "locomotive":
         return {"rewardType": "fp", "rewardValue": round((10 + rn * 0.4) * editionScale, 1), "threshold": 35}
     if effectName == "trebuchet":
@@ -1104,6 +1126,7 @@ _EFFECT_BUILDER_OVERRIDES = {
     "babysitter": _buildMultiplierParams,
     "martyr": _buildMultiplierParams,
     "resplendent": _buildMultiplierParams,
+    "rising_tide": _buildMultiplierParams,
     "loyalty_program": _buildMultiplierParams,
     "underdog": _buildMultiplierParams,
     "house_money": _buildMultiplierParams,
@@ -1200,28 +1223,31 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     """Build the effect_config JSON for a new card template.
 
     Effects are drawn from a shared pool (all positions) plus position-exclusive
-    pools, minus excluded effects. Category is derived from the effect's natural
-    type, not the card's position.
+    pools, filtered to only effects belonging to the requested edition tier,
+    minus excluded effects. Category is derived from the effect's natural type,
+    not the card's position.
     forceEffect/forceCategory allow admin overrides.
     """
-    # Pool selection: shared + position exclusive, minus excluded
+    # Pool selection: shared + position exclusive, minus excluded, filtered by edition tier
     excluded = POSITION_EXCLUDED_EFFECTS.get(position, set())
-    pool = [(n, w) for n, w in SHARED_EFFECT_POOL if n not in excluded]
+    pool = [n for n in SHARED_EFFECT_POOL if n not in excluded]
     pool += POSITION_EXCLUSIVE_POOLS.get(position, [])
+
+    # Filter to only effects that belong to this edition tier
+    pool = [n for n in pool if EFFECT_EDITION_TIER.get(n) == edition]
 
     if forceEffect:
         effectName = forceEffect
+    elif not pool:
+        logger.warning(f"No effects available for edition={edition}, position={position} — falling back to freebie")
+        effectName = "freebie"
     else:
-        names, weights = zip(*pool)
-        effectName = random.choices(names, weights=weights, k=1)[0]
+        effectName = random.choice(pool)
 
     # Category from effect's natural type (not position)
     category = forceCategory or EFFECT_CATEGORY.get(effectName, "flat_fp")
 
-    editionScale = EDITION_POWER_SCALES.get(edition, 1.0)
-    secondary = EDITION_SECONDARY.get(edition)
-    if secondary is None and edition == 'prismatic':
-        secondary = buildPrismaticSecondary()
+    editionScale = 1.0  # Edition no longer scales effect params — tier determines effect
 
     # Builder: check per-effect overrides first, then category dispatch
     if category == "cross":
@@ -1285,7 +1311,6 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         "outputType": outputType,
         "primary": primary,
         "editionScale": editionScale,
-        "secondary": secondary,
         "tagline": tagline,
         "tooltip": tooltip,
         "detail": detail,
@@ -1467,11 +1492,12 @@ def _computeLoyaltyBonus(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeDiamondInTheRough(primary, ctx, cardPlayerId, eqId):
-    perPlayer = primary.get("perPlayerFP", 0)
+    perPlayer = primary.get("perPlayerFloobits", 0)
     count = sum(1 for pid in ctx.rosterPlayerIds
                 if ctx.playerPerformanceRatings.get(pid, 0) > ctx.rosterPlayerRatings.get(pid, 60))
-    eq = f"{perPlayer}/player × {count} overperforming"
-    return EffectResult(fpBonus=perPlayer * count, equation=eq)
+    bonus = perPlayer * count
+    eq = f"{perPlayer}F/player × {count} overperforming = +{bonus}F"
+    return EffectResult(floobits=bonus, equation=eq)
 
 
 
@@ -1602,6 +1628,17 @@ def _computeHotRoster(primary, ctx, cardPlayerId, eqId):
     bonus = perPlayer * count
     eq = f"1 + ({perPlayer}/player × {count} overperforming) = {1 + bonus:.2f}x"
     return EffectResult(multBonus=1 + bonus, equation=eq)
+
+
+def _computeRisingTide(primary, ctx, cardPlayerId, eqId):
+    perPlayer = primary.get("perPlayerMult", 0)
+    maxMult = primary.get("maxMult", 1.5)
+    count = sum(1 for pid in ctx.rosterPlayerIds
+                if ctx.playerPerformanceRatings.get(pid, 0) > ctx.rosterPlayerRatings.get(pid, 60))
+    rawMult = 1 + perPlayer * count
+    mult = min(rawMult, maxMult)
+    eq = f"1 + ({perPlayer}/player × {count} overperforming) = {mult:.2f}x (max {maxMult}x)"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeLoyaltyProgram(primary, ctx, cardPlayerId, eqId):
@@ -1940,19 +1977,27 @@ def _computeHighlightReel(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeSchadenfreude(primary, ctx, cardPlayerId, eqId):
-    # Roster player's team at card position must have lost
+    # Any roster player's team at card position must have lost
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
     if not pids:
         return EffectResult(equation="no roster player at position")
-    pid = pids[0]
-    rosterStats = ctx.weekPlayerStats.get(pid, {})
-    teamId = rosterStats.get("teamId") or ctx.rosterPlayerTeamIds.get(pid)
-    if not teamId or teamId not in ctx.teamResults:
-        return EffectResult(equation="waiting for game to end")
-    if not ctx.teamResults[teamId]:
+    anyLost = False
+    allResolved = True
+    for pid in pids:
+        rosterStats = ctx.weekPlayerStats.get(pid, {})
+        teamId = rosterStats.get("teamId") or ctx.rosterPlayerTeamIds.get(pid)
+        if not teamId or teamId not in ctx.teamResults:
+            allResolved = False
+            continue
+        if not ctx.teamResults[teamId]:
+            anyLost = True
+            break
+    if anyLost:
         result = _conditionalReward(primary)
         result.equation = "roster player's team lost"
         return result
+    if not allResolved:
+        return EffectResult(equation="waiting for game to end")
     return EffectResult(equation="roster player's team won")
 
 
@@ -3075,6 +3120,7 @@ EFFECT_REGISTRY = {
     "martyr": _computeTankCommander,
     "juggernaut": _computeJuggernaut,
     "resplendent": _computeHotRoster,
+    "rising_tide": _computeRisingTide,
     "loyalty_program": _computeLoyaltyProgram,
     "underdog": _computeUnderdog,
     "stockpiler": _computeStockpiler,

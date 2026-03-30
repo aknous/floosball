@@ -244,15 +244,16 @@ class PlayerDevelopment:
     
     @staticmethod
     def apply_offseason_training(player: Any, position_type: str = None,
-                                 coachDevRating: int = 50) -> Dict[str, Any]:
+                                 coachDevRating: int = 50, fundingDevBonus: int = 0) -> Dict[str, Any]:
         """
         Main method to apply offseason training to a player.
         coachDevRating (0-100): coach's playerDevelopment attribute — shifts modifier ranges.
+        fundingDevBonus: additive bonus from team funding tier (-1 to +2).
         Returns a dictionary with development details for logging.
         """
         try:
-            # -4 to +4 bias: elite coach accelerates growth/slows decline, poor coach reverses
-            devBias = round((coachDevRating - 60) / 10)
+            # -4 to +4 bias from coach, plus funding tier bonus (-1 to +2)
+            devBias = round((coachDevRating - 60) / 10) + fundingDevBonus
 
             # Store original values for comparison
             original_values = {

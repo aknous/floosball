@@ -46,9 +46,30 @@ def init_db():
     """Initialize the database by creating all tables."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    _runPendingMigrations()
     _seedPackTypes()
     _seedBetaAllowlist()
     print(f"Database initialized at {DB_PATH}")
+
+
+def _runPendingMigrations():
+    """Apply schema changes that create_all() can't handle (new columns on existing tables)."""
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        # Season award columns (v0.7)
+        for col, colDef in [
+            ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
+            ('all_pro_player_ids', 'TEXT'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE seasons ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                print(f"  Migration: added seasons.{col}")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+    finally:
+        conn.close()
 
 
 def clear_db():
@@ -113,6 +134,41 @@ def _seedBetaAllowlist():
         session.commit()
     except Exception:
         session.rollback()
+    finally:
+        session.close()
+
+
+def clear_card_data():
+    """Clear all card-related data while preserving everything else.
+
+    Used when deploying card system changes that require regeneration
+    of templates (e.g., new drop rates, classification rules).
+    Preserves players, teams, seasons, games, users, fantasy rosters, etc.
+    """
+    from .models import (
+        CardTemplate, UserCard, EquippedCard, WeeklyCardBonus,
+        CardUpgradeLog, PackOpening, FeaturedShopCard,
+        WeeklyModifier, UserModifierOverride,
+    )
+
+    session = SessionLocal()
+    try:
+        # Delete in reverse dependency order
+        session.query(WeeklyCardBonus).delete()
+        session.query(CardUpgradeLog).delete()
+        session.query(PackOpening).delete()
+        session.query(FeaturedShopCard).delete()
+        session.query(UserModifierOverride).delete()
+        session.query(WeeklyModifier).delete()
+        session.query(EquippedCard).delete()
+        session.query(UserCard).delete()
+        session.query(CardTemplate).delete()
+        session.commit()
+        print("Card data cleared — templates will regenerate on season start")
+    except Exception as e:
+        session.rollback()
+        print(f"Error clearing card data: {e}")
+        raise
     finally:
         session.close()
 

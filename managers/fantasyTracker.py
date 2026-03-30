@@ -4,8 +4,9 @@ Owns the entire FP lifecycle from generation to display:
   1. During games: addPlayerPoints() accumulates FP in _weekFP (in-memory)
      and also updates player.gameStatsDict for broadcasts
   2. At week end: bankWeek() persists _weekFP to WeeklyPlayerFP DB table
-     and zeros the accumulator
-  3. getSnapshot() reads from _weekFP (current week) + WeeklyPlayerFP (past weeks)
+     but keeps _weekFP alive so snapshot can still serve data between weeks
+  3. At next week start: clearWeekFP() zeros the accumulator
+  4. getSnapshot() reads from _weekFP (current week, pre-bank) + WeeklyPlayerFP (all banked)
 
 This completely decouples fantasy from the gameStatsDict zeroing that happens
 inside _accumulatePostgameStats(). Fantasy never reads from game/season stat dicts.
@@ -104,6 +105,8 @@ class FantasyTracker:
         # In-memory FP accumulator: {playerId: float}
         # Tracks current week's FP, banked to DB at week end
         self._weekFP: Dict[int, float] = {}
+        # Week number for which _weekFP was last banked (None = not yet banked)
+        self._bankedWeek: int = None
 
     def addPlayerPoints(self, playerId: int, points: int):
         """Called when a player earns fantasy points during a game.
@@ -138,8 +141,10 @@ class FantasyTracker:
             bankedTotal = sum(r.fantasy_points for r in rows)
         finally:
             session.close()
-        # Add current week's in-memory FP (not yet banked)
-        return bankedTotal + self._weekFP.get(playerId, 0)
+        # Add current week's in-memory FP only if not yet banked to DB
+        if self._bankedWeek is None:
+            return bankedTotal + self._weekFP.get(playerId, 0)
+        return bankedTotal
 
     def restoreWeekFP(self, season: int, week: int):
         """Reconstruct _weekFP from GamePlayerStats for a partially-completed week.
@@ -175,9 +180,11 @@ class FantasyTracker:
             session.close()
 
     def bankWeek(self, season: int, week: int):
-        """Persist current week's FP to DB and reset accumulator.
+        """Persist current week's FP to DB.
 
         Called by seasonManager at week end, before card effect processing.
+        Keeps _weekFP in memory so getSnapshot() can still overlay live data
+        until the next week starts and clearWeekFP() is called.
         """
         from database.connection import get_session
         from database.models import WeeklyPlayerFP
@@ -213,7 +220,17 @@ class FantasyTracker:
         finally:
             session.close()
 
+        # Mark as banked but keep data so getSnapshot overlay still works
+        # between week end and next week start
+        self._bankedWeek = week
+
+    def clearWeekFP(self):
+        """Clear the in-memory FP accumulator for a new week.
+
+        Called by seasonManager at the start of each new week, before games begin.
+        """
         self._weekFP.clear()
+        self._bankedWeek = None
 
     @property
     def _playerManager(self):
@@ -258,6 +275,14 @@ class FantasyTracker:
                 for g in sm.currentSeason.activeGames
             )
 
+        # Between weeks: activeGames is cleared but completedWeekGames holds finished games.
+        # Data comes from DB (gamesActive stays False for data-source selection),
+        # but we tell the frontend scoring is still visible.
+        gamesCompleted = (
+            isCurrentSeason and sm and sm.currentSeason
+            and sm.currentSeason.completedWeekGames is not None
+        )
+
         session = get_session()
         try:
             # ── 1. Get all locked rosters ──
@@ -267,7 +292,7 @@ class FantasyTracker:
             if not rosters:
                 return {
                     "season": seasonNum, "week": currentWeek,
-                    "gamesActive": gamesActive, "entries": [],
+                    "gamesActive": gamesActive or gamesCompleted, "entries": [],
                 }
 
             # ── 2. Collect all roster player IDs ──
@@ -280,8 +305,12 @@ class FantasyTracker:
             weekPlayerFPMap = self._getWeekPlayerFPFromDB(
                 session, seasonNum, allRosterPlayerIds
             )
-            # Overlay current week's in-memory accumulator (not yet banked)
-            if isCurrentSeason and self._weekFP:
+            # Overlay current week's in-memory accumulator when games are
+            # active or recently finished (not yet banked to DB).
+            # After bankWeek(), the DB already has this data so skip overlay
+            # to avoid stale overwrite.  _weekFP is kept alive until
+            # clearWeekFP() is called at the start of the next week.
+            if isCurrentSeason and self._weekFP and self._bankedWeek is None:
                 for pid in allRosterPlayerIds:
                     liveFP = self._weekFP.get(pid, 0)
                     if liveFP:
@@ -709,7 +738,7 @@ class FantasyTracker:
             return {
                 "season": seasonNum,
                 "week": currentWeek,
-                "gamesActive": gamesActive,
+                "gamesActive": gamesActive or gamesCompleted,
                 "entries": entries,
                 "modifier": modifierInfo,
             }

@@ -464,10 +464,10 @@ class GmManager:
     @staticmethod
     def _findPlayerOnTeam(team, playerId: int):
         """Find a player on a team's roster by ID."""
-        roster = getattr(team, 'roster', None)
-        if roster is None:
+        rosterDict = getattr(team, 'rosterDict', None)
+        if rosterDict is None:
             return None
-        for player in roster:
-            if player.id == playerId:
+        for player in rosterDict.values():
+            if player is not None and player.id == playerId:
                 return player
         return None

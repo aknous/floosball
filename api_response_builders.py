@@ -76,9 +76,11 @@ class TeamResponseBuilder(ResponseBuilder):
             'overallRating': team.overallRating,
             'offenseRating': team.offenseRating,
             'defenseRunCoverageRating': team.defenseRunCoverageRating,
-            'defensePassCoverageRating': team.defensePassCoverageRating
+            'defensePassCoverageRating': team.defensePassCoverageRating,
+            'fundingTier': getattr(team, 'fundingTier', 'MID_MARKET'),
+            'fundingTierRank': getattr(team, 'fundingTierRank', 3),
         })
-        
+
         return team_dict
     
     @staticmethod

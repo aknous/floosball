@@ -178,7 +178,7 @@ class SeasonManager:
         # CATCHUP mode: backdate season start to last Monday so schedule anchors to the past
         from managers.timingManager import TimingMode, TimingManager
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
-            self.currentSeason.startDate = TimingManager._lastMondayUtc(hour=11)
+            self.currentSeason.startDate = TimingManager._lastMondayUtc(hour=4)
             logger.info(f"{self.timingManager.mode.value} mode: season start backdated to {self.currentSeason.startDate.isoformat()}")
 
         # Clear previous season data
@@ -200,6 +200,9 @@ class SeasonManager:
         
         # Initialize season stats
         self._initializeSeasonStats()
+
+        # Load funding tiers from previous season (affects morale during games)
+        self._loadTeamFundingTiers(seasonNumber)
 
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
@@ -252,7 +255,10 @@ class SeasonManager:
         # Award pick-em season prizes after playoffs so all rounds are included
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
-        
+
+        # Apply season-end tax on unspent Floobits
+        self._applySeasonEndTax(self.currentSeason.seasonNumber)
+
         # Close game stats file
         self._closeGameStatsFile()
         
@@ -332,10 +338,22 @@ class SeasonManager:
                         logger.info(f"Catch-up complete — switched to SCHEDULED mode")
                 self.timingManager.catchingUp = isBehindSchedule
 
+            # If no games are currently visible (e.g. after a deploy/restart),
+            # show the upcoming slate immediately so the API isn't empty.
+            # Skip this when completedWeekGames has the previous week's results
+            # — those should stay visible until rollover clears them.
+            if not self.currentSeason.activeGames and not self.currentSeason.completedWeekGames:
+                self.currentSeason.activeGames = week['games']
+
             # Wait for rollover BEFORE clearing previous week's results.
             # In scheduled mode this keeps completedWeekGames visible until
-            # 15 minutes before the next game start.
-            weekSetupTime = weekStartTime - datetime.timedelta(minutes=15)
+            # shortly before the next game start.
+            # Cross-day transitions (weeks 8, 15, 22) have ~18-hour gaps;
+            # roll over 8 hours early so the next slate shows up the evening before.
+            curWeek = self.currentSeason.currentWeek
+            isCrossDayTransition = curWeek in (8, 15, 22)
+            earlyMinutes = 480 if isCrossDayTransition else 15  # 8 hours vs 15 min
+            weekSetupTime = weekStartTime - datetime.timedelta(minutes=earlyMinutes)
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # Cache the game start time so REST API returns a stable value on refresh
@@ -347,7 +365,7 @@ class SeasonManager:
                 gap = delays.get('week_start_wait', 30) + delays.get('game_announcement', 30)
                 self._cachedNextGameStart = datetime.datetime.utcnow() + datetime.timedelta(seconds=gap)
 
-            # NOW clear previous week and set up new week
+            # Rollover: show new week's games, clear previous week's completed data
             self.currentSeason.activeGames = week['games']
             self.currentSeason.completedWeekGames = None
 
@@ -391,6 +409,12 @@ class SeasonManager:
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
+
+            # Clear previous week's in-memory FP accumulator so it doesn't
+            # bleed into the new week's snapshot overlay
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if fantasyTracker:
+                fantasyTracker.clearWeekFP()
 
             # Auto-carry-forward equipped cards for all users, then lock
             try:
@@ -499,6 +523,7 @@ class SeasonManager:
             # Broadcast clinch/elimination events and award Floobits for team achievements
             from constants import CLINCH_PLAYOFF_REWARD, CLINCH_TOPSEED_REWARD
             for event in newClinchEvents:
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': event['text']}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(event['text']))
                 if event['type'] == 'clinch_playoff':
@@ -796,21 +821,27 @@ class SeasonManager:
                 playoff_round=playoff_round
             )
 
-        # Bank FP from in-memory accumulator to WeeklyPlayerFP DB table
-        fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
-        if fantasyTracker:
-            fantasyTracker.bankWeek(self.currentSeason.seasonNumber, week)
+        # Bank FP from in-memory accumulator to WeeklyPlayerFP DB table (regular season only)
+        if not in_playoffs:
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if fantasyTracker:
+                fantasyTracker.bankWeek(self.currentSeason.seasonNumber, week)
 
         # Grant roster swap every week (regular season only)
         if not in_playoffs:
             self._grantRosterSwaps(self.currentSeason.seasonNumber)
 
-        # Process card effects for this week (persists bonuses to DB)
-        self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
+        # Process card effects for this week (regular season only)
+        if not in_playoffs:
+            self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
 
         # Award weekly leaderboard prizes (after card effects are finalized)
         if not in_playoffs:
             self._awardWeeklyLeaderboardPrizes(self.currentSeason.seasonNumber, week)
+
+        # Award FP-based participation Floobits
+        if not in_playoffs:
+            self._awardWeeklyFpFloobits(self.currentSeason.seasonNumber, week)
 
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
@@ -2513,14 +2544,19 @@ class SeasonManager:
             # Track playoff round so pick-em can use virtual week numbers (29+)
             self.currentSeason.currentPlayoffRound = currentRound
 
+            # If no games are currently visible (e.g. after a deploy/restart),
+            # show the upcoming slate immediately so the API isn't empty.
+            if not self.currentSeason.activeGames and not self.currentSeason.completedWeekGames:
+                self.currentSeason.activeGames = playoffGamesList
+
             # Cache countdown time so REST API can serve it during the wait.
-            # Previous round's completedWeekGames stays visible until rollover.
             self._cachedNextGameStart = roundStartTime
 
-            # Wait for rollover (15 min / scaled gap before start)
-            # Previous round's completed game data remains visible during this wait.
+            # Wait for rollover — first playoff round is a cross-day transition
+            # (week 28 at 18:00 ET → round 1 at 12:00 ET next day), so roll over early
+            earlyMin = 480 if currentRound == 1 else 15
             if x < numOfRounds - 1:
-                await self.timingManager.waitForPlayoffRound(roundStartTime)
+                await self.timingManager.waitForPlayoffRound(roundStartTime, earlyMinutes=earlyMin)
             else:
                 await self.timingManager.waitForChampionship(roundStartTime)
 
@@ -2549,6 +2585,11 @@ class SeasonManager:
 
             # Games are about to start — clear cached countdown
             self._cachedNextGameStart = None
+
+            # Clear previous round's in-memory FP accumulator
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if fantasyTracker:
+                fantasyTracker.clearWeekFP()
 
             # Lock equipped cards for playoff week
             try:
@@ -2804,6 +2845,9 @@ class SeasonManager:
         """Handle offseason activities"""
         logger.info("Processing offseason activities")
 
+        # Wait after Floos Bowl so users can see championship results
+        await self.timingManager.waitPostChampionship()
+
         # Clear stale state from previous season's offseason
         self._offseasonTransactions = []
         self.playerManager._gmFaDirectives = {}
@@ -2906,17 +2950,22 @@ class SeasonManager:
 
         # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
         logger.info("Step 7: Player offseason training")
+        from constants import FUNDING_DEV_BONUS
         rosteredDevRating: dict = {}
+        rosteredFundingBonus: dict = {}
         teamManager = self.serviceContainer.getService('team_manager')
         for team in teamManager.teams:
             coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
+            fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
             for posGroup in team.rosterDict.values():
                 if posGroup is not None and hasattr(posGroup, 'id'):
                     rosteredDevRating[posGroup.id] = coachDevRating
+                    rosteredFundingBonus[posGroup.id] = fundingBonus
         for player in self.playerManager.activePlayers:
             if hasattr(player, 'offseasonTraining'):
                 devRating = rosteredDevRating.get(getattr(player, 'id', None), 50)
-                player.offseasonTraining(coachDevRating=devRating)
+                fundingBonus = rosteredFundingBonus.get(getattr(player, 'id', None), 0)
+                player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
 
         # STEP 8: Handle retired players on fantasy rosters
         # Must run before HoF which clears newlyRetiredPlayers
@@ -2949,11 +2998,6 @@ class SeasonManager:
 
         # STEP 12: Save unused names
         self.playerManager.saveUnusedNames()
-
-        # STEP 13: Generate card templates for newly drafted rookies
-        logger.info("Step 13: Generating rookie card templates")
-        nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
-        self._generateRookieCardTemplates(nextSeason)
 
         logger.info("Offseason activities complete")
     
@@ -2992,28 +3036,34 @@ class SeasonManager:
             from managers.cardManager import CardManager
             from database.connection import get_session
 
+            session = get_session()
+
             # Extract classification data from previous season
             mvpPlayerId = None
             championPlayerIds = set()
             allProPlayerIds = set()
 
-            if self.currentSeason:
-                # MVP player ID
-                mvpData = getattr(self.currentSeason, 'mvp', None)
+            # Classifications come from the PREVIOUS season, not the current one
+            prevSeasonNum = seasonNumber - 1
+            prevSeason = self.seasonHistory[-1] if self.seasonHistory else None
+
+            if prevSeason and prevSeason.seasonNumber == prevSeasonNum:
+                # In-memory data available (normal flow after completing a season)
+                mvpData = getattr(prevSeason, 'mvp', None)
                 if mvpData and isinstance(mvpData, dict):
                     mvpPlayerId = mvpData.get('id')
 
-                # Champion team's player IDs (all 6 roster players)
-                champion = getattr(self.currentSeason, 'champion', None)
+                champion = getattr(prevSeason, 'champion', None)
                 if champion and hasattr(champion, 'rosterDict'):
                     for player in champion.rosterDict.values():
                         if player and hasattr(player, 'id'):
                             championPlayerIds.add(player.id)
 
-                # All-Pro player IDs (top performer per position)
-                allProPlayerIds = getattr(self.currentSeason, 'allProPlayerIds', set())
-
-            session = get_session()
+                allProPlayerIds = getattr(prevSeason, 'allProPlayerIds', set())
+            elif prevSeasonNum >= 1:
+                # Resume fallback: read from DB + player objects
+                mvpPlayerId, championPlayerIds, allProPlayerIds = \
+                    self._loadClassificationsFromDB(session, prevSeasonNum)
             cardManager = CardManager(self.serviceContainer)
             count = cardManager.generateSeasonTemplates(
                 session, seasonNumber,
@@ -3028,6 +3078,64 @@ class SeasonManager:
             logger.warning(f"Card template generation failed: {e}")
             import traceback
             logger.debug(traceback.format_exc())
+
+    def _loadClassificationsFromDB(self, session, prevSeasonNum: int):
+        """Load classification data from DB and player objects on resume.
+
+        Uses Season DB row for MVP and champion_team_id, player objects for
+        All-Pro seasons, and team rosters for champion player IDs.
+        Returns (mvpPlayerId, championPlayerIds, allProPlayerIds).
+        """
+        mvpPlayerId = None
+        championPlayerIds = set()
+        allProPlayerIds = set()
+
+        try:
+            from database.models import Season as DBSeason
+            import json
+
+            dbSeason = session.query(DBSeason).filter_by(season_number=prevSeasonNum).first()
+            if not dbSeason:
+                logger.info(f"No DB season record for season {prevSeasonNum} — skipping classifications")
+                return mvpPlayerId, championPlayerIds, allProPlayerIds
+
+            # MVP
+            if dbSeason.mvp_player_id:
+                mvpPlayerId = dbSeason.mvp_player_id
+                logger.info(f"Resume: loaded MVP player ID {mvpPlayerId} from DB")
+
+            # All-Pro from DB column
+            if dbSeason.all_pro_player_ids:
+                try:
+                    ids = json.loads(dbSeason.all_pro_player_ids)
+                    allProPlayerIds.update(ids)
+                    logger.info(f"Resume: loaded {len(ids)} All-Pro player IDs from DB")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # If All-Pro not in DB, fall back to player objects
+            if not allProPlayerIds:
+                for player in self.playerManager.activePlayers:
+                    apSeasons = getattr(player, 'allProSeasons', [])
+                    if prevSeasonNum in apSeasons:
+                        allProPlayerIds.add(player.id)
+                if allProPlayerIds:
+                    logger.info(f"Resume: loaded {len(allProPlayerIds)} All-Pro IDs from player objects")
+
+            # Champion team roster
+            if dbSeason.champion_team_id:
+                teamManager = self.serviceContainer.getService('team_manager')
+                champTeam = teamManager.getTeamById(dbSeason.champion_team_id)
+                if champTeam and hasattr(champTeam, 'rosterDict'):
+                    for player in champTeam.rosterDict.values():
+                        if player and hasattr(player, 'id'):
+                            championPlayerIds.add(player.id)
+                    logger.info(f"Resume: loaded {len(championPlayerIds)} Champion player IDs from team {champTeam.name}")
+
+        except Exception as e:
+            logger.warning(f"Failed to load classifications from DB: {e}")
+
+        return mvpPlayerId, championPlayerIds, allProPlayerIds
 
     def _generateRookieCardTemplates(self, seasonNumber: int) -> None:
         """Generate card templates for newly drafted rookies.
@@ -4303,12 +4411,80 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
+        """Award Floobits to all users based on a percentage of their weekly FP."""
+        import math
+        from constants import WEEKLY_FP_FLOOBIT_RATE, WEEKLY_FP_FLOOBIT_CAP
+
+        fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+        if not fantasyTracker:
+            return
+
+        try:
+            snapshot = fantasyTracker.getSnapshot(season)
+        except Exception as e:
+            logger.error(f"Error getting snapshot for weekly FP floobits: {e}")
+            return
+
+        entries = snapshot.get('entries', [])
+        if not entries:
+            return
+
+        try:
+            from database.connection import get_session
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.repositories.notification_repository import NotificationRepository
+
+            session = get_session()
+            try:
+                currencyRepo = CurrencyRepository(session)
+                notifRepo = NotificationRepository(session)
+                from database.repositories.shop_repository import ShopPurchaseRepository
+                from constants import POWERUP_INCOME_BOOST
+                shopRepo = ShopPurchaseRepository(session)
+                boostedCap = POWERUP_INCOME_BOOST.get("boostedCap", 40)
+                awarded = 0
+                for entry in entries:
+                    weekFp = entry.get('weekTotal', 0)
+                    if weekFp <= 0:
+                        continue
+                    userId = entry['userId']
+                    # Check for active income boost powerup
+                    activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
+                    cap = boostedCap if activeBoost else WEEKLY_FP_FLOOBIT_CAP
+                    raw = weekFp * WEEKLY_FP_FLOOBIT_RATE
+                    reward = min(math.floor(raw), cap)
+                    if reward <= 0:
+                        continue
+                    currencyRepo.addFunds(
+                        userId, reward, 'weekly_fp_bonus',
+                        description=f'Week {week}: {int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP',
+                        season=season, week=week,
+                    )
+                    notifRepo.create(
+                        userId, 'weekly_fp_bonus',
+                        f'Week {week} Earnings',
+                        f'+{reward} Floobits ({int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP)',
+                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward},
+                    )
+                    awarded += 1
+                session.commit()
+                if awarded:
+                    logger.info(f"Awarded weekly FP floobits to {awarded} users for week {week}")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error awarding weekly FP floobits: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _awardSeasonEndPrizes(self, completedSeason: int) -> None:
-        """Award season-end leaderboard prizes and FP-to-Floobits conversion."""
+        """Award season-end leaderboard prizes."""
         import math
         from constants import (
             SEASON_LEADERBOARD_PRIZES, SEASON_LEADERBOARD_TOP_PCT_PRIZE,
-            SEASON_LEADERBOARD_TOP_PCT, SEASON_FP_PAYOUT_DIVISOR,
+            SEASON_LEADERBOARD_TOP_PCT,
         )
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
@@ -4375,25 +4551,6 @@ class SeasonManager:
                             f"Season leaderboard prize: user {userId} #{seasonRank} = {prize} Floobits"
                         )
 
-                    # --- FP-to-Floobits conversion ---
-                    fpPayout = math.floor(seasonTotal / SEASON_FP_PAYOUT_DIVISOR) if seasonTotal > 0 else 0
-                    if fpPayout > 0:
-                        currencyRepo.addFunds(
-                            userId, fpPayout, 'season_fp_payout',
-                            description=f'Season {completedSeason} FP payout ({seasonTotal:.0f} FP)',
-                            season=completedSeason,
-                        )
-                        notifRepo.create(
-                            userId, 'season_fp_payout',
-                            f'Season {completedSeason} FP Payout',
-                            f'Season {completedSeason} complete! Your {seasonTotal:.0f} FP earned you {fpPayout} Floobits',
-                            data={'season': completedSeason, 'fp': seasonTotal, 'payout': fpPayout},
-                        )
-                        logger.info(
-                            f"Season FP payout: user {userId} = {fpPayout} Floobits "
-                            f"({seasonTotal:.0f} FP / {SEASON_FP_PAYOUT_DIVISOR})"
-                        )
-
                 session.commit()
                 logger.info(f"Season-end prizes awarded for season {completedSeason}")
 
@@ -4415,6 +4572,158 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    def _applySeasonEndTax(self, completedSeason: int) -> None:
+        """Deduct a percentage of each user's unspent Floobits between seasons.
+        Tax amounts are directed to the user's favorite team's funding pool."""
+        import math
+        from constants import SEASON_END_TAX_RATE
+        if SEASON_END_TAX_RATE <= 0:
+            return
+        try:
+            from database.connection import get_session
+            from database.models import User
+            from database.repositories.card_repositories import CurrencyRepository
+            session = get_session()
+            try:
+                currencyRepo = CurrencyRepository(session)
+                users = session.query(User).all()
+                taxed = 0
+                totalTaxCollected = 0
+                teamFundingAccum = {}  # teamId -> total tax collected
+                for user in users:
+                    currency = currencyRepo.getByUser(user.id)
+                    balance = currency.balance if currency else 0
+                    if balance <= 0:
+                        continue
+                    taxAmount = math.floor(balance * SEASON_END_TAX_RATE)
+                    if taxAmount <= 0:
+                        continue
+                    currencyRepo.spendFunds(
+                        user.id, taxAmount, 'season_end_tax',
+                        description=f'Season {completedSeason} end-of-season tax ({int(SEASON_END_TAX_RATE * 100)}%)',
+                        season=completedSeason,
+                    )
+                    taxed += 1
+                    totalTaxCollected += taxAmount
+                    # Direct tax to favorite team's funding pool
+                    favTeamId = user.favorite_team_id
+                    if favTeamId is not None:
+                        teamFundingAccum[favTeamId] = teamFundingAccum.get(favTeamId, 0) + taxAmount
+                # Record team funding and assign tiers
+                self._recordTeamFunding(session, completedSeason, teamFundingAccum, totalTaxCollected)
+                session.commit()
+                logger.info(f"Season-end tax applied to {taxed} users ({int(SEASON_END_TAX_RATE * 100)}%), total {totalTaxCollected}F collected")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error applying season-end tax: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _recordTeamFunding(self, session, completedSeason: int, teamFundingAccum: dict, totalTaxCollected: int) -> None:
+        """Record collected taxes as team funding, computing decay carry-forward and assigning tiers."""
+        import math
+        from constants import FUNDING_DECAY_RATE
+        from database.models import TeamFunding
+
+        # Fetch previous season's effective funding for carry-forward
+        prevFunding = {}
+        if completedSeason > 1:
+            prevRecords = session.query(TeamFunding).filter_by(season=completedSeason - 1).all()
+            for rec in prevRecords:
+                prevFunding[rec.team_id] = rec.effective_funding
+
+        # Get all team IDs to ensure every team gets a record
+        teamManager = self.serviceContainer.getService('team_manager')
+        allTeamIds = [t.id for t in teamManager.teams]
+
+        for teamId in allTeamIds:
+            currentTax = teamFundingAccum.get(teamId, 0)
+            carriedFunding = math.floor(prevFunding.get(teamId, 0) * FUNDING_DECAY_RATE)
+            effectiveFunding = currentTax + carriedFunding
+
+            funding = TeamFunding(
+                team_id=teamId,
+                season=completedSeason,
+                current_funding=currentTax,
+                carried_funding=carriedFunding,
+                effective_funding=effectiveFunding,
+            )
+            session.add(funding)
+
+        session.flush()
+        self._assignFundingTiers(session, completedSeason, totalTaxCollected, len(allTeamIds))
+
+    def _assignFundingTiers(self, session, season: int, totalTaxCollected: int, numTeams: int) -> None:
+        """Assign funding tiers based on dynamic thresholds relative to fair share."""
+        from database.models import TeamFunding
+        from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
+
+        records = session.query(TeamFunding).filter_by(season=season).all()
+        if not records:
+            return
+
+        # Fair share: what each team would get if fans were evenly distributed
+        fairShare = totalTaxCollected / numTeams if numTeams > 0 and totalTaxCollected > 0 else 1
+
+        for rec in records:
+            tierAssigned = False
+            for i, threshold in enumerate(FUNDING_TIER_THRESHOLDS):
+                if rec.effective_funding >= fairShare * threshold:
+                    rec.funding_tier = FUNDING_TIER_NAMES[i]
+                    rec.tier_rank = i + 1
+                    tierAssigned = True
+                    break
+            if not tierAssigned:
+                rec.funding_tier = FUNDING_TIER_NAMES[-1]  # SMALL_MARKET
+                rec.tier_rank = len(FUNDING_TIER_NAMES)
+
+        session.flush()
+
+        # Also update runtime team objects so offseason training can use the tiers immediately
+        teamManager = self.serviceContainer.getService('team_manager')
+        tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
+        for team in teamManager.teams:
+            tier, rank = tierMap.get(team.id, ('MID_MARKET', 3))
+            team.fundingTier = tier
+            team.fundingTierRank = rank
+
+        tierCounts = {}
+        for rec in records:
+            tierCounts[rec.funding_tier] = tierCounts.get(rec.funding_tier, 0) + 1
+        logger.info(f"Funding tiers assigned for season {season} (fair share: {fairShare:.0f}F): {tierCounts}")
+
+    def _loadTeamFundingTiers(self, currentSeason: int) -> None:
+        """Load funding tiers from the previous completed season onto runtime team objects."""
+        previousSeason = currentSeason - 1
+        if previousSeason < 1:
+            logger.info("First season — all teams default to MID_MARKET funding tier")
+            return
+        try:
+            from database.connection import get_session
+            from database.models import TeamFunding
+            session = get_session()
+            try:
+                records = session.query(TeamFunding).filter_by(season=previousSeason).all()
+                if not records:
+                    logger.info(f"No funding records for season {previousSeason} — all teams default to MID_MARKET")
+                    return
+                tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
+                teamManager = self.serviceContainer.getService('team_manager')
+                for team in teamManager.teams:
+                    tier, rank = tierMap.get(team.id, ('MID_MARKET', 3))
+                    team.fundingTier = tier
+                    team.fundingTierRank = rank
+                tierCounts = {}
+                for r in records:
+                    tierCounts[r.funding_tier] = tierCounts.get(r.funding_tier, 0) + 1
+                logger.info(f"Loaded funding tiers from season {previousSeason}: {tierCounts}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Could not load funding tiers: {e}")
 
     def _getPickemWeek(self) -> int:
         """Return the effective week number for pick-em storage.
@@ -4654,22 +4963,37 @@ class SeasonManager:
             logger.warning("Could not determine All-Pro — not enough eligible players")
             return
 
-        # Group by position, take the top candidate per position
-        positionOrder = ['QB', 'RB', 'WR', 'TE', 'K']
+        # Group by position, take the top candidate(s) per position
+        # WR gets 2 slots to match team roster composition
+        positionOrder = ['QB', 'RB', 'WR', 'WR', 'TE', 'K']
+        positionSlots = {'QB': 1, 'RB': 1, 'WR': 2, 'TE': 1, 'K': 1}
         bestByPosition: dict = {}
         for c in candidates:
             pos = c['position']
             if pos not in bestByPosition:
-                bestByPosition[pos] = c
+                bestByPosition[pos] = []
+            if len(bestByPosition[pos]) < positionSlots.get(pos, 1):
+                bestByPosition[pos].append(c)
 
-        allProIds = {c['id'] for c in bestByPosition.values()}
+        allProIds = {c['id'] for picks in bestByPosition.values() for c in picks}
         self.currentSeason.allProPlayerIds = allProIds
+
+        # Store All-Pro award on each player object (persists across restarts)
+        seasonNum = self.currentSeason.seasonNumber
+        for picks in bestByPosition.values():
+            for pick in picks:
+                playerObj = pick.get('player')
+                if playerObj:
+                    if not hasattr(playerObj, 'allProSeasons'):
+                        playerObj.allProSeasons = []
+                    if seasonNum not in playerObj.allProSeasons:
+                        playerObj.allProSeasons.append(seasonNum)
 
         # Build broadcast-safe list (no player objects), ordered by position
         allProList = []
-        for pos in positionOrder:
-            if pos in bestByPosition:
-                entry = dict(bestByPosition[pos])
+        for pos in dict.fromkeys(positionOrder):
+            for pick in bestByPosition.get(pos, []):
+                entry = dict(pick)
                 entry.pop('player', None)
                 allProList.append(entry)
         self.currentSeason.allPro = allProList
@@ -4817,7 +5141,16 @@ class SeasonManager:
             # Set champion team ID
             if hasattr(self.currentSeason, 'champion') and self.currentSeason.champion:
                 db_season.champion_team_id = self.currentSeason.champion.id
-            
+
+            # Persist MVP and All-Pro for classification lookups on resume
+            mvpData = getattr(self.currentSeason, 'mvp', None)
+            if mvpData and isinstance(mvpData, dict) and mvpData.get('id'):
+                db_season.mvp_player_id = mvpData['id']
+            allProIds = getattr(self.currentSeason, 'allProPlayerIds', None)
+            if allProIds:
+                import json
+                db_season.all_pro_player_ids = json.dumps(list(allProIds))
+
             self.db_session.add(db_season)
             self.db_session.commit()
             logger.info(f"Saved season {self.currentSeason.seasonNumber} to database")

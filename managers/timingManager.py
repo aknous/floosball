@@ -72,6 +72,7 @@ class TimingManager:
             'onside_kick_result': 2.0, # Dramatic pause between onside attempt and result
             
             # Season-level delays
+            'post_championship': 30.0, # Time after Floos Bowl before offseason starts
             'offseason': 30.0,         # Time for offseason processing
             'offseason_pick': 0.4,     # Delay between each free agency pick broadcast
             'season_transition': 120.0, # Time between seasons
@@ -108,7 +109,8 @@ class TimingManager:
     def _getScheduledDelays(self) -> Dict[str, float]:
         """Scheduled-mode overrides: longer offseason delay and visible pick pacing for real users"""
         return {
-            'offseason': 300.0,        # 5 minutes — breathing room after Floosbowl
+            'post_championship': 3600.0, # 1 hour — let users see Floos Bowl results
+            'offseason': 300.0,        # 5 minutes — breathing room before FA draft
             'offseason_pick': 5.0,     # 5s per pick so users can follow the draft
         }
 
@@ -276,6 +278,17 @@ class TimingManager:
             logger.debug(f"{self.mode.value} mode: between games delay {self.delays['between_games']}s")
             await asyncio.sleep(self.delays['between_games'])
 
+    async def waitPostChampionship(self) -> None:
+        """Wait after Floos Bowl before starting offseason, so users can see results."""
+        if self._isFastCatchingUp:
+            return
+        delay = self.delays.get('post_championship', 30.0)
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.CATCHUP):
+            logger.info(f"{self.mode.value} mode: post-championship delay {delay}s")
+            await asyncio.sleep(delay)
+        elif self._isScheduledMode:
+            await asyncio.sleep(delay / 2)
+
     async def waitForOffseason(self) -> None:
         """Wait during offseason processing"""
         if self._isFastCatchingUp:
@@ -290,12 +303,12 @@ class TimingManager:
     async def waitBetweenSeasons(self) -> None:
         """Wait between seasons.
 
-        SCHEDULED mode: poll until next Monday at 11:00 local time.
+        SCHEDULED mode: poll until next Monday at 04:00 Eastern.
         This gives a maintenance window (Sunday) between offseason and new season.
         SEQUENTIAL / TURBO: fixed delay from config.
         """
         if self.mode == TimingMode.SCHEDULED:
-            targetUtc = self._nextMondayUtc(hour=11)
+            targetUtc = self._nextMondayUtc(hour=4)
             pollInterval = self.delays.get('daily_check', 30.0)
             logger.info(f"SCHEDULED mode: waiting for next season start at {targetUtc.isoformat()} (polling every {pollInterval}s)")
             while datetime.datetime.utcnow() < targetUtc:
@@ -310,7 +323,7 @@ class TimingManager:
             logger.info(f"{self.mode.value} mode: starting season immediately (backdated to last Monday)")
 
     @staticmethod
-    def _nextMondayUtc(hour: int = 11) -> datetime.datetime:
+    def _nextMondayUtc(hour: int = 4) -> datetime.datetime:
         """Compute the next Monday at the given Eastern hour, returned as naive UTC."""
         nowEt = datetime.datetime.now(EASTERN)
 
@@ -325,7 +338,7 @@ class TimingManager:
         return targetUtc.replace(tzinfo=None)
 
     @staticmethod
-    def _lastMondayUtc(hour: int = 11) -> datetime.datetime:
+    def _lastMondayUtc(hour: int = 4) -> datetime.datetime:
         """Compute the most recent Monday at the given Eastern hour, returned as naive UTC."""
         nowEt = datetime.datetime.now(EASTERN)
 
@@ -336,17 +349,17 @@ class TimingManager:
         targetUtc = targetEt.astimezone(datetime.timezone.utc)
         return targetUtc.replace(tzinfo=None)
 
-    async def waitForPlayoffRound(self, roundStartTime: 'datetime.datetime | None' = None) -> None:
+    async def waitForPlayoffRound(self, roundStartTime: 'datetime.datetime | None' = None, earlyMinutes: int = 15) -> None:
         """Wait between playoff rounds.
-        In SCHEDULED mode, rolls over 15 min early (like regular season) so
+        In SCHEDULED mode, rolls over earlyMinutes before start so
         matchups are visible before kickoff."""
         if self._isFastCatchingUp:
             return
         if self._isScheduledMode and roundStartTime:
-            rolloverTime = roundStartTime - datetime.timedelta(minutes=15)
+            rolloverTime = roundStartTime - datetime.timedelta(minutes=earlyMinutes)
             now = datetime.datetime.utcnow()
             if now < rolloverTime:
-                logger.info(f"Waiting {(rolloverTime - now).total_seconds():.1f}s for playoff round rollover (15 min before start)")
+                logger.info(f"Waiting {(rolloverTime - now).total_seconds():.1f}s for playoff round rollover ({earlyMinutes} min before start)")
                 while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
         elif self.mode == TimingMode.PLAYOFF_TEST and roundStartTime:

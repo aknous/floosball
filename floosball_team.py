@@ -99,6 +99,8 @@ class Team:
         self.defenseSeasonPerformanceRating = 0
         self.playerCap = 0
         self.gmScore = 0
+        self.fundingTier = 'MID_MARKET'
+        self.fundingTierRank = 3
         self.cutsAvailable = 0
         self.eliminated = False
         self.faComplete = False

@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Set
 
 from managers.cardEffects import (
     computeEffect, checkStreakCondition, EffectResult,
-    EDITION_SECONDARY, POSITION_CONDITIONALS,
+    POSITION_CONDITIONALS,
 )
 
 logger = logging.getLogger(__name__)
@@ -447,6 +447,12 @@ def _computeCardPass(
         matchedMult = 0  # Disable all mult effects
     elif mod == "payday":
         matchedFloobits *= 3  # Triple Floobits
+    elif mod == "longshot" and category == "conditional":
+        # Double conditional card rewards
+        matchedFP *= 2
+        matchedFloobits *= 2
+        if matchedMult > 1:
+            matchedMult = 1 + (matchedMult - 1) * 2
     # 3. Check position conditional if matched
     conditionalBonus = 0.0
     conditionalLabel = None
@@ -454,36 +460,20 @@ def _computeCardPass(
         conditionals = POSITION_CONDITIONALS.get(position, [])
         cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
         for cond in conditionals:
-            # Longshot modifier: halve conditional thresholds
-            checkCond = cond
-            if mod == "longshot" and cond:
-                checkCond = dict(cond)
-                checkCond["threshold"] = checkCond.get("threshold", 0) / 2
-            bonus, label = _checkConditional(checkCond, cardPlayerStats)
+            bonus, label = _checkConditional(cond, cardPlayerStats)
             if bonus > 0:
                 conditionalBonus += bonus
                 conditionalLabel = label
                 break  # Only apply the first triggered conditional
 
-    # 4. Add secondary effects (static, from edition, no match bonus)
-    secondary = EDITION_SECONDARY.get(cardEdition)
-    if secondary is None and cardEdition == 'prismatic':
-        # Prismatic generates random secondary at card creation — check effect_config
-        secondary = effectConfig.get("secondary")
+    # 4. Secondary effects removed — edition determines effect tier only
     secondaryFP = 0.0
     secondaryFloobits = 0
-    secondaryMult = 0.0   # FPx factor from edition
-    if secondary:
-        secondaryFP = secondary.get("flatFP", 0)
-        secondaryFloobits = secondary.get("floobits", 0)
-        secondaryMult = secondary.get("mult", 0)
-        # Grounded disables ALL multiplier effects, including edition bonuses
-        if mod == "grounded":
-            secondaryMult = 0.0
+    secondaryMult = 0.0
 
     # 5. Total up
-    totalCardFP = matchedFP + conditionalBonus + secondaryFP
-    totalCardFloobits = matchedFloobits + secondaryFloobits
+    totalCardFP = matchedFP + conditionalBonus
+    totalCardFloobits = matchedFloobits
 
     # Determine primary output type
     if primary.multBonus > 0:

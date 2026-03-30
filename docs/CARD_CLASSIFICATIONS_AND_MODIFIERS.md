@@ -97,7 +97,7 @@ A single global modifier rotates each week (every 7 games), announced **before g
 | `payday` | **Payday** | Floobits earned are tripled | Equip RB floobits cards |
 | `grounded` | **Grounded** | All mult effects disabled (+FPx and xFPx) | Pure flat FP + floobits day |
 | `wildcard` | **Wildcard** | All cards treated as matched | Equip best effects regardless of roster |
-| `longshot` | **Longshot** | Conditional thresholds halved | Conditionals trigger much easier |
+| `longshot` | **Longshot** | Conditional card rewards doubled | Stack conditional cards for big payouts |
 | `frenzy` | **Frenzy** | +FP values are doubled | Stack flat FP cards |
 | `synergy` | **Synergy** | Bonus xFPx for each unique position in your card slots | Diversify card positions |
 | `steady` | **Steady** | No special effect — all normal rules apply | Standard week, no adaptation needed |

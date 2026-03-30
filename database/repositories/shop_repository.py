@@ -78,6 +78,14 @@ class ShopPurchaseRepository:
             ShopPurchase.expires_at_week >= currentWeek,
         ).first()
 
+    def getActiveIncomeBoost(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
+        return self.session.query(ShopPurchase).filter(
+            ShopPurchase.user_id == userId,
+            ShopPurchase.season == season,
+            ShopPurchase.item_slug == "income_boost",
+            ShopPurchase.expires_at_week >= currentWeek,
+        ).first()
+
     def getActivePowerups(self, userId: int, season: int, currentWeek: int) -> List[ShopPurchase]:
         """Get all active power-ups (either current week or with unexpired duration)."""
         return self.session.query(ShopPurchase).filter(

@@ -12,48 +12,48 @@ logger = get_logger("floosball.cardManager")
 # Rating thresholds for edition eligibility
 EDITION_THRESHOLDS = {
     'base': 0,          # All players
-    'chrome': 70,       # Rating >= 70
     'holographic': 75,  # Rating >= 75
-    'gold': 78,         # Rating >= 78
-    'prismatic': 85,    # Rating >= 85
+    'prismatic': 80,    # Rating >= 80
     'diamond': 90,      # Rating >= 90
 }
 
 # Base rarity weights (before player-rating adjustment)
 EDITION_BASE_WEIGHTS = {
     'base': 100,
-    'chrome': 30,
-    'holographic': 20,
-    'gold': 15,
-    'prismatic': 5,
-    'diamond': 1,
+    'holographic': 25,
+    'prismatic': 10,
+    'diamond': 2,
 }
 
 # Sell values by edition (active season)
 EDITION_SELL_VALUES = {
     'base': 5,
-    'chrome': 20,
     'holographic': 30,
-    'gold': 40,
-    'prismatic': 100,
-    'diamond': 250,
+    'prismatic': 75,
+    'diamond': 100,
 }
 
 EXPIRED_SELL_MULTIPLIER = 0.2  # Expired cards sell for 20%
 
 # ─── The Combine (Card Upgrade System) ───────────────────────────────────────
 
-EDITION_ORDER = ['base', 'chrome', 'holographic', 'gold', 'prismatic', 'diamond']
+EDITION_ORDER = ['base', 'holographic', 'prismatic', 'diamond']
 
-# The Blender: total card value thresholds for resulting edition
+# The Combine: total card value thresholds for resulting edition
 BLENDER_THRESHOLDS = [
-    (400, 'diamond'),     # 400+ total value → diamond
-    (150, 'prismatic'),   # 150-399 → prismatic
-    (75, 'gold'),         # 75-149 → gold
-    (40, 'holographic'),  # 40-74 → holographic
-    (15, 'chrome'),       # 15-39 → chrome
-    (0, 'base'),          # 0-14 → base
+    (300, 'diamond'),       # 300+ total value → diamond (e.g. 4 prismatics, or 10 holos)
+    (175, 'prismatic'),     # 175-499 → prismatic (e.g. 6 holos, or 1 holo + many bases)
+    (50, 'holographic'),    # 50-174 → holographic (e.g. 10 base cards)
+    (0, 'base'),            # 0-49 → base
 ]
+
+# Daily pack purchase limits (resets on calendar day, same as featured shop refresh)
+DAILY_PACK_LIMITS = {
+    'humble': 3,
+    'proper': 2,
+    'grand': 1,
+    'exquisite': 1,
+}
 
 # Classification value multipliers (stacking for compound classifications)
 CLASSIFICATION_VALUE_MULTIPLIERS = {
@@ -63,9 +63,6 @@ CLASSIFICATION_VALUE_MULTIPLIERS = {
     'all_pro': 1.5,
 }
 
-# Transplant cost: baseFee + multiplier × max(0, targetValue - offeringValue)
-TRANSPLANT_BASE_FEE = 40
-TRANSPLANT_VALUE_MULTIPLIER = 2
 
 
 def getCardValue(card, currentSeason: int) -> int:
@@ -101,14 +98,20 @@ def _buildClassification(
     mvpPlayerId: Optional[int],
     championPlayerIds: set,
     allProPlayerIds: set,
+    edition: str = "base",
 ) -> Optional[str]:
     """Build classification string for a player's card templates.
 
     Classifications are underscore-joined tags (e.g., "mvp_champion", "all_pro_champion").
+    Rookie can appear on any edition. MVP, Champion, and All-Pro require holographic+.
     Rookie cannot stack with other classifications (rookies didn't play previous season).
     """
     if isRookie:
         return "rookie"
+
+    # MVP, Champion, All-Pro only on holographic and above
+    if edition == "base":
+        return None
 
     tags = []
     if mvpPlayerId is not None and playerId == mvpPlayerId:
@@ -166,6 +169,11 @@ class CardManager:
         templates: List[CardTemplate] = []
 
         for player in playerManager.activePlayers:
+            # Skip free agents — only rostered players get card templates
+            teamObj = getattr(player, 'team', None)
+            if teamObj is None or not hasattr(teamObj, 'id'):
+                continue
+
             rating = getattr(player, 'playerRating', None)
             if rating is None:
                 continue
@@ -173,24 +181,21 @@ class CardManager:
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
             isRookie = getattr(player, 'seasonsPlayed', 1) == 0
 
-            # Determine classification
-            classification = _buildClassification(
-                playerId=player.id,
-                isRookie=isRookie,
-                mvpPlayerId=mvpPlayerId,
-                championPlayerIds=champIds,
-                allProPlayerIds=apIds,
-            )
-
-            # Determine team info
-            teamObj = getattr(player, 'team', None)
-            teamId = None
-            if teamObj and hasattr(teamObj, 'id'):
-                teamId = teamObj.id
+            teamId = teamObj.id
 
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
                     continue
+
+                # Classification depends on edition (MVP/Champion/All-Pro require holo+)
+                classification = _buildClassification(
+                    playerId=player.id,
+                    isRookie=isRookie,
+                    mvpPlayerId=mvpPlayerId,
+                    championPlayerIds=champIds,
+                    allProPlayerIds=apIds,
+                    edition=edition,
+                )
 
                 effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
                 rarityWeight = computeRarityWeight(edition, rating)
@@ -247,6 +252,11 @@ class CardManager:
             if player.id in existingPlayerIds:
                 continue
 
+            # Skip free agents — only rostered players get card templates
+            teamObj = getattr(player, 'team', None)
+            if teamObj is None or not hasattr(teamObj, 'id'):
+                continue
+
             # Only create rookie templates for actual rookies (just generated this offseason)
             if getattr(player, 'seasonsPlayed', 1) > 0:
                 continue
@@ -256,11 +266,7 @@ class CardManager:
                 continue
 
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
-
-            teamObj = getattr(player, 'team', None)
-            teamId = None
-            if teamObj and hasattr(teamObj, 'id'):
-                teamId = teamObj.id
+            teamId = teamObj.id
 
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
@@ -349,17 +355,8 @@ class CardManager:
             # Re-derive output type with fresh params
             outputType = _deriveOutputType(category, effectName, primary)
 
-        # Rebuild secondary bonus from current edition constants
-        from managers.cardEffects import EDITION_SECONDARY, buildPrismaticSecondary
-        edition = template.edition
-        if edition == 'prismatic':
-            # Prismatic is random — keep stored value if it exists, otherwise generate
-            if not effectConfig.get("secondary"):
-                effectConfig["secondary"] = buildPrismaticSecondary()
-        else:
-            currentSecondary = EDITION_SECONDARY.get(edition)
-            if currentSecondary is not None:
-                effectConfig["secondary"] = currentSecondary
+        # Edition secondary bonuses removed — edition now determines effect tier only
+        effectConfig.pop("secondary", None)
 
         teamColor = None
         if template.team and hasattr(template.team, 'color'):
@@ -387,6 +384,7 @@ class CardManager:
             "tooltip": effectConfig.get("tooltip"),
             "detail": effectConfig.get("detail"),
             "sellValue": sellValue,
+            "combineValue": getCardValue(userCard, currentSeason),
             "isActive": isActive,
             "acquiredAt": userCard.acquired_at.isoformat() if userCard.acquired_at else None,
             "acquiredVia": userCard.acquired_via,
@@ -512,74 +510,9 @@ class CardManager:
         templateRepo = CardTemplateRepository(session)
         return templateRepo.save(template)
 
-    def promoteCard(self, session, userId: int, subjectCardId: int,
-                    offeringCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
-        """Promotion: Sacrifice a higher-edition card to promote the subject's edition.
-
-        The subject keeps its effect (recomputed at new power scale).
-        The offering is destroyed.
-        """
-        from database.models import CardUpgradeLog
-        from database.repositories.card_repositories import UserCardRepository
-
-        cards = self._validateUpgradeCards(session, userId, [subjectCardId, offeringCardId],
-                                           currentSeason, currentWeek)
-        cardMap = {c.id: c for c in cards}
-        subject = cardMap[subjectCardId]
-        offering = cardMap[offeringCardId]
-
-        subjectEdition = subject.card_template.edition
-        offeringEdition = offering.card_template.edition
-
-        # Validate edition hierarchy
-        if EDITION_ORDER.index(offeringEdition) <= EDITION_ORDER.index(subjectEdition):
-            raise ValueError(f"Offering edition ({offeringEdition}) must be higher than subject ({subjectEdition})")
-
-        # Rating gate
-        minRating = EDITION_THRESHOLDS.get(offeringEdition, 0)
-        if subject.card_template.player_rating < minRating:
-            raise ValueError(
-                f"{subject.card_template.player_name} (rating {subject.card_template.player_rating}) "
-                f"does not meet the minimum rating of {minRating} for {offeringEdition} edition"
-            )
-
-        # Get subject's current effect
-        subjectEffect = (subject.card_template.effect_config or {}).get("effectName")
-
-        # Create upgraded template
-        oldTemplateId = subject.card_template_id
-        newTemplate = self._createUpgradedTemplate(
-            session, subject.card_template, offeringEdition,
-            forceEffect=subjectEffect, currentSeason=currentSeason,
-        )
-
-        # Re-point subject to new template
-        subject.card_template_id = newTemplate.id
-        subject.acquired_via = "promotion"
-
-        # Delete offering
-        cardRepo = UserCardRepository(session)
-        cardRepo.delete(offering)
-
-        # Log
-        session.add(CardUpgradeLog(
-            user_id=userId,
-            upgrade_type="promotion",
-            subject_user_card_id=subjectCardId,
-            offering_user_card_ids=[offeringCardId],
-            old_template_id=oldTemplateId,
-            new_template_id=newTemplate.id,
-        ))
-        session.flush()
-
-        # Expire cached relationship so serialization sees new template
-        session.expire(subject, ["card_template"])
-
-        return self.serializeCard(subject, currentSeason)
-
     def blendCards(self, session, userId: int, offeringCardIds: List[int],
                    currentSeason: int, currentWeek: int = 0) -> dict:
-        """The Blender: Sacrifice multiple cards to create one new random card.
+        """The Combine: Sacrifice multiple cards to create one new random card.
 
         The result edition is determined by total classification-aware value
         of the sacrificed cards.
@@ -590,7 +523,7 @@ class CardManager:
         )
 
         if len(offeringCardIds) < 2:
-            raise ValueError("The Blender requires at least 2 cards")
+            raise ValueError("The Combine requires at least 2 cards")
 
         # Deduplicate
         offeringCardIds = list(set(offeringCardIds))
@@ -672,123 +605,11 @@ class CardManager:
 
         return self.serializeCard(newCard, currentSeason)
 
-    def transplantCard(self, session, userId: int, targetCardId: int,
-                       offeringCardId: int, currentSeason: int,
-                       currentWeek: int = 0) -> dict:
-        """Transplant: Sacrifice the offering to transfer its effect onto the target.
-
-        Cost in Floobits scales with value difference between target and offering.
-        """
-        from database.models import CardUpgradeLog
-        from database.repositories.card_repositories import (
-            UserCardRepository, CurrencyRepository,
-        )
-
-        cards = self._validateUpgradeCards(session, userId, [targetCardId, offeringCardId],
-                                           currentSeason, currentWeek)
-        cardMap = {c.id: c for c in cards}
-        target = cardMap[targetCardId]
-        offering = cardMap[offeringCardId]
-
-        # Validate different effects
-        targetEffect = (target.card_template.effect_config or {}).get("effectName", "")
-        offeringEffect = (offering.card_template.effect_config or {}).get("effectName", "")
-        if targetEffect == offeringEffect:
-            raise ValueError(f"Target already has the '{targetEffect}' effect")
-
-        # Compute cost
-        targetValue = getCardValue(target, currentSeason)
-        offeringValue = getCardValue(offering, currentSeason)
-        cost = max(TRANSPLANT_BASE_FEE,
-                   TRANSPLANT_BASE_FEE + TRANSPLANT_VALUE_MULTIPLIER * max(0, targetValue - offeringValue))
-
-        # Spend Floobits
-        currencyRepo = CurrencyRepository(session)
-        result = currencyRepo.spendFunds(
-            userId, cost,
-            transactionType='transplant',
-            description=f"Transplant: {offeringEffect} onto {target.card_template.player_name}",
-        )
-        if result is None:
-            raise ValueError(f"Insufficient Floobits (need {cost})")
-
-        # Create upgraded template with offering's effect on target's card
-        oldTemplateId = target.card_template_id
-        newTemplate = self._createUpgradedTemplate(
-            session, target.card_template, target.card_template.edition,
-            forceEffect=offeringEffect, currentSeason=currentSeason,
-        )
-
-        # Re-point target to new template
-        target.card_template_id = newTemplate.id
-        target.acquired_via = "transplant"
-
-        # Delete offering
-        cardRepo = UserCardRepository(session)
-        cardRepo.delete(offering)
-
-        # Log
-        session.add(CardUpgradeLog(
-            user_id=userId,
-            upgrade_type="transplant",
-            subject_user_card_id=targetCardId,
-            offering_user_card_ids=[offeringCardId],
-            old_template_id=oldTemplateId,
-            new_template_id=newTemplate.id,
-            floobits_spent=cost,
-        ))
-        session.flush()
-
-        # Expire cached relationship so serialization sees new template
-        session.expire(target, ["card_template"])
-
-        return self.serializeCard(target, currentSeason)
-
-    def previewPromotion(self, session, userId: int, subjectCardId: int,
-                         offeringCardId: int, currentSeason: int,
-                         currentWeek: int = 0) -> dict:
-        """Preview Promotion result without executing."""
-        cards = self._validateUpgradeCards(session, userId, [subjectCardId, offeringCardId],
-                                           currentSeason, currentWeek)
-        cardMap = {c.id: c for c in cards}
-        subject = cardMap[subjectCardId]
-        offering = cardMap[offeringCardId]
-
-        subjectEdition = subject.card_template.edition
-        offeringEdition = offering.card_template.edition
-
-        if EDITION_ORDER.index(offeringEdition) <= EDITION_ORDER.index(subjectEdition):
-            raise ValueError(f"Offering edition ({offeringEdition}) must be higher than subject ({subjectEdition})")
-
-        minRating = EDITION_THRESHOLDS.get(offeringEdition, 0)
-        if subject.card_template.player_rating < minRating:
-            raise ValueError(
-                f"{subject.card_template.player_name} (rating {subject.card_template.player_rating}) "
-                f"does not meet the minimum rating of {minRating} for {offeringEdition} edition"
-            )
-
-        subjectEffect = (subject.card_template.effect_config or {}).get("effectName", "")
-        effectConfig = _buildEffectConfig(
-            offeringEdition, subject.card_template.player_rating,
-            subject.card_template.position, subject.card_template.team_id,
-            forceEffect=subjectEffect,
-        )
-
-        return {
-            "playerName": subject.card_template.player_name,
-            "currentEdition": subjectEdition,
-            "resultEdition": offeringEdition,
-            "effectName": subjectEffect,
-            "effectDisplayName": effectConfig.get("displayName", subjectEffect),
-            "tooltip": effectConfig.get("tooltip", ""),
-            "detail": effectConfig.get("detail", ""),
-        }
-
     def previewBlend(self, session, userId: int, offeringCardIds: List[int],
                      currentSeason: int, currentWeek: int = 0) -> dict:
-        """Preview The Blender result (edition only — player/effect are random)."""
+        """Preview The Combine result (edition only — player/effect are random)."""
         if len(offeringCardIds) < 2:
-            raise ValueError("The Blender requires at least 2 cards")
+            raise ValueError("The Combine requires at least 2 cards")
 
         offeringCardIds = list(set(offeringCardIds))
         cards = self._validateUpgradeCards(session, userId, offeringCardIds,
@@ -806,43 +627,6 @@ class CardManager:
             "totalValue": totalValue,
             "resultEdition": resultEdition,
             "cardCount": len(cards),
-        }
-
-    def previewTransplant(self, session, userId: int, targetCardId: int,
-                          offeringCardId: int, currentSeason: int,
-                          currentWeek: int = 0) -> dict:
-        """Preview Transplant result and cost."""
-        cards = self._validateUpgradeCards(session, userId, [targetCardId, offeringCardId],
-                                           currentSeason, currentWeek)
-        cardMap = {c.id: c for c in cards}
-        target = cardMap[targetCardId]
-        offering = cardMap[offeringCardId]
-
-        targetEffect = (target.card_template.effect_config or {}).get("effectName", "")
-        offeringEffect = (offering.card_template.effect_config or {}).get("effectName", "")
-        if targetEffect == offeringEffect:
-            raise ValueError(f"Target already has the '{targetEffect}' effect")
-
-        targetValue = getCardValue(target, currentSeason)
-        offeringValue = getCardValue(offering, currentSeason)
-        cost = max(TRANSPLANT_BASE_FEE,
-                   TRANSPLANT_BASE_FEE + TRANSPLANT_VALUE_MULTIPLIER * max(0, targetValue - offeringValue))
-
-        effectConfig = _buildEffectConfig(
-            target.card_template.edition, target.card_template.player_rating,
-            target.card_template.position, target.card_template.team_id,
-            forceEffect=offeringEffect,
-        )
-
-        return {
-            "playerName": target.card_template.player_name,
-            "targetEdition": target.card_template.edition,
-            "currentEffect": targetEffect,
-            "newEffect": offeringEffect,
-            "newEffectDisplayName": effectConfig.get("displayName", offeringEffect),
-            "tooltip": effectConfig.get("tooltip", ""),
-            "detail": effectConfig.get("detail", ""),
-            "cost": cost,
         }
 
     # ─── Pack Opening ─────────────────────────────────────────────────────────
@@ -867,6 +651,21 @@ class CardManager:
         packType = packRepo.getById(packTypeId)
         if not packType:
             raise ValueError("Invalid pack type")
+
+        # Enforce daily purchase limit
+        dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
+        if dailyLimit is not None:
+            from datetime import datetime, timedelta
+            from database.models import PackOpening
+            now = datetime.utcnow()
+            dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            todayCount = session.query(PackOpening).filter(
+                PackOpening.user_id == userId,
+                PackOpening.pack_type_id == packType.id,
+                PackOpening.opened_at >= dayStart,
+            ).count()
+            if todayCount >= dailyLimit:
+                raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
 
         # Spend Floobits
         result = currencyRepo.spendFunds(
@@ -906,18 +705,12 @@ class CardManager:
                     drawnTemplates.extend(picked)
                     cardsNeeded -= len(picked)
 
-            # Exquisite packs guarantee a second prismatic+ and a gold+
+            # Exquisite packs guarantee a prismatic+ alongside the diamond
             if packType.name == 'exquisite':
                 prismaticPlus = self._editionsAtOrAbove('prismatic')
-                prismPool = [t for t in allTemplates if t.edition in prismaticPlus and t not in drawnTemplates]
-                if prismPool:
-                    picked = self._weightedDraw(prismPool, packWeights, count=1)
-                    drawnTemplates.extend(picked)
-                    cardsNeeded -= len(picked)
-                goldPlus = self._editionsAtOrAbove('gold')
-                goldPool = [t for t in allTemplates if t.edition in goldPlus and t not in drawnTemplates]
-                if goldPool:
-                    picked = self._weightedDraw(goldPool, packWeights, count=1)
+                prismaticPool = [t for t in allTemplates if t.edition in prismaticPlus and t not in drawnTemplates]
+                if prismaticPool:
+                    picked = self._weightedDraw(prismaticPool, packWeights, count=1)
                     drawnTemplates.extend(picked)
                     cardsNeeded -= len(picked)
 
@@ -966,7 +759,7 @@ class CardManager:
 
     def _editionsAtOrAbove(self, minEdition: str) -> set:
         """Return set of editions at or above the given rarity tier."""
-        order = ['base', 'chrome', 'holographic', 'gold', 'prismatic', 'diamond']
+        order = EDITION_ORDER
         try:
             idx = order.index(minEdition)
         except ValueError:
@@ -994,10 +787,9 @@ class CardManager:
     FEATURED_CARD_COUNT = 5
     # Markup over sell value for shop singles
     SHOP_MARKUP = {
-        'chrome': 3.0,
-        'holographic': 3.0,
-        'gold': 3.5,
-        'prismatic': 4.0,
+        'base': 5.0,
+        'holographic': 3.34,
+        'prismatic': 5.0,
         'diamond': 5.0,
     }
 
@@ -1065,28 +857,38 @@ class CardManager:
             # Generate fresh selection for this user
             templateRepo = CardTemplateRepository(session)
             allTemplates = templateRepo.getBySeason(currentSeason)
-            nonBase = [t for t in allTemplates if t.edition != 'base']
 
-            if not nonBase:
+            if not allTemplates:
                 return []
 
-            # Weight toward rarer editions (invert rarity for selection bias)
+            # Flattened shop weights — rarer editions less common but still appear
+            SHOP_EDITION_WEIGHTS = {
+                'base': 50, 'holographic': 25, 'prismatic': 12, 'diamond': 5,
+            }
             weights = []
-            for t in nonBase:
-                edWeight = EDITION_BASE_WEIGHTS.get(t.edition, 1)
-                invWeight = max(1, 110 - edWeight)
-                weights.append(invWeight)
+            for t in allTemplates:
+                weights.append(SHOP_EDITION_WEIGHTS.get(t.edition, 50))
 
-            count = min(self.FEATURED_CARD_COUNT, len(nonBase))
+            count = min(self.FEATURED_CARD_COUNT, len(allTemplates))
             picked = []
-            poolCopy = list(nonBase)
+            seenEffects = set()
+            poolCopy = list(allTemplates)
             weightsCopy = list(weights)
-            for _ in range(count):
-                if not poolCopy:
-                    break
+            maxAttempts = count * 10
+            attempts = 0
+            while len(picked) < count and poolCopy and attempts < maxAttempts:
+                attempts += 1
                 choice = random.choices(poolCopy, weights=weightsCopy, k=1)[0]
-                picked.append(choice)
+                effectName = (choice.effect_config or {}).get('effect') if choice.effect_config else None
                 idx = poolCopy.index(choice)
+                if effectName and effectName in seenEffects:
+                    # Duplicate effect — remove from pool and skip
+                    poolCopy.pop(idx)
+                    weightsCopy.pop(idx)
+                    continue
+                picked.append(choice)
+                if effectName:
+                    seenEffects.add(effectName)
                 poolCopy.pop(idx)
                 weightsCopy.pop(idx)
 

@@ -179,6 +179,7 @@ class Player:
         self.serviceTime = PlayerServiceTime.Rookie
         self.leagueChampionships = []
         self.mvpAwards = []
+        self.allProSeasons = []
 
         # Use optimized stats instead of deep copying
         self.gameStats = get_optimized_stats()
@@ -265,7 +266,7 @@ class Player:
         self.gameAttributes.confidenceModifier = round(self.gameAttributes.confidenceModifier + value, 3)
         self.updateInGameRating()
 
-    def offseasonTraining(self, coachDevRating: int = 50):
+    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
         pass
 
 
@@ -609,7 +610,7 @@ class PlayerQB(Player, CachedRatingMixin):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.calculateSkills()
         self.gameAttributes.skillRating = round(((self.gameAttributes.armStrength*1.2) + (self.gameAttributes.accuracy*1.3) + (self.gameAttributes.agility*.5))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
+        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
@@ -633,13 +634,13 @@ class PlayerQB(Player, CachedRatingMixin):
         
         # For game ratings, we still calculate directly since they change frequently
         self.gameAttributes.skillRating = round(((self.gameAttributes.armStrength*1.2) + (self.gameAttributes.accuracy*1.3) + (self.gameAttributes.agility*.5))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
+        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
 
-    def offseasonTraining(self, coachDevRating: int = 50):
-        PlayerDevelopment.apply_offseason_training(self, "QB", coachDevRating=coachDevRating)
+    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+        PlayerDevelopment.apply_offseason_training(self, "QB", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
 class PlayerRB(Player):
@@ -669,7 +670,7 @@ class PlayerRB(Player):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.calculateSkills()
         self.gameAttributes.skillRating = round(((self.gameAttributes.speed*.7) + (self.gameAttributes.power*1.3) + (self.gameAttributes.agility*1))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
+        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
@@ -677,13 +678,13 @@ class PlayerRB(Player):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.power*1.3) + (self.attributes.agility*1))/3)
-        self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
 
 
-    def offseasonTraining(self, coachDevRating: int = 50):
-        PlayerDevelopment.apply_offseason_training(self, "RB", coachDevRating=coachDevRating)
+    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+        PlayerDevelopment.apply_offseason_training(self, "RB", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
-        
+
 class PlayerWR(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
@@ -711,7 +712,7 @@ class PlayerWR(Player):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.calculateSkills()
         self.gameAttributes.skillRating = round(((self.gameAttributes.speed*.7) + (self.gameAttributes.hands*1.5) + (self.gameAttributes.agility*.8))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
+        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
@@ -719,11 +720,11 @@ class PlayerWR(Player):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.hands*1.5) + (self.attributes.agility*.8))/3)
-        self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
 
 
-    def offseasonTraining(self, coachDevRating: int = 50):
-        PlayerDevelopment.apply_offseason_training(self, "WR", coachDevRating=coachDevRating)
+    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+        PlayerDevelopment.apply_offseason_training(self, "WR", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
 class PlayerTE(Player):
@@ -753,7 +754,7 @@ class PlayerTE(Player):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.calculateSkills()
         self.gameAttributes.skillRating = round(((self.gameAttributes.power*1.3) + (self.gameAttributes.hands*1) + (self.gameAttributes.agility*.7))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
+        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
@@ -761,12 +762,12 @@ class PlayerTE(Player):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.power*1.3) + (self.attributes.hands*1) + (self.attributes.agility*.7))/3)
-        self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
         self.playerRating = self.attributes.overallRating
 
 
-    def offseasonTraining(self, coachDevRating: int = 50):
-        PlayerDevelopment.apply_offseason_training(self, "TE", coachDevRating=coachDevRating)
+    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+        PlayerDevelopment.apply_offseason_training(self, "TE", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
 class PlayerK(Player):
@@ -790,7 +791,7 @@ class PlayerK(Player):
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.calculateSkills()
         self.gameAttributes.skillRating = round((self.gameAttributes.legStrength + self.gameAttributes.accuracy)/2)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*2) + (self.gameAttributes.playMakingAbility*1.5) + (self.gameAttributes.xFactor*1.5))/5)
+        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
@@ -798,10 +799,10 @@ class PlayerK(Player):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
         self.attributes.skillRating = round((self.attributes.legStrength + self.attributes.accuracy)/2)
-        self.attributes.overallRating = round(((self.attributes.skillRating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
+        self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
         self.maxFgDistance = round(70*(self.attributes.legStrength/100))
 
 
-    def offseasonTraining(self, coachDevRating: int = 50):
-        PlayerDevelopment.apply_offseason_training(self, "K", coachDevRating=coachDevRating)
+    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+        PlayerDevelopment.apply_offseason_training(self, "K", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()

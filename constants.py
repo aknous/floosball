@@ -107,14 +107,27 @@ SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
 SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25
 
-SEASON_FP_PAYOUT_DIVISOR = 25  # 1 Floobit per N FP
+ROSTER_SWAP_COST = 15
+
+# Weekly FP → Floobits conversion (participation reward)
+WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
+WEEKLY_FP_FLOOBIT_CAP = 20      # Max Floobits earned from FP conversion per week
+
+SEASON_END_TAX_RATE = 0.25  # 25% of unspent floobits removed between seasons
+
+# ---- Team Funding (Patronage) ----
+FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
+FUNDING_TIER_THRESHOLDS = [1.75, 1.0, 0.5]  # multipliers of fairShare: >= 1.75 = MEGA, >= 1.0 = LARGE, >= 0.5 = MID, else SMALL
+FUNDING_TIER_NAMES = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
+FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
+FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
     "displayName": "Dispensation",
     "description": "+1 roster swap to make an additional player change.",
-    "price": 35,
+    "price": 50,
 }
 POWERUP_MODIFIER_NULLIFIER = {
     "slug": "modifier_nullifier",
@@ -129,12 +142,6 @@ POWERUP_TEMP_FLEX = {
     "price": 200,
     "durationWeeks": 4,
     "seasonLimit": 2,
-}
-POWERUP_SHOP_REROLL = {
-    "slug": "shop_reroll",
-    "displayName": "Requisition",
-    "description": "Regenerates your featured shop cards.",
-    "price": 30,
 }
 POWERUP_TEMP_CARD_SLOT = {
     "slug": "temp_card_slot",
@@ -154,14 +161,28 @@ POWERUP_FORTUNES_FAVOR = {
     "seasonLimit": 2,
 }
 
+POWERUP_INCOME_BOOST = {
+    "slug": "income_boost",
+    "displayName": "Endowment",
+    "description": "Raises your weekly FP earnings cap to 40 Floobits for 4 weeks.",
+    "price": 100,
+    "durationWeeks": 4,
+    "seasonLimit": 2,
+    "boostedCap": 40,
+}
+
 POWERUP_CATALOG = {
     "extra_swap": POWERUP_EXTRA_SWAP,
     "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
     "temp_flex": POWERUP_TEMP_FLEX,
     "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
-    "shop_reroll": POWERUP_SHOP_REROLL,
     "fortunes_favor": POWERUP_FORTUNES_FAVOR,
+    "income_boost": POWERUP_INCOME_BOOST,
 }
+
+# Shop reroll (not a powerup — lives in the Daily Selection section)
+SHOP_REROLL_BASE_COST = 10
+SHOP_REROLL_COST_INCREMENT = 10  # Each reroll costs 10 more than the last
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7

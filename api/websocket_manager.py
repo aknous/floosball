@@ -103,11 +103,15 @@ class ConnectionManager:
         disconnected = []
         for connection in list(self.active_connections.get(channel, set())):
             try:
+                # Skip connections that are already closed
+                if connection.client_state.name != 'CONNECTED':
+                    disconnected.append(connection)
+                    continue
                 await connection.send_json(message)
             except WebSocketDisconnect:
                 disconnected.append(connection)
             except Exception as e:
-                logger.error(f"Error broadcasting to connection: {e}")
+                logger.debug(f"Broadcast to closing connection: {e}")
                 disconnected.append(connection)
         
         # Clean up disconnected clients

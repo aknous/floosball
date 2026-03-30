@@ -246,10 +246,15 @@ class PlayerManager:
                 else:
                     player.seasonStatsArchive = archive_data
             
+            # Load awards/accolades
+            player.mvpAwards = player_data.get('mvpAwards', [])
+            player.allProSeasons = player_data.get('allProSeasons', [])
+            player.leagueChampionships = player_data.get('leagueChampionships', [])
+
             # Set up season stats dict if not present
             if not hasattr(player, 'seasonStatsDict') or player.seasonStatsDict is None:
                 player.seasonStatsDict = player.careerStatsDict.copy() if hasattr(player, 'careerStatsDict') else {}
-            
+
             return player
             
         except Exception as e:
@@ -1451,6 +1456,9 @@ class PlayerManager:
                     playerDict['attributes'] = vars(player.attributes) if hasattr(player.attributes, '__dict__') else player.attributes
                 except:
                     playerDict['attributes'] = {}
+            playerDict['mvpAwards'] = getattr(player, 'mvpAwards', [])
+            playerDict['allProSeasons'] = getattr(player, 'allProSeasons', [])
+            playerDict['leagueChampionships'] = getattr(player, 'leagueChampionships', [])
             playerDict['careerStats'] = player.careerStatsDict
             
             # Handle seasonStatsArchive as numbered dictionary (matches original)

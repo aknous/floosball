@@ -80,6 +80,19 @@ def _areGamesStarted() -> bool:
     )
 
 
+def _areGamesCompleted() -> bool:
+    """True when the week's games have finished but the next week hasn't started.
+
+    After all games end, activeGames is cleared and completedWeekGames holds
+    the finished games.  Use this to keep fantasy scoring visible between weeks
+    (while _areGamesStarted returns False so rosters can be swapped).
+    """
+    sm = floosball_app.seasonManager if floosball_app else None
+    if not sm or not sm.currentSeason:
+        return False
+    return sm.currentSeason.completedWeekGames is not None
+
+
 def _areGamesScheduled() -> bool:
     """True when games exist for the current week (Scheduled, Active, or Final).
 
@@ -380,6 +393,43 @@ async def get_team(team_id: int):
             except Exception:
                 continue
         team_dict['schedule'] = teamSchedule
+
+        # Funding details (from most recent completed season)
+        try:
+            from database.connection import get_session as _gs
+            from database.models import TeamFunding
+            from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
+            fundSession = _gs()
+            try:
+                # Get the latest funding record for this team
+                latestFunding = fundSession.query(TeamFunding).filter_by(
+                    team_id=team_id
+                ).order_by(TeamFunding.season.desc()).first()
+                if latestFunding:
+                    # Compute fair share from all teams in that season
+                    allRecords = fundSession.query(TeamFunding).filter_by(
+                        season=latestFunding.season
+                    ).all()
+                    totalEffective = sum(r.effective_funding for r in allRecords)
+                    numTeams = len(allRecords)
+                    fairShare = totalEffective / numTeams if numTeams > 0 else 1
+                    team_dict['funding'] = {
+                        'season': latestFunding.season,
+                        'currentFunding': latestFunding.current_funding,
+                        'carriedFunding': latestFunding.carried_funding,
+                        'effectiveFunding': latestFunding.effective_funding,
+                        'tier': latestFunding.funding_tier,
+                        'tierRank': latestFunding.tier_rank,
+                        'fairShare': round(fairShare),
+                        'thresholds': {
+                            FUNDING_TIER_NAMES[i]: round(fairShare * t)
+                            for i, t in enumerate(FUNDING_TIER_THRESHOLDS)
+                        },
+                    }
+            finally:
+                fundSession.close()
+        except Exception:
+            pass  # Funding data is optional — skip if unavailable
 
         return build_success_response(team_dict)
     
@@ -755,6 +805,31 @@ async def get_current_games():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _buildMatchupPreview(game) -> dict:
+    """Build pre-game matchup comparison from season team stats."""
+    def _teamStats(team):
+        off = team.seasonTeamStats.get('Offense', {})
+        dfn = team.seasonTeamStats.get('Defense', {})
+        return {
+            'avgPts': off.get('avgPts', 0),
+            'avgPtsAlwd': dfn.get('avgPtsAlwd', 0),
+            'avgPassYards': off.get('avgPassYards', 0),
+            'avgPassTds': off.get('avgPassTds', 0),
+            'avgRunYards': off.get('avgRunYards', 0),
+            'avgRunTds': off.get('avgRunTds', 0),
+            'avgYards': off.get('avgYards', 0),
+            'avgYardsAlwd': dfn.get('avgYardsAlwd', 0),
+            'avgPassYardsAlwd': dfn.get('avgPassYardsAlwd', 0),
+            'avgRunYardsAlwd': dfn.get('avgRunYardsAlwd', 0),
+            'avgSacks': dfn.get('avgSacks', 0),
+            'avgInts': dfn.get('avgInts', 0),
+        }
+    return {
+        'home': _teamStats(game.homeTeam),
+        'away': _teamStats(game.awayTeam),
+    }
+
+
 @app.get("/api/games/{game_id}", response_model=Dict[str, Any])
 async def get_game_by_id(game_id: int):
     """
@@ -859,9 +934,17 @@ async def get_game_by_id(game_id: int):
         # gameFeed is newest-first (insert(0, ...)), so serializable_plays is already newest-first
         game_dict['plays'] = serializable_plays
 
-        # Add live game stats snapshot
-        if hasattr(game, '_buildGameStatsSnapshot'):
+        # Add live game stats snapshot (skip for Scheduled — player gameStatsDict
+        # still holds data from their previous game until playGame() resets it)
+        if hasattr(game, '_buildGameStatsSnapshot') and game.status.name != 'Scheduled':
             game_dict['gameStats'] = game._buildGameStatsSnapshot()
+        else:
+            game_dict['gameStats'] = None
+
+        # Clear plays/feed for scheduled games (same reason — no data yet)
+        if game.status.name == 'Scheduled':
+            game_dict['plays'] = []
+            game_dict['matchupPreview'] = _buildMatchupPreview(game)
 
         return game_dict
     
@@ -1053,6 +1136,7 @@ async def get_season_info():
             'mvp': current_season.mvp if hasattr(current_season, 'mvp') and current_season.mvp else None,
             'allPro': current_season.allPro if hasattr(current_season, 'allPro') and current_season.allPro else None,
             'next_game_start_time': nextGameStartTime,
+            'shop_open': not current_season.isComplete and current_season.currentWeek <= 28,
         })
     
     except Exception as e:
@@ -1572,9 +1656,10 @@ def admin_card_options(x_admin_password: Optional[str] = Header(default=None)):
     _check_admin_password(x_admin_password)
     from managers.cardEffects import (
         SHARED_EFFECT_POOL, POSITION_EXCLUSIVE_POOLS,
-        EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY, EDITION_POWER_SCALES,
+        EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY,
     )
-    editions = list(EDITION_POWER_SCALES.keys())
+    from managers.cardManager import EDITION_ORDER
+    editions = list(EDITION_ORDER)
     # Build effects grouped by category from the shared + exclusive pools
     effects = {}
     allEffects = list(SHARED_EFFECT_POOL)
@@ -1630,8 +1715,8 @@ def admin_grant_card(payload: Dict[str, Any],
     _check_admin_password(x_admin_password)
     from database.connection import get_session
     from database.models import User, CardTemplate, UserCard
-    from managers.cardEffects import buildEffectConfig, EDITION_POWER_SCALES
-    from managers.cardManager import EDITION_SELL_VALUES
+    from managers.cardEffects import buildEffectConfig
+    from managers.cardManager import EDITION_SELL_VALUES, EDITION_ORDER
 
     email = payload.get("email", "").strip().lower()
     playerId = payload.get("playerId")
@@ -1642,7 +1727,7 @@ def admin_grant_card(payload: Dict[str, Any],
 
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
-    if edition not in EDITION_POWER_SCALES:
+    if edition not in EDITION_ORDER:
         raise HTTPException(status_code=400, detail=f"Invalid edition: {edition}")
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
@@ -1862,10 +1947,10 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
     phase = "unknown"
     if not season:
         phase = "inactive"
-    elif liveWeekText == 'Offseason':
-        phase = "offseason"
     elif liveComplete and not hasLiveGames:
         phase = "between_seasons"
+    elif liveWeekText == 'Offseason':
+        phase = "offseason"
     elif hasLiveGames or (liveWeek > 0 and not liveComplete):
         # Check playoffs from live season state
         inPlayoffs = bool(season.playoffBracket)
@@ -2078,11 +2163,13 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         except Exception:
             pass
 
+    draftComplete = len(draftOrder) > 0 and all(t.get("complete") for t in draftOrder)
     return {
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
         "faWindowEnd": faWindowEnd, "faPool": faPool,
         "existingBallot": existingBallot, "faDirectives": faDirectives,
+        "draftComplete": draftComplete,
     }
 
 
@@ -2490,8 +2577,16 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 "bankedFP": round(swap.banked_fp, 1),
             })
 
-        # Check if games are actually running (Active/Final, not just Scheduled)
-        gamesActive = _areGamesStarted()
+        # gamesActive: scoring visible (in progress or just finished between weeks)
+        # gamesInProgress: blocks roster swaps (only while a game is actively being played)
+        gamesActive = _areGamesStarted() or _areGamesCompleted()
+        sm = floosball_app.seasonManager if floosball_app else None
+        gamesInProgress = False
+        if sm and sm.currentSeason and sm.currentSeason.activeGames:
+            gamesInProgress = any(
+                getattr(g, 'status', None) == FloosGame.GameStatus.Active
+                for g in sm.currentSeason.activeGames
+            )
 
         cardBonus = roster.card_bonus_points or 0.0
         return build_success_response({
@@ -2510,6 +2605,7 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
             },
             "season": displaySeason,
             "gamesActive": gamesActive,
+            "gamesInProgress": gamesInProgress,
         })
     finally:
         session.close()
@@ -2790,9 +2886,6 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
             raise HTTPException(status_code=404, detail="No roster found")
         if not roster.is_locked:
             raise HTTPException(status_code=400, detail="Roster is not locked — edit it directly instead")
-        totalSwaps = roster.swaps_available + roster.purchased_swaps
-        if totalSwaps < 1:
-            raise HTTPException(status_code=409, detail="No swaps available")
 
         # Find the current player in this slot
         rosterPlayer = None
@@ -2800,13 +2893,30 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
             if rp.slot == req.slot:
                 rosterPlayer = rp
                 break
-        if rosterPlayer is None:
-            raise HTTPException(status_code=400, detail=f"No player in slot {req.slot}")
 
         # Validate new player not already on roster
         for rp in roster.players:
             if rp.player_id == req.newPlayerId:
                 raise HTTPException(status_code=409, detail=f"{newPlayerObj.name} is already on your roster")
+
+        currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
+
+        # Empty FLEX slot: add player for free (no swap cost, no swap consumed)
+        if rosterPlayer is None:
+            if req.slot != "FLEX":
+                raise HTTPException(status_code=400, detail=f"No player in slot {req.slot}")
+            from database.models import FantasyRosterPlayer
+            newPlayerSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
+                player_id=req.newPlayerId, season=currentSeasonNum
+            ).scalar()
+            session.add(FantasyRosterPlayer(
+                roster_id=roster.id,
+                player_id=req.newPlayerId,
+                slot="FLEX",
+                points_at_lock=float(newPlayerSeasonFP),
+            ))
+            session.commit()
+            return build_success_response({"message": "FLEX player added", "slot": "FLEX"})
 
         # Calculate old player's earned FP
         oldPlayerId = rosterPlayer.player_id
@@ -2815,16 +2925,19 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         ).scalar()
         bankedFP = max(0.0, float(totalSeasonFP) - rosterPlayer.points_at_lock)
 
-        # Deduct 1 Floobit
+        totalSwaps = roster.swaps_available + roster.purchased_swaps
+        if totalSwaps < 1:
+            raise HTTPException(status_code=409, detail="No swaps available")
+
+        # Deduct swap cost
+        from constants import ROSTER_SWAP_COST
         currencyRepo = CurrencyRepository(session)
         result = currencyRepo.spendFunds(
-            userId=user.id, amount=1, transactionType="roster_swap",
-            description=f"Roster swap: {req.slot}", season=currentSeasonNum,
+            userId=user.id, amount=ROSTER_SWAP_COST, transactionType="roster_swap",
+            description=f"Roster swap: {req.slot} ({ROSTER_SWAP_COST} Floobits)", season=currentSeasonNum,
         )
         if result is None:
-            raise HTTPException(status_code=402, detail="Insufficient Floobits (need 1)")
-
-        currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
+            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {ROSTER_SWAP_COST})")
 
         # Record the swap
         session.add(FantasyRosterSwap(
@@ -3029,7 +3142,7 @@ def get_fantasy_weekly_leaderboard(season: Optional[int] = Query(default=None)):
     sm = floosball_app.seasonManager if floosball_app else None
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     isCurrentSeason = seasonNum == (sm.currentSeason.seasonNumber if sm and sm.currentSeason else -1)
-    gamesActive = isCurrentSeason and _areGamesStarted()
+    gamesActive = isCurrentSeason and (_areGamesStarted() or _areGamesCompleted())
 
     session = get_session()
     try:
@@ -3352,75 +3465,13 @@ def sellCards(req: SellCardsRequest, user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 
 
-class PromotionRequest(BaseModel):
-    subjectCardId: int
-    offeringCardId: int
-
-
 class BlendRequest(BaseModel):
     offeringCardIds: List[int]
 
 
-class TransplantRequest(BaseModel):
-    targetCardId: int
-    offeringCardId: int
-
-
-@app.post("/api/cards/promote")
-def promoteCard(req: PromotionRequest, user: _User = Depends(_getCurrentUser)):
-    """Promotion: Sacrifice a higher-edition card to promote the subject's edition."""
-    from database.connection import get_session
-    from managers.cardManager import CardManager
-
-    sm = floosball_app.seasonManager if floosball_app else None
-    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-
-    session = get_session()
-    try:
-        result = cardManager.promoteCard(session, user.id, req.subjectCardId,
-                                         req.offeringCardId, currentSeason, currentWeek)
-        session.commit()
-        return build_success_response(result)
-    except ValueError as e:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        session.rollback()
-        if "database is locked" in str(e).lower():
-            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
-        logger.error(f"Card promotion failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to promote card")
-    finally:
-        session.close()
-
-
-@app.post("/api/cards/promote/preview")
-def previewPromotion(req: PromotionRequest, user: _User = Depends(_getCurrentUser)):
-    """Preview Promotion result."""
-    from database.connection import get_session
-    from managers.cardManager import CardManager
-
-    sm = floosball_app.seasonManager if floosball_app else None
-    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-
-    session = get_session()
-    try:
-        result = cardManager.previewPromotion(session, user.id, req.subjectCardId,
-                                              req.offeringCardId, currentSeason, currentWeek)
-        return build_success_response(result)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        session.close()
-
-
 @app.post("/api/cards/blend")
 def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
-    """The Blender: Sacrifice multiple cards to create one new random card."""
+    """The Combine: Sacrifice multiple cards to create one new random card."""
     from database.connection import get_session
     from managers.cardManager import CardManager
 
@@ -3451,7 +3502,7 @@ def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
 
 @app.post("/api/cards/blend/preview")
 def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
-    """Preview The Blender result (shows resulting edition based on total value)."""
+    """Preview The Combine result (shows resulting edition based on total value)."""
     from database.connection import get_session
     from managers.cardManager import CardManager
 
@@ -3463,58 +3514,6 @@ def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.previewBlend(session, user.id, req.offeringCardIds, currentSeason, currentWeek)
-        return build_success_response(result)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        session.close()
-
-
-@app.post("/api/cards/transplant")
-def transplantCard(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
-    """Transplant: Sacrifice offering to transfer its effect onto the target."""
-    from database.connection import get_session
-    from managers.cardManager import CardManager
-
-    sm = floosball_app.seasonManager if floosball_app else None
-    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-
-    session = get_session()
-    try:
-        result = cardManager.transplantCard(session, user.id, req.targetCardId,
-                                            req.offeringCardId, currentSeason, currentWeek)
-        session.commit()
-        return build_success_response(result)
-    except ValueError as e:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        session.rollback()
-        if "database is locked" in str(e).lower():
-            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
-        logger.error(f"Card transplant failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to transplant effect")
-    finally:
-        session.close()
-
-
-@app.post("/api/cards/transplant/preview")
-def previewTransplant(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
-    """Preview Transplant result and cost."""
-    from database.connection import get_session
-    from managers.cardManager import CardManager
-
-    sm = floosball_app.seasonManager if floosball_app else None
-    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-
-    session = get_session()
-    try:
-        result = cardManager.previewTransplant(session, user.id, req.targetCardId,
-                                               req.offeringCardId, currentSeason, currentWeek)
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3803,16 +3802,45 @@ def setEquippedCards(
 # ============================================================================
 
 
+def _isShopOpen() -> bool:
+    """Check if the shop is open (regular season only, weeks 1-28)."""
+    sm = floosball_app.seasonManager if floosball_app else None
+    if not sm or not sm.currentSeason:
+        return False
+    return sm.currentSeason.currentWeek <= 28 and not sm.currentSeason.isComplete
+
+
+def _requireShopOpen():
+    """Raise 403 if shop is closed (playoffs/offseason)."""
+    if not _isShopOpen():
+        raise HTTPException(status_code=403, detail="Shop is closed for the season")
+
+
 @app.get("/api/packs/types")
-def getPackTypes():
-    """Get available pack types with costs."""
+def getPackTypes(user: Optional[_User] = Depends(_getOptionalUser)):
+    """Get available pack types with costs and daily purchase limits."""
     from database.connection import get_session
+    from database.models import PackOpening
     from database.repositories.card_repositories import PackTypeRepository
+    from managers.cardManager import DAILY_PACK_LIMITS
+    from datetime import datetime
 
     session = get_session()
     try:
         packRepo = PackTypeRepository(session)
         packs = packRepo.getAll()
+
+        # Count today's purchases per pack type if user is authenticated
+        todayCounts = {}
+        if user:
+            dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            for p in packs:
+                todayCounts[p.id] = session.query(PackOpening).filter(
+                    PackOpening.user_id == user.id,
+                    PackOpening.pack_type_id == p.id,
+                    PackOpening.opened_at >= dayStart,
+                ).count()
+
         return build_success_response({
             "packs": [
                 {
@@ -3823,9 +3851,12 @@ def getPackTypes():
                     "cardsPerPack": p.cards_per_pack,
                     "guaranteedRarity": p.guaranteed_rarity,
                     "description": p.description,
+                    "dailyLimit": DAILY_PACK_LIMITS.get(p.name),
+                    "remainingToday": max(0, DAILY_PACK_LIMITS.get(p.name, 99) - todayCounts.get(p.id, 0)) if user else None,
                 }
                 for p in packs
-            ]
+            ],
+            "shopOpen": _isShopOpen(),
         })
     finally:
         session.close()
@@ -3838,6 +3869,7 @@ class OpenPackRequest(BaseModel):
 @app.post("/api/packs/open")
 def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
     """Buy and open a card pack."""
+    _requireShopOpen()
     from database.connection import get_session
     from managers.cardManager import CardManager
 
@@ -3883,7 +3915,7 @@ def getShopFeatured(user: _User = Depends(_getCurrentUser)):
             currentWeek=currentWeek, isScheduledMode=isScheduledMode,
         )
         session.commit()
-        return build_success_response({"cards": featured, "currentSeason": currentSeason})
+        return build_success_response({"cards": featured, "currentSeason": currentSeason, "shopOpen": _isShopOpen()})
     except Exception:
         session.rollback()
         raise
@@ -3898,6 +3930,7 @@ class BuyCardRequest(BaseModel):
 @app.post("/api/shop/buy-card")
 def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser)):
     """Buy a single featured card from the shop."""
+    _requireShopOpen()
     from database.connection import get_session
     from managers.cardManager import CardManager
 
@@ -3918,6 +3951,124 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
         session.rollback()
         logger.error(f"Card purchase failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to buy card")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# SHOP REROLL
+# ============================================================================
+
+
+@app.get("/api/shop/reroll-cost")
+def getRerollCost(user: _User = Depends(_getCurrentUser)):
+    """Get the current reroll cost (escalates with each reroll today)."""
+    from database.connection import get_session
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from constants import SHOP_REROLL_BASE_COST, SHOP_REROLL_COST_INCREMENT
+
+    session = get_session()
+    try:
+        shopRepo = ShopPurchaseRepository(session)
+        sm = floosball_app.seasonManager if floosball_app else None
+        isScheduledMode = sm and sm.timingManager and sm.timingManager._isScheduledMode
+        if isScheduledMode:
+            rerollCount = shopRepo.getPurchasesToday(user.id, "shop_reroll")
+        else:
+            currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+            currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+            cycleLen = 7
+            cycleStartWeek = max(1, ((currentWeek - 1) // cycleLen) * cycleLen + 1)
+            cycleEndWeek = cycleStartWeek + cycleLen - 1
+            rerollCount = shopRepo.getPurchasesForCycle(
+                user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
+            )
+        cost = SHOP_REROLL_BASE_COST + (rerollCount * SHOP_REROLL_COST_INCREMENT)
+        return build_success_response({"cost": cost, "rerollCount": rerollCount})
+    finally:
+        session.close()
+
+
+@app.post("/api/shop/reroll")
+def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
+    """Reroll the daily selection. Cost escalates with each reroll."""
+    _requireShopOpen()
+    from database.connection import get_session
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from database.models import FeaturedShopCard
+    from managers.cardManager import CardManager
+    from constants import SHOP_REROLL_BASE_COST, SHOP_REROLL_COST_INCREMENT
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    isScheduledMode = sm and sm.timingManager and sm.timingManager._isScheduledMode
+
+    if currentWeek < 1:
+        raise HTTPException(status_code=400, detail="No active week")
+
+    session = get_session()
+    try:
+        shopRepo = ShopPurchaseRepository(session)
+        currencyRepo = CurrencyRepository(session)
+
+        # Calculate escalating cost
+        if isScheduledMode:
+            rerollCount = shopRepo.getPurchasesToday(user.id, "shop_reroll")
+        else:
+            cycleLen = 7
+            cycleStartWeek = max(1, ((currentWeek - 1) // cycleLen) * cycleLen + 1)
+            cycleEndWeek = cycleStartWeek + cycleLen - 1
+            rerollCount = shopRepo.getPurchasesForCycle(
+                user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
+            )
+        cost = SHOP_REROLL_BASE_COST + (rerollCount * SHOP_REROLL_COST_INCREMENT)
+
+        # Deduct
+        result = currencyRepo.spendFunds(
+            userId=user.id, amount=cost,
+            transactionType="shop_reroll",
+            description=f"Daily Selection reroll #{rerollCount + 1}",
+            season=currentSeasonNum, week=currentWeek,
+        )
+        if result is None:
+            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {cost})")
+
+        # Record purchase so next reroll costs more
+        shopRepo.createPurchase(
+            userId=user.id, itemSlug="shop_reroll", season=currentSeasonNum,
+            week=currentWeek, pricePaid=cost,
+        )
+
+        # Regenerate featured cards
+        cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+        session.query(FeaturedShopCard).filter(
+            FeaturedShopCard.user_id == user.id,
+            FeaturedShopCard.season == currentSeasonNum,
+            FeaturedShopCard.purchased == False,
+        ).delete()
+        session.flush()
+        featured = cardManager.getFeaturedCards(
+            session, user.id, currentSeasonNum,
+            currentWeek=currentWeek, isScheduledMode=isScheduledMode,
+            forceRegenerate=True,
+        )
+
+        nextCost = cost + SHOP_REROLL_COST_INCREMENT
+        session.commit()
+        return build_success_response({
+            "featuredCards": featured,
+            "newBalance": result.balance,
+            "nextRerollCost": nextCost,
+        })
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Shop reroll failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reroll")
     finally:
         session.close()
 
@@ -4036,18 +4187,18 @@ def getShopPowerups(user: _User = Depends(_getCurrentUser)):
                     and seasonCount < info.get("seasonLimit", 2) and currentWeek > 0
                 )
 
-            elif slug == "shop_reroll":
-                # 1 per refresh cycle
-                if isScheduledMode:
-                    purchasedCount = shopRepo.getPurchasesToday(user.id, slug)
-                else:
-                    purchasedCount = shopRepo.getPurchasesForCycle(
-                        user.id, currentSeasonNum, slug, cycleStartWeek, cycleEndWeek
-                    )
-                item["purchased"] = purchasedCount
-                item["limit"] = 1
-                item["limitLabel"] = "per refresh"
-                item["available"] = purchasedCount < 1 and currentWeek > 0
+            elif slug == "income_boost":
+                activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
+                seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
+                item["purchased"] = seasonCount
+                item["limit"] = info.get("seasonLimit", 2)
+                item["limitLabel"] = "per season"
+                item["durationWeeks"] = info.get("durationWeeks", 4)
+                item["activeUntilWeek"] = activeBoost.expires_at_week if activeBoost else None
+                item["available"] = (
+                    activeBoost is None
+                    and seasonCount < info.get("seasonLimit", 2) and currentWeek > 0
+                )
 
             items.append(item)
 
@@ -4067,6 +4218,7 @@ class BuyPowerupRequest(BaseModel):
 @app.post("/api/shop/powerups/buy")
 def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
     """Purchase a power-up. Validates eligibility, deducts Floobits, executes effect."""
+    _requireShopOpen()
     from database.connection import get_session
     from database.models import FantasyRoster, FeaturedShopCard
     from database.repositories.shop_repository import ShopPurchaseRepository, ModifierOverrideRepository
@@ -4168,15 +4320,19 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
             expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
 
-        elif slug == "shop_reroll":
+        elif slug == "income_boost":
             if currentWeek < 1:
                 raise HTTPException(status_code=400, detail="No active week")
-            if isScheduledMode:
-                count = shopRepo.getPurchasesToday(user.id, slug)
-            else:
-                count = shopRepo.getPurchasesForCycle(user.id, currentSeasonNum, slug, cycleStartWeek, cycleEndWeek)
-            if count >= 1:
-                raise HTTPException(status_code=409, detail="Already rerolled this period")
+            activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
+            if activeBoost:
+                raise HTTPException(status_code=409, detail="You already have Endowment active")
+            seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
+            seasonLimit = itemInfo.get("seasonLimit", 2)
+            if seasonCount >= seasonLimit:
+                raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
+            durationWeeks = itemInfo.get("durationWeeks", 4)
+            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
 
         # ── Deduct Floobits ──
 
@@ -4229,21 +4385,9 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             responseData["expiresAtWeek"] = expiresAtWeek
             responseData["durationWeeks"] = itemInfo.get("durationWeeks", 3)
 
-        elif slug == "shop_reroll":
-            # Delete unpurchased featured cards and regenerate
-            cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-            session.query(FeaturedShopCard).filter(
-                FeaturedShopCard.user_id == user.id,
-                FeaturedShopCard.season == currentSeasonNum,
-                FeaturedShopCard.purchased == False,
-            ).delete()
-            session.flush()
-            featured = cardManager.getFeaturedCards(
-                session, user.id, currentSeasonNum,
-                currentWeek=currentWeek, isScheduledMode=isScheduledMode,
-                forceRegenerate=True,
-            )
-            responseData["featuredCards"] = featured
+        elif slug == "income_boost":
+            responseData["expiresAtWeek"] = expiresAtWeek
+            responseData["durationWeeks"] = itemInfo.get("durationWeeks", 4)
 
         session.commit()
         return build_success_response(responseData)
@@ -4885,11 +5029,23 @@ def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
                 matchup["result"] = {"winnerId": liveGame.winningTeam.id}
             weekGames.append(matchup)
     elif isinstance(week, int) and 0 < week <= len(schedule):
-        scheduleGames = schedule[week - 1].get('games', [])
+        # Between weeks: show just-completed results instead of blank next-week matchups.
+        # currentWeek has already advanced but completedWeekGames still holds finished games.
+        completedGames = currentSeason.completedWeekGames
         activeGames = currentSeason.activeGames
+        if not activeGames and completedGames and week > 1:
+            week = week - 1  # show the completed week's results + picks
+
+        scheduleGames = schedule[week - 1].get('games', [])
         for i, game in enumerate(scheduleGames):
-            # Use active game object if available (has live status/quarter)
-            liveGame = activeGames[i] if activeGames and i < len(activeGames) else game
+            # Use active game object if available (has live status/quarter),
+            # then completed games, then fall back to schedule object
+            if activeGames and i < len(activeGames):
+                liveGame = activeGames[i]
+            elif completedGames and i < len(completedGames):
+                liveGame = completedGames[i]
+            else:
+                liveGame = game
             rawStatus = getattr(liveGame, 'status', None)
             # Compare by enum value to avoid identity issues across module reloads
             statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None

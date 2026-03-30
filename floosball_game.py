@@ -440,8 +440,8 @@ passPlayBook = {
                     'Play5': {
                         'dropback': QbDropback.long,
                         'targets': {
-                            'wr1': PassType.long,
-                            'wr2': None,
+                            'wr1': None,
+                            'wr2': PassType.long,
                             'te': PassType.medium,
                             'rb': None
                         }
@@ -458,8 +458,8 @@ passPlayBook = {
                     'Play7': {
                         'dropback': QbDropback.medium,
                         'targets': {
-                            'wr1': PassType.medium,
-                            'wr2': None,
+                            'wr1': None,
+                            'wr2': PassType.medium,
                             'te': PassType.medium,
                             'rb': None
                         }
@@ -693,6 +693,7 @@ class Game:
         self.otFirstPossTeam = None             # Team that received ball from OT coin flip
         self.otFirstPossComplete = False        # True once first team's OT possession ends
         self.otSecondPossComplete = False       # True once second team's OT possession ends
+        self.otPeriod = 0                        # OT period counter (1 = first OT, 2+ = sudden death)
         self.startTime: datetime.datetime = None
         self.isTwoPtConv = False
         self.isOnsideKick = False
@@ -1284,10 +1285,10 @@ class Game:
     def _checkDefensiveTimeout(self):
         """Defense calls timeout to stop the clock when trailing and the offense is milking clock.
 
-        Q4: triggers up to 5 min out with urgency scaling; under 2 min uses original high-urgency logic.
+        Q4/OT: triggers up to 5 min out with urgency scaling; under 2 min uses original high-urgency logic.
         Q2: triggers under 60 sec (moderate, end-of-half is less critical).
         """
-        if self.currentQuarter not in (2, 4):
+        if self.currentQuarter not in (2, 4) and self.currentQuarter < 5:
             return
         if not self.clockRunning:
             return
@@ -1306,17 +1307,18 @@ class Game:
         defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
         if defTimeouts <= 0:
             return
-        # Time window: Q4 up to 5 min; Q2 up to 60 sec
-        threshold = 300 if self.currentQuarter == 4 else 60
+        # Time window: Q4/OT up to 5 min; Q2 up to 60 sec
+        isEndGame = self.currentQuarter == 4 or self.currentQuarter >= 5
+        threshold = 300 if isEndGame else 60
         if secs > threshold:
             return
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
         # Urgency-based timeout probability
-        if self.currentQuarter == 4 and secs <= TIMEOUT_CLOCK_THRESHOLD:
+        if isEndGame and secs <= TIMEOUT_CLOCK_THRESHOLD:
             # Under 2 min: high urgency (original behavior)
             toChance = 0.5 + 0.5 * defGameIQ
-        elif self.currentQuarter == 4:
+        elif isEndGame:
             # 2-5 min: scale by time urgency and deficit size
             urgency = (300 - secs) / 180  # 0→1 as time decreases toward 2 min
             deficitScale = min(1.0, deficit / 14)
@@ -2042,9 +2044,9 @@ class Game:
 
         # Clock management — evaluated before any play selection on downs 1-3
         if self.down <= 3:
-            # Kneel: Q4, leading — only when guaranteed to drain the clock
+            # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
             # Each kneel ~40 sec; opponent timeouts only matter when game is close (≤8 pts)
-            if self.currentQuarter == 4 and scoreDiff > 0:
+            if (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff > 0:
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = 4 - self.down  # 1st→3, 2nd→2, 3rd→1
                 # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
@@ -2070,8 +2072,8 @@ class Game:
             gameIQ = self._coachClockIQ(coach)
 
             # Desperation FG: trailing by ≤3, in FG range, very little time — kick NOW
-            if (self.currentQuarter in (2, 4) and -3 <= scoreDiff < 0
-                    and self.gameClockSeconds <= 30):
+            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
+                    and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 30):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
                 despFgProb = self._estimateFgProbability()
@@ -2090,11 +2092,12 @@ class Game:
                         }
                         self.play.playType = PlayType.FieldGoal
                         return
-            # Spike: Q2/Q4, clock running, no timeouts, trailing/tied
+            # Spike: Q2/Q4/OT, clock running, no timeouts, trailing/tied
             # Urgency scales with remaining time — almost always spike under 30s,
             # less likely at 90s+ (sometimes better to just run a play)
             secs = self.gameClockSeconds
-            if (self.currentQuarter in (2, 4) and self.clockRunning
+            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
+                    and self.clockRunning
                     and secs <= SPIKE_CLOCK_THRESHOLD
                     and timeoutsLeft == 0 and scoreDiff <= 0
                     and not self._isGarbageTime(scoreDiff)):
@@ -2113,18 +2116,20 @@ class Game:
                     self.play.spike()
                     return
             # Call timeout (offense): trailing/tied, clock running, timeouts available
-            # Q4: expanded window to 5 min — urgency scales with deficit and time
+            # Q4/OT: expanded window to 5 min — urgency scales with deficit and time
             # Q2: standard 2-min window
-            if (self.currentQuarter in (2, 4) and scoreDiff <= 0 and self.clockRunning
+            isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
+            if (isLateGame and scoreDiff <= 0 and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
-                toWindow = 300 if self.currentQuarter == 4 else TIMEOUT_CLOCK_THRESHOLD
+                toWindow = 300 if self.currentQuarter >= 4 else TIMEOUT_CLOCK_THRESHOLD
                 if secs <= toWindow:
                     if secs <= TIMEOUT_CLOCK_THRESHOLD:
                         # Under 2 min: high urgency (original behavior)
                         toChance = 0.5 + 0.5 * gameIQ
                     else:
-                        # 2-5 min (Q4 only): scale by deficit — bigger hole = more urgent
-                        deficitScale = min(1.0, abs(scoreDiff) / 16)
+                        # 2-5 min (Q4/OT): scale by deficit — bigger hole = more urgent
+                        # Tied games get 0.5 floor — still urgent enough to manage clock
+                        deficitScale = max(0.5, min(1.0, abs(scoreDiff) / 16))
                         toChance = (0.2 + 0.5 * gameIQ) * deficitScale
                     if _random.random() < toChance:
                         self.play.insights['clockMgmt'] = {
@@ -2831,6 +2836,10 @@ class Game:
             player: FloosPlayer.Player
             player.gameAttributes = copy.deepcopy(player.attributes)
             player.reset_game_stats()
+
+        # Apply funding morale modifiers (small pregame confidence/determination nudge)
+        self._applyFundingMorale(self.homeTeam)
+        self._applyFundingMorale(self.awayTeam)
 
         x = batched_randint(0,1)
         if x == 0:
@@ -3963,6 +3972,20 @@ class Game:
 
     # ─── End Momentum System ────────────────────────────────────────────────
 
+    # ─── Funding Morale ───────────────────────────────────────────────────
+
+    def _applyFundingMorale(self, team):
+        """Apply a small pregame confidence/determination nudge based on team funding tier."""
+        from constants import FUNDING_MORALE_MODIFIER
+        fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
+        modifier = FUNDING_MORALE_MODIFIER.get(fundingTier, 0)
+        if modifier == 0:
+            return
+        for player in team.rosterDict.values():
+            if player is not None and player.gameAttributes is not None:
+                player.updateInGameConfidence(modifier * 0.6)
+                player.updateInGameDetermination(modifier * 0.4)
+
     def formatTime(self, seconds: int) -> str:
         """Format seconds into MM:SS display format"""
         minutes = seconds // 60
@@ -4577,16 +4600,17 @@ class Game:
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
                 self.awayTimeoutsRemaining = 2
+                self.otPeriod = 1
             # else game is over
         elif self.currentQuarter >= 5:
             # Additional OT periods - reset clock if game is still tied
             if self.homeScore == self.awayScore:
+                self.otPeriod += 1
                 self.gameClockSeconds = 600  # Another 10 minute OT period
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
                 self.awayTimeoutsRemaining = 2
-                self.otFirstPossComplete = False
-                self.otSecondPossComplete = False
+                # 2nd+ OT is sudden death — no possession reset needed
                 # Keep currentQuarter at 5 for tracking (all OT periods shown as "OT")
             # else game is over with a winner
     
@@ -4812,12 +4836,19 @@ class Game:
     
     def checkOvertimeEnd(self) -> bool:
         """Check if scoring in OT should end the game.
-        Both teams must have had a possession before a score can end the game."""
+        1st OT: both teams must have had a possession before a score can end the game.
+        2nd+ OT: sudden death — first score wins."""
         if self.currentQuarter < 5:
             return False
+        if self.homeScore == self.awayScore:
+            return False
 
-        # Game ends on a score only after both teams have had their guaranteed possession
-        if self.otSecondPossComplete and self.homeScore != self.awayScore:
+        # 2nd+ OT: sudden death — any score wins immediately
+        if self.otPeriod >= 2:
+            return True
+
+        # 1st OT: game ends only after both teams have had their guaranteed possession
+        if self.otSecondPossComplete:
             return True
 
         return False
@@ -5329,91 +5360,53 @@ class Play():
             self.runner.attributes.discipline
         )
         
-        # STAGE 3: Execute run through selected gap
-        # Gap quality affects initial yards (like throw quality affects completion)
-        gapQuality = selectedGap['actualQuality']  # Use actual, not perceived
+        # ── Yardage calculation ──
+        # Single-sample model: one Gaussian draw for base yards + breakaway chance
+        gapQuality = selectedGap['actualQuality']
+        gapType = selectedGap['type']
 
-        # Calculate offensive strength with pressure modifier
-        rbPowerRating = (self.runner.attributes.power * 1.5 +
-                        self.runner.attributes.agility * 1.2 +
-                        self.runner.attributes.playMakingAbility * 0.8 +
-                        self.runner.attributes.xFactor * 0.5) / 4
+        # RB composite rating weighted by gap type (power inside, agility outside)
+        if gapType == 'A-gap':
+            rbRating = (self.runner.attributes.power * 1.5 + self.runner.attributes.agility * 0.5) / 2
+        elif gapType == 'B-gap':
+            rbRating = (self.runner.attributes.power + self.runner.attributes.agility) / 2
+        elif gapType == 'C-gap':
+            rbRating = (self.runner.attributes.power * 0.5 + self.runner.attributes.agility * 1.5) / 2
+        else:  # bounce
+            rbRating = self.runner.attributes.agility
 
-        # Mental state: RB in rhythm hits holes harder, frustrated RB is tentative
-        # Scale by /15 to keep drift within ±1-3 on the rating scale
-        rbPowerRating += self._mentalDrift(self.runner) / 15
+        # Mental drift: RB in rhythm hits holes harder, frustrated RB is tentative
+        rbRating += self._mentalDrift(self.runner) / 15
 
-        stage1Offense = ((rbPowerRating * 0.65) + (blockerRating * 0.35)) + runnerPressureMod
-        
-        # Adjust offense rating based on gap quality
-        # Good gap quality = better chance for yards
-        qualityBonus = (gapQuality - 50) / 10  # -5 to +5 bonus
-        adjustedOffense = stage1Offense + qualityBonus
-        
-        # Calculate initial burst yards using Gaussian distribution
-        if self.yardsToEndzone >= 10:
-            stage1MaxYards = 10
-        else:
-            stage1MaxYards = self.yardsToEndzone + 5
-        
-        stage1Yardages = np.arange(-2, stage1MaxYards + 1)
+        # Offensive rating: RB skill + TE blocking + pressure modifier
+        offRating = (rbRating * 0.6) + (blockerRating * 0.4) + runnerPressureMod
 
-        # Mean yardage: baseline 3.0 for even matchups, shifted by rating differential
-        # Divisor 4.0 moderates matchup sensitivity (prevents elite RBs from 10+ avg)
-        mean_stage1 = ((adjustedOffense - self.defense.defenseRunCoverageRating) / 4.0) + 3.0
-        mean_stage1 = min(stage1MaxYards + 1, max(-1, mean_stage1))
+        # Gap quality bonus: clean hole = better yards (±2.5 range)
+        qualityBonus = (gapQuality - 50) / 20
 
-        ratingDifferential = (adjustedOffense - self.defense.defenseRunCoverageRating) / 100
-        std_dev_stage1 = max(1.5, 2.75 * (1.0 + ratingDifferential))
-        
-        # Create Gaussian curve for initial yards
-        stage1Curve = np.exp(-((stage1Yardages - mean_stage1) ** 2) / (2 * std_dev_stage1 ** 2))
-        stage1Curve /= np.sum(stage1Curve)
-        
-        stage1YardsGained = int(np.random.choice(stage1Yardages, p=stage1Curve))
-        self.yardage = stage1YardsGained
-        
-        # STAGE 4: Breakaway potential (second level)
-        if self.yardage < self.yardsToEndzone and stage1YardsGained >= stage1MaxYards * 0.4:
-            self.runner.updateInGameConfidence(.015)
-            
-            # Calculate breakaway potential (speed/agility focused) - BOOSTED
-            stage2Offense = ((self.runner.attributes.speed * 1.5 + 
-                            self.runner.attributes.agility * 1.2 + 
-                            self.runner.attributes.playMakingAbility * 0.8 +
-                            self.runner.attributes.xFactor * 0.5) / 4) + runnerPressureMod
-            
-            # Decay rate: higher = fewer second-level yards
-            # Even matchup ~0.35 (avg ~2.5 yds), elite offense ~0.20, weak offense ~0.50
-            ratingDiff = stage2Offense - self.defense.defenseRunCoverageRating
-            stage2DecayRate = max(0.12, min(0.55, 0.35 - ratingDiff * 0.006))
+        # Skill differential determines mean yardage
+        # Baseline 4.0 for even matchups, divisor 10.0 compresses mismatch spread
+        diff = offRating + qualityBonus - effectiveRunDef
+        runMean = 4.0 + (diff / 10.0)
+        runMean = max(-1, min(5.5, runMean))
 
-            if self.yardsToEndzone >= 10:
-                stage2MaxYards = 10
-            else:
-                stage2MaxYards = self.yardsToEndzone + 3
-            
-            stage2Yardages = np.arange(0, stage2MaxYards + 1)
-            stage2Curve = np.exp(-stage2DecayRate * stage2Yardages)
-            stage2Curve /= np.sum(stage2Curve)
-            
-            stage2YardsGained = int(np.random.choice(stage2Yardages, p=stage2Curve))
-            self.yardage += stage2YardsGained
+        runStdDev = 3.0
+        maxYards = min(12, self.yardsToEndzone + 3)
+        runYardages = np.arange(-3, maxYards + 1)
+        runCurve = np.exp(-((runYardages - runMean) ** 2) / (2 * runStdDev ** 2))
+        runCurve /= np.sum(runCurve)
+        self.yardage = int(np.random.choice(runYardages, p=runCurve))
+        baseYards = self.yardage
 
-        # STAGE 5: Breakaway (open field) — when RB gets past second level
+        # Breakaway: if RB got 6+ yards, chance to hit open field
         if self.yardage >= 6 and self.yardage < self.yardsToEndzone:
             speedRating = (self.runner.attributes.speed * 2 +
                           self.runner.attributes.agility +
                           self.runner.attributes.playMakingAbility) / 4
-            # Execution bonus: clean gap = easier breakaway
-            execBonus = 0
-            if gapQuality >= 65:
-                execBonus += 5 + (gapQuality - 65) * 0.15
-            breakawayChance = max(3, min(25, (speedRating - 60) * 0.3 + 3 + execBonus))
-            if batched_randint(1, 100) <= breakawayChance:
-                remainingYards = self.yardsToEndzone - self.yardage
-                breakawayYards = min(remainingYards, int(np.random.exponential(15)))
-                self.yardage += breakawayYards
+            breakChance = max(2, min(15, (speedRating - 60) * 0.25 + 2))
+            if batched_randint(1, 100) <= breakChance:
+                remaining = self.yardsToEndzone - self.yardage
+                self.yardage += min(remaining, int(np.random.exponential(8)))
 
         # Fumble check
         fumbleRoll = batched_randint(1, 100)
@@ -5455,14 +5448,14 @@ class Play():
             'gapQualityUsed': round(gapQuality),
             'rbVision': self.runner.attributes.vision,
             'rbDiscipline': self.runner.attributes.discipline,
-            'runnerRating': round(rbPowerRating),
+            'runnerRating': round(rbRating),
             'runnerPressureMod': round(runnerPressureMod, 1),
             'blockerRating': round(blockerRating),
             'blockerName': blocker.name if blocker else None,
             'blockingVsDefense': round(blockerRating - effectiveRunDef, 1),
             'effectiveRunDef': round(effectiveRunDef),
-            'offenseVsDefense': round(adjustedOffense - self.defense.defenseRunCoverageRating, 1),
-            'stage1Yards': stage1YardsGained,
+            'offenseVsDefense': round(offRating + qualityBonus - effectiveRunDef, 1),
+            'baseYards': baseYards,
             'fumbleRisk': round(100 - fumbleThreshold),
             'isFumble': self.isFumble,
         }
