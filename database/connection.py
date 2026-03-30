@@ -1,12 +1,15 @@
 """Database connection and session management."""
 
 import os
+import logging
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
 from .models import Base
+
+logger = logging.getLogger(__name__)
 
 # Database file path — configurable via DATABASE_DIR env var (for Fly.io volume mount)
 _defaultDbDir = Path(__file__).parent.parent / "data"
@@ -49,7 +52,7 @@ def init_db():
     _runPendingMigrations()
     _seedPackTypes()
     _seedBetaAllowlist()
-    print(f"Database initialized at {DB_PATH}")
+    logger.info(f"Database initialized at {DB_PATH}")
 
 
 def _runPendingMigrations():
@@ -65,7 +68,7 @@ def _runPendingMigrations():
             try:
                 conn.execute(text(f"ALTER TABLE seasons ADD COLUMN {col} {colDef}"))
                 conn.commit()
-                print(f"  Migration: added seasons.{col}")
+                logger.info(f"  Migration: added seasons.{col}")
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
@@ -94,7 +97,7 @@ def _runPendingMigrations():
                 try:
                     conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} {colDef}"))
                     conn.commit()
-                    print(f"  Migration: added {tbl}.{col}")
+                    logger.info(f"  Migration: added {tbl}.{col}")
                 except Exception:
                     conn.rollback()
     finally:
@@ -123,7 +126,7 @@ def _backfillPlayerSeasonTeamIds():
         if nullCount == 0:
             return
 
-        print(f"  Backfill: fixing {nullCount} player_season_stats rows with NULL team_id")
+        logger.info(f"  Backfill: fixing {nullCount} player_season_stats rows with NULL team_id")
 
         # For each NULL row, find the most common team_id from that player's game stats
         # in that season. Uses a correlated subquery with GROUP BY to pick the mode.
@@ -149,10 +152,10 @@ def _backfillPlayerSeasonTeamIds():
         ))
         remaining = result.scalar()
         fixed = nullCount - remaining
-        print(f"  Backfill: fixed {fixed} rows, {remaining} still NULL (no game data)")
+        logger.info(f"  Backfill: fixed {fixed} rows, {remaining} still NULL (no game data)")
     except Exception as e:
         conn.rollback()
-        print(f"  Backfill warning: {e}")
+        logger.info(f"  Backfill warning: {e}")
     finally:
         conn.close()
 
@@ -170,13 +173,13 @@ def _backfillPlayerSeasonStatsFromGames():
     try:
         # Diagnostic: count game_player_stats rows to verify data exists
         gpsCount = conn.execute(text("SELECT COUNT(*) FROM game_player_stats")).fetchone()[0]
-        print(f"  Backfill diagnostic: game_player_stats has {gpsCount} rows")
+        logger.info(f"  Backfill diagnostic: game_player_stats has {gpsCount} rows")
         if gpsCount > 0:
             sampleRow = conn.execute(text(
                 "SELECT passing_stats, rushing_stats FROM game_player_stats "
                 "WHERE passing_stats IS NOT NULL LIMIT 1"
             )).fetchone()
-            print(f"  Backfill diagnostic: sample passing_stats = {str(sampleRow[0])[:100] if sampleRow else 'NO ROWS WITH DATA'}")
+            logger.info(f"  Backfill diagnostic: sample passing_stats = {str(sampleRow[0])[:100] if sampleRow else 'NO ROWS WITH DATA'}")
 
         # Find season stats rows where all denormalized stat columns are zero or NULL
         # but the player has game data (meaning the stats were zeroed by the save bug)
@@ -198,13 +201,13 @@ def _backfillPlayerSeasonStatsFromGames():
                 "SELECT passing_yards, rushing_yards, receiving_yards, passing_stats "
                 "FROM player_season_stats LIMIT 1"
             )).fetchone()
-            print(f"  Backfill: no empty rows found. Total PSS rows: {totalPss}")
+            logger.info(f"  Backfill: no empty rows found. Total PSS rows: {totalPss}")
             if samplePss:
-                print(f"  Backfill: sample PSS row: passing_yards={samplePss[0]}, rushing_yards={samplePss[1]}, "
+                logger.info(f"  Backfill: sample PSS row: passing_yards={samplePss[0]}, rushing_yards={samplePss[1]}, "
                       f"receiving_yards={samplePss[2]}, passing_stats={str(samplePss[3])[:80]}")
             return
 
-        print(f"  Backfill: reconstructing stats for {len(emptyRows)} player_season_stats rows")
+        logger.info(f"  Backfill: reconstructing stats for {len(emptyRows)} player_season_stats rows")
         fixed = 0
 
         for rowId, playerId, season in emptyRows:
@@ -288,10 +291,10 @@ def _backfillPlayerSeasonStatsFromGames():
             fixed += 1
 
         conn.commit()
-        print(f"  Backfill: reconstructed stats for {fixed} rows from game data")
+        logger.info(f"  Backfill: reconstructed stats for {fixed} rows from game data")
     except Exception as e:
         conn.rollback()
-        print(f"  Backfill warning (stats): {e}")
+        logger.info(f"  Backfill warning (stats): {e}")
     finally:
         conn.close()
 
@@ -321,7 +324,7 @@ def _backfillPlayerCareerStatsFromGames():
         if not playerIds:
             return
 
-        print(f"  Backfill: reconstructing career stats for {len(playerIds)} players")
+        logger.info(f"  Backfill: reconstructing career stats for {len(playerIds)} players")
         fixed = 0
 
         for playerId in playerIds:
@@ -422,10 +425,10 @@ def _backfillPlayerCareerStatsFromGames():
             fixed += 1
 
         conn.commit()
-        print(f"  Backfill: reconstructed career stats for {fixed} players from game data")
+        logger.info(f"  Backfill: reconstructed career stats for {fixed} players from game data")
     except Exception as e:
         conn.rollback()
-        print(f"  Backfill warning (career): {e}")
+        logger.info(f"  Backfill warning (career): {e}")
     finally:
         conn.close()
 
@@ -449,7 +452,7 @@ def clear_db():
 
     # Recreate all tables (create_all is safe — skips existing preserved tables)
     Base.metadata.create_all(bind=engine)
-    print(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
+    logger.info(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
     _seedPackTypes()
     _seedBetaAllowlist()
@@ -522,10 +525,10 @@ def clear_card_data():
         session.query(UserCard).delete()
         session.query(CardTemplate).delete()
         session.commit()
-        print("Card data cleared — templates will regenerate on season start")
+        logger.info("Card data cleared — templates will regenerate on season start")
     except Exception as e:
         session.rollback()
-        print(f"Error clearing card data: {e}")
+        logger.info(f"Error clearing card data: {e}")
         raise
     finally:
         session.close()
@@ -624,10 +627,10 @@ def clear_database():
         session.query(UnusedName).delete()
         
         session.commit()
-        print("Database cleared successfully")
+        logger.info("Database cleared successfully")
     except Exception as e:
         session.rollback()
-        print(f"Error clearing database: {e}")
+        logger.info(f"Error clearing database: {e}")
         raise
     finally:
         session.close()
