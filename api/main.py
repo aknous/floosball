@@ -2522,13 +2522,7 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 user_id=user.id, season=currentSeasonNum
             ).first()
 
-        # Fall back to the most recent roster if no current-season roster exists
-        if roster is None:
-            roster = session.query(FantasyRoster).filter_by(
-                user_id=user.id
-            ).order_by(FantasyRoster.season.desc()).first()
-
-        displaySeason = currentSeasonNum or (roster.season if roster else None)
+        displaySeason = currentSeasonNum
 
         # Check if user has FLEX slot (champion card or temp_flex power-up)
         # Must run before the early return so users building a new roster see the slot

@@ -1264,8 +1264,10 @@ class TeamManager:
         team.coach = None
 
     def handleCoachRetirement(self, season: int) -> None:
-        """Check each team's coach for retirement; replace retiring coaches."""
+        """Increment seasonsCoached, then check each coach for retirement."""
         for team in self.teams:
+            if team.coach:
+                team.coach.seasonsCoached += 1
             if team.coach and team.coach.shouldRetire():
                 self.logger.info(
                     f"{team.coach.name} retires after {team.coach.seasonsCoached} seasons with {team.name}"

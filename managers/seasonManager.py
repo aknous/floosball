@@ -2878,6 +2878,17 @@ class SeasonManager:
         await self._resolveGmFireCoachVotes(gmResults)
         await self._resolveGmResignVotes(gmResults)
 
+        # STEP 2.5: Increment coach seasons and handle retirements
+        logger.info("Step 2.5: Coach season increments and retirements")
+        teamManager = self.serviceContainer.getService('team_manager')
+        if teamManager:
+            seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
+            teamManager.handleCoachRetirement(seasonNum)
+            # Save updated coach data (seasonsCoached increment + any new coaches)
+            for team in teamManager.teams:
+                if team.coach:
+                    teamManager._saveCoachToDatabase(team)
+
         # STEP 3: Process contract decrements and retirements for rostered players
         logger.info("Step 3: Contract decrements and team retirements")
         await self._processRosteredPlayerContracts()
