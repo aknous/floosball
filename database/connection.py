@@ -71,8 +71,9 @@ def _runPendingMigrations():
     finally:
         conn.close()
 
-    # One-time data backfill: reconstruct PlayerSeasonStats.team_id from GamePlayerStats
+    # One-time data backfills: reconstruct missing PlayerSeasonStats data from GamePlayerStats
     _backfillPlayerSeasonTeamIds()
+    _backfillPlayerSeasonStatsFromGames()
 
 
 def _backfillPlayerSeasonTeamIds():
@@ -122,6 +123,120 @@ def _backfillPlayerSeasonTeamIds():
     except Exception as e:
         conn.rollback()
         print(f"  Backfill warning: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillPlayerSeasonStatsFromGames():
+    """Reconstruct player_season_stats JSON columns from game_player_stats.
+
+    For rows where all stat JSON columns are NULL (stats were zeroed before save),
+    aggregate per-game stats from game_player_stats to rebuild season totals.
+    Idempotent — skips rows that already have non-NULL passing_stats.
+    """
+    import json as _json
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        # Find season stats rows with empty JSON (passing_stats is a good sentinel)
+        result = conn.execute(text(
+            "SELECT id, player_id, season FROM player_season_stats "
+            "WHERE passing_stats IS NULL OR passing_stats = '{}' "
+            "   OR passing_stats = '{\"att\": 0, \"comp\": 0, \"compPerc\": 0, \"missedPass\": 0, "
+            "\"tds\": 0, \"ints\": 0, \"yards\": 0, \"ypc\": 0, \"20+\": 0, \"longest\": 0}'"
+        ))
+        emptyRows = result.fetchall()
+        if not emptyRows:
+            return
+
+        print(f"  Backfill: reconstructing stats for {len(emptyRows)} player_season_stats rows")
+        fixed = 0
+
+        for rowId, playerId, season in emptyRows:
+            # Get all game stats for this player in this season
+            gameRows = conn.execute(text(
+                "SELECT gps.passing_stats, gps.rushing_stats, gps.receiving_stats, "
+                "       gps.kicking_stats, gps.defense_stats, gps.fantasy_points "
+                "FROM game_player_stats gps "
+                "JOIN games g ON gps.game_id = g.id "
+                "WHERE gps.player_id = :pid AND g.season = :season"
+            ), {"pid": playerId, "season": season}).fetchall()
+
+            if not gameRows:
+                continue
+
+            # Aggregate stats across games
+            passing = {}
+            rushing = {}
+            receiving = {}
+            kicking = {}
+            defense = {}
+            totalFp = 0
+            gamesPlayed = len(gameRows)
+
+            for gPassing, gRushing, gReceiving, gKicking, gDefense, gFp in gameRows:
+                totalFp += gFp or 0
+                for src, dest in [
+                    (gPassing, passing), (gRushing, rushing),
+                    (gReceiving, receiving), (gKicking, kicking), (gDefense, defense)
+                ]:
+                    if src:
+                        d = _json.loads(src) if isinstance(src, str) else src
+                        for k, v in d.items():
+                            if isinstance(v, (int, float)):
+                                dest[k] = dest.get(k, 0) + v
+
+            # Recompute derived stats
+            if passing.get('att', 0) > 0:
+                passing['compPerc'] = round(passing.get('comp', 0) / passing['att'] * 100, 1)
+                passing['ypc'] = round(passing.get('yards', 0) / passing['att'], 1)
+            if rushing.get('carries', 0) > 0:
+                rushing['ypc'] = round(rushing.get('yards', 0) / rushing['carries'], 1)
+            if receiving.get('receptions', 0) > 0:
+                receiving['ypr'] = round(receiving.get('yards', 0) / receiving['receptions'], 1)
+            if receiving.get('targets', 0) > 0:
+                receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
+            if kicking.get('fgAtt', 0) > 0:
+                kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
+
+            # Update the row
+            sPassing = passing.get('yards', 0)
+            conn.execute(text(
+                "UPDATE player_season_stats SET "
+                "  passing_stats = :passing, rushing_stats = :rushing, "
+                "  receiving_stats = :receiving, kicking_stats = :kicking, "
+                "  defense_stats = :defense, fantasy_points = :fp, "
+                "  games_played = :gp, "
+                "  passing_yards = :pyards, passing_tds = :ptds, passing_ints = :pints, "
+                "  passing_completions = :pcomp, passing_attempts = :patt, "
+                "  rushing_yards = :ryards, rushing_tds = :rtds, rushing_attempts = :ratt, "
+                "  receiving_yards = :recyards, receiving_tds = :rectds, receptions = :rec, "
+                "  sacks = :sacks, interceptions = :dints, tackles = :tackles "
+                "WHERE id = :id"
+            ), {
+                "passing": _json.dumps(passing) if passing else None,
+                "rushing": _json.dumps(rushing) if rushing else None,
+                "receiving": _json.dumps(receiving) if receiving else None,
+                "kicking": _json.dumps(kicking) if kicking else None,
+                "defense": _json.dumps(defense) if defense else None,
+                "fp": totalFp, "gp": gamesPlayed, "id": rowId,
+                "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
+                "pints": passing.get('ints', 0), "pcomp": passing.get('comp', 0),
+                "patt": passing.get('att', 0),
+                "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
+                "ratt": rushing.get('carries', 0),
+                "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
+                "rec": receiving.get('receptions', 0),
+                "sacks": defense.get('sacks', 0), "dints": defense.get('ints', 0),
+                "tackles": defense.get('tackles', 0),
+            })
+            fixed += 1
+
+        conn.commit()
+        print(f"  Backfill: reconstructed stats for {fixed} rows from game data")
+    except Exception as e:
+        conn.rollback()
+        print(f"  Backfill warning (stats): {e}")
     finally:
         conn.close()
 

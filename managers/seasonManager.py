@@ -2825,10 +2825,15 @@ class SeasonManager:
         # Update career records
         self.recordsManager.checkCareerRecords()
         
-        # Handle player season progression
+        # Save final player season stats BEFORE progression resets them
+        playerManager = self.serviceContainer.getService('player_manager')
+        if playerManager:
+            playerManager.savePlayerData()
+
+        # Handle player season progression (archives then resets seasonStatsDict)
         await self._handlePlayerSeasonProgression()
-        
-        # Save season statistics
+
+        # Save season statistics (team stats, season record, championships)
         self.saveSeasonStats()
         
         # Add to season history
@@ -3333,9 +3338,8 @@ class SeasonManager:
                 if player is None:
                     continue
                 
-                # Increment seasons played and update service time rank
-                player.seasonsPlayed += 1
-                self.playerManager._updatePlayerServiceTime(player)
+                # Note: seasonsPlayed and serviceTime are updated in _handlePlayerSeasonProgression
+                # for ALL active players (rostered + FA). Don't increment here.
 
                 # Decrement contract term
                 player.termRemaining -= 1
@@ -5059,11 +5063,6 @@ class SeasonManager:
 
         # Save team season stats to database
         self._saveTeamSeasonStatsToDatabase()
-
-        # Final player data save (captures playoff stats that weekly saves missed)
-        playerManager = self.serviceContainer.getService('player_manager')
-        if playerManager:
-            playerManager.savePlayerData()
 
         # Save championships to Championship table
         self._saveChampionshipsToDatabase()
