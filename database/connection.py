@@ -68,6 +68,35 @@ def _runPendingMigrations():
                 print(f"  Migration: added seasons.{col}")
             except Exception:
                 conn.rollback()  # column already exists — ignore
+
+        # Ensure denormalized stat columns exist on player_season_stats
+        # (create_all only creates tables, doesn't add columns to existing ones)
+        for tbl, cols in [
+            ('player_season_stats', [
+                ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),
+                ('passing_ints', 'INTEGER DEFAULT 0'), ('passing_completions', 'INTEGER DEFAULT 0'),
+                ('passing_attempts', 'INTEGER DEFAULT 0'),
+                ('rushing_yards', 'INTEGER DEFAULT 0'), ('rushing_tds', 'INTEGER DEFAULT 0'),
+                ('rushing_attempts', 'INTEGER DEFAULT 0'),
+                ('receiving_yards', 'INTEGER DEFAULT 0'), ('receiving_tds', 'INTEGER DEFAULT 0'),
+                ('receptions', 'INTEGER DEFAULT 0'),
+                ('sacks', 'INTEGER DEFAULT 0'), ('interceptions', 'INTEGER DEFAULT 0'),
+                ('tackles', 'INTEGER DEFAULT 0'),
+            ]),
+            ('player_career_stats', [
+                ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),
+                ('passing_ints', 'INTEGER DEFAULT 0'),
+                ('rushing_yards', 'INTEGER DEFAULT 0'), ('rushing_tds', 'INTEGER DEFAULT 0'),
+                ('receiving_yards', 'INTEGER DEFAULT 0'), ('receiving_tds', 'INTEGER DEFAULT 0'),
+            ]),
+        ]:
+            for col, colDef in cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} {colDef}"))
+                    conn.commit()
+                    print(f"  Migration: added {tbl}.{col}")
+                except Exception:
+                    conn.rollback()
     finally:
         conn.close()
 
@@ -139,12 +168,22 @@ def _backfillPlayerSeasonStatsFromGames():
     from sqlalchemy import text
     conn = engine.connect()
     try:
-        # Find season stats rows where all denormalized stat columns are zero
+        # Diagnostic: count game_player_stats rows to verify data exists
+        gpsCount = conn.execute(text("SELECT COUNT(*) FROM game_player_stats")).fetchone()[0]
+        print(f"  Backfill diagnostic: game_player_stats has {gpsCount} rows")
+        if gpsCount > 0:
+            sampleRow = conn.execute(text(
+                "SELECT passing_stats, rushing_stats FROM game_player_stats "
+                "WHERE passing_stats IS NOT NULL LIMIT 1"
+            )).fetchone()
+            print(f"  Backfill diagnostic: sample passing_stats = {str(sampleRow[0])[:100] if sampleRow else 'NO ROWS WITH DATA'}")
+
+        # Find season stats rows where all denormalized stat columns are zero or NULL
         # but the player has game data (meaning the stats were zeroed by the save bug)
         result = conn.execute(text(
             "SELECT pss.id, pss.player_id, pss.season FROM player_season_stats pss "
-            "WHERE pss.passing_yards = 0 AND pss.rushing_yards = 0 "
-            "  AND pss.receiving_yards = 0 AND pss.sacks = 0 "
+            "WHERE COALESCE(pss.passing_yards, 0) = 0 AND COALESCE(pss.rushing_yards, 0) = 0 "
+            "  AND COALESCE(pss.receiving_yards, 0) = 0 AND COALESCE(pss.sacks, 0) = 0 "
             "  AND EXISTS ("
             "    SELECT 1 FROM game_player_stats gps "
             "    JOIN games g ON gps.game_id = g.id "
@@ -153,6 +192,16 @@ def _backfillPlayerSeasonStatsFromGames():
         ))
         emptyRows = result.fetchall()
         if not emptyRows:
+            # Log why we found nothing — check total rows and their state
+            totalPss = conn.execute(text("SELECT COUNT(*) FROM player_season_stats")).fetchone()[0]
+            samplePss = conn.execute(text(
+                "SELECT passing_yards, rushing_yards, receiving_yards, passing_stats "
+                "FROM player_season_stats LIMIT 1"
+            )).fetchone()
+            print(f"  Backfill: no empty rows found. Total PSS rows: {totalPss}")
+            if samplePss:
+                print(f"  Backfill: sample PSS row: passing_yards={samplePss[0]}, rushing_yards={samplePss[1]}, "
+                      f"receiving_yards={samplePss[2]}, passing_stats={str(samplePss[3])[:80]}")
             return
 
         print(f"  Backfill: reconstructing stats for {len(emptyRows)} player_season_stats rows")
@@ -258,14 +307,14 @@ def _backfillPlayerCareerStatsFromGames():
     from sqlalchemy import text
     conn = engine.connect()
     try:
-        # Find players with game data but zeroed or missing career stats
+        # Find players with game data but zeroed/NULL or missing career stats
         result = conn.execute(text(
             "SELECT DISTINCT gps.player_id FROM game_player_stats gps "
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM player_career_stats pcs "
             "  WHERE pcs.player_id = gps.player_id AND pcs.season = 0 "
-            "    AND (pcs.passing_yards > 0 OR pcs.rushing_yards > 0 "
-            "         OR pcs.receiving_yards > 0)"
+            "    AND (COALESCE(pcs.passing_yards, 0) > 0 OR COALESCE(pcs.rushing_yards, 0) > 0 "
+            "         OR COALESCE(pcs.receiving_yards, 0) > 0)"
             ")"
         ))
         playerIds = [row[0] for row in result.fetchall()]
