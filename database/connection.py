@@ -1,15 +1,15 @@
 """Database connection and session management."""
 
 import os
-import logging
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
 from .models import Base
+from logger_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("floosball.database")
 
 # Database file path — configurable via DATABASE_DIR env var (for Fly.io volume mount)
 _defaultDbDir = Path(__file__).parent.parent / "data"
