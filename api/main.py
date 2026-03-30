@@ -716,7 +716,44 @@ async def get_player(player_id: int):
         currentSeasonEntry['team'] = teamName
         currentSeasonEntry['color'] = teamColor
         currentSeasonEntry['gp'] = player.gamesPlayed
-        player_dict['stats'] = [currentSeasonEntry] + list(player.seasonStatsArchive)
+
+        # Load past seasons from DB instead of runtime archive
+        pastSeasons = []
+        try:
+            from database.connection import get_session
+            from database.models import PlayerSeasonStats as DBPlayerSeasonStats, Team as DBTeam
+            dbSession = get_session()
+            pastRows = dbSession.query(DBPlayerSeasonStats).filter(
+                DBPlayerSeasonStats.player_id == player.id,
+                DBPlayerSeasonStats.season < currentSeasonNum
+            ).order_by(DBPlayerSeasonStats.season.desc()).all()
+            for row in pastRows:
+                # Look up team name/color
+                rowTeamName = 'FA'
+                rowTeamColor = '#94a3b8'
+                if row.team_id:
+                    dbTeam = dbSession.get(DBTeam, row.team_id)
+                    if dbTeam:
+                        rowTeamName = dbTeam.name
+                        rowTeamColor = dbTeam.color or '#94a3b8'
+                pastEntry = {
+                    'season': row.season,
+                    'team': rowTeamName,
+                    'color': rowTeamColor,
+                    'gp': row.games_played or 0,
+                    'fantasyPoints': row.fantasy_points or 0,
+                    'passing': row.passing_stats or {},
+                    'rushing': row.rushing_stats or {},
+                    'receiving': row.receiving_stats or {},
+                    'kicking': row.kicking_stats or {},
+                    'defense': row.defense_stats or {},
+                }
+                pastSeasons.append(pastEntry)
+            dbSession.close()
+        except Exception:
+            pastSeasons = list(player.seasonStatsArchive) if player.seasonStatsArchive else []
+
+        player_dict['stats'] = [currentSeasonEntry] + pastSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
         
         return build_success_response(player_dict)
