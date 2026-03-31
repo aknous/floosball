@@ -96,8 +96,12 @@ class CardCalcContext:
     # Weekly modifier
     activeModifier: str = ""  # e.g. "amplify", "grounded", ""
 
-    # Swap data (for Stockpiler effect)
+    # Swap data (for Stockpiler / swap-based effects)
     unusedSwaps: int = 0
+    seasonSwapsUsed: int = 0
+
+    # Economy data (for balance-based effects)
+    userFloobitsBalance: int = 0
 
     # Chance card infrastructure
     userId: int = 0

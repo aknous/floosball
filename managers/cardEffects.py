@@ -31,15 +31,15 @@ EFFECT_CATEGORY = {
     "scrappy": "flat_fp", "honor_roll": "flat_fp", "garbage_time": "flat_fp",
     "loyalty_bonus": "flat_fp", "windfall": "floobits",
     "spotlight_moment": "flat_fp", "possession": "flat_fp", "ace_up_the_sleeve": "flat_fp",
-    "slippery": "flat_fp", "jailbreak": "flat_fp", "homer": "flat_fp",
+    "slippery": "flat_fp", "jailbreak": "flat_fp", "homer": "flat_fp", "rng": "flat_fp", "avalanche": "flat_fp", "hedge": "flat_fp",
     "three_pointer": "flat_fp", "safety_blanket": "flat_fp",
-    "monolith": "conditional", "industrious": "floobits", "sniper": "flat_fp",
+    "industrious": "floobits", "sniper": "flat_fp",
     # multiplier
     "big_deal": "multiplier", "cornucopia": "multiplier", "luminary": "multiplier",
     "squire": "flat_fp", "babysitter": "flat_fp", "martyr": "flat_fp",
-    "juggernaut": "multiplier", "resplendent": "flat_fp", "loyalty_program": "flat_fp",
+    "juggernaut": "multiplier", "resplendent": "flat_fp",
     "underdog": "flat_fp", "stockpiler": "multiplier", "providence": "multiplier",
-    "house_money": "flat_fp", "locomotive": "flat_fp", "gunslinger": "flat_fp",
+    "house_money": "flat_fp", "gunslinger": "flat_fp",
     "air_raid": "floobits", "trebuchet": "flat_fp", "double_trouble": "flat_fp",
     "stampede": "multiplier",
     "stack": "multiplier", "backfield_buddies": "multiplier", "rising_tide": "multiplier",
@@ -53,13 +53,13 @@ EFFECT_CATEGORY = {
     # conditional
     "showoff": "conditional", "flourish": "conditional", "bandwagon": "conditional",
     "upset_special": "conditional", "believe": "conditional", "schadenfreude": "conditional",
-    "due": "conditional", "reclamation": "conditional", "pedigree": "conditional",
+    "reclamation": "conditional", "pedigree": "conditional",
     "mismatch": "conditional", "team_chemistry": "conditional",
     "comeback_kid": "conditional", "domination": "conditional", "walk_off": "conditional",
     # streak
     "couch_potato": "streak", "on_fire": "streak", "gravy_train": "streak",
     "snowball_fight": "streak", "fairweather_fan": "streak", "bandwagon_express": "streak",
-    "touchdown_jackpot": "accumulator", "odometer": "accumulator", "complacency": "streak",
+    "touchdown_jackpot": "accumulator", "odometer": "flat_fp", "complacency": "streak",
     "leg_day": "streak", "automatic": "streak", "hot_hand": "accumulator",
     "momentum": "streak",
     # cross-position (declared by _buildCrossPositionParams)
@@ -75,6 +75,11 @@ EFFECT_CATEGORY = {
     "crescendo": "flat_fp", "eminence": "multiplier", "traverse": "flat_fp",
     # chance synergy
     "advantage": "meta", "catalyst": "floobits",
+    # strategy-warping
+    "alchemy": "flat_fp", "home_alone": "multiplier", "moral_victory": "flat_fp",
+    "closer": "flat_fp", "dark_horse": "multiplier",
+    "vagabond": "multiplier", "fat_cat": "flat_fp", "surplus": "floobits",
+    "bonsai": "streak",
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -89,7 +94,7 @@ EFFECT_EDITION_TIER = {
     "freebie": "base", "entourage": "base", "touchdown_pinata": "base",
     "honor_roll": "base", "garbage_time": "base", "windfall": "base",
     "resplendent": "base", "three_pointer": "base", "hot_hand": "base",
-    "big_deal": "base", "bandwagon": "base",
+    "big_deal": "base", "bandwagon": "base", "rng": "base",
     "allowance": "base", "piggy_bank": "base", "buy_low": "base", "trust_fund": "base",
     "showoff": "base", "flourish": "base", "schadenfreude": "base",
     "believe": "base", "reclamation": "base",
@@ -99,40 +104,46 @@ EFFECT_EDITION_TIER = {
     "goal_line_vulture": "base",
     "homer": "base",
 
-    # ── HOLOGRAPHIC (28) — Conditional, team-composition, position thresholds ──
-    "spotlight_moment": "holographic", "squire": "holographic", "monolith": "holographic",
-    "mismatch": "holographic", "upset_special": "holographic", "due": "holographic",
+    # ── HOLOGRAPHIC (26) — Conditional, team-composition, position thresholds ──
+    "closer": "holographic", "moral_victory": "holographic", "good_neighbor": "holographic",
+    "diversified": "holographic", "bonus_round": "holographic",
+    "spotlight_moment": "holographic", "squire": "holographic",
+    "mismatch": "holographic", "upset_special": "holographic",
     "pedigree": "holographic", "spectacle": "holographic", "game_ball": "holographic",
     "jailbreak": "holographic",
-    "cornucopia": "holographic", "luminary": "holographic", "stampede": "holographic",
+    "luminary": "holographic", "stampede": "holographic",
     "stack": "holographic", "backfield_buddies": "holographic",
     "cha_ching": "holographic", "feeding_frenzy": "holographic",
     "highlight_reel": "holographic", "connection": "holographic",
     "team_chemistry": "holographic", "hometown_hero": "holographic",
-    "loyalty_bonus": "holographic", "loyalty_program": "holographic",
-    "juggernaut": "holographic",
+    "loyalty_bonus": "holographic",
     "ace_up_the_sleeve": "holographic", "trebuchet": "holographic",
-    "double_trouble": "holographic", "locomotive": "holographic", "rising_tide": "holographic",
+    "double_trouble": "holographic",
+    "fat_cat": "holographic", "surplus": "holographic", "hedge": "holographic",
 
-    # ── PRISMATIC (33) — Chance-based, streaks, game-outcome, build-around ──
+    # ── PRISMATIC (40) — Chance-based, streaks, game-outcome, build-around ──
+    "alchemy": "prismatic", "home_alone": "prismatic", "dark_horse": "prismatic",
+    "providence": "prismatic", "chain_reaction": "prismatic", "copycat": "prismatic",
+    "cornucopia": "prismatic", "rising_tide": "prismatic", "juggernaut": "prismatic",
     "scrappy": "prismatic", "babysitter": "prismatic", "martyr": "prismatic", "underdog": "prismatic",
-    "good_neighbor": "prismatic", "consolation_prize": "prismatic", "rock_bottom": "prismatic",
+    "consolation_prize": "prismatic", "rock_bottom": "prismatic",
     "indemnity": "prismatic", "crescendo": "prismatic", "traverse": "prismatic",
     "couch_potato": "prismatic", "complacency": "prismatic", "snowball_fight": "prismatic",
     "bandwagon_express": "prismatic", "on_fire": "prismatic", "momentum": "prismatic",
     "gravy_train": "prismatic", "fairweather_fan": "prismatic", "leg_day": "prismatic",
     "automatic": "prismatic", "touchdown_jackpot": "prismatic", "odometer": "prismatic",
     "comeback_kid": "prismatic", "domination": "prismatic", "walk_off": "prismatic",
-    "stockpiler": "prismatic", "house_money": "prismatic", "eminence": "prismatic",
-    "all_in": "prismatic", "diversified": "prismatic", "gold_rush": "prismatic",
-    "bonus_round": "prismatic", "last_resort": "prismatic",
+    "stockpiler": "prismatic", "house_money": "prismatic", "eminence": "prismatic", "vagabond": "prismatic",
+    "bonsai": "prismatic",
+    "all_in": "prismatic", "gold_rush": "prismatic",
+    "last_resort": "prismatic", "avalanche": "prismatic",
 
-    # ── DIAMOND (12) — Meta-defining, synergy-enabling, hand-shaping ──
-    "providence": "diamond", "catalyst": "diamond", "advantage": "diamond",
+    # ── DIAMOND (9) — Strategy-defining cornerstones that shape your entire hand ──
+    "catalyst": "diamond", "advantage": "diamond",
     "high_roller": "diamond", "jackpot": "diamond",
     "fortitude": "diamond", "immaculate": "diamond",
-    "full_roster": "diamond", "stacked_deck": "diamond", "copycat": "diamond",
-    "chain_reaction": "diamond", "double_down": "diamond",
+    "full_roster": "diamond", "stacked_deck": "diamond",
+    "double_down": "diamond",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -173,6 +184,9 @@ EFFECT_DISPLAY_NAMES = {
     "garbage_time": "Garbage Time",
     "loyalty_bonus": "Loyalty Bonus",
     "windfall": "Windfall",
+    "rng": "RNG",
+    "avalanche": "Avalanche",
+    "hedge": "Hedge",
     "complacency": "Complacency",
     "spotlight_moment": "Spotlight Moment",
     "ace_up_the_sleeve": "Ace Up the Sleeve",
@@ -185,12 +199,10 @@ EFFECT_DISPLAY_NAMES = {
     "martyr": "Martyr",
     "juggernaut": "Juggernaut",
     "resplendent": "Resplendent",
-    "loyalty_program": "Loyalty Program",
     "underdog": "Underdog",
     "stockpiler": "Stockpiler",
     "providence": "Providence",
     "house_money": "House Money",
-    "locomotive": "Locomotive",
     "rising_tide": "Rising Tide",
     # Floobits (RB)
     "allowance": "Allowance",
@@ -210,7 +222,6 @@ EFFECT_DISPLAY_NAMES = {
     "upset_special": "Upset Special",
     "believe": "Believe",
     "schadenfreude": "Schadenfreude",
-    "due": "Due",
     "reclamation": "Reclamation",
     "pedigree": "Pedigree",
     # Streak (K) — 10 effects
@@ -239,7 +250,6 @@ EFFECT_DISPLAY_NAMES = {
     "slippery": "Slippery",
     "jailbreak": "Jailbreak",
     "safety_blanket": "Safety Blanket",
-    "monolith": "Monolith",
     "industrious": "Industrious",
     "mismatch": "Mismatch",
     "sniper": "Sniper",
@@ -279,6 +289,16 @@ EFFECT_DISPLAY_NAMES = {
     # ── Chance Synergy Effects ──
     "advantage": "Advantage",
     "catalyst": "Catalyst",
+    # ── Strategy-Warping Effects ──
+    "alchemy": "Alchemy",
+    "home_alone": "Home Alone",
+    "moral_victory": "Moral Victory",
+    "closer": "Closer",
+    "dark_horse": "Dark Horse",
+    "vagabond": "Vagabond",
+    "fat_cat": "Fat Cat",
+    "surplus": "Surplus",
+    "bonsai": "Bonsai",
 }
 
 # ─── Three-Tier Description System ───────────────────────────────────────────
@@ -308,6 +328,9 @@ EFFECT_TAGLINES = {
     "garbage_time": "Participation trophies",
     "loyalty_bonus": "Faithful fan rewards",
     "windfall": "Cashing in on talent",
+    "rng": "Feeling lucky?",
+    "avalanche": "Each one hits harder",
+    "hedge": "Downside protection",
     "complacency": "Stop tinkering",
     "spotlight_moment": "Your {posLabel} delivers",
     "ace_up_the_sleeve": "Your WRs hit the mark",
@@ -320,18 +343,16 @@ EFFECT_TAGLINES = {
     "martyr": "Embrace the tank",
     "juggernaut": "I'M THE JUGGERNAUT",
     "resplendent": "Everyone's cooking",
-    "loyalty_program": "Rewards member",
     "underdog": "Nothing to lose",
     "stockpiler": "Saving for a rainy day",
     "providence": "A little something extra",
     "house_money": "Playing with profit",
-    "locomotive": "Unstoppable after the catch",
     "rising_tide": "Lifts all boats",
     # Floobits (RB)
     "allowance": "Weekly pocket money",
     "cha_ching": "Your {posLabel} scores, you profit",
     "piggy_bank": "Points into coins",
-    "good_neighbor": "You're covered.",
+    "good_neighbor": "Silver lining included",
     "consolation_prize": "Better luck next time",
     "rock_bottom": "Silver lining",
     "buy_low": "Buy the dip",
@@ -345,8 +366,17 @@ EFFECT_TAGLINES = {
     "upset_special": "Giant slayer",
     "believe": "Playoff or bust",
     "schadenfreude": "Your {posLabel}'s team lost",
-    "due": "They're due",
     "reclamation": "Fixer's bonus",
+    # ── Strategy-Warping Effects ──
+    "alchemy": "Lead into gold",
+    "home_alone": "Keep the change, ya filthy animal",
+    "moral_victory": "We lost, but we grew as a team",
+    "closer": "Finish the job",
+    "dark_horse": "Nobody saw them coming",
+    "vagabond": "A restless spirit",
+    "fat_cat": "Money makes money",
+    "surplus": "More where that came from",
+    "bonsai": "Snip snip, grow grow",
     "pedigree": "Blue blood benefits",
     # Streak (K)
     "couch_potato": "Don't touch that dial",
@@ -356,7 +386,7 @@ EFFECT_TAGLINES = {
     "fairweather_fan": "Only here for the wins",
     "bandwagon_express": "Choo choo!",
     "touchdown_jackpot": "Weekly TD lottery",
-    "odometer": "Racking up miles",
+    "odometer": "Every milestone pays",
     "leg_day": "Never skip leg day",
     "automatic": "Perfect kicks only",
     "hot_hand": "Foot on fire",
@@ -374,7 +404,6 @@ EFFECT_TAGLINES = {
     "slippery": "Can't bring me down",
     "jailbreak": "Breaking tackles, breaking records",
     "safety_blanket": "Reliable target",
-    "monolith": "An imposing presence",
     "industrious": "Honest work",
     "mismatch": "Too big, too fast",
     "sniper": "From downtown",
@@ -410,7 +439,7 @@ EFFECT_TAGLINES = {
     # ── Escalating / Pace Effects ──
     "crescendo": "Keep missing, it only gets easier",
     "eminence": "Stats don't lie",
-    "traverse": "Are we there yet?",
+    "traverse": "Long road, big payoff",
     # ── Chance Synergy Effects ──
     "advantage": "Double or nothing (minus the nothing)",
     "catalyst": "Points in, luck out",
@@ -418,7 +447,7 @@ EFFECT_TAGLINES = {
 
 EFFECT_TOOLTIPS = {
     # Flat FP (WR)
-    "freebie": "It pays to show up. Bonus FP every week just for having this card equipped.",
+    "freebie": "It pays to show up. Bonus FP every week.",
     "entourage": "Strength in numbers. Bonus FP for each high-rated player on your roster.",
     "touchdown_pinata": "Every house call fills the piñata. Bonus FP per roster TD.",
     "scrappy": "Somebody has to believe in them. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more low-rated players are on your roster.",
@@ -427,6 +456,9 @@ EFFECT_TOOLTIPS = {
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
     "windfall": "When your players ball out, you get paid. Floobits per overperforming roster player.",
+    "rng": "Pure chaos. Random FP rolled each week.",
+    "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
+    "hedge": "Insurance policy. Starts with an FP pool. Roster FP subtracts from it, and whatever remains is your payout.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Resets if you make a swap. Stacking streak cards accelerates growth.",
     "spotlight_moment": "When your {posLabel} finds the endzone, you cash in. FP whenever your {posLabel} slot scores a TD. For WR, either slot counts.",
     "ace_up_the_sleeve": "Your WRs put in the work. Bonus FP when your WR slots hit a combined stat threshold.",
@@ -436,21 +468,19 @@ EFFECT_TOOLTIPS = {
     "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your {posLabel} slot earns.",
     "squire": "The crowd goes wild. FP that stacks with each TD your {posLabel} slot scores.",
     "babysitter": "Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
-    "martyr": "Pain builds character (and FP). Guaranteed FP floor plus a chance at enhanced FP. Odds increase the further your favorite team's ELO drops below the league average.",
+    "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's ELO below average.",
     "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's win streak.",
     "resplendent": "When they're hot, they're HOT. FP per overperforming roster player.",
-    "loyalty_program": "Set it and forget it. FP that grows each week your roster doesn't change.",
     "underdog": "The worse they are, the better the odds. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
-    "stockpiler": "Patience pays. FPx that grows with each unused roster swap you're sitting on.",
-    "providence": "Small FPx bonus plus increased odds on all chance cards in your hand. Equipping multiple chance cards further improves all their odds.",
+    "stockpiler": "Patience pays. FPx that grows with each unused roster swap.",
+    "providence": "Fortune favors the prepared. FPx bonus plus chance boost to all chance cards in your hand.",
     "house_money": "Upset city. FP that builds every time your favorite team wins as an underdog.",
-    "locomotive": "When your WRs rack up serious YAC, your whole week gets a bonus. FP if WR slots combine for 35+ YAC.",
     "rising_tide": "A rising tide lifts all boats. FPx that grows with each roster player outperforming their rating.",
     # Floobits (RB)
     "allowance": "Don't spend it all in one place. Free Floobits every week just for existing.",
     "cha_ching": "Your {posLabel}'s endzone is your cash register. Floobits for every TD your {posLabel} slot scores.",
     "piggy_bank": "Automatic savings plan. Converts a chunk of your roster's total FP into Floobits.",
-    "good_neighbor": "At least something good came out of it. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase with each missed field goal by your kicker.",
+    "good_neighbor": "Every cloud has a silver lining. Guaranteed Floobits plus a bonus for each FG your kicker misses.",
     "consolation_prize": "Here's a little something for your troubles. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more roster players have a bad week.",
     "rock_bottom": "Rock bottom has a cash reward. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the longer your favorite team's losing streak.",
     "buy_low": "Buy low, sell... whenever. Floobits for every underperforming roster player.",
@@ -464,18 +494,17 @@ EFFECT_TOOLTIPS = {
     "upset_special": "Giant killer. FP when your favorite team beats a higher-rated opponent.",
     "believe": "Keep the dream alive. FP as long as your favorite team holds a playoff spot.",
     "schadenfreude": "You feel bad about it. But also... free points. FP when your {posLabel} slot's team loses.",
-    "due": "Redemption tastes sweet. FP when your favorite team snaps a losing streak of 3+ games.",
     "reclamation": "Someone has to fix this mess. FP when most of your roster is underperforming.",
     "pedigree": "Good breeding shows. FP with a bonus when your favorite team's ELO reaches elite status (1600+).",
     # Streak (K) — streak cards boost each other's growth when stacked
-    "couch_potato": "Just sit there. Literally. FP that grows every week this card stays equipped. Stacking streak cards accelerates all their growth.",
+    "couch_potato": "Just sit there. Literally. FP that grows every week this card stays equipped. Stacking streak cards accelerates growth.",
     "on_fire": "Don't let the flame die. FPx that grows each week your K slot makes a FG. Resets if they don't. Stacking streak cards accelerates growth.",
     "gravy_train": "The gravy train keeps rolling. Floobits growing each week the card player's team wins. Resets on a loss. Stacking streak cards accelerates growth.",
     "snowball_fight": "It just keeps getting bigger. FP growing each week your roster scores a TD. Resets if they don't. Stacking streak cards accelerates growth.",
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
-    "odometer": "Miles and miles of yards. FP ticking up per chunk of roster yards, resets weekly.",
+    "odometer": "Hit the milestones. Escalating FP at each yardage gate your roster hits. Resets weekly.",
     "leg_day": "Never skip it. FP growing each week your K slot nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week your K slot goes perfect on FGs. Resets on a miss. Stacking streak cards accelerates growth.",
     "hot_hand": "Feed the hot hand. FP scales with how many FGs your K slot makes each week.",
@@ -483,17 +512,16 @@ EFFECT_TOOLTIPS = {
     # ── New Position-Based Effects ──
     "gunslinger": "Let it fly. FP that scales with how many passing yards your QB slot racks up.",
     "air_raid": "Death from above. Floobits for each passing TD your QB slot throws.",
-    "workhorse": "Workhorse backs get rewarded. FP scaling with your RB slot's rushing attempts.",
+    "workhorse": "Pound the rock. FP scaling with your RB slot's rushing attempts.",
     "expedition": "Yards are yards. FP that scales with how many rushing yards your RB slot gains.",
     "stampede": "Get rolling. Base FPx always, enhanced FPx when your RB slot hits 75+ rushing yards.",
     "goal_line_vulture": "Vulture season. Floobits for every rushing TD your RB slot punches in.",
     "possession": "Chain-mover. FP that scales with how many catches your WR slots haul in combined.",
     "trebuchet": "One big play changes everything. FP if either of your WR slots catches a pass of 25+ yards.",
-    "double_trouble": "Two is better than one. FP bonus when BOTH of your WR slots score a TD in the same week.",
+    "double_trouble": "Two is better than one. FP when either WR scores a TD, with a bonus when both WRs score.",
     "slippery": "Yards after the catch turn into points. FP that scales with your WR slots' combined YAC.",
-    "jailbreak": "Big YAC day = big bonus. Flat FP reward when your WR slots combine for enough yards after catch.",
+    "jailbreak": "Big YAC day = big bonus. FP when your WR slots combine for enough yards after catch.",
     "safety_blanket": "Every QB needs one. FP scaling with your TE slot's receptions.",
-    "monolith": "An immovable object in the endzone. FP when your TE slot scores a receiving TD.",
     "industrious": "Honest work deserves honest pay. Floobits scaling with your TE slot's receptions.",
     "mismatch": "They can't cover this guy. FP when your {posLabel} slot scores 2+ TDs in a week.",
     "sniper": "From long range. FP for each field goal your K slot makes from 40+ yards out.",
@@ -505,34 +533,44 @@ EFFECT_TOOLTIPS = {
     "backfield_buddies": "Same backfield, double the payoff. FPx when your QB slot and RB play on the same team.",
     "homer": "Loyalty has its perks. FP scaling with how many of your roster players play on your favorite team.",
     "hometown_hero": "Full stack activated. Floobits when 3 or more of your roster players share the same team.",
-    "connection": "Real-life connections pay off. Floobits per TD scored by a roster player who shares a team with another roster player.",
+    "connection": "Real-life connections pay off. Floobits per TD by roster players who share a team.",
     "team_chemistry": "Good chemistry lifts all boats. Floobits that grow with the number of same-team pairs on your roster.",
     # ── Game-Outcome Effects ──
-    "comeback_kid": "Down but never out. FP when your favorite team overcomes a deficit and wins. The bigger the comeback, the bigger the bonus.",
-    "domination": "Run up the score. FP when your favorite team wins, with a massive bonus for blowout victories (21+ point margin).",
-    "walk_off": "The best kind of finish. FP when your favorite team wins, with a massive bonus for walk-off victories (lead taken in final 60 seconds of Q4 or OT).",
+    "comeback_kid": "Down but never out. FP when your favorite team overcomes a deficit and wins.",
+    "domination": "Run up the score. FP when your favorite team wins, with a bonus for blowout victories.",
+    "walk_off": "The best kind of finish. FP when your favorite team wins, with a bonus for walk-off victories.",
     # ── Card-to-Card Interaction Effects ──
     "full_roster": "Cover all your bases. FPx when your equipped hand has cards from all 5 positions (QB, RB, WR, TE, K).",
     "all_in": "Bet big on one position. FPx that grows with how many of your equipped cards share the same position.",
     "diversified": "Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards.",
     "gold_rush": "Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand.",
     "stacked_deck": "Multipliers boost multipliers. FPx for each FPx card in your hand.",
-    "copycat": "Copies the best. FP equal to the highest flat FP bonus among your other cards this week. Calculated after other cards resolve.",
+    "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
     "bonus_round": "Everyone showed up to play. Large FP if 4 or more of your other cards triggered a non-zero bonus this week.",
-    "double_down": "Sacrifice your best card for raw power. Large FPx added to your pool, but zeroes your highest card's bonus.",
+    "double_down": "Go big or go home. FPx boost, but zeroes your highest card's bonus.",
     "last_resort": "When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more of your other cards fail to produce a bonus.",
-    "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards triggered their enhanced payout this week. Stack chance cards to maximize the payoff.",
-    "jackpot": "The ultimate payoff. Massive FP bonus when every chance card in your hand hits its enhanced payout. More chance cards means a harder jackpot to hit — but a bigger floor thanks to innate synergy.",
-    "fortitude": "The resolute are rewarded. FPx that scales with how many of your streak cards have active streaks. The more streaks you keep alive, the stronger this gets.",
-    "immaculate": "Not a single blemish on the record. Massive FP bonus when every streak card in your hand has an active streak. Maintaining perfection has its privileges.",
+    "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
+    "jackpot": "The ultimate payoff. FP when every chance card in your hand hits enhanced.",
+    "fortitude": "The resolute are rewarded. FPx that scales with how many of your streak cards have active streaks.",
+    "immaculate": "Not a single blemish. FP when every streak card in your hand has an active streak.",
     # ── Escalating / Pace Effects ──
-    "crescendo": "Miss enough and eventually you can't miss. Each TD your {posLabel} slot scores rolls for a one-time bonus — miss it and the odds go up. For K, triggers on field goals instead.",
-    "eminence": "Good players get paid more. Shocking. FPx scales with how far above the position average your player is performing. Active from week 3.",
-    "traverse": "Rack up yards, roll the dice. At game end, your {posLabel} slot's yardage determines the odds of a one-time bonus. More yards, better odds.",
+    "crescendo": "Miss enough and eventually you can't miss. Each {posLabel} slot TD rolls for a bonus. Miss and the odds go up. For K, triggers on FGs.",
+    "eminence": "Good players get paid more. FPx that scales with how far above position average your player performs. Active from week 3.",
+    "traverse": "High stakes yardage gamble. FP floor plus a jackpot chance based on your {posLabel} slot's yardage.",
     # ── Chance Synergy Effects ──
     "advantage": "Loaded dice. Every chance card in your hand rolls twice, keeping the better result.",
-    "catalyst": "Turn raw production into better odds. The more FP your roster earns, the higher the chance boost applied to all your chance cards. Also pays a small Floobits dividend.",
+    "catalyst": "Compound interest. Roster FP boosts odds on all your chance cards. Also pays Floobits.",
+    # ── Strategy-Warping Effects ──
+    "alchemy": "Transmutation complete. Each FG your K slot makes counts as a TD for fantasy scoring and other card effects.",
+    "home_alone": "Embrace the void. FPx that grows with each empty roster slot.",
+    "moral_victory": "Not all losses are total losses. Base FP every week, with a bonus when your {posLabel} slot's team loses.",
+    "closer": "Fourth quarter closer. Bonus FP from a multiple of your roster's Q4 and OT production.",
+    "dark_horse": "The stars shine brightest from below. FPx that scales inversely with your {posLabel} slot's star rating.",
+    "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
+    "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
+    "surplus": "Raise the ceiling. Increases the weekly Floobits payout cap while equipped.",
+    "bonsai": "Patience rewards the diligent. Base FP that can permanently grow each week. Game events boost the growth chance. Resets if unequipped.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -540,38 +578,39 @@ EFFECT_DETAIL_TEMPLATES = {
     "freebie": "+{baseFP} FP per week",
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
     "touchdown_pinata": "+{perTdFP} FP for every TD your roster scores",
-    "scrappy": "+{baseFP} FP floor + chance of {enhancedFP} FP. Base chance 25% with 1 low-rated player ({maxStars}★ or lower), up to 75% max",
+    "scrappy": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 25% with 1 low-rated player ({maxStars}★ or below), up to 75%",
     "honor_roll": "+{perPlayerFP} FP per roster player with {fpThreshold}+ FP",
     "three_pointer": "+{perFgFP} FP for every FG your K slot makes",
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
-    "loyalty_bonus": "+{perStreakFP} FP equal to your favorite team's win streak",
+    "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
+    "rng": "Random +{minFP}–{maxFP} FP each week",
+    "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th+={td4}",
+    "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged. Resets on swap",
     "spotlight_moment": "+{rewardValue} FP when your {posLabel} slot scores a TD. WR counts both slots combined",
     "ace_up_the_sleeve": "+{rewardValue} FP if your WR slots combine for {threshold}+ {statDisplay}",
     # Multiplier (QB) — FPx
     "cornucopia": "+{perTdMult} FPx per roster TD",
-    "babysitter": "+{baseFP} FP floor + chance of {enhancedFP} FP. Base chance 20% with 1 underperformer (under {fpThreshold} FP), up to 70% max",
-    "martyr": "+{baseFP} FP floor + chance of {enhancedFP} FP when your favorite team loses. Base chance 10% at 1 loss, scales with season losses up to 60% max",
+    "babysitter": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 20% with 1 underperformer (under {fpThreshold} FP), up to 70%",
+    "martyr": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 10% at 1 loss, grows with your favorite team's season losses, up to 60%",
     "resplendent": "+{perPlayerFP} FP per overperforming roster player",
-    "loyalty_program": "+{baseFP} FP base, grows by {growthFPPerWeek} per unchanged week",
     "big_deal": "{xMultValue}x FPx",
-    "luminary": "FPx grows with your {posLabel} slot's share of team FP",
+    "luminary": "FPx that grows the more FP your {posLabel} slot earns compared to teammates",
     "squire": "+{perTdFP} FP per {posLabel} slot TD",
     "juggernaut": "{baseXMult} FPx, grows by {growthPerWin} per your favorite team's win streak",
-    "underdog": "+{baseFP} FP floor + chance of {enhancedFP} FP. Base chance scales with your favorite team's ELO below league average, up to 75% max",
+    "underdog": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Chance grows the worse your favorite team's rating is, up to 75%",
     "stockpiler": "{perSwapXMult} FPx per unused roster swap",
-    "providence": "{baseMult}x FPx + {chanceBonus} chance boost to all chance cards",
+    "providence": "{baseMult}x FPx + boosts all chance card odds by {chanceBonus}",
     "house_money": "+{baseFP} FP base, +{perUpsetFP} per your favorite team's upset wins this season",
-    "locomotive": "+{rewardValue} FP if your WR slots combine for 35+ YAC",
-    "rising_tide": "1.0 + {perPlayerMult} FPx per overperforming roster player (max {maxMult}x)",
+    "rising_tide": "+{perPlayerMult} FPx per overperforming roster player (max {maxMult}x)",
     # Floobits (RB)
     "allowance": "{floobits} Floobits per week",
     "cha_ching": "{perTdFloobits} Floobits per {posLabel} slot TD",
     "piggy_bank": "{fpPercent}% of roster FP → Floobits",
-    "good_neighbor": "+{baseFloobits}F floor + chance of {enhancedFloobits}F. Base chance 15% at 1 season FG miss, up to 55% max",
-    "consolation_prize": "+{baseFloobits}F floor + chance of {enhancedFloobits}F. Base chance 20% with 1 underperformer (under {fpThreshold} FP), up to 70% max",
-    "rock_bottom": "+{baseFloobits}F floor + chance of {enhancedFloobits}F. Base chance 20% at 1-game losing streak, up to 65% max",
+    "good_neighbor": "+{baseFloobits}F base + {perMissFloobits}F per missed FG this week",
+    "consolation_prize": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. 20% with 1 underperformer (under {fpThreshold} FP), up to 70%",
+    "rock_bottom": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. 20% at 1-game losing streak, up to 65%",
     "buy_low": "{perPlayerFloobits} Floobits per underperforming roster player",
     "trust_fund": "{baseFloobits} Floobits base, +{growthPerWeek} per unchanged week",
     "feeding_frenzy": "{rewardValue} Floobits when roster scores {tdThreshold}+ TDs",
@@ -583,7 +622,6 @@ EFFECT_DETAIL_TEMPLATES = {
     "upset_special": "+{rewardValue} FP when your favorite team beats a higher-ELO team",
     "believe": "+{rewardValue} FP while your favorite team is in a playoff spot",
     "schadenfreude": "+{rewardValue} FP when your {posLabel} slot's team loses",
-    "due": "+{rewardValue} FP when your favorite team snaps a {streakThreshold}+ game losing streak",
     "reclamation": "+{rewardValue} FP when majority of roster is underperforming",
     "pedigree": "+{baseFP} FP base, +{rewardValue} FP when your favorite team's ELO ≥ {eloThreshold}",
     # Streak (K)
@@ -595,7 +633,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "fairweather_fan": "{baseReward} Floobits, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
     "bandwagon_express": "+{baseReward} FP, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
     "touchdown_jackpot": "{baseReward} Floobits on 1st TD, +{growthPerTick} more per TD after. Resets weekly",
-    "odometer": "+{baseReward} FP at {yardsPerTick} yds, reward grows by {growthPerTick} every {yardsPerTick} yds. Resets weekly",
+    "odometer": "Escalating FP at 50, 100, 150, and 200+ total roster yards. Resets weekly",
     "leg_day": "+{baseReward} FP, +{growthPerTick} per consecutive 35+ yd FG week. Each other streak card adds +1 bonus tick",
     "automatic": "+{baseReward} FP, +{growthPerTick} per consecutive perfect FG week. Resets on a miss. Each other streak card adds +1 bonus tick",
     "hot_hand": "+{perFGFP} FP per FG made by your K slot this week",
@@ -605,21 +643,20 @@ EFFECT_DETAIL_TEMPLATES = {
     "air_raid": "{perTdFloobits} Floobits per passing TD by your QB slot",
     "workhorse": "+{perAttemptFP} FP per rushing attempt by your RB slot",
     "expedition": "+{perFiftyYardsFP} FP per 50 rushing yards by your RB slot",
-    "stampede": "{baseMult}x FPx base, {enhancedMult}x FPx at {yardThreshold}+ rush yards",
+    "stampede": "{baseMult}x FPx normally, {enhancedMult}x FPx when your RB hits {yardThreshold}+ rush yards",
     "goal_line_vulture": "{perTdFloobits} Floobits per rushing TD by your RB slot",
     "possession": "+{perReceptionFP} FP per reception by your WR slots (combined)",
     "trebuchet": "+{rewardValue} FP if a WR slot catches a 25+ yard pass",
-    "double_trouble": "+{rewardValue} FP when both WR slots score a TD",
+    "double_trouble": "+{singleWrFP} FP when a WR scores, +{rewardValue} bonus FP when both WRs score",
     "slippery": "+{perYacFP} FP per 10 YAC by your WR slots",
     "jailbreak": "+{rewardValue} FP if your WR slots combine for {threshold}+ YAC",
     "safety_blanket": "+{perReceptionFP} FP per reception by your TE slot",
-    "monolith": "+{rewardValue} FP when your TE slot scores a receiving TD",
     "industrious": "{perReceptionFloobits} Floobits per reception by your TE slot",
     "mismatch": "+{rewardValue} FP when your {posLabel} slot scores 2+ TDs",
     "sniper": "+{perFgFP} FP per 40+ yard FG by your K slot",
     "game_ball": "+{rewardValue} FP when your {posLabel} slot overperforms",
     "spectacle": "+{perPointFP} FP per point your {posLabel} slot overperforms by",
-    "indemnity": "+{baseFloobits}F floor + chance of {enhancedFloobits}F. Chance scales with {posLabel} underperformance, up to 70% max",
+    "indemnity": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Chance grows with {posLabel} underperformance, up to 70%",
     # ── Same-Team Stacking Effects ──
     "stack": "{rewardValue} FPx when QB slot and WR share a team",
     "backfield_buddies": "+{rewardValue} FPx when QB slot and RB share a team",
@@ -641,18 +678,28 @@ EFFECT_DETAIL_TEMPLATES = {
     "chain_reaction": "{perCardXMult} FPx per other card that produced a bonus",
     "bonus_round": "+{rewardValue} FP when 4+ of your other cards triggered",
     "double_down": "{rewardValue} FPx, but zeroes your highest card's bonus",
-    "last_resort": "+{baseFP} FP floor + chance of {enhancedFP} FP. Base chance 15% per failed card, up to 70% max",
+    "last_resort": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 15% per card that didn't trigger, up to 70%",
     "high_roller": "{perCardMult} FPx per chance card that hits",
     "jackpot": "+{rewardValue} FP when all chance cards in hand hit enhanced",
     "fortitude": "{perCardMult} FPx per active streak card in your hand",
     "immaculate": "+{rewardValue} FP when all season streak cards have active streaks",
     # ── Escalating / Pace Effects ──
-    "crescendo": "+{baseFP} FP floor + chance of {bonusFP} FP. Starts at {baseChance}%, +{chanceStep}% per miss. Triggers once per week",
-    "eminence": "+{bonusPerFP} FPx per FP/game above position pace (max {maxMult}x)",
-    "traverse": "+{baseFP} FP floor + chance of {bonusFP} FP at game end. +{chancePerStep}% per {yardStep} yards by your {posLabel} slot",
+    "crescendo": "+{baseFP} FP guaranteed, chance at {bonusFP} FP. {baseChance}% to start, +{chanceStep}% each time you miss",
+    "eminence": "+{bonusPerFP} FPx per FP/game above position average (max {maxMult}x)",
+    "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
     "advantage": "All chance cards roll twice, keep the better result",
-    "catalyst": "+1% chance per {fpPer1Pct} roster FP above {baseline}. Max +{maxBoostDisplay}%. {baseFloobits} Floobits base",
+    "catalyst": "+1% chance boost per {fpPer1Pct} roster FP above {baseline}. Max +{maxBoostDisplay}%. Also pays {baseFloobits} Floobits",
+    # ── Strategy-Warping Effects ──
+    "alchemy": "+{perFgBonusFP} bonus FP per FG by your K slot. FGs count as TDs for other effects",
+    "home_alone": "+{perSlotMult} FPx per empty roster slot",
+    "moral_victory": "+{baseFP} FP base, +{lossBonusFP} FP when your {posLabel} slot's team loses",
+    "closer": "+{q4MultFactor}x bonus on all Q4/OT FP earned by your roster",
+    "dark_horse": "+{perStarMult} FPx per star under 5 of your rostered {posLabel}",
+    "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
+    "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
+    "surplus": "+{ceilingBonus} Floobits weekly payout cap while equipped",
+    "bonsai": "+{baseFP} FP base. {baseChance}% chance to permanently grow by {growthFP} FP each week. {triggerLabel} boost the growth chance",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -663,11 +710,11 @@ SHARED_EFFECT_POOL = [
     # flat_fp effects
     "freebie", "entourage", "touchdown_pinata", "scrappy",
     "honor_roll", "garbage_time", "loyalty_bonus",
-    "windfall", "homer",
+    "windfall", "homer", "rng", "avalanche", "hedge",
     # multiplier effects
     "big_deal", "cornucopia", "babysitter",
     "martyr", "juggernaut", "resplendent",
-    "loyalty_program", "underdog", "stockpiler",
+    "underdog", "stockpiler",
     "providence", "house_money", "rising_tide",
     # floobits effects
     "allowance", "cha_ching", "piggy_bank",
@@ -676,7 +723,7 @@ SHARED_EFFECT_POOL = [
     "feeding_frenzy", "highlight_reel",
     # conditional effects
     "showoff", "flourish", "bandwagon", "upset_special",
-    "believe", "schadenfreude", "due", "reclamation",
+    "believe", "schadenfreude", "reclamation",
     "pedigree", "mismatch",
     # streak effects
     "couch_potato", "gravy_train", "snowball_fight",
@@ -699,6 +746,9 @@ SHARED_EFFECT_POOL = [
     "eminence",
     # chance synergy
     "advantage", "catalyst",
+    # strategy-warping
+    "home_alone", "moral_victory", "closer", "dark_horse",
+    "vagabond", "fat_cat", "surplus", "bonsai",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -707,13 +757,13 @@ POSITION_EXCLUSIVE_POOLS = {
     2: ["workhorse", "expedition", "stampede", "goal_line_vulture",
         "crescendo", "traverse"],
     3: ["possession", "trebuchet", "double_trouble",
-        "slippery", "jailbreak", "locomotive",
+        "slippery", "jailbreak",
         "ace_up_the_sleeve", "crescendo", "traverse"],
-    4: ["safety_blanket", "monolith", "industrious",
+    4: ["safety_blanket", "industrious",
         "traverse"],
     5: ["three_pointer", "sniper", "leg_day",
         "automatic", "on_fire", "hot_hand",
-        "crescendo"],
+        "crescendo", "alchemy"],
 }
 
 # Effects excluded from certain positions (dead cards)
@@ -721,7 +771,7 @@ POSITION_EXCLUSIVE_POOLS = {
 POSITION_EXCLUDED_EFFECTS = {
     4: {"crescendo"},  # TE: too few TDs for escalating mechanic
     5: {"spotlight_moment", "squire", "cha_ching", "mismatch", "double_trouble",
-        "traverse"},  # K: no meaningful yardage
+        "traverse", "closer"},  # K: no meaningful yardage or Q4 stats
 }
 
 # ─── Streak Configuration ────────────────────────────────────────────────────
@@ -736,13 +786,28 @@ STREAK_CONFIGS = {
     "fairweather_fan":   {"resetCondition": "favorite_team_wins", "isWeekly": False},
     "bandwagon_express": {"resetCondition": "favorite_team_wins", "isWeekly": False},
     "touchdown_jackpot": {"resetCondition": None, "isWeekly": True},
-    "odometer":          {"resetCondition": None, "isWeekly": True},
     "complacency":       {"resetCondition": "roster_unchanged", "isWeekly": False},
     "leg_day":           {"resetCondition": "kicker_35plus", "isWeekly": False},
     "automatic":         {"resetCondition": "kicker_no_miss", "isWeekly": False},
     "momentum":          {"resetCondition": "roster_75fp", "isWeekly": False},
     "house_money":       {"resetCondition": "favorite_team_upset_win", "isWeekly": False, "noReset": True},
+    "bonsai":       {"resetCondition": "equipped", "isWeekly": False, "noReset": True},
 }
+
+# ─── Cultivation Trigger Pool ────────────────────────────────────────────────
+# Each trigger is a countable, repeatable game event. Pass TDs count for both
+# QBs (as passer) and WR/TEs (as receiver) so stacking same-team players
+# doubles trigger frequency.
+CULTIVATION_TRIGGER_POOL = [
+    # statPaths: list of (category, key) tuples — all are summed across roster players.
+    # pass_td counts for both QBs (passer) and WR/TEs (receiver) for double events.
+    {"event": "pass_td",      "label": "passing/receiving TDs",   "statPaths": [("passing_stats", "tds"), ("receiving_stats", "rcvTds")]},
+    {"event": "rush_td",      "label": "rushing TDs",             "statPaths": [("rushing_stats", "runTds")]},
+    {"event": "reception",    "label": "receptions",              "statPaths": [("receiving_stats", "receptions")]},
+    {"event": "fg_made",      "label": "field goals made",        "statPaths": [("kicking_stats", "fgs")]},
+    {"event": "carry",        "label": "rushing attempts",        "statPaths": [("rushing_stats", "carries")]},
+    {"event": "yac",          "label": "yards after catch",       "statPaths": [("receiving_stats", "yac")]},
+]
 
 
 # ─── EffectResult ────────────────────────────────────────────────────────────
@@ -835,6 +900,16 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "scrappy":
         return {"baseFP": round(4.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "maxStars": 2, "isChanceEffect": True}
+    if effectName == "rng":
+        return {"minFP": round((5 + rn * 0.1) * editionScale, 1),
+                "maxFP": round((20 + rn * 0.4) * editionScale, 1)}
+    if effectName == "avalanche":
+        return {"td1": round((2.0 + rn * 0.08) * editionScale, 1),
+                "td2": round((4.0 + rn * 0.16) * editionScale, 1),
+                "td3": round((7.0 + rn * 0.28) * editionScale, 1),
+                "td4": round((11.0 + rn * 0.44) * editionScale, 1)}
+    if effectName == "hedge":
+        return {"floorFP": 75}
     if effectName == "honor_roll":
         return {"perPlayerFP": round((2.5 + rn * 0.10) * editionScale, 1), "fpThreshold": 15}
     if effectName == "three_pointer":
@@ -876,12 +951,29 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     # ── Yardage chance: Traverse (end-of-game roll scaled by yards)
     if effectName == "traverse":
         return {"baseFP": round((0.5 + rn * 0.03) * editionScale, 1),
-                "bonusFP": round((7.0 + rn * 0.25) * editionScale, 1),
-                "baseChance": 5, "chancePerStep": 8, "yardStep": 50, "yardType": "passing",
+                "bonusFP": round((15.0 + rn * 0.5) * editionScale, 1),
+                "baseChance": 2, "chancePerStep": 5, "yardStep": 50, "yardType": "passing",
                 "isChanceEffect": True}
     # ── Meta: Advantage (no direct payout, enables roll-twice on all chance cards)
     if effectName == "advantage":
         return {"isAdvantage": True}
+    # ── Strategy-Warping: Opulence (FP per Floobits balance)
+    if effectName == "fat_cat":
+        # 1 FP per X Floobits, capped
+        floobitsPerFP = max(1, int(round((3 - rn * 0.02) / editionScale)))
+        maxFP = int(round((15 + rn * 0.5) * editionScale))
+        return {"floobitsPerFP": floobitsPerFP, "maxFP": maxFP}
+    # ── Strategy-Warping: Alchemy (FG → TD upgrade)
+    if effectName == "alchemy":
+        # Bonus FP per FG = TD FP value (6) minus FG FP value (~3) = ~3 base
+        return {"perFgBonusFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+    # ── Strategy-Warping: Consolation (base FP + loss bonus)
+    if effectName == "moral_victory":
+        return {"baseFP": round((3.0 + rn * 0.10) * editionScale, 1),
+                "lossBonusFP": round((10.0 + rn * 0.35) * editionScale, 1)}
+    # ── Strategy-Warping: Overtime (Q4 FP multiplier)
+    if effectName == "closer":
+        return {"q4MultFactor": round((1.5 + rn * 0.03) * editionScale, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(2 * editionScale, 1)}
 
 
@@ -899,9 +991,6 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
                 "isChanceEffect": True}
     if effectName == "resplendent":
         return {"perPlayerFP": round((2.5 + rn * 0.1) * editionScale, 1)}
-    if effectName == "loyalty_program":
-        return {"baseFP": round((2.0 + rn * 0.08) * editionScale, 1),
-                "growthFPPerWeek": round((1.5 + rn * 0.06) * editionScale, 1)}
     # ── FPx effects (factor-based, values > 1) ──
     if effectName == "big_deal":
         return {"xMultValue": round(1 + (playerRating / 100) * 0.25 * editionScale, 2)}
@@ -914,7 +1003,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "isChanceEffect": True}
     if effectName == "stockpiler":
-        return {"perSwapXMult": round((0.04 + rn * 0.002) * editionScale, 3)}
+        return {"perSwapXMult": round((0.04 + rn * 0.002) * editionScale, 2)}
     if effectName == "hometown_hero":
         return {"rewardFloobits": int(round((15 + rn * 0.6) * editionScale))}
     if effectName == "providence":
@@ -925,14 +1014,14 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         return {"baseFP": round((3 + rn * 0.12) * editionScale, 1),
                 "perUpsetFP": round((3 + rn * 0.12) * editionScale, 1)}
     if effectName == "rising_tide":
-        return {"perPlayerMult": round((0.04 + rn * 0.002) * editionScale, 3),
+        return {"perPlayerMult": round((0.04 + rn * 0.002) * editionScale, 2),
                 "maxMult": round(1 + (0.20 + rn * 0.008) * editionScale, 2)}
-    if effectName == "locomotive":
-        return {"rewardType": "fp", "rewardValue": round((10 + rn * 0.4) * editionScale, 1), "threshold": 35}
     if effectName == "trebuchet":
         return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     if effectName == "double_trouble":
-        return {"rewardType": "fp", "rewardValue": round((18 + rn * 0.7) * editionScale, 1)}
+        return {"rewardType": "fp",
+                "singleWrFP": round((6 + rn * 0.25) * editionScale, 1),
+                "rewardValue": round((14 + rn * 0.55) * editionScale, 1)}
     if effectName == "gunslinger":
         return {"rewardType": "fp", "perHundredYardsFP": round((3 + rn * 0.15) * editionScale, 1)}
     if effectName == "air_raid":
@@ -948,8 +1037,17 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     # ── Pace multiplier: Eminence (FPx from season pace above position avg)
     if effectName == "eminence":
         return {"rewardType": "mult",
-                "bonusPerFP": round((0.015 + rn * 0.0008) * editionScale, 3),
+                "bonusPerFP": round((0.015 + rn * 0.0008) * editionScale, 2),
                 "maxMult": min(1.50, round(1 + (0.12 + rn * 0.004) * editionScale, 2))}
+    # ── Strategy-Warping: Austerity (FPx per empty roster slot)
+    if effectName == "home_alone":
+        return {"perSlotMult": round((0.12 + rn * 0.004) * editionScale, 2)}
+    # ── Strategy-Warping: Humility (FPx per star under 5 of rostered player)
+    if effectName == "dark_horse":
+        return {"perStarMult": round((0.08 + rn * 0.003) * editionScale, 2)}
+    # ── Strategy-Warping: Vagabond (FPx per swap used, inverse Stockpiler)
+    if effectName == "vagabond":
+        return {"perSwapXMult": round((0.03 + rn * 0.001) * editionScale, 2)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.2 * editionScale, 1)}
 
 
@@ -963,8 +1061,8 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
     if effectName == "piggy_bank":
         return {"fpPercent": int(round((14 + rn * 0.3) * editionScale))}
     if effectName == "good_neighbor":
-        return {"baseFloobits": int(round(8 * editionScale)), "enhancedFloobits": int(round((30 + rn * 0.4) * editionScale)),
-                "isChanceEffect": True}
+        return {"baseFloobits": int(round((4 + rn * 0.15) * editionScale)),
+                "perMissFloobits": int(round((8 + rn * 0.3) * editionScale))}
     if effectName == "consolation_prize":
         return {"baseFloobits": int(round(8 * editionScale)), "enhancedFloobits": int(round((30 + rn * 0.4) * editionScale)),
                 "fpThreshold": 5, "isChanceEffect": True}
@@ -990,6 +1088,10 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "industrious":
         return {"perReceptionFloobits": int(round((3 + rn * 0.15) * editionScale))}
+    # ── Strategy-Warping: Prosperity (Floobits payout ceiling raiser)
+    if effectName == "surplus":
+        ceilingBonus = int(round((10 + rn * 0.4) * editionScale))
+        return {"ceilingBonus": ceilingBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
         # Edition scaling: higher editions = lower FP threshold, lower baseline, higher max
@@ -1023,9 +1125,6 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "rewardValue": round((6 + rn * 0.25) * editionScale, 1)}
     if effectName == "schadenfreude":
         return {"rewardType": "fp", "rewardValue": round((6 + rn * 0.25) * editionScale, 1)}
-    if effectName == "due":
-        return {"rewardType": "fp", "rewardValue": round((15 + rn * 0.6) * editionScale, 1),
-                "streakThreshold": 3}
     if effectName == "reclamation":
         return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
     if effectName == "pedigree":
@@ -1033,8 +1132,6 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "baseFP": round((4 + rn * 0.15) * editionScale, 1),
                 "rewardValue": round((12 + rn * 0.5) * editionScale, 1),
                 "eloThreshold": 1600}
-    if effectName == "monolith":
-        return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     if effectName == "mismatch":
         return {"rewardType": "fp", "rewardValue": round((15 + rn * 0.6) * editionScale, 1)}
     if effectName == "team_chemistry":
@@ -1090,9 +1187,12 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "growthPerTick": int(round((2 + rn * 0.1) * editionScale))}
     if effectName == "odometer":
         return {"rewardType": "fp",
-                "baseReward": round((1.0 + rn * 0.04) * editionScale, 1),
-                "growthPerTick": round((0.5 + rn * 0.02) * editionScale, 1),
-                "yardsPerTick": 100}
+                "gates": [
+                    {"yards": 50,  "fp": round((2.0 + rn * 0.08) * editionScale, 1)},
+                    {"yards": 100, "fp": round((4.0 + rn * 0.16) * editionScale, 1)},
+                    {"yards": 150, "fp": round((6.0 + rn * 0.24) * editionScale, 1)},
+                    {"yards": 200, "fp": round((10.0 + rn * 0.4) * editionScale, 1)},
+                ]}
     if effectName == "leg_day":
         return {"rewardType": "fp",
                 "baseReward": round((3.0 + rn * 0.12) * editionScale, 1),
@@ -1107,6 +1207,16 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
+    # ── Strategy-Warping: Cultivation (growing chance — streak + chance hybrid)
+    if effectName == "bonsai":
+        trigger = random.choice(CULTIVATION_TRIGGER_POOL)
+        return {"rewardType": "fp",
+                "baseFP": round((4.0 + rn * 0.15) * editionScale, 1),
+                "growthFP": round((2.0 + rn * 0.08) * editionScale, 1),
+                "baseChance": 20, "chancePerTrigger": 5,
+                "triggerEvent": trigger["event"],
+                "triggerLabel": trigger["label"],
+                "isChanceEffect": True}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "baseReward": round(1.0 * editionScale, 1), "growthPerTick": round(0.5 * editionScale, 1)}
 
 
@@ -1127,10 +1237,9 @@ _EFFECT_BUILDER_OVERRIDES = {
     "martyr": _buildMultiplierParams,
     "resplendent": _buildMultiplierParams,
     "rising_tide": _buildMultiplierParams,
-    "loyalty_program": _buildMultiplierParams,
     "underdog": _buildMultiplierParams,
     "house_money": _buildMultiplierParams,
-    "locomotive": _buildMultiplierParams,
+    "odometer": _buildStreakParams,
     "trebuchet": _buildMultiplierParams,
     "double_trouble": _buildMultiplierParams,
     "gunslinger": _buildMultiplierParams,
@@ -1152,6 +1261,7 @@ _MULT_EFFECTS = frozenset({
     "full_roster", "all_in", "chain_reaction",
     "double_down", "high_roller", "fortitude",
     "stacked_deck", "eminence",
+    "home_alone", "dark_horse", "vagabond",
 })
 
 def _deriveOutputType(category: str, effectName: str, primary: dict) -> str:
@@ -1249,6 +1359,12 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
 
     editionScale = 1.0  # Edition no longer scales effect params — tier determines effect
 
+    # Dampen player rating scaling for rarer tiers — higher tiers have narrow
+    # rating bands already, and the tier itself IS the power signal.
+    _RATING_DAMPENING = {"base": 1.0, "holographic": 0.5, "prismatic": 0.25, "diamond": 0.0}
+    dampening = _RATING_DAMPENING.get(edition, 1.0)
+    dampenedRating = 60 + (playerRating - 60) * dampening
+
     # Builder: check per-effect overrides first, then category dispatch
     if category == "cross":
         builder = _buildCrossPositionParams
@@ -1256,7 +1372,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         builder = _EFFECT_BUILDER_OVERRIDES[effectName]
     else:
         builder = _PARAM_BUILDERS.get(category, _buildFlatFPParams)
-    primary = builder(effectName, playerRating, editionScale)
+    primary = builder(effectName, dampenedRating, editionScale)
     # _buildCrossPositionParams returns None for unknown effects — fallback
     if primary is None:
         primary = {"baseFP": round(2 * editionScale, 1)}
@@ -1405,6 +1521,48 @@ def _getKickerFgStats(ctx) -> tuple:
 
 
 # ── Flat FP (WR) ─────────────────────────────────────────────────────────────
+
+def _computeRng(primary, ctx, cardPlayerId, eqId):
+    """Random FP between min and max, seeded by week + equipped card ID for consistency."""
+    import random as _rand
+    minFP = primary.get("minFP", 5)
+    maxFP = primary.get("maxFP", 20)
+    seed = hash((eqId, ctx.season, ctx.weekNumber))
+    rng = _rand.Random(seed)
+    rolledFP = round(rng.uniform(minFP, maxFP), 1)
+    eq = f"Rolled +{rolledFP} FP (range {minFP}–{maxFP})"
+    return EffectResult(fpBonus=rolledFP, equation=eq)
+
+
+def _computeAvalanche(primary, ctx, cardPlayerId, eqId):
+    """Escalating FP per roster TD within a week. Each TD pays more than the last."""
+    gates = [primary.get("td1", 2), primary.get("td2", 4), primary.get("td3", 7), primary.get("td4", 11)]
+    tds = ctx.rosterTotalTds
+    if tds == 0:
+        return EffectResult(equation="No roster TDs this week")
+    totalFP = 0
+    details = []
+    for i in range(tds):
+        gateFP = gates[min(i, len(gates) - 1)]
+        totalFP += gateFP
+        label = f"TD{i + 1}=+{gateFP}"
+        details.append(label)
+    totalFP = round(totalFP, 1)
+    eq = f"{tds} roster TD{'s' if tds != 1 else ''}: {', '.join(details)} = +{totalFP} FP"
+    return EffectResult(fpBonus=totalFP, equation=eq)
+
+
+def _computeHedge(primary, ctx, cardPlayerId, eqId):
+    """FP floor: guarantees a minimum roster output. Pays the difference between floor and actual."""
+    floorFP = primary.get("floorFP", 50)
+    rosterFP = round(ctx.weekRawFP, 1)
+    bonus = round(max(0, floorFP - rosterFP), 1)
+    if bonus > 0:
+        eq = f"{floorFP} floor − {rosterFP} roster FP = +{bonus} FP"
+        return EffectResult(fpBonus=bonus, equation=eq)
+    eq = f"Roster scored {rosterFP} FP (above {floorFP} floor — no hedge needed)"
+    return EffectResult(equation=eq)
+
 
 def _computeFreebie(primary, ctx, cardPlayerId, eqId):
     val = primary.get("baseFP", 0)
@@ -1615,8 +1773,9 @@ def _computeJuggernaut(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeHotRoster(primary, ctx, cardPlayerId, eqId):
+    # Match the +5 threshold used by the player hover tooltip
     count = sum(1 for pid in ctx.rosterPlayerIds
-                if ctx.playerPerformanceRatings.get(pid, 0) > ctx.rosterPlayerRatings.get(pid, 60))
+                if ctx.playerPerformanceRatings.get(pid, 0) - ctx.rosterPlayerRatings.get(pid, 60) >= 5)
     # New FP path
     perPlayerFP = primary.get("perPlayerFP", 0)
     if perPlayerFP:
@@ -1640,22 +1799,6 @@ def _computeRisingTide(primary, ctx, cardPlayerId, eqId):
     eq = f"1 + ({perPlayer}/player × {count} overperforming) = {mult:.2f}x (max {maxMult}x)"
     return EffectResult(multBonus=mult, equation=eq)
 
-
-def _computeLoyaltyProgram(primary, ctx, cardPlayerId, eqId):
-    weeks = max(0, ctx.rosterUnchangedWeeks)
-    # New FP path
-    baseFP = primary.get("baseFP", 0)
-    growthFP = primary.get("growthFPPerWeek", 0)
-    if baseFP or growthFP:
-        bonus = round(baseFP + growthFP * weeks, 1)
-        eq = f"{baseFP} base + {growthFP}/wk × {weeks} wks = +{bonus} FP"
-        return EffectResult(fpBonus=bonus, equation=eq)
-    # Legacy FPx path
-    baseMult = primary.get("baseMult", 0)
-    growth = primary.get("growthPerWeek", 0)
-    bonus = baseMult + growth * weeks
-    eq = f"1 + ({baseMult} base + {growth}/wk × {weeks} wks) = {1 + bonus:.2f}x"
-    return EffectResult(multBonus=1 + bonus, equation=eq)
 
 
 def _computeUnderdog(primary, ctx, cardPlayerId, eqId):
@@ -1752,35 +1895,18 @@ def _computePiggyBank(primary, ctx, cardPlayerId, eqId):
 
 
 def _computegood_neighbor(primary, ctx, cardPlayerId, eqId):
-    """Chance card: base Floobits always + chance of enhanced (scales with season FG misses)."""
-    from managers.cardEffectCalculator import _chanceRoll
-    baseFloobits = primary.get("baseFloobits", 2)
-    enhancedFloobits = primary.get("enhancedFloobits", 10)
-    # Legacy fallback
-    if "baseFloobits" not in primary and "perMissFloobits" in primary:
-        fgMade, fgAtt, _, _ = _getKickerFgStats(ctx)
-        misses = max(0, fgAtt - fgMade)
-        perMiss = primary["perMissFloobits"]
-        eq = f"{perMiss}F/miss × {misses} FG misses"
-        return EffectResult(floobits=perMiss * misses, equation=eq)
+    """Base Floobits every week + windfall per missed FG this week."""
+    baseFloobits = primary.get("baseFloobits", 4)
+    perMissFloobits = primary.get("perMissFloobits", 8)
     fgMade, fgAtt, _, _ = _getKickerFgStats(ctx)
     weekMisses = max(0, fgAtt - fgMade)
-    totalMisses = ctx.kickerSeasonFgMisses + weekMisses
-    if totalMisses <= 0:
-        eq = f"+{baseFloobits}F (base — no FG misses this season)"
-        return EffectResult(floobits=baseFloobits, equation=eq)
-    baseChance = min(0.55, totalMisses * 0.10 + 0.05)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
-    rng = _chanceRoll(ctx, eqId)
-    roll = rng.random()
-    triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
-    floobitsVal = enhancedFloobits if triggered else baseFloobits
-    eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{totalMisses} season misses", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFloobits}F floor — " + eq
-    return EffectResult(floobits=floobitsVal, equation=eq,
-                        chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
+    missBonus = perMissFloobits * weekMisses
+    total = baseFloobits + missBonus
+    if weekMisses > 0:
+        eq = f"+{baseFloobits}F base + {perMissFloobits}F × {weekMisses} missed FG{'s' if weekMisses > 1 else ''} = +{total}F"
+    else:
+        eq = f"+{baseFloobits}F base (no missed FGs this week)"
+    return EffectResult(floobits=total, equation=eq)
 
 
 def _computeConsolationPrize(primary, ctx, cardPlayerId, eqId):
@@ -1878,37 +2004,42 @@ def _computeAceUpTheSleeve(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeShowoff(primary, ctx, cardPlayerId, eqId):
-    # +FP if player at card's position overperformed
-    if not ctx.gamePerformanceRatings:
+    # +FP if player at card's position overperformed (after all games complete)
+    if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
     if not pids:
         return EffectResult(equation="no roster player at position")
-    pid = pids[0]
-    gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
-    baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-    if gamePerfRating > baseRating and gamePerfRating > 0:
-        result = _conditionalReward(primary)
-        result.equation = "Overperformed expectations"
-        return result
-    return EffectResult(equation="Did not overperform")
+    for pid in pids:
+        gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
+        baseRating = ctx.rosterPlayerRatings.get(pid, 60)
+        if gamePerfRating > baseRating and gamePerfRating > 0:
+            playerName = ctx.rosterPlayerNames.get(pid, "?")
+            result = _conditionalReward(primary)
+            result.equation = f"{playerName} overperformed"
+            return result
+    names = [ctx.rosterPlayerNames.get(pid, "?") for pid in pids]
+    return EffectResult(equation=f"{' + '.join(names)}: did not overperform")
 
 
 def _computeGlowUp(primary, ctx, cardPlayerId, eqId):
-    # FP if player at card's position overperformed
-    if not ctx.gamePerformanceRatings:
+    # FP if player at card's position overperformed (after all games complete)
+    if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
     if not pids:
         return EffectResult(equation="no roster player at position")
-    pid = pids[0]
-    gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
-    baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-    if gamePerfRating > baseRating and gamePerfRating > 0:
-        result = _conditionalReward(primary)
-        result.equation = "Overperformed expectations"
-        return result
-    return EffectResult(equation="Did not overperform")
+    # Check each player at position — trigger if any overperformed
+    for pid in pids:
+        gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
+        baseRating = ctx.rosterPlayerRatings.get(pid, 60)
+        if gamePerfRating > baseRating and gamePerfRating > 0:
+            playerName = ctx.rosterPlayerNames.get(pid, "?")
+            result = _conditionalReward(primary)
+            result.equation = f"{playerName} overperformed"
+            return result
+    names = [ctx.rosterPlayerNames.get(pid, "?") for pid in pids]
+    return EffectResult(equation=f"{' + '.join(names)}: did not overperform")
 
 
 def _computeBandwagon(primary, ctx, cardPlayerId, eqId):
@@ -2001,24 +2132,6 @@ def _computeSchadenfreude(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation="roster player's team won")
 
 
-def _computeDue(primary, ctx, cardPlayerId, eqId):
-    if not ctx.favoriteTeamGameFinal:
-        return EffectResult(equation="waiting for game to end")
-    streakThreshold = primary.get("streakThreshold", 3)
-    priorStreak = getattr(ctx, 'favoriteTeamPriorStreak', 0)
-    priorLossLength = abs(min(0, priorStreak))
-    if ctx.favoriteTeamWonThisWeek and ctx.favoriteTeamStreak == 1 and priorLossLength >= streakThreshold:
-        result = _conditionalReward(primary)
-        result.equation = f"snapped {priorLossLength}-game losing streak (threshold {streakThreshold})"
-        return result
-    if ctx.favoriteTeamStreak < 0:
-        eq = f"Your favorite team on {abs(ctx.favoriteTeamStreak)}-game losing streak (need {streakThreshold}+ then win)"
-    elif ctx.favoriteTeamWonThisWeek and ctx.favoriteTeamStreak == 1:
-        eq = f"Snapped {priorLossLength}-game streak (need {streakThreshold}+)"
-    else:
-        eq = f"Your favorite team not on a losing streak"
-    return EffectResult(equation=eq)
-
 
 def _computeFixerUpper(primary, ctx, cardPlayerId, eqId):
     if not ctx.favoriteTeamGameFinal:
@@ -2085,21 +2198,7 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         # Weekly streaks: count ticks from this week's data
         ticks = _countWeeklyTicks(ctx._currentEffectName, primary, ctx)
         totalReward = sum(baseReward + growthPerTick * i for i in range(ticks))
-        # Odometer: include yard data in equation
-        if ctx._currentEffectName == "odometer":
-            yardsPerTick = primary.get("yardsPerTick", 50)
-            totalYards = _getRosterTotalYards(ctx)
-            if growthPerTick and ticks > 0:
-                tickValues = [round(baseReward + growthPerTick * i, 1) for i in range(ticks)]
-                if len(tickValues) > 3:
-                    shown = f"... + {' + '.join(str(v) for v in tickValues[-3:])}"
-                else:
-                    shown = ' + '.join(str(v) for v in tickValues)
-                eq = f"{totalYards} yds / {yardsPerTick} = {ticks} ticks ({shown})"
-            else:
-                eq = f"{totalYards} yds / {yardsPerTick} = {ticks} ticks × {baseReward}"
-        else:
-            eq = f"{baseReward} base + ({growthPerTick}/TD × {ticks} TDs)"
+        eq = f"{baseReward} base + ({growthPerTick}/TD × {ticks} TDs)"
     else:
         # Season streaks: live-aware computation
         # streakCounts already includes +1 increment if condition was met live
@@ -2130,11 +2229,35 @@ def _countWeeklyTicks(effectName, primary, ctx):
     """Count ticks for weekly-reset streaks."""
     if effectName == "touchdown_jackpot":
         return ctx.rosterTotalTds
-    if effectName == "odometer":
-        yardsPerTick = primary.get("yardsPerTick", 50)
-        totalYards = _getRosterTotalYards(ctx)
-        return int(totalYards / yardsPerTick) if yardsPerTick > 0 else 0
     return 0
+
+
+def _computeOdometer(primary, ctx, cardPlayerId, eqId):
+    """Yard gates with escalating payouts. Each gate crossed adds its FP bonus."""
+    totalYards = _getRosterTotalYards(ctx)
+    gates = primary.get("gates", [])
+    totalFP = 0
+    gatesHit = 0
+    gateDetails = []
+    for gate in gates:
+        yardThreshold = gate.get("yards", 100)
+        gateFP = gate.get("fp", 2.0)
+        if totalYards >= yardThreshold:
+            totalFP += gateFP
+            gatesHit += 1
+            gateDetails.append(f"{yardThreshold}yd=+{gateFP}")
+    if gatesHit == 0:
+        nextGate = gates[0] if gates else {"yards": 50}
+        eq = f"{totalYards} roster yds — next gate at {nextGate['yards']}"
+        return EffectResult(equation=eq)
+    nextIdx = gatesHit
+    if nextIdx < len(gates):
+        nextLabel = f" — next gate at {gates[nextIdx]['yards']}yd"
+    else:
+        nextLabel = " — all gates cleared!"
+    totalFP = round(totalFP, 1)
+    eq = f"{totalYards} roster yds: {', '.join(gateDetails)} = +{totalFP} FP{nextLabel}"
+    return EffectResult(fpBonus=totalFP, equation=eq)
 
 
 def _getRosterTotalYards(ctx):
@@ -2292,8 +2415,9 @@ def _computeDeepThreat(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeDoubleTrouble(primary, ctx, cardPlayerId, eqId):
-    """FP when both WR slots score a TD in the same week."""
-    rewardValue = primary.get("rewardValue", 18)
+    """Tiered WR TD bonus: moderate FP for one WR scoring, big bonus when both score."""
+    singleFP = primary.get("singleWrFP", 6)
+    bothFP = primary.get("rewardValue", 14)
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 3)
     wrWithTd = 0
     for pid in pids:
@@ -2301,9 +2425,13 @@ def _computeDoubleTrouble(primary, ctx, cardPlayerId, eqId):
         if _countPlayerTds(stats) > 0:
             wrWithTd += 1
     if wrWithTd >= 2:
-        eq = f"+{rewardValue} FP (both WRs scored)"
-        return EffectResult(fpBonus=rewardValue, equation=eq)
-    eq = f"{wrWithTd}/2 WRs scored a TD"
+        total = singleFP + bothFP
+        eq = f"+{singleFP} FP (1st WR TD) + {bothFP} FP (2nd WR TD) = +{total} FP"
+        return EffectResult(fpBonus=total, equation=eq)
+    if wrWithTd == 1:
+        eq = f"+{singleFP} FP (1 WR scored — need both for +{bothFP} bonus)"
+        return EffectResult(fpBonus=singleFP, equation=eq)
+    eq = "No WR TDs this week"
     return EffectResult(equation=eq)
 
 
@@ -2330,19 +2458,6 @@ def _computeYacAttack(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
-def _computeBrokenTackles(primary, ctx, cardPlayerId, eqId):
-    """FP if WR slots combine for threshold+ YAC."""
-    rewardValue = primary.get("rewardValue", 10)
-    threshold = primary.get("threshold", 50)
-    # Always check WR stats (position 3) regardless of card position
-    stats = _getRosterStatsAtPosition(ctx, 3)
-    yac = stats.get("receiving_stats", {}).get("yac", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
-    if yac >= threshold:
-        eq = f"+{rewardValue} FP ({yac} YAC >= {threshold})"
-        return EffectResult(fpBonus=rewardValue, equation=eq)
-    eq = f"{yac}/{threshold} YAC needed"
-    return EffectResult(equation=eq)
-
 
 def _computeSafetyBlanket(primary, ctx, cardPlayerId, eqId):
     """FP scaling with TE slot's receptions."""
@@ -2353,17 +2468,6 @@ def _computeSafetyBlanket(primary, ctx, cardPlayerId, eqId):
     eq = f"{perRec}/rec × {recs} TE receptions"
     return EffectResult(fpBonus=bonus, equation=eq)
 
-
-def _computeRedZoneThreat(primary, ctx, cardPlayerId, eqId):
-    """FP when TE slot scores a receiving TD."""
-    rewardValue = primary.get("rewardValue", 12)
-    stats = _getRosterStatsAtPosition(ctx, 4)
-    rcvTds = stats.get("receiving_stats", {}).get("rcvTds", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
-    if rcvTds >= 1:
-        eq = f"+{rewardValue} FP ({rcvTds} TE receiving TD{'s' if rcvTds > 1 else ''})"
-        return EffectResult(fpBonus=rewardValue, equation=eq)
-    eq = "No TE receiving TDs"
-    return EffectResult(equation=eq)
 
 
 def _computeChainMover(primary, ctx, cardPlayerId, eqId):
@@ -2418,25 +2522,27 @@ def _computeHotHand(primary, ctx, cardPlayerId, eqId):
 
 def _computeGameBall(primary, ctx, cardPlayerId, eqId):
     """FP when roster player at card position overperforms their base rating."""
-    if not ctx.gamePerformanceRatings:
+    if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
     pos = ctx.cardPosition or 1
     pids = _getRosterPlayersByPosition(ctx, pos)
     if not pids:
         return EffectResult(equation="no roster player at position")
-    pid = pids[0]
-    gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
-    baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-    if gamePerfRating > baseRating and gamePerfRating > 0:
-        result = _conditionalReward(primary)
-        result.equation = "Overperformed expectations"
-        return result
-    return EffectResult(equation="Did not overperform")
+    for pid in pids:
+        gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
+        baseRating = ctx.rosterPlayerRatings.get(pid, 60)
+        if gamePerfRating > baseRating and gamePerfRating > 0:
+            playerName = ctx.rosterPlayerNames.get(pid, "?")
+            result = _conditionalReward(primary)
+            result.equation = f"{playerName} overperformed"
+            return result
+    names = [ctx.rosterPlayerNames.get(pid, "?") for pid in pids]
+    return EffectResult(equation=f"{' + '.join(names)}: did not overperform")
 
 
 def _computeBoomWeek(primary, ctx, cardPlayerId, eqId):
     """FP scaling with how much roster player overperformed this week."""
-    if not ctx.gamePerformanceRatings:
+    if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
     pos = ctx.cardPosition or 1
     pids = _getRosterPlayersByPosition(ctx, pos)
@@ -2467,7 +2573,7 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
     enhancedFloobits = primary.get("enhancedFloobits", 10)
     # Legacy fallback
     if "baseFloobits" not in primary and "perPointUnder" in primary:
-        if not ctx.gamePerformanceRatings:
+        if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
             return EffectResult(equation="Waiting for games to complete")
         perPoint = primary["perPointUnder"]
         pos = ctx.cardPosition or 1
@@ -2483,7 +2589,7 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
             floobits = int(perPoint * worstUnder)
             return EffectResult(floobits=floobits, equation=f"Underperformed — +{floobits} Floobits")
         return EffectResult(equation="Did not underperform")
-    if not ctx.gamePerformanceRatings:
+    if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
     pos = ctx.cardPosition or 1
     pids = _getRosterPlayersByPosition(ctx, pos)
@@ -3098,6 +3204,180 @@ def _computeWalkOff(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
+# ─── Strategy-Warping Effect Compute Functions ──────────────────────────────
+
+MAX_ROSTER_SLOTS = 6  # QB, RB, WR1, WR2, TE, K
+
+
+def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
+    """FGs count as TDs: bonus FP per FG, and bump rosterTotalTds for synergy."""
+    if not ctx.gamesActive and not ctx.teamResults:
+        return EffectResult(equation="Waiting for games")
+    perFgBonusFP = primary.get("perFgBonusFP", 3.0)
+    # Find kicker FGs from roster (K position = 5)
+    fgsMade = 0
+    for pid in ctx.rosterPlayerIds:
+        if ctx.rosterPlayerPositions.get(pid) == 5:
+            kickStats = ctx.weekPlayerStats.get(pid, {}).get("kicking_stats", {})
+            fgsMade += kickStats.get("fgs", 0)
+    if fgsMade == 0:
+        return EffectResult(equation="No FGs made by K slot")
+    bonus = round(perFgBonusFP * fgsMade, 1)
+    # Bump rosterTotalTds so TD-counting effects (Cornucopia, Touchdown Piñata, etc.) synergize
+    ctx.rosterTotalTds += fgsMade
+    eq = f"{perFgBonusFP}/FG × {fgsMade} FGs (counted as TDs)"
+    return EffectResult(fpBonus=bonus, equation=eq)
+
+
+def _computeAusterity(primary, ctx, cardPlayerId, eqId):
+    """FPx per empty roster slot. Fewer players = bigger multiplier."""
+    perSlotMult = primary.get("perSlotMult", 0.15)
+    filledSlots = len(ctx.rosterPlayerIds)
+    emptySlots = max(0, MAX_ROSTER_SLOTS - filledSlots)
+    if emptySlots == 0:
+        return EffectResult(multBonus=1.0, equation="No empty roster slots")
+    mult = round(1.0 + perSlotMult * emptySlots, 3)
+    eq = f"1.0 + {perSlotMult}/slot × {emptySlots} empty = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
+
+
+def _computeConsolation(primary, ctx, cardPlayerId, eqId):
+    """Base FP always, bonus FP when the card's position slot player's team loses."""
+    if not ctx.teamResults:
+        return EffectResult(equation="Waiting for games to complete")
+    baseFP = primary.get("baseFP", 3.0)
+    lossBonusFP = primary.get("lossBonusFP", 10.0)
+    # Check roster players at this card's position slot (WR returns both)
+    slotPids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 3)
+    if not slotPids:
+        return EffectResult(fpBonus=baseFP, equation=f"{baseFP} base (no player in slot)")
+    # Bonus triggers if any slot player's team lost
+    anyLost = False
+    for pid in slotPids:
+        teamId = ctx.rosterPlayerTeamIds.get(pid)
+        if teamId and ctx.teamResults.get(teamId) is False:
+            anyLost = True
+            break
+    if anyLost:
+        total = round(baseFP + lossBonusFP, 1)
+        eq = f"{baseFP} base + {lossBonusFP} loss bonus = {total}"
+        return EffectResult(fpBonus=total, equation=eq)
+    return EffectResult(fpBonus=baseFP, equation=f"{baseFP} base (slot player's team won)")
+
+
+def _computeCloser(primary, ctx, cardPlayerId, eqId):
+    """Bonus FP based on Q4/OT fantasy points earned by roster players."""
+    if ctx.gamesActive:
+        return EffectResult(equation="Waiting for games to complete")
+    q4MultFactor = primary.get("q4MultFactor", 2.0)
+    # Sum Q4 FP across all rostered players
+    totalQ4FP = 0
+    for pid in ctx.rosterPlayerIds:
+        ps = ctx.weekPlayerStats.get(pid, {})
+        totalQ4FP += ps.get("q4FantasyPoints", 0)
+    if totalQ4FP <= 0:
+        return EffectResult(equation="No Q4/OT fantasy points")
+    bonus = round(q4MultFactor * totalQ4FP, 1)
+    eq = f"{q4MultFactor}x × {round(totalQ4FP, 1)} Q4/OT FP = +{bonus}"
+    return EffectResult(fpBonus=bonus, equation=eq)
+
+
+def _computeHumility(primary, ctx, cardPlayerId, eqId):
+    """FPx inverse to star rating of rostered player at card's position."""
+    perStarMult = primary.get("perStarMult", 0.1)
+    cardPos = ctx.cardPosition
+    # Find rostered players at this card's position
+    matchingPids = [pid for pid, pos in ctx.rosterPlayerPositions.items() if pos == cardPos]
+    if not matchingPids:
+        return EffectResult(multBonus=1.0, equation="No rostered player at position")
+    # Average stars-under-5 across matching players (handles WR1+WR2)
+    totalStarsUnder = 0
+    for pid in matchingPids:
+        rating = ctx.rosterPlayerRatings.get(pid, 60)
+        stars = min(5, max(1, (rating - 60) // 8 + 1))
+        totalStarsUnder += max(0, 5 - stars)
+    avgStarsUnder = totalStarsUnder / len(matchingPids)
+    if avgStarsUnder <= 0:
+        return EffectResult(multBonus=1.0, equation="Rostered player is 5★ (no bonus)")
+    mult = round(1.0 + perStarMult * avgStarsUnder, 2)
+    posLabel = POSITION_LABELS.get(cardPos, "player")
+    eq = f"1.0 + {perStarMult}/star × {avgStarsUnder:.1f} stars under 5 ({posLabel}) = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
+
+
+def _computeVagabond(primary, ctx, cardPlayerId, eqId):
+    """FPx per roster swap used this season — inverse of Stockpiler."""
+    perSwap = primary.get("perSwapXMult", 0.03)
+    swapsUsed = ctx.seasonSwapsUsed
+    if swapsUsed <= 0:
+        return EffectResult(multBonus=1.0, equation="No swaps used this season")
+    mult = round(1.0 + perSwap * swapsUsed, 3)
+    eq = f"1.0 + {perSwap}/swap × {swapsUsed} swaps used = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
+
+
+def _computeOpulence(primary, ctx, cardPlayerId, eqId):
+    """FP scaling with Floobits balance."""
+    floobitsPerFP = primary.get("floobitsPerFP", 3)
+    maxFP = primary.get("maxFP", 15)
+    balance = ctx.userFloobitsBalance
+    if balance <= 0:
+        return EffectResult(equation="No Floobits in balance")
+    rawFP = balance / max(1, floobitsPerFP)
+    bonus = round(min(rawFP, maxFP), 1)
+    eq = f"{balance}F ÷ {floobitsPerFP} = {rawFP:.1f} FP (cap {maxFP}) = +{bonus}"
+    return EffectResult(fpBonus=bonus, equation=eq)
+
+
+def _computeProsperity(primary, ctx, cardPlayerId, eqId):
+    """Raises the weekly Floobits payout cap. Output is informational only —
+    the actual cap raise is applied in seasonManager._awardWeeklyFpFloobits()."""
+    ceilingBonus = primary.get("ceilingBonus", 10)
+    from constants import WEEKLY_FP_FLOOBIT_CAP
+    newCap = WEEKLY_FP_FLOOBIT_CAP + ceilingBonus
+    return EffectResult(floobits=0, equation=f"+{ceilingBonus} cap raise (effective cap: {newCap}F)")
+
+
+def _computeCultivation(primary, ctx, cardPlayerId, eqId):
+    """Growing chance — base FP that can permanently increase each week.
+    streak_count tracks how many times the base has grown."""
+    if ctx.gamesActive:
+        return EffectResult(equation="Waiting for games to complete")
+    baseFP = primary.get("baseFP", 4.0)
+    growthFP = primary.get("growthFP", 2.0)
+    # streak_count tracks number of successful growths (starts at 1 = no growth)
+    growthLevel = max(0, ctx.streakCounts.get(eqId, 1) - 1)
+    currentFP = round(baseFP + growthFP * growthLevel, 1)
+    # Count trigger events across all rostered players
+    triggerEvent = primary.get("triggerEvent", "pass_td")
+    triggerLabel = primary.get("triggerLabel", "events")
+    triggerCount = _countCultivationTriggers(triggerEvent, ctx)
+    # Calculate growth chance
+    baseChance = primary.get("baseChance", 20)
+    chancePerTrigger = primary.get("chancePerTrigger", 5)
+    growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
+    eq = f"+{currentFP} FP (base {baseFP} + {growthFP}×{growthLevel} growths). "
+    eq += f"Next growth: {growthChance}% ({baseChance}% + {chancePerTrigger}%×{triggerCount} {triggerLabel})"
+    return EffectResult(fpBonus=currentFP, equation=eq)
+
+
+def _countCultivationTriggers(triggerEvent, ctx):
+    """Sum trigger events across all rostered players for Cultivation."""
+    total = 0
+    triggerDef = None
+    for t in CULTIVATION_TRIGGER_POOL:
+        if t["event"] == triggerEvent:
+            triggerDef = t
+            break
+    if not triggerDef:
+        return 0
+    for pid in ctx.rosterPlayerIds:
+        ps = ctx.weekPlayerStats.get(pid, {})
+        for catKey, statKey in triggerDef["statPaths"]:
+            total += ps.get(catKey, {}).get(statKey, 0)
+    return total
+
+
 # ─── Effect Registry ─────────────────────────────────────────────────────────
 
 EFFECT_REGISTRY = {
@@ -3111,6 +3391,9 @@ EFFECT_REGISTRY = {
     "garbage_time": _computeGarbageTime,
     "loyalty_bonus": _computeLoyaltyBonus,
     "windfall": _computeDiamondInTheRough,
+    "rng": _computeRng,
+    "avalanche": _computeAvalanche,
+    "hedge": _computeHedge,
     # Multiplier (QB)
     "big_deal": _computeBigDeal,
     "cornucopia": _computeTriggerHappy,
@@ -3121,7 +3404,6 @@ EFFECT_REGISTRY = {
     "juggernaut": _computeJuggernaut,
     "resplendent": _computeHotRoster,
     "rising_tide": _computeRisingTide,
-    "loyalty_program": _computeLoyaltyProgram,
     "underdog": _computeUnderdog,
     "stockpiler": _computeStockpiler,
     "providence": _computeProvidence,
@@ -3145,7 +3427,6 @@ EFFECT_REGISTRY = {
     "spotlight_moment": _computeSpotlightMoment,
     "highlight_reel": _computeHighlightReel,
     "schadenfreude": _computeSchadenfreude,
-    "due": _computeDue,
     "reclamation": _computeFixerUpper,
     "pedigree": _computePedigree,
     # Streak (K) — all use the generic streak handler
@@ -3157,7 +3438,7 @@ EFFECT_REGISTRY = {
     "fairweather_fan": _computeStreakEffect,
     "bandwagon_express": _computeStreakEffect,
     "touchdown_jackpot": _computeStreakEffect,
-    "odometer": _computeStreakEffect,
+    "odometer": _computeOdometer,
     "leg_day": _computeStreakEffect,
     "automatic": _computeStreakEffect,
     "hot_hand": _computeHotHand,
@@ -3175,9 +3456,7 @@ EFFECT_REGISTRY = {
     "double_trouble": _computeDoubleTrouble,
     "slippery": _computeSlippery,
     "jailbreak": _computeYacAttack,
-    "locomotive": _computeBrokenTackles,
     "safety_blanket": _computeSafetyBlanket,
-    "monolith": _computeRedZoneThreat,
     "industrious": _computeChainMover,
     "mismatch": _computeMismatch,
     "sniper": _computeSniper,
@@ -3217,6 +3496,16 @@ EFFECT_REGISTRY = {
     "jackpot": _computeJackpot,
     "fortitude": _computeIronWill,
     "immaculate": _computeUnbreakable,
+    # ── Strategy-Warping Effects ──
+    "alchemy": _computeAlchemy,
+    "home_alone": _computeAusterity,
+    "moral_victory": _computeConsolation,
+    "closer": _computeCloser,
+    "dark_horse": _computeHumility,
+    "vagabond": _computeVagabond,
+    "fat_cat": _computeOpulence,
+    "surplus": _computeProsperity,
+    "bonsai": _computeCultivation,
 }
 
 

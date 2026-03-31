@@ -105,6 +105,9 @@ class FantasyTracker:
         # In-memory FP accumulator: {playerId: float}
         # Tracks current week's FP, banked to DB at week end
         self._weekFP: Dict[int, float] = {}
+        # Q4+ fantasy points: {playerId: float} — tracks FP earned in Q4/OT only
+        # Used by Overtime card effect; not persisted to DB
+        self._weekQ4FP: Dict[int, float] = {}
         # Week number for which _weekFP was last banked (None = not yet banked)
         self._bankedWeek: int = None
 
@@ -119,6 +122,10 @@ class FantasyTracker:
         player = self._playerManager.getPlayerById(playerId)
         if player and 'fantasyPoints' in player.gameStatsDict:
             player.gameStatsDict['fantasyPoints'] += points
+
+    def addPlayerQ4Points(self, playerId: int, points: int):
+        """Called when a player earns fantasy points during Q4 or overtime."""
+        self._weekQ4FP[playerId] = self._weekQ4FP.get(playerId, 0) + points
 
     def getPlayerWeekFP(self, playerId: int) -> float:
         """Get accumulated FP for a player this week (from in-memory tracker)."""
@@ -230,6 +237,7 @@ class FantasyTracker:
         Called by seasonManager at the start of each new week, before games begin.
         """
         self._weekFP.clear()
+        self._weekQ4FP.clear()
         self._bankedWeek = None
 
     @property
@@ -1090,6 +1098,21 @@ class FantasyTracker:
                     kStats = _jsonk.loads(kStats)
                 kickerSeasonFgMisses += kStats.get("fg_missed", 0)
 
+        # Season swaps used (for swap-based card effects)
+        seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(
+            roster_id=roster.id
+        ).count() if roster else 0
+
+        # User Floobits balance (for balance-based card effects)
+        userFloobitsBalance = 0
+        try:
+            from database.models import UserCurrency
+            uc = session.query(UserCurrency).filter_by(user_id=userId).first()
+            if uc:
+                userFloobitsBalance = uc.balance or 0
+        except Exception:
+            pass
+
         # Compute chanceBonus from Fortune's Favor + fortunate modifier
         chanceBonus = 0.0
         if activeModifier == "fortunate":
@@ -1121,6 +1144,11 @@ class FantasyTracker:
                 effectName = ec.get("effectName", "")
                 if effectName in STREAK_CONFIGS and not STREAK_CONFIGS[effectName].get("isWeekly", False):
                     liveStreakConditionsMet[eq.id] = False
+
+        # Inject Q4 fantasy points into weekPlayerStats for Overtime card effect
+        for pid, q4fp in self._weekQ4FP.items():
+            if pid in weekPlayerStats:
+                weekPlayerStats[pid]["q4FantasyPoints"] = q4fp
 
         # Eminence: position pace data (cached per-week, cheap to compute)
         from managers.cardEffectCalculator import computeEminenceData
@@ -1164,6 +1192,8 @@ class FantasyTracker:
             favoriteTeamWalkOffWin=favoriteTeamWalkOffWin,
             activeModifier=activeModifier,
             unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+            seasonSwapsUsed=seasonSwapsUsed,
+            userFloobitsBalance=userFloobitsBalance,
             liveStreakConditionsMet=liveStreakConditionsMet,
             positionAvgFPs=positionAvgFPs,
             playerSeasonFPPerGame=playerSeasonFPPerGame,
