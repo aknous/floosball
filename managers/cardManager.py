@@ -370,6 +370,7 @@ class CardManager:
             "teamId": template.team_id,
             "teamColor": teamColor,
             "playerRating": template.player_rating,
+            "ratingStars": min(5, max(1, (template.player_rating - 60) // 8 + 1)),
             "position": template.position,
             "edition": template.edition,
             "seasonCreated": template.season_created,

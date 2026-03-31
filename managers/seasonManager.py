@@ -295,6 +295,10 @@ class SeasonManager:
             nextScheduleIdx = resumeFromWeek  # 0-indexed: schedule[N] = week N+1
             if nextScheduleIdx < len(self.currentSeason.schedule):
                 self._cachedNextGameStart = self.currentSeason.schedule[nextScheduleIdx]['startTime']
+            # Set currentWeek to the last completed week so API calls during
+            # the pre-game wait show the correct week (not 0).
+            self.currentSeason.currentWeek = resumeFromWeek
+            self.currentSeason.currentWeekText = f'Week {resumeFromWeek}'
             # Clean up orphaned game data from any interrupted week
             # (the next week will replay from scratch, generating new records)
             self._cleanupOrphanedWeekGames(
@@ -303,25 +307,25 @@ class SeasonManager:
 
         for week in self.currentSeason.schedule:
             roundIndex = self.currentSeason.schedule.index(week)  # 0-indexed
-            self.currentSeason.currentWeek = roundIndex + 1
+            nextWeek = roundIndex + 1
             dayNum = roundIndex // 7 + 1    # 1-indexed day (1–4), used for day-boundary events
-            self.currentSeason.currentWeekText = f'Week {self.currentSeason.currentWeek}'
+            nextWeekText = f'Week {nextWeek}'
 
             # Skip weeks that were completed before a restart
-            if self.currentSeason.currentWeek <= resumeFromWeek:
-                logger.info(f"Skipping {self.currentSeason.currentWeekText} — already completed before restart")
+            if nextWeek <= resumeFromWeek:
+                logger.info(f"Skipping {nextWeekText} — already completed before restart")
                 continue
 
-            logger.info(f"Simulating {self.currentSeason.currentWeekText} in {self.timingManager.getModeString()} mode")
+            logger.info(f"Simulating {nextWeekText} in {self.timingManager.getModeString()} mode")
 
             # Select weekly modifier
             weeklyModifier = self._selectWeeklyModifier(
-                self.currentSeason.seasonNumber, self.currentSeason.currentWeek
+                self.currentSeason.seasonNumber, nextWeek
             )
 
             # Notify users whose power-ups (Accession / Conscription) just expired
             self._notifyExpiredPowerups(
-                self.currentSeason.seasonNumber, self.currentSeason.currentWeek
+                self.currentSeason.seasonNumber, nextWeek
             )
 
             weekStartTime = week['startTime']
@@ -330,9 +334,9 @@ class SeasonManager:
             if self.timingManager._isScheduledMode:
                 isBehindSchedule = datetime.datetime.utcnow() > weekStartTime
                 if isBehindSchedule and not self.timingManager.catchingUp:
-                    logger.info(f"Week {self.currentSeason.currentWeek}: past scheduled time — entering catch-up mode")
+                    logger.info(f"Week {nextWeek}: past scheduled time — entering catch-up mode")
                 elif not isBehindSchedule and self.timingManager.catchingUp:
-                    logger.info(f"Week {self.currentSeason.currentWeek}: back on schedule — resuming normal timing")
+                    logger.info(f"Week {nextWeek}: back on schedule — resuming normal timing")
                     if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
                         self.timingManager.setMode(TimingMode.SCHEDULED)
                         logger.info(f"Catch-up complete — switched to SCHEDULED mode")
@@ -350,11 +354,17 @@ class SeasonManager:
             # shortly before the next game start.
             # Cross-day transitions (weeks 8, 15, 22) have ~18-hour gaps;
             # roll over 8 hours early so the next slate shows up the evening before.
-            curWeek = self.currentSeason.currentWeek
-            isCrossDayTransition = curWeek in (8, 15, 22)
+            isCrossDayTransition = nextWeek in (8, 15, 22)
             earlyMinutes = 480 if isCrossDayTransition else 15  # 8 hours vs 15 min
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=earlyMinutes)
             await self.timingManager.waitForWeekSetup(weekSetupTime)
+
+            # ── Official week transition ──
+            # Advance currentWeek AFTER the wait so that between-weeks API calls
+            # still see the completed week's fantasy/card data (not the upcoming
+            # empty week).  Before this point, use the local `nextWeek` variable.
+            self.currentSeason.currentWeek = nextWeek
+            self.currentSeason.currentWeekText = nextWeekText
 
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
@@ -604,14 +614,21 @@ class SeasonManager:
 
             # Wire fantasy tracker callback for each player so FP generation
             # flows through FantasyTracker (updates both _weekFP and gameStatsDict)
+            # Also tracks Q4/OT fantasy points for the Overtime card effect
             fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
             if fantasyTracker:
                 for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
                     for player in team.rosterDict.values():
                         if player:
                             pid = player.id
-                            player.stat_tracker._on_fantasy_points = (
-                                lambda pts, _pid=pid: fantasyTracker.addPlayerPoints(_pid, pts)
+                            def _makeFpCallback(_pid, _game, _ft):
+                                def cb(pts):
+                                    _ft.addPlayerPoints(_pid, pts)
+                                    if _game.currentQuarter >= 4:
+                                        _ft.addPlayerQ4Points(_pid, pts)
+                                return cb
+                            player.stat_tracker._on_fantasy_points = _makeFpCallback(
+                                pid, gameInstance, fantasyTracker
                             )
 
             # Simulate the game
@@ -1415,6 +1432,10 @@ class SeasonManager:
 
                         if category == "streak":
                             from managers.cardEffects import STREAK_CONFIGS
+                            # Bonsai: probabilistic growth instead of auto-increment
+                            if effectName == "bonsai":
+                                self._rollCultivationGrowth(eq, effectConfig, calcCtx)
+                                continue
                             # Ironclad modifier: streaks can't reset this week
                             if activeModifier == "ironclad":
                                 conditionMet = True
@@ -2744,15 +2765,21 @@ class SeasonManager:
             gameInstance.isRegularSeasonGame = False
             gameInstance.isPlayoff = True
 
-            # Wire fantasy tracker callback for each player
+            # Wire fantasy tracker callback for each player (with Q4 tracking)
             fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
             if fantasyTracker:
                 for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
                     for player in team.rosterDict.values():
                         if player:
                             pid = player.id
-                            player.stat_tracker._on_fantasy_points = (
-                                lambda pts, _pid=pid: fantasyTracker.addPlayerPoints(_pid, pts)
+                            def _makeFpCallback(_pid, _game, _ft):
+                                def cb(pts):
+                                    _ft.addPlayerPoints(_pid, pts)
+                                    if _game.currentQuarter >= 4:
+                                        _ft.addPlayerQ4Points(_pid, pts)
+                                return cb
+                            player.stat_tracker._on_fantasy_points = _makeFpCallback(
+                                pid, gameInstance, fantasyTracker
                             )
 
             # Simulate the game
@@ -2764,7 +2791,7 @@ class SeasonManager:
                     for player in team.rosterDict.values():
                         if player:
                             player.stat_tracker._on_fantasy_points = None
-            
+
             # Determine winner
             winner = game.homeTeam if gameInstance.homeScore > gameInstance.awayScore else game.awayTeam
             
@@ -4411,6 +4438,35 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _rollCultivationGrowth(self, eq, effectConfig, calcCtx):
+        """Roll for Cultivation card growth. streak_count tracks growth level."""
+        import random as _rand
+        from managers.cardEffects import CULTIVATION_TRIGGER_POOL, _countCultivationTriggers
+        primary = effectConfig.get("primary", {})
+        baseChance = primary.get("baseChance", 20)
+        chancePerTrigger = primary.get("chancePerTrigger", 5)
+        triggerEvent = primary.get("triggerEvent", "pass_td")
+        triggerCount = _countCultivationTriggers(triggerEvent, calcCtx)
+        growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
+        roll = _rand.randint(1, 100)
+        # Apply advantage (double roll) if ctx has it
+        if calcCtx.hasAdvantage:
+            roll2 = _rand.randint(1, 100)
+            roll = min(roll, roll2)
+        if roll <= growthChance:
+            eq.streak_count = getattr(eq, 'streak_count', 0) + 1
+            growthFP = primary.get("growthFP", 2.0)
+            level = eq.streak_count - 1  # streak_count starts at 1
+            logger.info(
+                f"Cultivation growth! eq={eq.id} roll={roll}≤{growthChance}% "
+                f"triggers={triggerCount} level={level} (+{growthFP} FP)"
+            )
+        else:
+            logger.debug(
+                f"Cultivation no growth: eq={eq.id} roll={roll}>{growthChance}% "
+                f"triggers={triggerCount}"
+            )
+
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
         """Award Floobits to all users based on a percentage of their weekly FP."""
         import math
@@ -4443,6 +4499,20 @@ class SeasonManager:
                 from constants import POWERUP_INCOME_BOOST
                 shopRepo = ShopPurchaseRepository(session)
                 boostedCap = POWERUP_INCOME_BOOST.get("boostedCap", 40)
+                # Pre-load Prosperity card ceiling bonuses per user
+                prosperityCaps = {}
+                try:
+                    from database.repositories.card_repositories import EquippedCardRepository
+                    eqRepo = EquippedCardRepository(session)
+                    allEquipped = eqRepo.getAllForWeek(season, week)
+                    for eq in allEquipped:
+                        ec = eq.user_card.card_template.effect_config or {}
+                        if ec.get("effectName") == "surplus":
+                            ownerId = eq.user_id
+                            bonus = ec.get("primary", {}).get("ceilingBonus", 0)
+                            prosperityCaps[ownerId] = prosperityCaps.get(ownerId, 0) + bonus
+                except Exception as e:
+                    logger.warning(f"Could not load Prosperity caps: {e}")
                 awarded = 0
                 for entry in entries:
                     weekFp = entry.get('weekTotal', 0)
@@ -4452,6 +4522,8 @@ class SeasonManager:
                     # Check for active income boost powerup
                     activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
                     cap = boostedCap if activeBoost else WEEKLY_FP_FLOOBIT_CAP
+                    # Apply Prosperity card ceiling bonus
+                    cap += prosperityCaps.get(userId, 0)
                     raw = weekFp * WEEKLY_FP_FLOOBIT_RATE
                     reward = min(math.floor(raw), cap)
                     if reward <= 0:

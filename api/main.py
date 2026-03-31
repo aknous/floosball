@@ -1656,7 +1656,7 @@ def admin_card_options(x_admin_password: Optional[str] = Header(default=None)):
     _check_admin_password(x_admin_password)
     from managers.cardEffects import (
         SHARED_EFFECT_POOL, POSITION_EXCLUSIVE_POOLS,
-        EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY,
+        EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY, EFFECT_EDITION_TIER,
     )
     from managers.cardManager import EDITION_ORDER
     editions = list(EDITION_ORDER)
@@ -1666,14 +1666,14 @@ def admin_card_options(x_admin_password: Optional[str] = Header(default=None)):
     for posPool in POSITION_EXCLUSIVE_POOLS.values():
         allEffects.extend(posPool)
     seen = set()
-    for name, _w in allEffects:
+    for name in allEffects:
         if name in seen:
             continue
         seen.add(name)
         cat = EFFECT_CATEGORY.get(name, "flat_fp")
         if cat not in effects:
             effects[cat] = []
-        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name)})
+        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "base")})
     classifications = ["rookie", "mvp", "champion", "all_pro",
                         "mvp_champion", "all_pro_champion", "mvp_all_pro_champion"]
     return build_success_response({
@@ -3598,20 +3598,22 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 "templatePosition": template.position,
             })
 
-        # Check if user qualifies for 6th slot: MVP card owned OR active temp_card_slot power-up
+        # Check if user qualifies for 6th slot: MVP card equipped OR active temp_card_slot power-up
         from database.repositories.shop_repository import ShopPurchaseRepository
-        mvpOwned = (
-            session.query(UserCard.id)
+        mvpEquipped = (
+            session.query(EquippedCard.id)
+            .join(UserCard, EquippedCard.user_card_id == UserCard.id)
             .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
             .filter(
-                UserCard.user_id == user.id,
-                CardTemplate.season_created == currentSeason,
+                EquippedCard.user_id == user.id,
+                EquippedCard.season == currentSeason,
+                EquippedCard.week == currentWeek,
                 CardTemplate.classification.isnot(None),
                 CardTemplate.classification.contains("mvp"),
             )
             .first()
         ) is not None
-        if not mvpOwned:
+        if not mvpEquipped:
             shopRepo = ShopPurchaseRepository(session)
             activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeason, currentWeek)
             hasExtraSlot = activeSlot is not None
