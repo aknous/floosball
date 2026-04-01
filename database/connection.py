@@ -72,6 +72,15 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Email preference columns on users (v0.7.1)
+        for col in ['email_day_report', 'email_season_report']:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} BOOLEAN DEFAULT 1"))
+                conn.commit()
+                logger.info(f"  Migration: added users.{col}")
+            except Exception:
+                conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [
