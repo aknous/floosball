@@ -2242,6 +2242,16 @@ def _computeOdometer(primary, ctx, cardPlayerId, eqId):
     """Yard gates with escalating payouts. Each gate crossed adds its FP bonus."""
     totalYards = _getRosterTotalYards(ctx)
     gates = primary.get("gates", [])
+    # Legacy cards stored accumulator params (baseReward/growthPerTick/yardsPerTick)
+    # instead of gates — synthesize gates from old format
+    if not gates and "yardsPerTick" in primary:
+        yardsPerTick = primary.get("yardsPerTick", 50)
+        baseReward = primary.get("baseReward", 2.0)
+        growth = primary.get("growthPerTick", 1.0)
+        gates = [
+            {"yards": yardsPerTick * (i + 1), "fp": round(baseReward + growth * i, 1)}
+            for i in range(4)
+        ]
     totalFP = 0
     gatesHit = 0
     gateDetails = []
