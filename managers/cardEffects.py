@@ -1658,7 +1658,7 @@ def _computeLoyaltyBonus(primary, ctx, cardPlayerId, eqId):
 def _computeDiamondInTheRough(primary, ctx, cardPlayerId, eqId):
     perPlayer = primary.get("perPlayerFloobits", 0)
     count = sum(1 for pid in ctx.rosterPlayerIds
-                if ctx.playerPerformanceRatings.get(pid, 0) > ctx.rosterPlayerRatings.get(pid, 60))
+                if ctx.playerPerformanceRatings.get(pid, 0) - ctx.rosterPlayerRatings.get(pid, 60) >= 5)
     bonus = perPlayer * count
     eq = f"{perPlayer}F/player × {count} overperforming = +{bonus}F"
     return EffectResult(floobits=bonus, equation=eq)
@@ -1799,7 +1799,7 @@ def _computeRisingTide(primary, ctx, cardPlayerId, eqId):
     perPlayer = primary.get("perPlayerMult", 0)
     maxMult = primary.get("maxMult", 1.5)
     count = sum(1 for pid in ctx.rosterPlayerIds
-                if ctx.playerPerformanceRatings.get(pid, 0) > ctx.rosterPlayerRatings.get(pid, 60))
+                if ctx.playerPerformanceRatings.get(pid, 0) - ctx.rosterPlayerRatings.get(pid, 60) >= 5)
     rawMult = 1 + perPlayer * count
     mult = min(rawMult, maxMult)
     eq = f"1 + ({perPlayer}/player × {count} overperforming) = {mult:.2f}x (max {maxMult}x)"
@@ -1980,7 +1980,7 @@ def _computeRockBottom(primary, ctx, cardPlayerId, eqId):
 def _computeBuyLow(primary, ctx, cardPlayerId, eqId):
     perPlayer = primary.get("perPlayerFloobits", 0)
     count = sum(1 for pid in ctx.rosterPlayerIds
-                if ctx.playerPerformanceRatings.get(pid, 0) < ctx.rosterPlayerRatings.get(pid, 60)
+                if ctx.rosterPlayerRatings.get(pid, 60) - ctx.playerPerformanceRatings.get(pid, 0) >= 5
                 and ctx.playerPerformanceRatings.get(pid, 0) > 0)
     eq = f"{perPlayer}F/player × {count} underperforming"
     return EffectResult(floobits=perPlayer * count, equation=eq)
@@ -2143,7 +2143,7 @@ def _computeFixerUpper(primary, ctx, cardPlayerId, eqId):
     if not ctx.favoriteTeamGameFinal:
         return EffectResult(equation="waiting for game to end")
     underperforming = sum(1 for pid in ctx.rosterPlayerIds
-                         if ctx.playerPerformanceRatings.get(pid, 0) < ctx.rosterPlayerRatings.get(pid, 60)
+                         if ctx.rosterPlayerRatings.get(pid, 60) - ctx.playerPerformanceRatings.get(pid, 0) >= 5
                          and ctx.playerPerformanceRatings.get(pid, 0) > 0)
     total = len(ctx.rosterPlayerIds)
     needed = total // 2 + 1
