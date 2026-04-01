@@ -1244,6 +1244,112 @@ async def get_standings():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/reigning-champion")
+async def get_reigning_champion():
+    """Return the previous season's Floosbowl champion (for navbar display)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    try:
+        from database.connection import get_session
+        from database.models import Season as DBSeason, Team as DBTeam
+        session = get_session()
+        seasonManager = floosball_app.seasonManager
+        currentSeason = seasonManager.seasonNumber if seasonManager else None
+        if not currentSeason or currentSeason < 2:
+            return build_success_response(None)
+        prevSeason = session.query(DBSeason).filter_by(season_number=currentSeason - 1).first()
+        if not prevSeason or not prevSeason.champion_team_id:
+            return build_success_response(None)
+        teamManager = floosball_app.teamManager
+        champTeam = teamManager.getTeamById(prevSeason.champion_team_id) if teamManager else None
+        if not champTeam:
+            return build_success_response(None)
+        return build_success_response(TeamResponseBuilder.buildBasicTeamDict(champTeam))
+    except Exception as e:
+        logger.error(f"Error getting reigning champion: {e}")
+        return build_success_response(None)
+
+
+@app.get("/api/admin/schedule-debug")
+async def schedule_debug():
+    """Diagnostic: show schedule times and startDate for debugging."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    season = floosball_app.seasonManager.currentSeason
+    if not season:
+        return build_success_response({"error": "no season"})
+    import math
+    import datetime as dt
+    from managers.timingManager import _isEdtDate
+    startDate = season.startDate
+    # Manual ET conversion for display
+    etOffset = 4 if _isEdtDate(startDate) else 5
+    startDateEt = startDate - dt.timedelta(hours=etOffset)
+    weeks = []
+    for i, week in enumerate(season.schedule):
+        userWeek = i + 1
+        startTime = week.get('startTime')
+        games = week.get('games', [])
+        gameStartTime = games[0].startTime if games else None
+        # Recalculate what getWeekStartTime would return
+        weekIdx = i  # 0-indexed
+        etHour = [12, 13, 14, 15, 16, 17, 18][weekIdx % 7]
+        dayNumber = math.floor(weekIdx / 7)
+        targetDate = (startDate + dt.timedelta(days=dayNumber)).date()
+        utcHour = etHour + (4 if _isEdtDate(targetDate) else 5)
+        # Call getWeekStartTime live to see what it returns NOW
+        liveStartTime = floosball_app.seasonManager.getWeekStartTime(dt.datetime.utcnow(), weekIdx)
+        weeks.append({
+            "userWeek": userWeek,
+            "weekIdx": weekIdx,
+            "weekIdx_mod7": weekIdx % 7,
+            "etHour": etHour,
+            "utcHour": utcHour,
+            "edtActive": _isEdtDate(targetDate),
+            "dayNumber": dayNumber,
+            "targetDate": str(targetDate),
+            "weekStartTime": startTime.isoformat() if startTime else None,
+            "liveGetWeekStartTime": liveStartTime.isoformat() if liveStartTime else None,
+            "gameStartTime": gameStartTime.isoformat() if gameStartTime else None,
+            "gameStartTimeTs": gameStartTime.timestamp() if gameStartTime else None,
+            "gameCount": len(games),
+        })
+    # Also check if _isEdt from seasonManager works
+    from managers.seasonManager import _isEdt
+    testDate = dt.date(2026, 3, 31)
+
+    # Query DB directly — how many games per week?
+    dbWeekCounts = {}
+    teamsPerLeague = None
+    try:
+        from database.connection import get_session as _gs
+        from database.models import Game as _G
+        from sqlalchemy import func
+        _s = _gs()
+        rows = _s.query(_G.week, _G.status, func.count(_G.id)).filter_by(
+            season=season.seasonNumber
+        ).group_by(_G.week, _G.status).order_by(_G.week).all()
+        for w, st, cnt in rows:
+            dbWeekCounts.setdefault(w, {})[st] = cnt
+        _s.close()
+    except Exception as e:
+        dbWeekCounts = {"error": str(e)}
+    try:
+        lm = floosball_app.seasonManager.leagueManager
+        teamsPerLeague = [len(lg.teamList) for lg in lm.leagues]
+    except Exception:
+        pass
+
+    return build_success_response({
+        "seasonStartDate": startDate.isoformat(),
+        "seasonStartDateET": startDateEt.isoformat(),
+        "scheduleLength": len(season.schedule),
+        "teamsPerLeague": teamsPerLeague,
+        "dbWeekCounts": dbWeekCounts,
+        "weeks": weeks,
+    })
+
+
 # ============================================================================
 # REST API - STATS & RECORDS
 # ============================================================================
@@ -2271,6 +2377,8 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "floobits": currency.balance if currency else 0,
             "hasCompletedOnboarding": user.has_completed_onboarding,
             "emailOptOut": user.email_opt_out,
+            "emailDayReport": user.email_day_report,
+            "emailSeasonReport": user.email_season_report,
         }
     finally:
         session.close()
@@ -2346,8 +2454,17 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
         dbUser = session.get(_User, user.id)
         if "emailOptOut" in payload:
             dbUser.email_opt_out = bool(payload["emailOptOut"])
+        if "emailDayReport" in payload:
+            dbUser.email_day_report = bool(payload["emailDayReport"])
+        if "emailSeasonReport" in payload:
+            dbUser.email_season_report = bool(payload["emailSeasonReport"])
         session.commit()
-        return {"ok": True, "emailOptOut": dbUser.email_opt_out}
+        return {
+            "ok": True,
+            "emailOptOut": dbUser.email_opt_out,
+            "emailDayReport": dbUser.email_day_report,
+            "emailSeasonReport": dbUser.email_season_report,
+        }
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=str(e))

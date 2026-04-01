@@ -63,49 +63,176 @@ def sendAccessApprovedEmail(email: str) -> bool:
     return sendEmail(email, subject, html)
 
 
-def sendPrizeNotification(email: str, rank: int, prize: int, context: str) -> bool:
-    """Send a leaderboard prize email."""
-    subject = f"You placed #{rank} — {context}"
+def _buildStatRow(label: str, value: str, color: str = "#e2e8f0") -> str:
+    """Build a single stat row for email templates."""
+    return f"""
+    <tr>
+        <td style="padding: 8px 0; font-size: 13px; color: #94a3b8; border-bottom: 1px solid #1e293b;">{label}</td>
+        <td style="padding: 8px 0; font-size: 13px; color: {color}; font-weight: 600; text-align: right; border-bottom: 1px solid #1e293b;">{value}</td>
+    </tr>"""
+
+
+def _buildTeamSection(favTeam: dict, isSeasonEnd: bool = False) -> str:
+    """Build the favorite team section for email templates."""
+    if not favTeam:
+        return ""
+
+    record = f"{favTeam['wins']}-{favTeam['losses']}"
+    if favTeam.get('ties', 0) > 0:
+        record += f"-{favTeam['ties']}"
+
+    rows = f'<div style="font-size: 13px; color: #94a3b8; margin-bottom: 6px;">Record: <span style="color: #e2e8f0; font-weight: 600;">{record}</span></div>'
+
+    if isSeasonEnd and favTeam.get('playoffResult'):
+        rows += f'<div style="font-size: 13px; color: #c084fc; font-weight: 600; margin-bottom: 6px;">{favTeam["playoffResult"]}</div>'
+
+    todayGames = favTeam.get('todayGames', [])
+    for g in todayGames:
+        result = "W" if g['won'] else "L"
+        resultColor = "#4ade80" if g['won'] else "#f87171"
+        homeAway = "vs" if g['isHome'] else "@"
+        rows += f'<div style="font-size: 13px; margin-top: 4px;"><span style="color: {resultColor}; font-weight: 600;">{result}</span> <span style="color: #94a3b8;">{homeAway} {g["opponent"]}</span> <span style="color: #e2e8f0;">{g["score"]}</span></div>'
+
+    return f"""
+    <div style="background: #1e293b; border-radius: 8px; padding: 14px; margin-top: 16px;">
+        <div style="font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 8px;">{favTeam['name']}</div>
+        {rows}
+    </div>"""
+
+
+def sendDayReport(email: str, data: dict) -> bool:
+    """Send a game day recap email."""
+    season = data['season']
+    dayNum = data['dayNum']
+    dayFP = data.get('dayFP', 0)
+    seasonFP = data.get('seasonFP', 0)
+    seasonRank = data.get('seasonRank', 0)
+    totalUsers = data.get('totalUsers', 0)
+    floobitsEarned = data.get('floobitsEarned', 0)
+    leaderboardPrizes = data.get('leaderboardPrizes', [])
+    pickEm = data.get('pickEm', {})
+    favTeam = data.get('favoriteTeam')
+
+    subject = f"Day {dayNum} Report \u2014 Season {season}"
+
+    # Build stats table rows
+    statsRows = _buildStatRow("Fantasy Points Today", f"+{dayFP:.1f} FP", "#4ade80")
+    statsRows += _buildStatRow("Season Total", f"{seasonFP:.1f} FP")
+    if totalUsers > 0:
+        statsRows += _buildStatRow("Season Rank", f"#{seasonRank} of {totalUsers}")
+    if floobitsEarned > 0:
+        statsRows += _buildStatRow("Floobits Earned", f"+{floobitsEarned}", "#eab308")
+
+    # Leaderboard prizes
+    prizeHtml = ""
+    if leaderboardPrizes:
+        prizeItems = ""
+        for p in leaderboardPrizes:
+            prizeItems += f'<div style="font-size: 13px; color: #e2e8f0; padding: 4px 0;"><span style="color: #f59e0b; font-weight: 600;">#{p["rank"]}</span> Week {p["week"]} \u2014 <span style="color: #eab308; font-weight: 600;">+{p["prize"]} Floobits</span></div>'
+        prizeHtml = f"""
+        <div style="background: rgba(234,179,8,0.08); border: 1px solid rgba(234,179,8,0.2); border-radius: 8px; padding: 12px; margin-top: 16px;">
+            <div style="font-size: 12px; color: #a16207; font-weight: 600; margin-bottom: 6px;">Leaderboard Finishes</div>
+            {prizeItems}
+        </div>"""
+
+    # Pick-em section
+    pickEmHtml = ""
+    if pickEm.get('total', 0) > 0:
+        correct = pickEm.get('correct', 0)
+        total = pickEm['total']
+        pct = round(correct / total * 100) if total > 0 else 0
+        pickEmRow = f'{correct}/{total} correct ({pct}%)'
+        pickEmFloobits = pickEm.get('floobitsEarned', 0)
+        statsRows += _buildStatRow("Pick-Em", pickEmRow)
+        if pickEmFloobits > 0:
+            statsRows += _buildStatRow("Pick-Em Floobits", f"+{pickEmFloobits}", "#eab308")
+
+    # Favorite team
+    teamHtml = _buildTeamSection(favTeam)
+
     html = f"""
     <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
-        <h1 style="font-size: 24px; color: #e2e8f0; margin-bottom: 8px;">Congratulations!</h1>
-        <p style="font-size: 16px; color: #94a3b8; line-height: 1.6;">
-            You placed <strong style="color: #f59e0b;">#{rank}</strong> on the {context}!
-        </p>
-        <div style="background: #1e293b; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center;">
-            <div style="font-size: 32px; font-weight: 700; color: #eab308;">+{prize}</div>
-            <div style="font-size: 14px; color: #a16207; margin-top: 4px;">Floobits</div>
+        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 4px;">Day {dayNum} Report</h1>
+        <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">Season {season}</p>
+
+        <table style="width: 100%; border-collapse: collapse;">
+            {statsRows}
+        </table>
+
+        {prizeHtml}
+        {teamHtml}
+
+        <div style="margin-top: 24px; text-align: center;">
+            <a href="https://floosball.com" style="color: #3b82f6; font-size: 14px; font-weight: 600; text-decoration: none;">
+                View Full Standings
+            </a>
         </div>
-        <p style="font-size: 13px; color: #64748b; line-height: 1.5;">
-            Log in to Floosball to see your updated balance and keep competing!
-        </p>
+
         <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
         <p style="font-size: 11px; color: #475569;">
-            You're receiving this because you have a Floosball account. To opt out, update your preferences in the app.
+            You're receiving this because you have a Floosball account. To change email preferences, visit your profile settings in the app.
         </p>
     </div>
     """
     return sendEmail(email, subject, html)
 
 
-def sendPrizeEmails(session, weekRanked: list, prizeMap: dict, context: str, topN: int = 3):
-    """Send prize emails to top-N finishers who haven't opted out."""
-    from database.models import User
+def sendSeasonReport(email: str, data: dict) -> bool:
+    """Send a season-end summary email."""
+    season = data['season']
+    seasonFP = data.get('seasonFP', 0)
+    seasonRank = data.get('seasonRank', 0)
+    totalUsers = data.get('totalUsers', 0)
+    totalFloobitsEarned = data.get('totalFloobitsEarned', 0)
+    bestWeeklyRank = data.get('bestWeeklyRank')
+    seasonPrize = data.get('seasonPrize')
+    pickEm = data.get('pickEm', {})
+    favTeam = data.get('favoriteTeam')
 
-    for i, entry in enumerate(weekRanked[:topN]):
-        userId = entry.get('userId')
-        rank = i + 1
-        prize = prizeMap.get(rank)
-        if not prize:
-            continue
+    subject = f"Season {season} Final Report"
 
-        try:
-            user = session.query(User).filter_by(id=userId).first()
-            if not user or user.email_opt_out:
-                continue
-            # Skip placeholder emails
-            if user.email.endswith('@clerk.user'):
-                continue
-            sendPrizeNotification(user.email, rank, prize, context)
-        except Exception as e:
-            logger.warning(f"Error sending prize email to user {userId}: {e}")
+    # Build stats table
+    statsRows = _buildStatRow("Final Fantasy Points", f"{seasonFP:.1f} FP")
+    if totalUsers > 0:
+        statsRows += _buildStatRow("Final Rank", f"#{seasonRank} of {totalUsers}")
+    if bestWeeklyRank:
+        statsRows += _buildStatRow("Best Weekly Finish", f"#{bestWeeklyRank}")
+    if totalFloobitsEarned > 0:
+        statsRows += _buildStatRow("Floobits Earned (Season)", f"+{totalFloobitsEarned}", "#eab308")
+    if seasonPrize:
+        statsRows += _buildStatRow("Season Leaderboard Prize", f"+{seasonPrize} Floobits", "#f59e0b")
+
+    # Pick-em
+    if pickEm.get('total', 0) > 0:
+        correct = pickEm.get('correct', 0)
+        total = pickEm['total']
+        pct = round(correct / total * 100) if total > 0 else 0
+        statsRows += _buildStatRow("Pick-Em Record", f'{correct}/{total} ({pct}%)')
+
+    # Favorite team
+    teamHtml = _buildTeamSection(favTeam, isSeasonEnd=True)
+
+    html = f"""
+    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
+        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 4px;">Season {season} Complete</h1>
+        <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">Final standings are in.</p>
+
+        <table style="width: 100%; border-collapse: collapse;">
+            {statsRows}
+        </table>
+
+        {teamHtml}
+
+        <div style="margin-top: 24px; text-align: center;">
+            <a href="https://floosball.com" style="color: #3b82f6; font-size: 14px; font-weight: 600; text-decoration: none;">
+                View Season Results
+            </a>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
+        <p style="font-size: 11px; color: #475569;">
+            You're receiving this because you have a Floosball account. To change email preferences, visit your profile settings in the app.
+        </p>
+    </div>
+    """
+    return sendEmail(email, subject, html)

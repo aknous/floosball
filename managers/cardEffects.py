@@ -33,7 +33,7 @@ EFFECT_CATEGORY = {
     "spotlight_moment": "flat_fp", "possession": "flat_fp", "ace_up_the_sleeve": "flat_fp",
     "slippery": "flat_fp", "jailbreak": "flat_fp", "homer": "flat_fp", "rng": "flat_fp", "avalanche": "flat_fp", "hedge": "flat_fp",
     "three_pointer": "flat_fp", "safety_blanket": "flat_fp",
-    "industrious": "floobits", "sniper": "flat_fp",
+    "industrious": "floobits", "sniper": "flat_fp", "lead_blocker": "flat_fp",
     # multiplier
     "big_deal": "multiplier", "cornucopia": "multiplier", "luminary": "multiplier",
     "squire": "flat_fp", "babysitter": "flat_fp", "martyr": "flat_fp",
@@ -118,7 +118,7 @@ EFFECT_EDITION_TIER = {
     "team_chemistry": "holographic", "hometown_hero": "holographic",
     "loyalty_bonus": "holographic",
     "ace_up_the_sleeve": "holographic", "trebuchet": "holographic",
-    "double_trouble": "holographic",
+    "double_trouble": "holographic", "lead_blocker": "holographic",
     "fat_cat": "holographic", "surplus": "holographic", "hedge": "holographic",
 
     # ── PRISMATIC (40) — Chance-based, streaks, game-outcome, build-around ──
@@ -190,6 +190,7 @@ EFFECT_DISPLAY_NAMES = {
     "complacency": "Complacency",
     "spotlight_moment": "Spotlight Moment",
     "ace_up_the_sleeve": "Ace Up the Sleeve",
+    "lead_blocker": "Lead Blocker",
     # Multiplier (QB) — 10 effects
     "big_deal": "Big Deal",
     "cornucopia": "Cornucopia",
@@ -405,6 +406,7 @@ EFFECT_TAGLINES = {
     "jailbreak": "Breaking tackles, breaking records",
     "safety_blanket": "Reliable target",
     "industrious": "Honest work",
+    "lead_blocker": "Paving the way",
     "mismatch": "Too big, too fast",
     "sniper": "From downtown",
     "game_ball": "Above and beyond",
@@ -523,6 +525,7 @@ EFFECT_TOOLTIPS = {
     "jailbreak": "Big YAC day = big bonus. FP when your WR slots combine for enough yards after catch.",
     "safety_blanket": "Every QB needs one. FP scaling with your TE slot's receptions.",
     "industrious": "Honest work deserves honest pay. Floobits scaling with your TE slot's receptions.",
+    "lead_blocker": "Clearing the path. FP per TD by your TE — RB touchdowns on the same team count as TE TDs.",
     "mismatch": "They can't cover this guy. FP when your {posLabel} slot scores 2+ TDs in a week.",
     "sniper": "From long range. FP for each field goal your K slot makes from 40+ yards out.",
     "game_ball": "Game ball material. FP when your {posLabel} slot overperforms expectations in a single game.",
@@ -652,6 +655,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "jailbreak": "+{rewardValue} FP if your WR slots combine for {threshold}+ YAC",
     "safety_blanket": "+{perReceptionFP} FP per reception by your TE slot",
     "industrious": "{perReceptionFloobits} Floobits per reception by your TE slot",
+    "lead_blocker": "+{perTdFP} FP per TE TD (same-team RB TDs count as TE TDs)",
     "mismatch": "+{rewardValue} FP when your {posLabel} slot scores 2+ TDs",
     "sniper": "+{perFgFP} FP per 40+ yard FG by your K slot",
     "game_ball": "+{rewardValue} FP when your {posLabel} slot overperforms",
@@ -759,7 +763,7 @@ POSITION_EXCLUSIVE_POOLS = {
     3: ["possession", "trebuchet", "double_trouble",
         "slippery", "jailbreak",
         "ace_up_the_sleeve", "crescendo", "traverse"],
-    4: ["safety_blanket", "industrious",
+    4: ["safety_blanket", "industrious", "lead_blocker",
         "traverse"],
     5: ["three_pointer", "sniper", "leg_day",
         "automatic", "on_fire", "hot_hand",
@@ -937,6 +941,8 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"perPlayerFP": round((4.0 + rn * 0.15) * editionScale, 1)}
     if effectName == "safety_blanket":
         return {"rewardType": "fp", "perReceptionFP": round((1.0 + rn * 0.04) * editionScale, 1)}
+    if effectName == "lead_blocker":
+        return {"rewardType": "fp", "perTdFP": round((4.0 + rn * 0.2) * editionScale, 1)}
     if effectName == "sniper":
         return {"perFgFP": round((5 + rn * 0.2) * editionScale, 1)}
     if effectName == "squire":
@@ -2470,6 +2476,40 @@ def _computeSafetyBlanket(primary, ctx, cardPlayerId, eqId):
 
 
 
+def _computeLeadBlocker(primary, ctx, cardPlayerId, eqId):
+    """FP per TE TD, where same-team RB rushing TDs count as TE TDs."""
+    perTd = primary.get("perTdFP", 4.0)
+    tePids = _getRosterPlayersByPosition(ctx, 4)  # TE slot
+    rbPids = _getRosterPlayersByPosition(ctx, 2)  # RB slot
+    # Count TE's own TDs
+    teTds = 0
+    for tePid in tePids:
+        teTds += _countPlayerTds(ctx.weekPlayerStats.get(tePid, {}))
+    # Count same-team RB rushing TDs that credit to the TE
+    rbTds = 0
+    for tePid in tePids:
+        teTeam = ctx.rosterPlayerTeamIds.get(tePid, 0)
+        if not teTeam:
+            continue
+        for rbPid in rbPids:
+            if ctx.rosterPlayerTeamIds.get(rbPid, 0) == teTeam:
+                rbStats = ctx.weekPlayerStats.get(rbPid, {})
+                rushGroup = rbStats.get("rushing_stats")
+                if isinstance(rushGroup, dict):
+                    rbTds += rushGroup.get("runTds", 0)
+    totalTds = teTds + rbTds
+    if totalTds > 0:
+        bonus = round(perTd * totalTds, 1)
+        parts = []
+        if teTds:
+            parts.append(f"{teTds} TE")
+        if rbTds:
+            parts.append(f"{rbTds} RB")
+        eq = f"{perTd}/TD × {totalTds} TDs ({' + '.join(parts)})"
+        return EffectResult(fpBonus=bonus, equation=eq)
+    return EffectResult(equation="No TDs by TE or same-team RBs")
+
+
 def _computeChainMover(primary, ctx, cardPlayerId, eqId):
     """Floobits scaling with TE slot's receptions."""
     perRec = primary.get("perReceptionFloobits", 3)
@@ -3457,6 +3497,7 @@ EFFECT_REGISTRY = {
     "slippery": _computeSlippery,
     "jailbreak": _computeYacAttack,
     "safety_blanket": _computeSafetyBlanket,
+    "lead_blocker": _computeLeadBlocker,
     "industrious": _computeChainMover,
     "mismatch": _computeMismatch,
     "sniper": _computeSniper,

@@ -111,7 +111,7 @@ ROSTER_SWAP_COST = 15
 
 # Weekly FP → Floobits conversion (participation reward)
 WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
-WEEKLY_FP_FLOOBIT_CAP = 20      # Max Floobits earned from FP conversion per week
+WEEKLY_FP_FLOOBIT_CAP = 40      # Max Floobits earned from FP conversion per week
 
 SEASON_END_TAX_RATE = 0.25  # 25% of unspent floobits removed between seasons
 
@@ -164,11 +164,11 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Raises your weekly FP earnings cap to 40 Floobits for 4 weeks.",
+    "description": "Raises your weekly FP earnings cap to 65 Floobits for 4 weeks.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    "boostedCap": 40,
+    "boostedCap": 65,
 }
 
 POWERUP_CATALOG = {

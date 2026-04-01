@@ -590,6 +590,8 @@ class User(Base):
     auto_fill_roster: Mapped[bool] = mapped_column(Boolean, default=True)
     has_completed_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
     email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_day_report: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_season_report: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 

@@ -160,7 +160,7 @@ class FantasyTracker:
         FP from games already saved to the database before the restart.
         """
         from database.connection import get_session
-        from database.models import Game, GamePlayerStats
+        from database.models import Game, GamePlayerStats, WeeklyPlayerFP
 
         session = get_session()
         try:
@@ -183,6 +183,20 @@ class FantasyTracker:
             logger.info(
                 f"Restored week {week} FP for {len(restored)} players from GamePlayerStats"
             )
+
+            # If this week was already banked to WeeklyPlayerFP, mark it so
+            # the snapshot overlay guard skips stale data.  Without this,
+            # _weekFP (from the completed week) would be overlaid onto the
+            # NEXT week's snapshot after currentWeek advances but before
+            # clearWeekFP() runs — producing phantom FP for the new week.
+            alreadyBanked = session.query(WeeklyPlayerFP).filter_by(
+                season=season, week=week
+            ).first()
+            if alreadyBanked:
+                self._bankedWeek = week
+                logger.info(
+                    f"Week {week} already banked — set _bankedWeek to prevent stale overlay"
+                )
         finally:
             session.close()
 

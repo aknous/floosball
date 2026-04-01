@@ -7,12 +7,38 @@ import asyncio
 import datetime
 from enum import Enum
 from typing import Optional, Dict, Any
-from zoneinfo import ZoneInfo
 from logger_config import get_logger
 
-EASTERN = ZoneInfo("America/New_York")
-
 logger = get_logger("floosball.timingManager")
+
+
+def _isEdtDate(d):
+    """Return True if date d falls within US Eastern Daylight Time.
+
+    EDT: 2nd Sunday of March → 1st Sunday of November.  Date-level
+    granularity is sufficient for scheduling purposes.
+    """
+    year = d.year
+    mar1 = datetime.date(year, 3, 1)
+    firstSunMar = (6 - mar1.weekday()) % 7 + 1
+    secondSunMar = firstSunMar + 7
+
+    nov1 = datetime.date(year, 11, 1)
+    firstSunNov = (6 - nov1.weekday()) % 7 + 1
+
+    edtStart = datetime.date(year, 3, secondSunMar)
+    edtEnd = datetime.date(year, 11, firstSunNov)
+
+    asDate = d if isinstance(d, datetime.date) and not isinstance(d, datetime.datetime) else d.date() if hasattr(d, 'date') else d
+    return edtStart <= asDate < edtEnd
+
+
+def _nowEastern():
+    """Return the current time as a naive datetime in US Eastern time,
+    computed from UTC with a manual EDT/EST offset (avoids stale tzdata)."""
+    utcNow = datetime.datetime.utcnow()
+    offset = 4 if _isEdtDate(utcNow) else 5
+    return utcNow - datetime.timedelta(hours=offset)
 
 class TimingMode(Enum):
     """Different timing modes for game simulation"""
@@ -325,7 +351,7 @@ class TimingManager:
     @staticmethod
     def _nextMondayUtc(hour: int = 4) -> datetime.datetime:
         """Compute the next Monday at the given Eastern hour, returned as naive UTC."""
-        nowEt = datetime.datetime.now(EASTERN)
+        nowEt = _nowEastern()
 
         # Find next Monday (weekday 0)
         daysAhead = (7 - nowEt.weekday()) % 7  # 0=Monday
@@ -334,20 +360,22 @@ class TimingManager:
             if nowEt.hour >= hour:
                 daysAhead = 7
         targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) + datetime.timedelta(days=daysAhead)
-        targetUtc = targetEt.astimezone(datetime.timezone.utc)
-        return targetUtc.replace(tzinfo=None)
+        # Convert naive ET back to naive UTC
+        offset = 4 if _isEdtDate(targetEt) else 5
+        return targetEt + datetime.timedelta(hours=offset)
 
     @staticmethod
     def _lastMondayUtc(hour: int = 4) -> datetime.datetime:
         """Compute the most recent Monday at the given Eastern hour, returned as naive UTC."""
-        nowEt = datetime.datetime.now(EASTERN)
+        nowEt = _nowEastern()
 
         daysBack = nowEt.weekday()  # Monday=0, so 0 days back on Monday
         if daysBack == 0 and nowEt.hour < hour:
             daysBack = 7  # Before target hour on Monday — use previous Monday
         targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) - datetime.timedelta(days=daysBack)
-        targetUtc = targetEt.astimezone(datetime.timezone.utc)
-        return targetUtc.replace(tzinfo=None)
+        # Convert naive ET back to naive UTC
+        offset = 4 if _isEdtDate(targetEt) else 5
+        return targetEt + datetime.timedelta(hours=offset)
 
     async def waitForPlayoffRound(self, roundStartTime: 'datetime.datetime | None' = None, earlyMinutes: int = 15) -> None:
         """Wait between playoff rounds.

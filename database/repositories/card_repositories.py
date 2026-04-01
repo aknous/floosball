@@ -354,7 +354,7 @@ class PackTypeRepository:
             PackType(
                 name='humble',
                 display_name='Humble Pack',
-                cost=75,
+                cost=50,
                 cards_per_pack=3,
                 guaranteed_rarity=None,
                 rarity_weights={'base': 100, 'holographic': 20, 'prismatic': 10, 'diamond': 1},
@@ -363,7 +363,7 @@ class PackTypeRepository:
             PackType(
                 name='proper',
                 display_name='Proper Pack',
-                cost=250,
+                cost=150,
                 cards_per_pack=5,
                 guaranteed_rarity='holographic',
                 rarity_weights={'base': 80, 'holographic': 35, 'prismatic': 20, 'diamond': 3},
@@ -372,7 +372,7 @@ class PackTypeRepository:
             PackType(
                 name='grand',
                 display_name='Grand Pack',
-                cost=500,
+                cost=350,
                 cards_per_pack=5,
                 guaranteed_rarity='prismatic',
                 rarity_weights={'base': 50, 'holographic': 30, 'prismatic': 25, 'diamond': 3},
@@ -381,17 +381,20 @@ class PackTypeRepository:
             PackType(
                 name='exquisite',
                 display_name='Exquisite Pack',
-                cost=1200,
+                cost=750,
                 cards_per_pack=5,
                 guaranteed_rarity='diamond',
                 rarity_weights={'base': 40, 'holographic': 30, 'prismatic': 20, 'diamond': 2},
                 description='5 cards with a guaranteed Diamond and Prismatic or better.',
             ),
         ]
+        updatedCosts = {'humble': 50, 'proper': 150, 'grand': 350, 'exquisite': 750}
         for pt in defaults:
             existing = self.getByName(pt.name)
             if not existing:
                 self.session.add(pt)
+            elif existing.cost != updatedCosts.get(pt.name, pt.cost):
+                existing.cost = updatedCosts[pt.name]
             else:
                 # Update existing pack type prices
                 existing.cost = pt.cost

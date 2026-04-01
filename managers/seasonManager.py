@@ -48,6 +48,32 @@ except ImportError:
 
 logger = get_logger("floosball.seasonManager")
 
+
+def _isEdt(d):
+    """Return True if the given date falls within US Eastern Daylight Time.
+
+    EDT runs from the 2nd Sunday of March at 2 AM ET to the 1st Sunday of
+    November at 2 AM ET.  Since we only care about *date*-level granularity
+    (we never schedule games at 2 AM), treating the boundary dates as EDT is
+    fine.  US DST rules have been stable since 2007.
+    """
+    year = d.year if hasattr(d, 'year') else d.year
+    # 2nd Sunday of March: March 1 weekday (0=Mon…6=Sun), find first Sunday,
+    # then add 7 days.
+    mar1 = datetime.date(year, 3, 1)
+    firstSunMar = (6 - mar1.weekday()) % 7 + 1  # day-of-month of 1st Sunday
+    secondSunMar = firstSunMar + 7               # day-of-month of 2nd Sunday
+
+    # 1st Sunday of November
+    nov1 = datetime.date(year, 11, 1)
+    firstSunNov = (6 - nov1.weekday()) % 7 + 1
+
+    edtStart = datetime.date(year, 3, secondSunMar)
+    edtEnd = datetime.date(year, 11, firstSunNov)
+
+    return edtStart <= (d if isinstance(d, datetime.date) and not isinstance(d, datetime.datetime) else d.date() if hasattr(d, 'date') else d) < edtEnd
+
+
 class Season:
     """Represents a single season"""
     
@@ -189,19 +215,20 @@ class SeasonManager:
         if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
             if self.game_repo.has_schedule(seasonNumber):
                 logger.info(f"Existing schedule found for season {seasonNumber} — loading from database")
+                # Restore the original startDate BEFORE schedule load so that
+                # recalculated start times use the correct anchor date.
+                self._restoreSeasonStartDate(seasonNumber)
+                self._fillMissingScheduleWeeks(seasonNumber)
                 scheduleLoaded = self._loadScheduleFromDatabase(seasonNumber)
                 if not scheduleLoaded:
                     logger.warning("Schedule load from database failed — falling back to fresh generation")
-                else:
-                    # Restore the original startDate so playoff scheduling aligns
-                    self._restoreSeasonStartDate(seasonNumber)
         if not scheduleLoaded:
             self.createSchedule()
-        
+
         # Initialize season stats
         self._initializeSeasonStats()
 
-        # Restore reigning champion flag from previous season
+        # Restore reigning champion flag from DB
         self._restoreReigningChampion(seasonNumber)
 
         # Load funding tiers from previous season (affects morale during games)
@@ -258,6 +285,10 @@ class SeasonManager:
         # Award pick-em season prizes after playoffs so all rounds are included
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
+
+        # Send season-end email reports (before tax so earned totals are accurate)
+        if not self.timingManager.catchingUp:
+            self._sendSeasonEndEmails(self.currentSeason.seasonNumber)
 
         # Apply season-end tax on unspent Floobits
         self._applySeasonEndTax(self.currentSeason.seasonNumber)
@@ -590,6 +621,12 @@ class SeasonManager:
                     await broadcaster.broadcast_season_event(SeasonEvent.dayComplete(dayNum))
                 else:
                     await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
+
+            # Send day-end email reports (skip during catch-up / fast modes)
+            if isLastRoundOfDay and not self.timingManager.catchingUp:
+                firstRound = roundIndex - 6  # 0-indexed first round of this day
+                weekRange = list(range(firstRound + 1, roundIndex + 2))  # 1-indexed week numbers
+                self._sendDayEndEmails(self.currentSeason.seasonNumber, dayNum, weekRange)
 
         # Catch-up is done — switch to SCHEDULED so playoffs run at normal speed
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
@@ -1545,7 +1582,7 @@ class SeasonManager:
             from database.connection import get_session as _getSession
             session = _getSession()
             orphanedGames = session.query(DBGame).filter_by(
-                season=season, week=week
+                season=season, week=week, status='final'
             ).all()
             if not orphanedGames:
                 session.close()
@@ -2050,9 +2087,10 @@ class SeasonManager:
             newGame.homeScore = row.home_score or 0
             newGame.awayScore = row.away_score or 0
 
-            # Use stored game_date if present; otherwise compute from current time
+            # Always recompute start times from the 0-indexed week to avoid
+            # stale or incorrect game_date values stored in the DB.
             weekIdx = row.week - 1
-            startTime = row.game_date if row.game_date else self.getWeekStartTime(now, weekIdx)
+            startTime = self.getWeekStartTime(now, weekIdx)
             newGame.startTime = startTime
 
             # Reconstruct minimal gameDict['gameStats'] from stored columns so
@@ -2120,6 +2158,110 @@ class SeasonManager:
         logger.info(f"Loaded {len(rows)} games ({len(weekMap)} weeks) from DB for season {seasonNumber}")
         return True
 
+    def _recalculateScheduleTimes(self) -> None:
+        """Patch all schedule start times using the current getWeekStartTime logic.
+
+        This runs after the schedule is loaded (from DB or freshly created) to
+        guarantee times use the correct EDT/EST offset.  It's a belt-and-suspenders
+        guard against stale DB game_date values or bytecode-cache issues during
+        startup."""
+        if not self.currentSeason or not self.currentSeason.schedule:
+            return
+        now = datetime.datetime.utcnow()
+        patched = 0
+        for weekIdx, weekDict in enumerate(self.currentSeason.schedule):
+            correctTime = self.getWeekStartTime(now, weekIdx)
+            oldTime = weekDict.get('startTime')
+            if oldTime != correctTime:
+                patched += 1
+            weekDict['startTime'] = correctTime
+            for game in weekDict.get('games', []):
+                game.startTime = correctTime
+        if patched:
+            logger.info(f"Recalculated start times for {patched}/{len(self.currentSeason.schedule)} weeks")
+
+    def _fillMissingScheduleWeeks(self, seasonNumber: int) -> None:
+        """Detect and fill missing weeks in the DB before schedule load.
+
+        If a week's games were deleted (e.g., by orphan cleanup during
+        multi-deploy), regenerate random matchups and insert them so
+        _loadScheduleFromDatabase sees a complete schedule.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo):
+            return
+
+        leagueTeamCount = len(self.leagueManager.leagues[0].teamList) if self.leagueManager.leagues else 0
+        if leagueTeamCount == 0:
+            return
+
+        expectedWeeks = int(((leagueTeamCount - 1) * 2) + (leagueTeamCount / 2))
+
+        # Query distinct weeks present in DB
+        from sqlalchemy import distinct
+        existingWeeks = set(
+            w for (w,) in self.db_session.query(distinct(DBGame.week)).filter_by(season=seasonNumber).all()
+        )
+        missingWeeks = set(range(1, expectedWeeks + 1)) - existingWeeks
+        if not missingWeeks:
+            return
+
+        logger.warning(f"Detected {len(missingWeeks)} missing week(s) in schedule: {sorted(missingWeeks)}")
+
+        import random
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+        allTeams = list(teamManager.teams)
+        now = datetime.datetime.utcnow()
+
+        # Build matchup sets per week for back-to-back avoidance
+        rows = self.game_repo.get_by_season_ordered(seasonNumber)
+        weekMatchups: Dict[int, set] = {}
+        for row in rows:
+            pair = (min(row.home_team_id, row.away_team_id), max(row.home_team_id, row.away_team_id))
+            weekMatchups.setdefault(row.week, set()).add(pair)
+
+        for missingWeek in sorted(missingWeeks):
+            avoidPairs = weekMatchups.get(missingWeek - 1, set()) | weekMatchups.get(missingWeek + 1, set())
+
+            # Generate random pairings that avoid adjacent-week repeats
+            pairings = None
+            for _attempt in range(200):
+                shuffled = allTeams[:]
+                random.shuffle(shuffled)
+                candidate = [(shuffled[i], shuffled[i + 1]) for i in range(0, len(shuffled), 2)]
+                candidatePairs = {(min(h.id, a.id), max(h.id, a.id)) for h, a in candidate}
+                if not candidatePairs & avoidPairs:
+                    pairings = candidate
+                    break
+
+            if pairings is None:
+                logger.warning(f"Could not avoid back-to-back matchups for week {missingWeek}, using best effort")
+                shuffled = allTeams[:]
+                random.shuffle(shuffled)
+                pairings = [(shuffled[i], shuffled[i + 1]) for i in range(0, len(shuffled), 2)]
+
+            weekIdx = missingWeek - 1
+            startTime = self.getWeekStartTime(now, weekIdx)
+
+            for homeTeam, awayTeam in pairings:
+                dbRow = DBGame(
+                    season=seasonNumber,
+                    week=missingWeek,
+                    home_team_id=homeTeam.id,
+                    away_team_id=awayTeam.id,
+                    game_date=startTime,
+                    status='scheduled',
+                )
+                self.game_repo.save(dbRow)
+
+            try:
+                self.db_session.commit()
+                logger.info(f"Reconstructed week {missingWeek} with {len(pairings)} games")
+            except Exception as e:
+                logger.error(f"Failed to reconstruct week {missingWeek}: {e}")
+                self.db_session.rollback()
+
     def _restoreSeasonStartDate(self, seasonNumber: int) -> None:
         """Restore startDate from the DB so playoff/week scheduling stays anchored
         to the original season start rather than the current restart time."""
@@ -2152,10 +2294,6 @@ class SeasonManager:
             else:
                 return now  # Already past → no wait
 
-        from zoneinfo import ZoneInfo
-
-        etZone = ZoneInfo('America/New_York')
-
         # Hours are in Eastern time
         startTimeHoursList = [12, 13, 14, 15, 16, 17, 18]
 
@@ -2176,10 +2314,11 @@ class SeasonManager:
             seasonStart = self.currentSeason.startDate if self.currentSeason else now
             targetDate = (seasonStart + datetime.timedelta(days=dayNumber)).date()
 
-        # Build Eastern datetime and convert to naive UTC
-        targetEt = datetime.datetime(targetDate.year, targetDate.month, targetDate.day, etHour, tzinfo=etZone)
-        targetUtc = targetEt.astimezone(datetime.timezone.utc)
-        return targetUtc.replace(tzinfo=None)
+        # Convert ET hour to UTC manually — avoids reliance on container tzdata
+        # which can be stale and return EST offsets for EDT dates.
+        utcOffset = 4 if _isEdt(targetDate) else 5
+        targetUtc = datetime.datetime(targetDate.year, targetDate.month, targetDate.day, etHour + utcOffset)
+        return targetUtc
 
     def getNextGameStartTime(self, currentWeek: int) -> 'datetime.datetime | None':
         """Return the start time of the next week's games, or None if no next week.
@@ -4396,17 +4535,6 @@ class SeasonManager:
                 if awarded:
                     logger.info(f"Awarded weekly leaderboard prizes to {awarded} users for week {week}")
 
-                # Email top-3 finishers
-                try:
-                    from managers.emailManager import sendPrizeEmails
-                    sendPrizeEmails(
-                        session, weekRanked,
-                        WEEKLY_LEADERBOARD_PRIZES,
-                        f'Week {week} leaderboard',
-                        topN=3,
-                    )
-                except Exception as emailErr:
-                    logger.warning(f"Error sending weekly prize emails: {emailErr}")
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error awarding weekly leaderboard prizes: {e}")
@@ -4603,17 +4731,6 @@ class SeasonManager:
                 session.commit()
                 logger.info(f"Season-end prizes awarded for season {completedSeason}")
 
-                # Email top-3 season finishers
-                try:
-                    from managers.emailManager import sendPrizeEmails
-                    sendPrizeEmails(
-                        session, entries,
-                        SEASON_LEADERBOARD_PRIZES,
-                        f'Season {completedSeason} leaderboard',
-                        topN=3,
-                    )
-                except Exception as emailErr:
-                    logger.warning(f"Error sending season prize emails: {emailErr}")
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error awarding season-end prizes: {e}")
@@ -4621,6 +4738,355 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    # ── Email report methods ───────────────────────────────────────────────
+
+    def _sendDayEndEmails(self, season: int, dayNum: int, weekRange: list) -> None:
+        """Send game day recap emails to opted-in users."""
+        try:
+            from database.connection import get_session
+            from database.models import User, CurrencyTransaction, Game
+            from database.repositories.pickem_repository import PickEmRepository
+            from managers.emailManager import sendDayReport
+
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if not fantasyTracker:
+                return
+
+            try:
+                snapshot = fantasyTracker.getSnapshot(season)
+            except Exception:
+                logger.warning("Could not get fantasy snapshot for day-end emails")
+                return
+
+            entries = snapshot.get('entries', [])
+            if not entries:
+                return
+
+            # Build season ranking lookup (sorted by seasonTotal desc)
+            seasonRanked = sorted(entries, key=lambda e: e['seasonTotal'], reverse=True)
+            rankByUser = {e['userId']: i + 1 for i, e in enumerate(seasonRanked)}
+            fpByUser = {e['userId']: e for e in entries}
+            totalUsers = len(entries)
+
+            session = get_session()
+            try:
+                # Get eligible users
+                users = session.query(User).filter(
+                    User.is_active == True,
+                    User.email_opt_out == False,
+                    User.email_day_report == True,
+                ).all()
+                users = [u for u in users if not u.email.endswith('@clerk.user')]
+
+                pickemRepo = PickEmRepository(session)
+
+                # Pre-fetch team objects for name lookup
+                teamManager = self.serviceContainer.getService('team_manager')
+
+                sent = 0
+                for user in users:
+                    try:
+                        userEntry = fpByUser.get(user.id)
+
+                        # Day FP: sum weekTotal across the day's weeks
+                        # We need per-week FP — use weekly snapshots or compute from weekRange
+                        dayFP = 0.0
+                        if userEntry:
+                            # weekTotal in snapshot is for the LATEST week only.
+                            # Query WeeklyPlayerFP for accurate day total.
+                            from database.models import WeeklyPlayerFP, FantasyRoster
+                            roster = session.query(FantasyRoster).filter_by(
+                                user_id=user.id, season=season
+                            ).first()
+                            if roster:
+                                rosterPlayerIds = [
+                                    roster.qb_player_id, roster.rb_player_id,
+                                    roster.wr_player_id, roster.te_player_id,
+                                    roster.k_player_id,
+                                ]
+                                rosterPlayerIds = [p for p in rosterPlayerIds if p]
+                                if rosterPlayerIds:
+                                    from sqlalchemy import func
+                                    dayFPResult = session.query(
+                                        func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0)
+                                    ).filter(
+                                        WeeklyPlayerFP.player_id.in_(rosterPlayerIds),
+                                        WeeklyPlayerFP.season == season,
+                                        WeeklyPlayerFP.week.in_(weekRange),
+                                    ).scalar()
+                                    dayFP = float(dayFPResult or 0)
+
+                        seasonFP = userEntry['seasonTotal'] if userEntry else 0.0
+                        seasonRank = rankByUser.get(user.id, 0)
+
+                        # Floobits earned this day
+                        floobitsEarned = session.query(
+                            func.coalesce(func.sum(CurrencyTransaction.amount), 0)
+                        ).filter(
+                            CurrencyTransaction.user_id == user.id,
+                            CurrencyTransaction.season == season,
+                            CurrencyTransaction.week.in_(weekRange),
+                            CurrencyTransaction.amount > 0,
+                        ).scalar()
+                        floobitsEarned = int(floobitsEarned or 0)
+
+                        # Leaderboard prizes this day
+                        prizeRows = session.query(
+                            CurrencyTransaction.week,
+                            CurrencyTransaction.amount,
+                            CurrencyTransaction.description,
+                        ).filter(
+                            CurrencyTransaction.user_id == user.id,
+                            CurrencyTransaction.season == season,
+                            CurrencyTransaction.week.in_(weekRange),
+                            CurrencyTransaction.transaction_type == 'leaderboard_weekly',
+                        ).all()
+                        leaderboardPrizes = []
+                        for row in prizeRows:
+                            # Parse rank from description like "Week 3 leaderboard #1"
+                            rank = 0
+                            if row.description and '#' in row.description:
+                                try:
+                                    rank = int(row.description.split('#')[-1])
+                                except ValueError:
+                                    pass
+                            leaderboardPrizes.append({
+                                'week': row.week,
+                                'rank': rank,
+                                'prize': row.amount,
+                            })
+
+                        # Pick-em results
+                        pickEmData = {}
+                        pickEmCorrect = 0
+                        pickEmTotal = 0
+                        pickEmFloobits = 0
+                        for w in weekRange:
+                            weekResults = pickemRepo.getWeekResultsByUser(season, w)
+                            for uid, correct, total, points in weekResults:
+                                if uid == user.id:
+                                    pickEmCorrect += correct
+                                    pickEmTotal += total
+                        # Pick-em floobits
+                        pickEmFloobitsResult = session.query(
+                            func.coalesce(func.sum(CurrencyTransaction.amount), 0)
+                        ).filter(
+                            CurrencyTransaction.user_id == user.id,
+                            CurrencyTransaction.season == season,
+                            CurrencyTransaction.week.in_(weekRange),
+                            CurrencyTransaction.transaction_type == 'pickem_correct',
+                            CurrencyTransaction.amount > 0,
+                        ).scalar()
+                        pickEmFloobits = int(pickEmFloobitsResult or 0)
+                        if pickEmTotal > 0:
+                            pickEmData = {
+                                'correct': pickEmCorrect,
+                                'total': pickEmTotal,
+                                'floobitsEarned': pickEmFloobits,
+                            }
+
+                        # Favorite team
+                        favTeamData = None
+                        if user.favorite_team_id and teamManager:
+                            team = teamManager.getTeamById(user.favorite_team_id)
+                            if team:
+                                games = session.query(Game).filter(
+                                    Game.season == season,
+                                    Game.week.in_(weekRange),
+                                ).filter(
+                                    (Game.home_team_id == user.favorite_team_id) |
+                                    (Game.away_team_id == user.favorite_team_id)
+                                ).all()
+                                todayGames = []
+                                for g in games:
+                                    isHome = g.home_team_id == user.favorite_team_id
+                                    teamScore = g.home_score if isHome else g.away_score
+                                    oppScore = g.away_score if isHome else g.home_score
+                                    won = teamScore > oppScore
+                                    oppId = g.away_team_id if isHome else g.home_team_id
+                                    oppTeam = teamManager.getTeamById(oppId)
+                                    oppName = oppTeam.name if oppTeam else f"Team {oppId}"
+                                    todayGames.append({
+                                        'opponent': oppName,
+                                        'won': won,
+                                        'score': f"{teamScore}-{oppScore}",
+                                        'isHome': isHome,
+                                    })
+                                favTeamData = {
+                                    'name': team.name,
+                                    'wins': team.wins,
+                                    'losses': team.losses,
+                                    'ties': getattr(team, 'ties', 0),
+                                    'todayGames': todayGames,
+                                }
+
+                        data = {
+                            'season': season,
+                            'dayNum': dayNum,
+                            'dayFP': dayFP,
+                            'seasonFP': seasonFP,
+                            'seasonRank': seasonRank,
+                            'totalUsers': totalUsers,
+                            'floobitsEarned': floobitsEarned,
+                            'leaderboardPrizes': leaderboardPrizes,
+                            'pickEm': pickEmData,
+                            'favoriteTeam': favTeamData,
+                        }
+                        sendDayReport(user.email, data)
+                        sent += 1
+                    except Exception as userErr:
+                        logger.warning(f"Error building day report for user {user.id}: {userErr}")
+
+                logger.info(f"Sent {sent} day-end report emails for day {dayNum}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Error sending day-end emails: {e}")
+
+    def _sendSeasonEndEmails(self, completedSeason: int) -> None:
+        """Send season-end summary emails to opted-in users."""
+        try:
+            from database.connection import get_session
+            from database.models import User, CurrencyTransaction
+            from database.repositories.pickem_repository import PickEmRepository
+            from managers.emailManager import sendSeasonReport
+            from sqlalchemy import func
+
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            if not fantasyTracker:
+                return
+
+            try:
+                snapshot = fantasyTracker.getSnapshot(completedSeason)
+            except Exception:
+                logger.warning("Could not get fantasy snapshot for season-end emails")
+                return
+
+            entries = snapshot.get('entries', [])
+            seasonRanked = sorted(entries, key=lambda e: e['seasonTotal'], reverse=True)
+            rankByUser = {e['userId']: i + 1 for i, e in enumerate(seasonRanked)}
+            fpByUser = {e['userId']: e for e in entries}
+            totalUsers = len(entries)
+
+            session = get_session()
+            try:
+                users = session.query(User).filter(
+                    User.is_active == True,
+                    User.email_opt_out == False,
+                    User.email_season_report == True,
+                ).all()
+                users = [u for u in users if not u.email.endswith('@clerk.user')]
+
+                pickemRepo = PickEmRepository(session)
+                teamManager = self.serviceContainer.getService('team_manager')
+
+                sent = 0
+                for user in users:
+                    try:
+                        userEntry = fpByUser.get(user.id)
+                        seasonFP = userEntry['seasonTotal'] if userEntry else 0.0
+                        seasonRank = rankByUser.get(user.id, 0)
+
+                        # Total floobits earned this season (positive transactions only)
+                        totalFloobits = session.query(
+                            func.coalesce(func.sum(CurrencyTransaction.amount), 0)
+                        ).filter(
+                            CurrencyTransaction.user_id == user.id,
+                            CurrencyTransaction.season == completedSeason,
+                            CurrencyTransaction.amount > 0,
+                        ).scalar()
+                        totalFloobits = int(totalFloobits or 0)
+
+                        # Best weekly rank — check leaderboard_weekly notifications
+                        bestWeeklyRank = None
+                        weeklyPrizeRows = session.query(
+                            CurrencyTransaction.description,
+                        ).filter(
+                            CurrencyTransaction.user_id == user.id,
+                            CurrencyTransaction.season == completedSeason,
+                            CurrencyTransaction.transaction_type == 'leaderboard_weekly',
+                        ).all()
+                        for row in weeklyPrizeRows:
+                            if row.description and '#' in row.description:
+                                try:
+                                    rank = int(row.description.split('#')[-1])
+                                    if bestWeeklyRank is None or rank < bestWeeklyRank:
+                                        bestWeeklyRank = rank
+                                except ValueError:
+                                    pass
+
+                        # Season leaderboard prize
+                        seasonPrize = session.query(CurrencyTransaction.amount).filter(
+                            CurrencyTransaction.user_id == user.id,
+                            CurrencyTransaction.season == completedSeason,
+                            CurrencyTransaction.transaction_type == 'leaderboard_season',
+                        ).scalar()
+
+                        # Pick-em season totals
+                        pickEmData = {}
+                        allWeekResults = []
+                        for w in range(1, 29):
+                            allWeekResults.extend(pickemRepo.getWeekResultsByUser(completedSeason, w))
+                        # Also include playoff weeks (29+)
+                        for w in range(29, 35):
+                            allWeekResults.extend(pickemRepo.getWeekResultsByUser(completedSeason, w))
+                        pickEmCorrect = 0
+                        pickEmTotal = 0
+                        for uid, correct, total, points in allWeekResults:
+                            if uid == user.id:
+                                pickEmCorrect += correct
+                                pickEmTotal += total
+                        if pickEmTotal > 0:
+                            pickEmData = {'correct': pickEmCorrect, 'total': pickEmTotal}
+
+                        # Favorite team
+                        favTeamData = None
+                        if user.favorite_team_id and teamManager:
+                            team = teamManager.getTeamById(user.favorite_team_id)
+                            if team:
+                                # Determine playoff result
+                                playoffResult = None
+                                if hasattr(self.currentSeason, 'champion') and self.currentSeason.champion:
+                                    if getattr(self.currentSeason.champion, 'id', None) == user.favorite_team_id:
+                                        playoffResult = "Floosbowl Champions"
+                                # Check if team made playoffs
+                                if not playoffResult:
+                                    for league in self.leagueManager.leagues:
+                                        for t in league.teamList:
+                                            if t.id == user.favorite_team_id:
+                                                if getattr(t, 'clinchPlayoff', False) or getattr(t, 'madePlayoffs', False):
+                                                    playoffResult = playoffResult or "Made Playoffs"
+
+                                favTeamData = {
+                                    'name': team.name,
+                                    'wins': team.wins,
+                                    'losses': team.losses,
+                                    'ties': getattr(team, 'ties', 0),
+                                    'playoffResult': playoffResult,
+                                }
+
+                        data = {
+                            'season': completedSeason,
+                            'seasonFP': seasonFP,
+                            'seasonRank': seasonRank,
+                            'totalUsers': totalUsers,
+                            'totalFloobitsEarned': totalFloobits,
+                            'bestWeeklyRank': bestWeeklyRank,
+                            'seasonPrize': int(seasonPrize) if seasonPrize else None,
+                            'pickEm': pickEmData,
+                            'favoriteTeam': favTeamData,
+                        }
+                        sendSeasonReport(user.email, data)
+                        sent += 1
+                    except Exception as userErr:
+                        logger.warning(f"Error building season report for user {user.id}: {userErr}")
+
+                logger.info(f"Sent {sent} season-end report emails for season {completedSeason}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Error sending season-end emails: {e}")
 
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct a percentage of each user's unspent Floobits between seasons.
