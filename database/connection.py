@@ -112,10 +112,54 @@ def _runPendingMigrations():
     finally:
         conn.close()
 
+    # Refresh stale effect_config text on reworked card effects
+    _refreshCardEffectText()
+
     # One-time data backfills: reconstruct missing data from GamePlayerStats
     _backfillPlayerSeasonTeamIds()
     _backfillPlayerSeasonStatsFromGames()
     _backfillPlayerCareerStatsFromGames()
+
+
+def _refreshCardEffectText():
+    """Update stale tooltip/detail text on card templates whose effects were reworked."""
+    import json as _json
+    from managers.cardEffects import EFFECT_TOOLTIPS, EFFECT_DETAIL_TEMPLATES
+    from sqlalchemy import text
+
+    # Map of effectName → fields to refresh from current definitions
+    refreshEffects = {"odometer"}
+
+    conn = engine.connect()
+    try:
+        rows = conn.execute(text("SELECT id, effect_config FROM card_templates")).fetchall()
+        updated = 0
+        for row in rows:
+            cfg = _json.loads(row[1]) if isinstance(row[1], str) else row[1]
+            effectName = cfg.get("effectName", "")
+            if effectName not in refreshEffects:
+                continue
+            currentTooltip = EFFECT_TOOLTIPS.get(effectName, "")
+            currentDetail = EFFECT_DETAIL_TEMPLATES.get(effectName, "")
+            if cfg.get("tooltip") == currentTooltip and cfg.get("detail") == currentDetail:
+                continue
+            cfg["tooltip"] = currentTooltip
+            cfg["detail"] = currentDetail
+            conn.execute(
+                text("UPDATE card_templates SET effect_config = :cfg WHERE id = :id"),
+                {"cfg": _json.dumps(cfg), "id": row[0]},
+            )
+            updated += 1
+        if updated:
+            conn.commit()
+            logger.info(f"  Migration: refreshed effect text on {updated} card templates")
+        else:
+            conn.rollback()
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
 
 
 def _backfillPlayerSeasonTeamIds():
