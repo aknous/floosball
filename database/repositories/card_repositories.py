@@ -388,16 +388,16 @@ class PackTypeRepository:
                 description='5 cards with a guaranteed Diamond and Prismatic or better.',
             ),
         ]
-        updatedCosts = {'humble': 50, 'proper': 150, 'grand': 350, 'exquisite': 750}
         for pt in defaults:
             existing = self.getByName(pt.name)
             if not existing:
                 self.session.add(pt)
-            elif existing.cost != updatedCosts.get(pt.name, pt.cost):
-                existing.cost = updatedCosts[pt.name]
             else:
-                # Update existing pack type prices
                 existing.cost = pt.cost
+                existing.description = pt.description
+                existing.rarity_weights = pt.rarity_weights
+                existing.guaranteed_rarity = pt.guaranteed_rarity
+                existing.cards_per_pack = pt.cards_per_pack
         self.session.flush()
 
 
