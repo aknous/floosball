@@ -3055,7 +3055,7 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     perCard = primary.get("perCardXMult", 0.15)
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
-                         if b.totalFP > 0 or b.floobitsEarned > 0)
+                         if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
     if triggeredCount > 0:
         bonus = round(1 + perCard * triggeredCount, 2)
         eq = f"1 + ({perCard} × {triggeredCount} triggered cards) = {bonus}"
@@ -3069,7 +3069,7 @@ def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
     rewardValue = primary.get("rewardValue", 8)
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
-                         if b.totalFP > 0 or b.floobitsEarned > 0)
+                         if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
     if triggeredCount >= 4:
         eq = f"+{rewardValue} FP ({triggeredCount}/4+ cards triggered)"
         return EffectResult(fpBonus=rewardValue, equation=eq)
@@ -3146,7 +3146,7 @@ def _computeDoubleDown(primary, ctx, cardPlayerId, eqId):
     """Large FPx — tradeoff applied post-calculation."""
     rewardValue = primary.get("rewardValue", 2.0)
     breakdowns = ctx._firstPassBreakdowns or []
-    nonZero = [b for b in breakdowns if b.totalFP > 0 or b.floobitsEarned > 0]
+    nonZero = [b for b in breakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0]
     if len(nonZero) >= 2:
         eq = f"{rewardValue} to lowest bonus, zeroes highest"
         return EffectResult(multBonus=rewardValue, equation=eq)
@@ -3163,18 +3163,18 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
     if "baseFP" not in primary and "rewardValue" in primary:
         rewardValue = primary["rewardValue"]
         breakdowns = ctx._firstPassBreakdowns or []
-        anyTriggered = any(b.totalFP > 0 or b.floobitsEarned > 0 for b in breakdowns)
+        anyTriggered = any(b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0 for b in breakdowns)
         if not anyTriggered:
             eq = f"{rewardValue} (no other cards produced a bonus)"
             return EffectResult(multBonus=rewardValue, equation=eq)
-        triggeredCount = sum(1 for b in breakdowns if b.totalFP > 0 or b.floobitsEarned > 0)
+        triggeredCount = sum(1 for b in breakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
         eq = f"{triggeredCount} other card(s) produced a bonus"
         return EffectResult(equation=eq)
     if "baseFP" not in primary and "baseMult" in primary:
         baseMult = primary["baseMult"]
         return EffectResult(multBonus=baseMult, equation=f"{baseMult}x FPx (legacy)")
     breakdowns = ctx._firstPassBreakdowns or []
-    failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0)
+    failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0 and b.primaryMult <= 0)
     if failedCount <= 0:
         eq = f"+{baseFP} FP (floor — all cards triggered)"
         return EffectResult(fpBonus=baseFP, equation=eq)

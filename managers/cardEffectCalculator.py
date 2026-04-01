@@ -679,7 +679,7 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
 
     if "double_down" in tradeoffNames and normalBreakdowns:
         # Large FPx applied to lowest non-zero bonus, zeroes highest bonus
-        nonZero = [b for b in normalBreakdowns if b.totalFP > 0 or b.floobitsEarned > 0]
+        nonZero = [b for b in normalBreakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0]
         if len(nonZero) >= 2:
             # Sort by total FP (using FP as primary metric)
             sorted_ = sorted(nonZero, key=lambda b: b.totalFP)
