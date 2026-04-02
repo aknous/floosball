@@ -5215,11 +5215,10 @@ def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
             weekGames.append(matchup)
     elif isinstance(week, int) and 0 < week <= len(schedule):
         # Between weeks: show just-completed results instead of blank next-week matchups.
-        # currentWeek has already advanced but completedWeekGames still holds finished games.
+        # currentWeek still points at the completed week (advances at rollover),
+        # so no adjustment needed — just use completedWeekGames for display.
         completedGames = currentSeason.completedWeekGames
         activeGames = currentSeason.activeGames
-        if not activeGames and completedGames and week > 1:
-            week = week - 1  # show the completed week's results + picks
 
         scheduleGames = schedule[week - 1].get('games', [])
         for i, game in enumerate(scheduleGames):
