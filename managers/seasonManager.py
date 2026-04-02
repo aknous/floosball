@@ -4800,12 +4800,7 @@ class SeasonManager:
                                 user_id=user.id, season=season
                             ).first()
                             if roster:
-                                rosterPlayerIds = [
-                                    roster.qb_player_id, roster.rb_player_id,
-                                    roster.wr_player_id, roster.te_player_id,
-                                    roster.k_player_id,
-                                ]
-                                rosterPlayerIds = [p for p in rosterPlayerIds if p]
+                                rosterPlayerIds = [rp.player_id for rp in roster.players]
                                 if rosterPlayerIds:
                                     from sqlalchemy import func
                                     dayFPResult = session.query(
@@ -4913,11 +4908,12 @@ class SeasonManager:
                                         'score': f"{teamScore}-{oppScore}",
                                         'isHome': isHome,
                                     })
+                                favStats = getattr(team, 'seasonTeamStats', {})
                                 favTeamData = {
                                     'name': team.name,
-                                    'wins': team.wins,
-                                    'losses': team.losses,
-                                    'ties': getattr(team, 'ties', 0),
+                                    'wins': favStats.get('wins', 0),
+                                    'losses': favStats.get('losses', 0),
+                                    'ties': favStats.get('ties', 0),
                                     'todayGames': todayGames,
                                 }
 
@@ -5058,11 +5054,12 @@ class SeasonManager:
                                                 if getattr(t, 'clinchPlayoff', False) or getattr(t, 'madePlayoffs', False):
                                                     playoffResult = playoffResult or "Made Playoffs"
 
+                                favStats = getattr(team, 'seasonTeamStats', {})
                                 favTeamData = {
                                     'name': team.name,
-                                    'wins': team.wins,
-                                    'losses': team.losses,
-                                    'ties': getattr(team, 'ties', 0),
+                                    'wins': favStats.get('wins', 0),
+                                    'losses': favStats.get('losses', 0),
+                                    'ties': favStats.get('ties', 0),
                                     'playoffResult': playoffResult,
                                 }
 
