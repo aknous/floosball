@@ -1254,7 +1254,7 @@ async def get_reigning_champion():
         from database.models import Season as DBSeason, Team as DBTeam
         session = get_session()
         seasonManager = floosball_app.seasonManager
-        currentSeason = seasonManager.seasonNumber if seasonManager else None
+        currentSeason = seasonManager.currentSeason.seasonNumber if seasonManager and seasonManager.currentSeason else None
         if not currentSeason or currentSeason < 2:
             return build_success_response(None)
         prevSeason = session.query(DBSeason).filter_by(season_number=currentSeason - 1).first()
