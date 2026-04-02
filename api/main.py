@@ -2760,6 +2760,13 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 "bankedFP": round(swap.banked_fp, 1),
             })
 
+        # Per-slot swap cost preview (escalating based on prior swaps)
+        from constants import ROSTER_SWAP_COST, ROSTER_SWAP_COST_INCREMENT
+        from collections import Counter
+        slotSwapCounts = Counter(swap.slot for swap in roster.swaps)
+        allSlots = ["QB", "RB", "WR1", "WR2", "TE", "K", "FLEX"]
+        swapCosts = {slot: ROSTER_SWAP_COST + ROSTER_SWAP_COST_INCREMENT * slotSwapCounts.get(slot, 0) for slot in allSlots}
+
         # gamesActive: scoring visible (in progress or just finished between weeks)
         # gamesInProgress: blocks roster swaps (only while a game is actively being played)
         gamesActive = _areGamesStarted() or _areGamesCompleted()
@@ -2785,6 +2792,7 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 "hasFlexSlot": hasFlexSlot,
                 "players": rosterPlayers,
                 "swapHistory": swapHistory,
+                "swapCosts": swapCosts,
             },
             "season": displaySeason,
             "gamesActive": gamesActive,
@@ -3112,15 +3120,20 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         if totalSwaps < 1:
             raise HTTPException(status_code=409, detail="No swaps available")
 
-        # Deduct swap cost
-        from constants import ROSTER_SWAP_COST
+        # Calculate escalating swap cost based on prior swaps in this slot
+        from constants import ROSTER_SWAP_COST, ROSTER_SWAP_COST_INCREMENT
+        priorSlotSwaps = session.query(func.count(FantasyRosterSwap.id)).filter_by(
+            roster_id=roster.id, slot=req.slot,
+        ).scalar() or 0
+        swapCost = ROSTER_SWAP_COST + ROSTER_SWAP_COST_INCREMENT * priorSlotSwaps
+
         currencyRepo = CurrencyRepository(session)
         result = currencyRepo.spendFunds(
-            userId=user.id, amount=ROSTER_SWAP_COST, transactionType="roster_swap",
-            description=f"Roster swap: {req.slot} ({ROSTER_SWAP_COST} Floobits)", season=currentSeasonNum,
+            userId=user.id, amount=swapCost, transactionType="roster_swap",
+            description=f"Roster swap: {req.slot} ({swapCost} Floobits)", season=currentSeasonNum,
         )
         if result is None:
-            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {ROSTER_SWAP_COST})")
+            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {swapCost})")
 
         # Record the swap
         session.add(FantasyRosterSwap(

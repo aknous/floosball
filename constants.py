@@ -107,7 +107,8 @@ SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
 SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25
 
-ROSTER_SWAP_COST = 15
+ROSTER_SWAP_COST = 15          # Base cost per swap (escalates per slot)
+ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same slot
 
 # Weekly FP → Floobits conversion (participation reward)
 WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
