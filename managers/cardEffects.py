@@ -636,7 +636,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "fairweather_fan": "{baseReward} Floobits, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
     "bandwagon_express": "+{baseReward} FP, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
     "touchdown_jackpot": "{baseReward} Floobits on 1st TD, +{growthPerTick} more per TD after. Resets weekly",
-    "odometer": "Escalating FP at 50, 100, 150, and 200+ total roster yards. Resets weekly",
+    "odometer": "Escalating FP at 200, 400, 600, and 800+ total roster yards. Resets weekly",
     "leg_day": "+{baseReward} FP, +{growthPerTick} per consecutive 35+ yd FG week. Each other streak card adds +1 bonus tick",
     "automatic": "+{baseReward} FP, +{growthPerTick} per consecutive perfect FG week. Resets on a miss. Each other streak card adds +1 bonus tick",
     "hot_hand": "+{perFGFP} FP per FG made by your K slot this week",
@@ -1194,10 +1194,10 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "odometer":
         return {"rewardType": "fp",
                 "gates": [
-                    {"yards": 50,  "fp": round((2.0 + rn * 0.08) * editionScale, 1)},
-                    {"yards": 100, "fp": round((4.0 + rn * 0.16) * editionScale, 1)},
-                    {"yards": 150, "fp": round((6.0 + rn * 0.24) * editionScale, 1)},
-                    {"yards": 200, "fp": round((10.0 + rn * 0.4) * editionScale, 1)},
+                    {"yards": 200, "fp": round((2.0 + rn * 0.08) * editionScale, 1)},
+                    {"yards": 400, "fp": round((4.0 + rn * 0.16) * editionScale, 1)},
+                    {"yards": 600, "fp": round((6.0 + rn * 0.24) * editionScale, 1)},
+                    {"yards": 800, "fp": round((10.0 + rn * 0.4) * editionScale, 1)},
                 ]}
     if effectName == "leg_day":
         return {"rewardType": "fp",
@@ -2243,14 +2243,15 @@ def _computeOdometer(primary, ctx, cardPlayerId, eqId):
     totalYards = _getRosterTotalYards(ctx)
     gates = primary.get("gates", [])
     # Legacy cards stored accumulator params (baseReward/growthPerTick/yardsPerTick)
-    # instead of gates — synthesize gates from old format
+    # instead of gates — use current gate thresholds with legacy FP values
     if not gates and "yardsPerTick" in primary:
-        yardsPerTick = primary.get("yardsPerTick", 50)
         baseReward = primary.get("baseReward", 2.0)
         growth = primary.get("growthPerTick", 1.0)
         gates = [
-            {"yards": yardsPerTick * (i + 1), "fp": round(baseReward + growth * i, 1)}
-            for i in range(4)
+            {"yards": 200, "fp": round(baseReward, 1)},
+            {"yards": 400, "fp": round(baseReward + growth, 1)},
+            {"yards": 600, "fp": round(baseReward + growth * 2, 1)},
+            {"yards": 800, "fp": round(baseReward + growth * 3, 1)},
         ]
     totalFP = 0
     gatesHit = 0
