@@ -95,17 +95,28 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
-        # Team funding breakdown columns (v0.9)
-        for col, colDef in [
-            ('baseline_funding', 'INTEGER DEFAULT 0'),
-            ('fan_contributions', 'INTEGER DEFAULT 0'),
-        ]:
-            try:
-                conn.execute(text(f"ALTER TABLE team_funding ADD COLUMN {col} {colDef}"))
+        # Team funding breakdown columns (v0.8) — clear old records and re-add columns
+        try:
+            # Check if new columns already exist
+            result = conn.execute(text("PRAGMA table_info(team_funding)"))
+            existingCols = {row[1] for row in result}
+            if 'baseline_funding' not in existingCols:
+                # Old funding records are incompatible — clear and re-add columns
+                conn.execute(text("DELETE FROM team_funding"))
                 conn.commit()
-                logger.info(f"  Migration: added team_funding.{col}")
-            except Exception:
-                conn.rollback()
+                logger.info("  Migration: cleared old team_funding records (schema change)")
+                for col, colDef in [
+                    ('baseline_funding', 'INTEGER DEFAULT 0'),
+                    ('fan_contributions', 'INTEGER DEFAULT 0'),
+                ]:
+                    try:
+                        conn.execute(text(f"ALTER TABLE team_funding ADD COLUMN {col} {colDef}"))
+                        conn.commit()
+                        logger.info(f"  Migration: added team_funding.{col}")
+                    except Exception:
+                        conn.rollback()
+        except Exception:
+            conn.rollback()
 
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
