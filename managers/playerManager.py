@@ -421,7 +421,8 @@ class PlayerManager:
                 player.attributes.confidenceModifier = attrs.confidence_modifier
                 player.attributes.determinationModifier = attrs.determination_modifier
                 player.attributes.luckModifier = attrs.luck_modifier
-            
+                player.attributes.fatigue = getattr(attrs, 'fatigue', 0.0) or 0.0
+
             # Load career stats from related table
             if db_player.career_stats:
                 for stat_record in db_player.career_stats:
@@ -1237,6 +1238,7 @@ class PlayerManager:
                             confidence_modifier=attrs.confidenceModifier,
                             determination_modifier=attrs.determinationModifier,
                             luck_modifier=attrs.luckModifier,
+                            fatigue=attrs.fatigue,
                         )
                         self.db_session.add(db_attrs)
                     else:
@@ -1277,7 +1279,8 @@ class PlayerManager:
                         db_attrs.confidence_modifier = attrs.confidenceModifier
                         db_attrs.determination_modifier = attrs.determinationModifier
                         db_attrs.luck_modifier = attrs.luckModifier
-                
+                        db_attrs.fatigue = attrs.fatigue
+
                 # Save career stats (season 0 = career totals)
                 if hasattr(player, 'careerStatsDict') and player.careerStatsDict:
                     db_career_stats = self.db_session.query(PlayerCareerStats).filter_by(
@@ -1335,84 +1338,91 @@ class PlayerManager:
                 season_manager = self.serviceContainer.getService('season_manager')
                 if season_manager and hasattr(season_manager, 'currentSeason') and season_manager.currentSeason:
                     current_season = season_manager.currentSeason.seasonNumber
-                    
+
                     if hasattr(player, 'seasonStatsDict') and player.seasonStatsDict:
                         db_season_stats = self.db_session.query(PlayerSeasonStats).filter_by(
                             player_id=player.id, season=current_season
                         ).first()
-                        
-                        season_dict = player.seasonStatsDict
-                        
-                        # Extract denormalized stats from JSON
-                        s_passing = season_dict.get('passing') or {}
-                        s_rushing = season_dict.get('rushing') or {}
-                        s_receiving = season_dict.get('receiving') or {}
-                        s_defense = season_dict.get('defense') or {}
-                        
-                        # Get team ID from player's team object
-                        playerTeamId = player.team.id if hasattr(player, 'team') and hasattr(player.team, 'id') else None
 
-                        if db_season_stats is None:
-                            db_season_stats = PlayerSeasonStats(
-                                player_id=player.id,
-                                season=current_season,
-                                team_id=playerTeamId,
-                                games_played=getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0),
-                                fantasy_points=season_dict.get('fantasyPoints', 0),
-                                # Denormalized passing stats
-                                passing_yards=s_passing.get('yards', 0),
-                                passing_tds=s_passing.get('tds', 0),
-                                passing_ints=s_passing.get('ints', 0),
-                                passing_completions=s_passing.get('comps', 0),
-                                passing_attempts=s_passing.get('atts', 0),
-                                # Denormalized rushing stats
-                                rushing_yards=s_rushing.get('yards', 0),
-                                rushing_tds=s_rushing.get('tds', 0),
-                                rushing_attempts=s_rushing.get('atts', 0),
-                                # Denormalized receiving stats
-                                receiving_yards=s_receiving.get('yards', 0),
-                                receiving_tds=s_receiving.get('tds', 0),
-                                receptions=s_receiving.get('receptions', 0),
-                                # Denormalized defensive stats
-                                sacks=s_defense.get('sacks', 0),
-                                interceptions=s_defense.get('ints', 0),
-                                tackles=s_defense.get('tackles', 0),
-                                # JSON for detailed stats
-                                passing_stats=season_dict.get('passing'),
-                                rushing_stats=season_dict.get('rushing'),
-                                receiving_stats=season_dict.get('receiving'),
-                                kicking_stats=season_dict.get('kicking'),
-                                defense_stats=season_dict.get('defense'),
-                            )
-                            self.db_session.add(db_season_stats)
+                        season_dict = player.seasonStatsDict
+
+                        # Detect if stats have been reset (post-season progression).
+                        # If the DB already has real data for this season, don't overwrite with zeros.
+                        gamesInMemory = getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0)
+                        if db_season_stats is not None and (db_season_stats.games_played or 0) > 0 and gamesInMemory == 0:
+                            # Stats were already saved; in-memory dict is reset — skip update
+                            pass
                         else:
-                            db_season_stats.team_id = playerTeamId
-                            db_season_stats.games_played = getattr(player, 'gamesPlayed', 0) or season_dict.get('gp', 0)
-                            db_season_stats.fantasy_points = season_dict.get('fantasyPoints', 0)
-                            # Update denormalized passing stats
-                            db_season_stats.passing_yards = s_passing.get('yards', 0)
-                            db_season_stats.passing_tds = s_passing.get('tds', 0)
-                            db_season_stats.passing_ints = s_passing.get('ints', 0)
-                            db_season_stats.passing_completions = s_passing.get('comps', 0)
-                            db_season_stats.passing_attempts = s_passing.get('atts', 0)
-                            # Update denormalized rushing stats
-                            db_season_stats.rushing_yards = s_rushing.get('yards', 0)
-                            db_season_stats.rushing_tds = s_rushing.get('tds', 0)
-                            db_season_stats.rushing_attempts = s_rushing.get('atts', 0)
-                            # Update denormalized receiving stats
-                            db_season_stats.receiving_yards = s_receiving.get('yards', 0)
-                            db_season_stats.receiving_tds = s_receiving.get('tds', 0)
-                            db_season_stats.receptions = s_receiving.get('receptions', 0)
-                            # Update denormalized defensive stats
-                            db_season_stats.sacks = s_defense.get('sacks', 0)
-                            db_season_stats.interceptions = s_defense.get('ints', 0)
-                            db_season_stats.tackles = s_defense.get('tackles', 0)
-                            # Update JSON
-                            db_season_stats.passing_stats = season_dict.get('passing')
-                            db_season_stats.rushing_stats = season_dict.get('rushing')
-                            db_season_stats.receiving_stats = season_dict.get('receiving')
-                            db_season_stats.kicking_stats = season_dict.get('kicking')
-                            db_season_stats.defense_stats = season_dict.get('defense')
+                            # Extract denormalized stats from JSON
+                            s_passing = season_dict.get('passing') or {}
+                            s_rushing = season_dict.get('rushing') or {}
+                            s_receiving = season_dict.get('receiving') or {}
+                            s_defense = season_dict.get('defense') or {}
+
+                            # Get team ID from player's team object
+                            playerTeamId = player.team.id if hasattr(player, 'team') and hasattr(player.team, 'id') else None
+
+                            if db_season_stats is None:
+                                db_season_stats = PlayerSeasonStats(
+                                    player_id=player.id,
+                                    season=current_season,
+                                    team_id=playerTeamId,
+                                    games_played=gamesInMemory,
+                                    fantasy_points=season_dict.get('fantasyPoints', 0),
+                                    # Denormalized passing stats
+                                    passing_yards=s_passing.get('yards', 0),
+                                    passing_tds=s_passing.get('tds', 0),
+                                    passing_ints=s_passing.get('ints', 0),
+                                    passing_completions=s_passing.get('comps', 0),
+                                    passing_attempts=s_passing.get('atts', 0),
+                                    # Denormalized rushing stats
+                                    rushing_yards=s_rushing.get('yards', 0),
+                                    rushing_tds=s_rushing.get('tds', 0),
+                                    rushing_attempts=s_rushing.get('atts', 0),
+                                    # Denormalized receiving stats
+                                    receiving_yards=s_receiving.get('yards', 0),
+                                    receiving_tds=s_receiving.get('tds', 0),
+                                    receptions=s_receiving.get('receptions', 0),
+                                    # Denormalized defensive stats
+                                    sacks=s_defense.get('sacks', 0),
+                                    interceptions=s_defense.get('ints', 0),
+                                    tackles=s_defense.get('tackles', 0),
+                                    # JSON for detailed stats
+                                    passing_stats=season_dict.get('passing'),
+                                    rushing_stats=season_dict.get('rushing'),
+                                    receiving_stats=season_dict.get('receiving'),
+                                    kicking_stats=season_dict.get('kicking'),
+                                    defense_stats=season_dict.get('defense'),
+                                )
+                                self.db_session.add(db_season_stats)
+                            else:
+                                db_season_stats.team_id = playerTeamId
+                                db_season_stats.games_played = gamesInMemory
+                                db_season_stats.fantasy_points = season_dict.get('fantasyPoints', 0)
+                                # Update denormalized passing stats
+                                db_season_stats.passing_yards = s_passing.get('yards', 0)
+                                db_season_stats.passing_tds = s_passing.get('tds', 0)
+                                db_season_stats.passing_ints = s_passing.get('ints', 0)
+                                db_season_stats.passing_completions = s_passing.get('comps', 0)
+                                db_season_stats.passing_attempts = s_passing.get('atts', 0)
+                                # Update denormalized rushing stats
+                                db_season_stats.rushing_yards = s_rushing.get('yards', 0)
+                                db_season_stats.rushing_tds = s_rushing.get('tds', 0)
+                                db_season_stats.rushing_attempts = s_rushing.get('atts', 0)
+                                # Update denormalized receiving stats
+                                db_season_stats.receiving_yards = s_receiving.get('yards', 0)
+                                db_season_stats.receiving_tds = s_receiving.get('tds', 0)
+                                db_season_stats.receptions = s_receiving.get('receptions', 0)
+                                # Update denormalized defensive stats
+                                db_season_stats.sacks = s_defense.get('sacks', 0)
+                                db_season_stats.interceptions = s_defense.get('ints', 0)
+                                db_season_stats.tackles = s_defense.get('tackles', 0)
+                                # Update JSON
+                                db_season_stats.passing_stats = season_dict.get('passing')
+                                db_season_stats.rushing_stats = season_dict.get('rushing')
+                                db_season_stats.receiving_stats = season_dict.get('receiving')
+                                db_season_stats.kicking_stats = season_dict.get('kicking')
+                                db_season_stats.defense_stats = season_dict.get('defense')
             
             # Commit all changes
             try:
@@ -2278,7 +2288,7 @@ class PlayerManager:
                     continue
                 # Sign the player
                 self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
-                                 freeAgencyDict, leagueHighlights, eventLog)
+                                 freeAgencyDict, leagueHighlights, eventLog, allFaLists=freeAgentLists)
                 log_fa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
 
         # FILL PHASE: Multi-round fill for remaining open roster spots
@@ -2492,7 +2502,7 @@ class PlayerManager:
                     if not openSlot:
                         continue
                     self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
-                                     freeAgencyDict, leagueHighlights)
+                                     freeAgencyDict, leagueHighlights, allFaLists=freeAgentLists)
                     logFa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
                     yield {
                         'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
@@ -2526,9 +2536,7 @@ class PlayerManager:
                         team.freeAgencyComplete = True
                         yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
 
-        # Cleanup
-        for team in teams:
-            team.freeAgencyComplete = False
+        # Cleanup — keep freeAgencyComplete=True so REST endpoint reports draftComplete correctly
         for player in self.freeAgents:
             player.team = 'Free Agent'
 
@@ -3078,10 +3086,21 @@ class PlayerManager:
 
     def _signPlayer(self, team, player, slot: str, faList: list,
                     freeAgencyDict: dict, leagueHighlights: list,
-                    eventLog: list = None) -> None:
+                    eventLog: list = None, allFaLists: dict = None) -> None:
         """Sign a player from the FA pool to a specific roster slot."""
+        # Remove from the specific position list
         if player in faList:
             faList.remove(player)
+        # Also remove from any other position lists (defensive cleanup)
+        if allFaLists:
+            seen = set()
+            for faL in allFaLists.values():
+                listId = id(faL)
+                if listId in seen or faL is faList:
+                    continue
+                seen.add(listId)
+                if player in faL:
+                    faL.remove(player)
         if player in self.freeAgents:
             self.freeAgents.remove(player)
         player.team = team

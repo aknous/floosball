@@ -206,6 +206,9 @@ class PlayerAttributes(Base):
     determination_modifier: Mapped[int] = mapped_column(Integer)
     luck_modifier: Mapped[int] = mapped_column(Integer)
 
+    # Fatigue (0.0 = fresh, 1.0 = fully fatigued)
+    fatigue: Mapped[float] = mapped_column(Float, default=0.0)
+
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="attributes")
 
@@ -374,6 +377,8 @@ class TeamFunding(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
+    baseline_funding: Mapped[int] = mapped_column(Integer, default=0)
+    fan_contributions: Mapped[int] = mapped_column(Integer, default=0)
     current_funding: Mapped[int] = mapped_column(Integer, default=0)
     carried_funding: Mapped[int] = mapped_column(Integer, default=0)
     effective_funding: Mapped[int] = mapped_column(Integer, default=0)
@@ -592,6 +597,7 @@ class User(Base):
     email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
     email_day_report: Mapped[bool] = mapped_column(Boolean, default=True)
     email_season_report: Mapped[bool] = mapped_column(Boolean, default=True)
+    team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 

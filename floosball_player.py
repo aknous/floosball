@@ -430,6 +430,9 @@ class PlayerAttributes:
         self.determinationModifier = randint(-2, 2)
         self.luckModifier = randint(-5, 5)
 
+        # Fatigue (0.0 = fresh, accumulates over the season)
+        self.fatigue = 0.0
+
         
     def calculateIntangibles(self):
         self.playMakingAbility = round((self.instinct+self.creativity)/2)

@@ -31,7 +31,7 @@ EFFECT_CATEGORY = {
     "scrappy": "flat_fp", "honor_roll": "flat_fp", "garbage_time": "flat_fp",
     "loyalty_bonus": "flat_fp", "windfall": "floobits",
     "spotlight_moment": "flat_fp", "possession": "flat_fp", "ace_up_the_sleeve": "flat_fp",
-    "slippery": "flat_fp", "jailbreak": "flat_fp", "homer": "flat_fp", "rng": "flat_fp", "avalanche": "flat_fp", "hedge": "flat_fp",
+    "slippery": "flat_fp", "jailbreak": "flat_fp", "homer": "flat_fp", "gone_streaking": "flat_fp", "rng": "flat_fp", "avalanche": "flat_fp", "hedge": "flat_fp",
     "three_pointer": "flat_fp", "safety_blanket": "flat_fp",
     "industrious": "floobits", "sniper": "flat_fp", "lead_blocker": "flat_fp",
     # multiplier
@@ -105,6 +105,7 @@ EFFECT_EDITION_TIER = {
     "homer": "base",
 
     # ── HOLOGRAPHIC (26) — Conditional, team-composition, position thresholds ──
+    "gone_streaking": "holographic",
     "closer": "holographic", "moral_victory": "holographic", "good_neighbor": "holographic",
     "diversified": "holographic", "bonus_round": "holographic",
     "spotlight_moment": "holographic", "squire": "holographic",
@@ -261,6 +262,7 @@ EFFECT_DISPLAY_NAMES = {
     "stack": "Stack",
     "backfield_buddies": "Backfield Buddies",
     "homer": "Homer",
+    "gone_streaking": "Gone Streaking",
     "hometown_hero": "Hometown Hero",
     "connection": "Connection",
     "team_chemistry": "Team Chemistry",
@@ -416,6 +418,7 @@ EFFECT_TAGLINES = {
     "stack": "QB-WR stack",
     "backfield_buddies": "Same backfield",
     "homer": "Hometown discount",
+    "gone_streaking": "Streaks of all kinds",
     "hometown_hero": "Full stack",
     "connection": "TD connection",
     "team_chemistry": "Chemistry bonus",
@@ -458,7 +461,7 @@ EFFECT_TOOLTIPS = {
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
     "windfall": "When your players ball out, you get paid. Floobits per overperforming roster player.",
-    "rng": "Pure chaos. Random FP rolled each week.",
+    "rng": "Feeling lucky? Random FP rolled each week — could be a little, could be a lot.",
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
     "hedge": "Insurance policy. Starts with an FP pool. Roster FP subtracts from it, and whatever remains is your payout.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Resets if you make a swap. Stacking streak cards accelerates growth.",
@@ -535,8 +538,9 @@ EFFECT_TOOLTIPS = {
     "stack": "Stack attack. FPx when your QB slot and any WR slot play on the same team.",
     "backfield_buddies": "Same backfield, double the payoff. FPx when your QB slot and RB play on the same team.",
     "homer": "Loyalty has its perks. FP scaling with how many of your roster players play on your favorite team.",
+    "gone_streaking": "It doesn't matter if they're winning or losing — the longer the streak, the bigger the payout. Uses your favorite team's longest streak this season.",
     "hometown_hero": "Full stack activated. Floobits when 3 or more of your roster players share the same team.",
-    "connection": "Real-life connections pay off. Floobits per TD by roster players who share a team.",
+    "connection": "Shared teams pay off. Earn Floobits when two or more of your fantasy roster players are on the same team and one scores a TD.",
     "team_chemistry": "Good chemistry lifts all boats. Floobits that grow with the number of same-team pairs on your roster.",
     # ── Game-Outcome Effects ──
     "comeback_kid": "Down but never out. FP when your favorite team overcomes a deficit and wins.",
@@ -572,7 +576,7 @@ EFFECT_TOOLTIPS = {
     "dark_horse": "The stars shine brightest from below. FPx that scales inversely with your {posLabel} slot's star rating.",
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
-    "surplus": "Raise the ceiling. Increases the weekly Floobits payout cap while equipped.",
+    "surplus": "Raise the ceiling. Increases the maximum Floobits you can earn per week while equipped.",
     "bonsai": "Patience rewards the diligent. Base FP that can permanently grow each week. Game events boost the growth chance. Resets if unequipped.",
 }
 
@@ -665,8 +669,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "stack": "{rewardValue} FPx when QB slot and WR share a team",
     "backfield_buddies": "+{rewardValue} FPx when QB slot and RB share a team",
     "homer": "+{perPlayerFP} FP per roster player on your favorite team",
+    "gone_streaking": "+{baseFP} FP base, +{perStreakFP} per game in longest streak",
     "hometown_hero": "+{rewardFloobits} Floobits when 3+ roster players share a team",
-    "connection": "{perTdFloobits} Floobits per TD by a roster player who shares a team with another",
+    "connection": "{perTdFloobits} Floobits per TD when the scorer shares a team with another roster player",
     "team_chemistry": "+{perGroupFloobits} Floobits per same-team pair on your roster",
     # ── Game-Outcome Effects ──
     "comeback_kid": "+{perPointFP} FP per point of deficit overcome when your favorite team wins",
@@ -702,7 +707,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "dark_horse": "+{perStarMult} FPx per star under 5 of your rostered {posLabel}",
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
-    "surplus": "+{ceilingBonus} Floobits weekly payout cap while equipped",
+    "surplus": "Weekly Floobits cap raised by +{ceilingBonus} while equipped",
     "bonsai": "+{baseFP} FP base. {baseChance}% chance to permanently grow by {growthFP} FP each week. {triggerLabel} boost the growth chance",
 }
 
@@ -714,7 +719,7 @@ SHARED_EFFECT_POOL = [
     # flat_fp effects
     "freebie", "entourage", "touchdown_pinata", "scrappy",
     "honor_roll", "garbage_time", "loyalty_bonus",
-    "windfall", "homer", "rng", "avalanche", "hedge",
+    "windfall", "homer", "gone_streaking", "rng", "avalanche", "hedge",
     # multiplier effects
     "big_deal", "cornucopia", "babysitter",
     "martyr", "juggernaut", "resplendent",
@@ -898,15 +903,15 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "freebie":
         return {"baseFP": round((7 + rn * 0.15) * editionScale, 1)}
     if effectName == "entourage":
-        return {"perPlayerFP": round((1.8 + rn * 0.06) * editionScale, 1), "minStars": 3}
+        return {"perPlayerFP": round((1.2 + rn * 0.04) * editionScale, 1), "minStars": 3}
     if effectName == "touchdown_pinata":
-        return {"perTdFP": round((3.5 + rn * 0.12) * editionScale, 1)}
+        return {"perTdFP": round((1.0 + rn * 0.03) * editionScale, 1)}
     if effectName == "scrappy":
         return {"baseFP": round(4.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "maxStars": 2, "isChanceEffect": True}
     if effectName == "rng":
-        return {"minFP": round((5 + rn * 0.1) * editionScale, 1),
-                "maxFP": round((20 + rn * 0.4) * editionScale, 1)}
+        return {"minFP": round((3 + rn * 0.06) * editionScale, 1),
+                "maxFP": round((14 + rn * 0.25) * editionScale, 1)}
     if effectName == "avalanche":
         return {"td1": round((2.0 + rn * 0.08) * editionScale, 1),
                 "td2": round((4.0 + rn * 0.16) * editionScale, 1),
@@ -915,9 +920,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "hedge":
         return {"floorFP": 75}
     if effectName == "honor_roll":
-        return {"perPlayerFP": round((2.5 + rn * 0.10) * editionScale, 1), "fpThreshold": 15}
+        return {"perPlayerFP": round((2.0 + rn * 0.06) * editionScale, 1), "fpThreshold": 15}
     if effectName == "three_pointer":
-        return {"perFgFP": round((4.0 + rn * 0.15) * editionScale, 1)}
+        return {"perFgFP": round((2.5 + rn * 0.08) * editionScale, 1)}
     if effectName == "garbage_time":
         return {"perPlayerFP": round((2.0 + rn * 0.08) * editionScale, 1)}
     if effectName == "loyalty_bonus":
@@ -932,19 +937,21 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "possession":
         return {"perReceptionFP": round((0.8 + rn * 0.04) * editionScale, 1)}
     if effectName == "slippery":
-        return {"perYacFP": round((0.5 + rn * 0.025) * editionScale, 1)}
+        return {"perYacFP": round((0.15 + rn * 0.008) * editionScale, 2)}
     if effectName == "jailbreak":
         return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1), "threshold": 30}
     if effectName == "expedition":
         return {"perFiftyYardsFP": round((2.5 + rn * 0.12) * editionScale, 1)}
     if effectName == "homer":
-        return {"perPlayerFP": round((4.0 + rn * 0.15) * editionScale, 1)}
+        return {"perPlayerFP": round((3.0 + rn * 0.10) * editionScale, 1)}
+    if effectName == "gone_streaking":
+        return {"baseFP": round((2.0 + rn * 0.08) * editionScale, 1), "perStreakFP": round((0.8 + rn * 0.04) * editionScale, 1)}
     if effectName == "safety_blanket":
         return {"rewardType": "fp", "perReceptionFP": round((1.0 + rn * 0.04) * editionScale, 1)}
     if effectName == "lead_blocker":
         return {"rewardType": "fp", "perTdFP": round((4.0 + rn * 0.2) * editionScale, 1)}
     if effectName == "sniper":
-        return {"perFgFP": round((5 + rn * 0.2) * editionScale, 1)}
+        return {"perFgFP": round((3.0 + rn * 0.10) * editionScale, 1)}
     if effectName == "squire":
         return {"perTdFP": round((4 + rn * 0.15) * editionScale, 1)}
     # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
@@ -996,10 +1003,10 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "isChanceEffect": True}
     if effectName == "resplendent":
-        return {"perPlayerFP": round((2.5 + rn * 0.1) * editionScale, 1)}
+        return {"perPlayerFP": round((1.5 + rn * 0.05) * editionScale, 1)}
     # ── FPx effects (factor-based, values > 1) ──
     if effectName == "big_deal":
-        return {"xMultValue": round(1 + (playerRating / 100) * 0.25 * editionScale, 2)}
+        return {"xMultValue": round(1 + (playerRating / 100) * 0.12 * editionScale, 2)}
     if effectName == "luminary":
         return {"fpShareScale": round((0.25 + rn * 0.012) * editionScale, 2)}
     if effectName == "juggernaut":
@@ -1029,7 +1036,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
                 "singleWrFP": round((6 + rn * 0.25) * editionScale, 1),
                 "rewardValue": round((14 + rn * 0.55) * editionScale, 1)}
     if effectName == "gunslinger":
-        return {"rewardType": "fp", "perHundredYardsFP": round((3 + rn * 0.15) * editionScale, 1)}
+        return {"rewardType": "fp", "perHundredYardsFP": round((2.0 + rn * 0.06) * editionScale, 1)}
     if effectName == "air_raid":
         return {"rewardType": "floobits", "perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stampede":
@@ -1087,13 +1094,13 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"rewardType": "floobits", "rewardValue": int(round((6 + rn * 0.3) * editionScale)),
                 "wpaThreshold": 10.0}
     if effectName == "workhorse":
-        return {"rewardType": "fp", "perAttemptFP": round((0.4 + rn * 0.02) * editionScale, 1)}
+        return {"rewardType": "fp", "perAttemptFP": round((0.2 + rn * 0.01) * editionScale, 1)}
     if effectName == "goal_line_vulture":
         return {"perTdFloobits": int(round((8 + rn * 0.4) * editionScale))}
     if effectName == "connection":
         return {"perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "industrious":
-        return {"perReceptionFloobits": int(round((3 + rn * 0.15) * editionScale))}
+        return {"perReceptionFloobits": int(round((1.5 + rn * 0.06) * editionScale))}
     # ── Strategy-Warping: Prosperity (Floobits payout ceiling raiser)
     if effectName == "surplus":
         ceilingBonus = int(round((10 + rn * 0.4) * editionScale))
@@ -1124,7 +1131,7 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
     if effectName == "game_ball":
         return {"rewardType": "fp", "rewardValue": round((7 + rn * 0.25) * editionScale, 1)}
     if effectName == "bandwagon":
-        return {"rewardType": "mult", "rewardValue": round(1 + (0.15 + rn * 0.008) * editionScale, 2)}
+        return {"rewardType": "mult", "rewardValue": round(1 + (0.08 + rn * 0.004) * editionScale, 2)}
     if effectName == "upset_special":
         return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     if effectName == "believe":
@@ -1194,10 +1201,10 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "odometer":
         return {"rewardType": "fp",
                 "gates": [
-                    {"yards": 200, "fp": round((2.0 + rn * 0.08) * editionScale, 1)},
-                    {"yards": 400, "fp": round((4.0 + rn * 0.16) * editionScale, 1)},
-                    {"yards": 600, "fp": round((6.0 + rn * 0.24) * editionScale, 1)},
-                    {"yards": 800, "fp": round((10.0 + rn * 0.4) * editionScale, 1)},
+                    {"yards": 200, "fp": round((5.0 + rn * 0.08) * editionScale, 1)},
+                    {"yards": 400, "fp": round((10.0 + rn * 0.15) * editionScale, 1)},
+                    {"yards": 600, "fp": round((16.0 + rn * 0.25) * editionScale, 1)},
+                    {"yards": 800, "fp": round((20.0 + rn * 0.3) * editionScale, 1)},
                 ]}
     if effectName == "leg_day":
         return {"rewardType": "fp",
@@ -1208,7 +1215,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((3.0 + rn * 0.12) * editionScale, 1),
                 "growthPerTick": round((1.5 + rn * 0.06) * editionScale, 1)}
     if effectName == "hot_hand":
-        return {"rewardType": "fp", "perFGFP": round((3 + rn * 0.12) * editionScale, 1)}
+        return {"rewardType": "fp", "perFGFP": round((2.0 + rn * 0.06) * editionScale, 1)}
     if effectName == "momentum":
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
@@ -2245,8 +2252,8 @@ def _computeOdometer(primary, ctx, cardPlayerId, eqId):
     # Legacy cards stored accumulator params (baseReward/growthPerTick/yardsPerTick)
     # instead of gates — use current gate thresholds with legacy FP values
     if not gates and "yardsPerTick" in primary:
-        baseReward = primary.get("baseReward", 2.0)
-        growth = primary.get("growthPerTick", 1.0)
+        baseReward = primary.get("baseReward", 5.0)
+        growth = primary.get("growthPerTick", 6.0)
         gates = [
             {"yards": 200, "fp": round(baseReward, 1)},
             {"yards": 400, "fp": round(baseReward + growth, 1)},
@@ -2913,6 +2920,16 @@ def _computeHomer(primary, ctx, cardPlayerId, eqId):
     return EffectResult(fpBonus=bonus, equation=eq)
 
 
+def _computeGoneStreaking(primary, ctx, cardPlayerId, eqId):
+    """FP based on favorite team's longest win or loss streak this season."""
+    baseFP = primary.get("baseFP", 2.0)
+    perStreakFP = primary.get("perStreakFP", 0.8)
+    peakStreak = getattr(ctx, 'favoriteTeamPeakStreak', 0)
+    total = round(baseFP + perStreakFP * peakStreak, 1)
+    eq = f"{baseFP} base + ({perStreakFP} × {peakStreak} peak streak)"
+    return EffectResult(fpBonus=total, equation=eq)
+
+
 def _computeHometownHero(primary, ctx, cardPlayerId, eqId):
     """Floobits if 3+ roster players share the same team."""
     rewardFloobits = primary.get("rewardFloobits", 15)
@@ -3526,6 +3543,7 @@ EFFECT_REGISTRY = {
     "stack": _computeStack,
     "backfield_buddies": _computeBackfieldBuddies,
     "homer": _computeHomer,
+    "gone_streaking": _computeGoneStreaking,
     "hometown_hero": _computeHometownHero,
     "connection": _computeConnection,
     "team_chemistry": _computeTeamChemistry,

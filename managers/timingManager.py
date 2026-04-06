@@ -52,6 +52,7 @@ class TimingMode(Enum):
     CATCHUP = "catchup"                # Backdate season to last Monday, catch up, then behave like SCHEDULED
     FAST_CATCHUP = "fast-catchup"      # Like CATCHUP but skips ALL delays during catch-up (instant sim)
     PLAYOFF_TEST = "playoff-test"      # FAST regular season + compressed scheduled playoffs (with broadcasting)
+    TURBO_SILENT = "turbo-silent"      # Sequential delays between games/weeks, no in-game delays, no broadcasting
 
 class TimingManager:
     """Manages timing and delays for different simulation modes"""
@@ -76,6 +77,7 @@ class TimingManager:
             self.delays.update(self._getScheduledDelays())
         elif mode == TimingMode.PLAYOFF_TEST:
             self.delays.update(self._getPlayoffTestDelays())
+        # TURBO_SILENT: uses default (sequential) delays — no overrides needed
 
         logger.info(f"TimingManager initialized in {mode.value} mode")
     
@@ -188,6 +190,7 @@ class TimingManager:
             self.delays.update(self._getScheduledDelays())
         elif mode == TimingMode.PLAYOFF_TEST:
             self.delays.update(self._getPlayoffTestDelays())
+        # TURBO_SILENT: uses default (sequential) delays — no overrides needed
         logger.info(f"Timing mode changed to {mode.value}")
     
     def setCustomDelays(self, delays: Dict[str, float]) -> None:
@@ -225,7 +228,7 @@ class TimingManager:
                 while datetime.datetime.utcnow() < weekRolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
 
-        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             # Fixed delay for sequential/turbo mode
             logger.info(f"{self.mode.value} mode: waiting {self.delays['week_setup']}s before week")
             await asyncio.sleep(self.delays['week_setup'])
@@ -251,7 +254,7 @@ class TimingManager:
                     while datetime.datetime.utcnow() < weekSetupTime:
                         await asyncio.sleep(self.delays['daily_check'])
 
-        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.info(f"{self.mode.value} mode: week setup delay {self.delays['week_start_wait']}s")
             await asyncio.sleep(self.delays['week_start_wait'])
 
@@ -283,7 +286,7 @@ class TimingManager:
                 while datetime.datetime.utcnow() < weekStartTime:
                     await asyncio.sleep(self.delays['daily_check'])
 
-        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.info(f"{self.mode.value} mode: games start delay {self.delays['game_announcement']}s")
             await asyncio.sleep(self.delays['game_announcement'])
 
@@ -291,7 +294,7 @@ class TimingManager:
         """Wait after week completes"""
         if self._isFastCatchingUp:
             return
-        if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.info(f"{self.mode.value} mode: post-week delay {self.delays['week_end_wait']}s")
             await asyncio.sleep(self.delays['week_end_wait'])
         # SCHEDULED: no fixed delay — waitForWeekStart handles the 15-min pre-game buffer
@@ -300,7 +303,7 @@ class TimingManager:
         """Wait between individual games"""
         if self._isFastCatchingUp:
             return
-        if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        if self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.debug(f"{self.mode.value} mode: between games delay {self.delays['between_games']}s")
             await asyncio.sleep(self.delays['between_games'])
 
@@ -309,7 +312,7 @@ class TimingManager:
         if self._isFastCatchingUp:
             return
         delay = self.delays.get('post_championship', 30.0)
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.CATCHUP):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.CATCHUP):
             logger.info(f"{self.mode.value} mode: post-championship delay {delay}s")
             await asyncio.sleep(delay)
         elif self._isScheduledMode:
@@ -340,7 +343,7 @@ class TimingManager:
             while datetime.datetime.utcnow() < targetUtc:
                 await asyncio.sleep(pollInterval)
             logger.info("Season start time reached — proceeding")
-        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.info(f"{self.mode.value} mode: season transition delay {self.delays['season_transition']}s")
             await asyncio.sleep(self.delays['season_transition'])
         elif self.mode == TimingMode.TEST_SCHEDULED:
@@ -399,7 +402,7 @@ class TimingManager:
                 logger.info(f"PLAYOFF_TEST: waiting {(rolloverTime - now).total_seconds():.1f}s for rollover ({rolloverSec:.0f}s before start)")
                 while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
-        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.info(f"{self.mode.value} mode: playoff round delay {self.delays['playoff_round']}s")
             await asyncio.sleep(self.delays['playoff_round'])
 
@@ -423,7 +426,7 @@ class TimingManager:
                 logger.info(f"PLAYOFF_TEST: waiting {(rolloverTime - now).total_seconds():.1f}s for championship rollover ({rolloverSec:.0f}s before start)")
                 while datetime.datetime.utcnow() < rolloverTime:
                     await asyncio.sleep(self.delays['daily_check'])
-        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO):
+        elif self.mode in (TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT):
             logger.info(f"{self.mode.value} mode: championship delay {self.delays['championship']}s")
             await asyncio.sleep(self.delays['championship'])
     
@@ -488,7 +491,7 @@ class TimingManager:
         """Wait between offseason free agency pick broadcasts"""
         if self._isFastCatchingUp:
             return
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.DEMO, TimingMode.OFFSEASON_TEST, TimingMode.CATCHUP):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.DEMO, TimingMode.OFFSEASON_TEST, TimingMode.CATCHUP):
             await asyncio.sleep(self.delays['offseason_pick'])
 
     async def waitBeforeOnsideResult(self) -> None:

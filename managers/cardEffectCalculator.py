@@ -53,6 +53,7 @@ class CardCalcContext:
     favoriteTeamElo: float = 1500.0
     favoriteTeamStreak: int = 0  # Positive = win streak, negative = loss streak
     favoriteTeamPriorStreak: int = 0  # Streak value before this week's game result
+    favoriteTeamPeakStreak: int = 0  # Longest win or loss streak this season (abs value)
     favoriteTeamSeasonLosses: int = 0
     favoriteTeamInPlayoffs: bool = False
     favoriteTeamWonThisWeek: bool = False

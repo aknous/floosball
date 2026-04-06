@@ -391,6 +391,8 @@ async def get_team(team_id: int):
                     'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
                     'termRemaining': player.termRemaining,
                     'tier': player.playerTier.name if hasattr(player.playerTier, 'name') else str(player.playerTier),
+                    'fatigue': round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1),
+                    'resilience': getattr(player.attributes, 'resilience', 80),
                 }
             else:
                 roster[pos] = None
@@ -429,7 +431,7 @@ async def get_team(team_id: int):
                 continue
         team_dict['schedule'] = teamSchedule
 
-        # Funding details (from most recent completed season)
+        # Funding details (current season)
         try:
             from database.connection import get_session as _gs
             from database.models import TeamFunding
@@ -441,23 +443,39 @@ async def get_team(team_id: int):
                     team_id=team_id
                 ).order_by(TeamFunding.season.desc()).first()
                 if latestFunding:
-                    # Compute fair share from all teams in that season
-                    allRecords = fundSession.query(TeamFunding).filter_by(
-                        season=latestFunding.season
-                    ).all()
-                    totalEffective = sum(r.effective_funding for r in allRecords)
-                    numTeams = len(allRecords)
-                    fairShare = totalEffective / numTeams if numTeams > 0 else 1
+                    effectiveFunding = latestFunding.effective_funding or 0
+                    currentTier = latestFunding.funding_tier or 'SMALL_MARKET'
+                    currentRank = latestFunding.tier_rank or 4
+
+                    # Compute progress to next tier
+                    nextTierThreshold = None
+                    nextTierName = None
+                    progressToNextTier = None
+                    if currentRank > 1:
+                        # There's a higher tier to reach
+                        nextIdx = currentRank - 2  # index into FUNDING_TIER_THRESHOLDS
+                        nextTierThreshold = FUNDING_TIER_THRESHOLDS[nextIdx]
+                        nextTierName = FUNDING_TIER_NAMES[nextIdx]
+                        # Progress from current tier threshold to next tier threshold
+                        currentTierThreshold = FUNDING_TIER_THRESHOLDS[currentRank - 1] if currentRank - 1 < len(FUNDING_TIER_THRESHOLDS) else 0
+                        tierRange = nextTierThreshold - currentTierThreshold
+                        if tierRange > 0:
+                            progressToNextTier = round(min(1.0, max(0.0, (effectiveFunding - currentTierThreshold) / tierRange)), 2)
+
                     team_dict['funding'] = {
                         'season': latestFunding.season,
-                        'currentFunding': latestFunding.current_funding,
-                        'carriedFunding': latestFunding.carried_funding,
-                        'effectiveFunding': latestFunding.effective_funding,
-                        'tier': latestFunding.funding_tier,
-                        'tierRank': latestFunding.tier_rank,
-                        'fairShare': round(fairShare),
-                        'thresholds': {
-                            FUNDING_TIER_NAMES[i]: round(fairShare * t)
+                        'baselineFunding': latestFunding.baseline_funding or 0,
+                        'fanContributions': latestFunding.fan_contributions or 0,
+                        'currentFunding': latestFunding.current_funding or 0,
+                        'carriedFunding': latestFunding.carried_funding or 0,
+                        'effectiveFunding': effectiveFunding,
+                        'tier': currentTier,
+                        'tierRank': currentRank,
+                        'nextTierThreshold': nextTierThreshold,
+                        'nextTierName': nextTierName,
+                        'progressToNextTier': progressToNextTier,
+                        'allTierThresholds': {
+                            FUNDING_TIER_NAMES[i]: t
                             for i, t in enumerate(FUNDING_TIER_THRESHOLDS)
                         },
                     }
@@ -704,28 +722,31 @@ async def get_player(player_id: int):
         player_dict['ratingValue'] = player.playerRating
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
-        # Build current-season entry from live seasonStatsDict and prepend to archive
+        player_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
+        # Build stats history: current live season + past seasons from DB
         sm = floosball_app.seasonManager
         currentSeasonNum = sm.currentSeason.seasonNumber if sm.currentSeason else None
+        seasonIsComplete = sm.currentSeason.isComplete if sm.currentSeason else True
         team = player.team
         hasTeamObj = team and not isinstance(team, str)
         teamName = team.name if hasTeamObj else (team if isinstance(team, str) else 'FA')
         teamColor = team.color if hasTeamObj else '#94a3b8'
-        currentSeasonEntry = dict(player.seasonStatsDict)
-        currentSeasonEntry['season'] = currentSeasonNum
-        currentSeasonEntry['team'] = teamName
-        currentSeasonEntry['color'] = teamColor
-        currentSeasonEntry['gp'] = player.gamesPlayed
 
-        # Load past seasons from DB instead of runtime archive
-        pastSeasons = []
+        # Load seasons from DB
+        allSeasons = []
         try:
             from database.connection import get_session
             from database.models import PlayerSeasonStats as DBPlayerSeasonStats, Team as DBTeam
             dbSession = get_session()
+            # If season is complete (offseason), load ALL seasons from DB
+            # If season is in progress, load only past seasons (current comes from live stats)
+            if seasonIsComplete and currentSeasonNum:
+                seasonFilter = DBPlayerSeasonStats.season <= currentSeasonNum
+            else:
+                seasonFilter = DBPlayerSeasonStats.season < currentSeasonNum if currentSeasonNum else True
             pastRows = dbSession.query(DBPlayerSeasonStats).filter(
                 DBPlayerSeasonStats.player_id == player.id,
-                DBPlayerSeasonStats.season < currentSeasonNum
+                seasonFilter
             ).order_by(DBPlayerSeasonStats.season.desc()).all()
             for row in pastRows:
                 # Look up team name/color
@@ -748,12 +769,21 @@ async def get_player(player_id: int):
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
                 }
-                pastSeasons.append(pastEntry)
+                allSeasons.append(pastEntry)
             dbSession.close()
         except Exception:
-            pastSeasons = list(player.seasonStatsArchive) if player.seasonStatsArchive else []
+            allSeasons = list(player.seasonStatsArchive) if player.seasonStatsArchive else []
 
-        player_dict['stats'] = [currentSeasonEntry] + pastSeasons
+        # Only prepend live current-season entry if the season is still in progress
+        if not seasonIsComplete and currentSeasonNum:
+            currentSeasonEntry = dict(player.seasonStatsDict)
+            currentSeasonEntry['season'] = currentSeasonNum
+            currentSeasonEntry['team'] = teamName
+            currentSeasonEntry['color'] = teamColor
+            currentSeasonEntry['gp'] = player.gamesPlayed
+            player_dict['stats'] = [currentSeasonEntry] + allSeasons
+        else:
+            player_dict['stats'] = allSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
         
         return build_success_response(player_dict)
@@ -1197,6 +1227,13 @@ async def get_season_info():
             if nextStart:
                 nextGameStartTime = nextStart.isoformat() + 'Z'
 
+        # Compute next season start time during offseason (SCHEDULED modes only)
+        nextSeasonStartTime = None
+        if current_season.isComplete and season_mgr.timingManager._isScheduledMode:
+            from managers.timingManager import TimingManager
+            nextSeasonStart = TimingManager._nextMondayUtc(hour=4)
+            nextSeasonStartTime = nextSeasonStart.isoformat() + 'Z'
+
         return build_success_response({
             'season_number': current_season.seasonNumber,
             'current_week': current_season.currentWeek,
@@ -1208,7 +1245,10 @@ async def get_season_info():
             'mvp': current_season.mvp if hasattr(current_season, 'mvp') and current_season.mvp else None,
             'allPro': current_season.allPro if hasattr(current_season, 'allPro') and current_season.allPro else None,
             'next_game_start_time': nextGameStartTime,
-            'shop_open': not current_season.isComplete and current_season.currentWeek <= 28,
+            'next_season_start_time': nextSeasonStartTime,
+            'regular_season_over': current_season.currentWeek > 28 or (
+                current_season.currentWeek == 28 and current_season.completedWeekGames is not None
+            ),
         })
     
     except Exception as e:
@@ -1254,13 +1294,25 @@ async def get_reigning_champion():
         from database.models import Season as DBSeason, Team as DBTeam
         session = get_session()
         seasonManager = floosball_app.seasonManager
-        currentSeason = seasonManager.currentSeason.seasonNumber if seasonManager and seasonManager.currentSeason else None
-        if not currentSeason or currentSeason < 2:
-            return build_success_response(None)
-        prevSeason = session.query(DBSeason).filter_by(season_number=currentSeason - 1).first()
-        if not prevSeason or not prevSeason.champion_team_id:
+        currentSeason = seasonManager.currentSeason if seasonManager else None
+        if not currentSeason:
             return build_success_response(None)
         teamManager = floosball_app.teamManager
+
+        # If the current season is complete and has a champion, use it directly
+        # (handles the window between Floosbowl ending and next season starting)
+        if currentSeason.isComplete and getattr(currentSeason, 'champion', None):
+            champTeam = teamManager.getTeamById(currentSeason.champion.id) if teamManager else None
+            if champTeam:
+                return build_success_response(TeamResponseBuilder.buildBasicTeamDict(champTeam))
+
+        # Otherwise look at the previous season
+        seasonNum = currentSeason.seasonNumber
+        if seasonNum < 2:
+            return build_success_response(None)
+        prevSeason = session.query(DBSeason).filter_by(season_number=seasonNum - 1).first()
+        if not prevSeason or not prevSeason.champion_team_id:
+            return build_success_response(None)
         champTeam = teamManager.getTeamById(prevSeason.champion_team_id) if teamManager else None
         if not champTeam:
             return build_success_response(None)
@@ -2273,6 +2325,7 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                 "tier": p.playerTier.name,
             }
             for p in sorted(pm.freeAgents, key=lambda p: -p.playerRating)
+            if isinstance(getattr(p, 'team', None), str)
         ]
     draftOrder = []
     if sm.currentSeason and hasattr(sm.currentSeason, 'freeAgencyOrder'):
@@ -2289,10 +2342,12 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
     faWindowEnd = getattr(sm, '_faWindowEnd', None)
     # Always include FA pool during offseason so ballot rank markers work after window closes
+    # Defensive: only include players whose .team is actually 'Free Agent' (not a team object)
     faPool = [
         {"id": p.id, "name": p.name, "position": p.position.name,
          "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
         for p in pm.freeAgents
+        if isinstance(getattr(p, 'team', None), str)
     ] if isOffseason else []
 
     # Include user's existing ballot if logged in
@@ -2359,6 +2414,93 @@ from api.auth import getCurrentUser as _getCurrentUser, getOptionalUser as _getO
 from database.models import User as _User, Team as _Team
 
 
+@app.post("/api/teams/{team_id}/contribute")
+def contribute_to_team(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Contribute Floobits to a team's funding pool mid-season. Requires auth."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    amount = payload.get("amount")
+    if not isinstance(amount, int) or amount <= 0:
+        raise HTTPException(status_code=400, detail="'amount' must be a positive integer")
+
+    try:
+        result = floosball_app.seasonManager.contributeToTeam(user.id, team_id, amount)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error contributing to team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/teams/{team_id}/projected-funding")
+def get_projected_funding(team_id: int):
+    """Estimate end-of-season auto-contribution funding for a team.
+    Calculates what each fan would contribute if the season ended now,
+    based on their current balance and funding percentage.
+    Also projects next season's tier after carry-forward decay."""
+    import math
+    from constants import DEFAULT_FUNDING_PCT, FUNDING_DECAY_RATE, FUNDING_BASELINE_PER_TEAM, FUNDING_TIER_THRESHOLDS
+    from database.connection import get_session
+    from database.models import User, UserCurrency, TeamFunding
+    session = get_session()
+    try:
+        fans = session.query(User).filter(User.favorite_team_id == team_id).all()
+        totalProjected = 0
+        fanCount = 0
+        for fan in fans:
+            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT)
+            if pct is None:
+                pct = DEFAULT_FUNDING_PCT
+            pct = max(0, min(100, pct))
+            if pct <= 0:
+                continue
+            currency = session.query(UserCurrency).filter_by(user_id=fan.id).first()
+            balance = currency.balance if currency else 0
+            if balance <= 0:
+                continue
+            contribution = math.floor(balance * pct / 100.0)
+            if contribution > 0:
+                totalProjected += contribution
+                fanCount += 1
+
+        # Compute next-season projected effective funding after decay
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+        currentRec = session.query(TeamFunding).filter_by(
+            team_id=team_id, season=currentSeasonNum).first()
+        endOfSeasonEffective = 0
+        if currentRec:
+            endOfSeasonEffective = (currentRec.current_funding or 0) + totalProjected
+        nextSeasonCarried = math.floor(endOfSeasonEffective * FUNDING_DECAY_RATE)
+        nextSeasonEffective = FUNDING_BASELINE_PER_TEAM + nextSeasonCarried
+
+        # Determine next-season tier
+        thresholds = FUNDING_TIER_THRESHOLDS  # [2000, 1000, 500]
+        tierNames = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
+        nextSeasonTier = tierNames[-1]
+        for i, threshold in enumerate(thresholds):
+            if nextSeasonEffective >= threshold:
+                nextSeasonTier = tierNames[i]
+                break
+
+        return build_success_response({
+            "teamId": team_id,
+            "projectedAutoContributions": totalProjected,
+            "contributingFans": fanCount,
+            "totalFans": len(fans),
+            "nextSeasonProjectedFunding": nextSeasonEffective,
+            "nextSeasonProjectedTier": nextSeasonTier,
+            "decayRate": FUNDING_DECAY_RATE,
+        })
+    except Exception as e:
+        logger.error(f"Error calculating projected funding for team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/users/me")
 def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
     """Get current user profile. Requires Bearer token."""
@@ -2379,6 +2521,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailOptOut": user.email_opt_out,
             "emailDayReport": user.email_day_report,
             "emailSeasonReport": user.email_season_report,
+            "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
         }
     finally:
         session.close()
@@ -2458,12 +2601,16 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             dbUser.email_day_report = bool(payload["emailDayReport"])
         if "emailSeasonReport" in payload:
             dbUser.email_season_report = bool(payload["emailSeasonReport"])
+        if "teamFundingPct" in payload:
+            pct = int(payload["teamFundingPct"])
+            dbUser.team_funding_pct = max(0, min(100, pct))
         session.commit()
         return {
             "ok": True,
             "emailOptOut": dbUser.email_opt_out,
             "emailDayReport": dbUser.email_day_report,
             "emailSeasonReport": dbUser.email_season_report,
+            "teamFundingPct": dbUser.team_funding_pct,
         }
     except Exception as e:
         session.rollback()
@@ -2738,6 +2885,7 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
                 "teamColor": getattr(playerObj.team, 'color', '#334155') if playerObj and hasattr(playerObj.team, 'name') else "#334155",
                 "ratingStars": PlayerResponseBuilder.calculateStarRating(playerObj.playerRating) if playerObj else 0,
+                "fatigue": round((getattr(playerObj.attributes, 'fatigue', 0.0) or 0.0) * 100, 1) if playerObj else 0,
                 "pointsAtLock": rp.points_at_lock,
                 "seasonFantasyPoints": round(seasonFp, 1),
                 "currentFantasyPoints": currentFp,
@@ -4001,11 +4149,16 @@ def setEquippedCards(
 
 
 def _isShopOpen() -> bool:
-    """Check if the shop is open (regular season only, weeks 1-28)."""
+    """Check if the shop is open (regular season only, before week 28 games finish)."""
     sm = floosball_app.seasonManager if floosball_app else None
     if not sm or not sm.currentSeason:
         return False
-    return sm.currentSeason.currentWeek <= 28 and not sm.currentSeason.isComplete
+    cs = sm.currentSeason
+    if cs.isComplete or cs.currentWeek > 28:
+        return False
+    if cs.currentWeek == 28 and cs.completedWeekGames is not None:
+        return False
+    return True
 
 
 def _requireShopOpen():

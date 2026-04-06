@@ -43,8 +43,7 @@ def sendEmail(to: str, subject: str, html: str) -> bool:
 def sendAccessApprovedEmail(email: str) -> bool:
     """Send a notification that beta access has been granted."""
     subject = "You've been granted access to Floosball"
-    html = """
-    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
+    inner = """
         <h1 style="font-size: 24px; color: #e2e8f0; margin-bottom: 8px;">Welcome to Floosball</h1>
         <p style="font-size: 16px; color: #94a3b8; line-height: 1.6;">
             Your request to join the closed beta has been approved. You can now sign in and start playing.
@@ -54,13 +53,8 @@ def sendAccessApprovedEmail(email: str) -> bool:
                 Sign in to Floosball
             </a>
         </div>
-        <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
-        <p style="font-size: 11px; color: #475569;">
-            You're receiving this because you requested access to Floosball.
-        </p>
-    </div>
     """
-    return sendEmail(email, subject, html)
+    return sendEmail(email, subject, _wrapEmailHtml(inner))
 
 
 def _buildStatRow(label: str, value: str, color: str = "#e2e8f0") -> str:
@@ -70,6 +64,30 @@ def _buildStatRow(label: str, value: str, color: str = "#e2e8f0") -> str:
         <td style="padding: 8px 0; font-size: 13px; color: #94a3b8; border-bottom: 1px solid #1e293b;">{label}</td>
         <td style="padding: 8px 0; font-size: 13px; color: {color}; font-weight: 600; text-align: right; border-bottom: 1px solid #1e293b;">{value}</td>
     </tr>"""
+
+
+_EMAIL_FONT = "'Inconsolata', 'Courier New', monospace"
+_FONT_IMPORT = '@import url("https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;600;700");'
+
+
+_LOGO_URL = "https://floosball.com/logo192.png"
+
+
+def _wrapEmailHtml(innerHtml: str) -> str:
+    """Wrap email body with font import, logo header, and outer container."""
+    return f"""
+    <style>{_FONT_IMPORT}</style>
+    <div style="font-family: {_EMAIL_FONT}; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+            <img src="{_LOGO_URL}" alt="Floosball" width="40" height="40" style="display: inline-block;" />
+        </div>
+        {innerHtml}
+        <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
+        <p style="font-size: 11px; color: #475569;">
+            You're receiving this because you have a Floosball account. To change email preferences, visit your profile settings in the app.
+        </p>
+    </div>
+    """
 
 
 def _buildTeamSection(favTeam: dict, isSeasonEnd: bool = False) -> str:
@@ -85,6 +103,13 @@ def _buildTeamSection(favTeam: dict, isSeasonEnd: bool = False) -> str:
 
     if isSeasonEnd and favTeam.get('playoffResult'):
         rows += f'<div style="font-size: 13px; color: #c084fc; font-weight: 600; margin-bottom: 6px;">{favTeam["playoffResult"]}</div>'
+
+    # Playoff qualification (day 4 email)
+    if 'madePlayoffs' in favTeam:
+        if favTeam['madePlayoffs']:
+            rows += '<div style="font-size: 13px; color: #4ade80; font-weight: 600; margin-bottom: 6px;">Qualified for Playoffs</div>'
+        else:
+            rows += '<div style="font-size: 13px; color: #f87171; font-weight: 600; margin-bottom: 6px;">Eliminated from Playoff Contention</div>'
 
     todayGames = favTeam.get('todayGames', [])
     for g in todayGames:
@@ -112,8 +137,13 @@ def sendDayReport(email: str, data: dict) -> bool:
     leaderboardPrizes = data.get('leaderboardPrizes', [])
     pickEm = data.get('pickEm', {})
     favTeam = data.get('favoriteTeam')
+    leaderboardTop = data.get('leaderboardTop', [])
+    isDay4 = (dayNum == 4)
 
-    subject = f"Day {dayNum} Report \u2014 Season {season}"
+    if isDay4:
+        subject = f"Regular Season Complete \u2014 Season {season}"
+    else:
+        subject = f"Day {dayNum} Report \u2014 Season {season}"
 
     # Build stats table rows
     statsRows = _buildStatRow("Fantasy Points Today", f"+{dayFP:.1f} FP", "#4ade80")
@@ -136,7 +166,6 @@ def sendDayReport(email: str, data: dict) -> bool:
         </div>"""
 
     # Pick-em section
-    pickEmHtml = ""
     if pickEm.get('total', 0) > 0:
         correct = pickEm.get('correct', 0)
         total = pickEm['total']
@@ -150,16 +179,40 @@ def sendDayReport(email: str, data: dict) -> bool:
     # Favorite team
     teamHtml = _buildTeamSection(favTeam)
 
-    html = f"""
-    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
-        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 4px;">Day {dayNum} Report</h1>
-        <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">Season {season}</p>
+    # Day 4: season fantasy leaderboard
+    leaderboardHtml = ""
+    if isDay4 and leaderboardTop:
+        userRank = data.get('userSeasonRank', 0)
+        lbRows = ""
+        for entry in leaderboardTop:
+            isUser = (entry['rank'] == userRank)
+            nameColor = "#818cf8" if isUser else "#e2e8f0"
+            rowBg = "rgba(99,102,241,0.08)" if isUser else "transparent"
+            lbRows += f"""<tr style="background: {rowBg};">
+                <td style="padding: 5px 8px; font-size: 12px; color: #94a3b8; font-weight: 600;">#{entry['rank']}</td>
+                <td style="padding: 5px 8px; font-size: 12px; color: {nameColor}; font-weight: {'700' if isUser else '400'};">{entry['username']}</td>
+                <td style="padding: 5px 8px; font-size: 12px; color: #e2e8f0; font-weight: 600; text-align: right;">{entry['seasonTotal']}</td>
+            </tr>"""
+        leaderboardHtml = f"""
+        <div style="background: #1e293b; border-radius: 8px; padding: 14px; margin-top: 16px;">
+            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; margin-bottom: 10px;">Season Leaderboard</div>
+            <table style="width: 100%; border-collapse: collapse;">{lbRows}</table>
+            {f'<div style="font-size: 12px; color: #94a3b8; margin-top: 8px; text-align: center;">Your rank: <span style="color: #818cf8; font-weight: 600;">#{userRank}</span> of {totalUsers}</div>' if userRank > 10 else ''}
+        </div>"""
+
+    heading = "Regular Season Complete" if isDay4 else f"Day {dayNum} Report"
+    subheading = f"Season {season} \u2014 Playoffs begin tomorrow" if isDay4 else f"Season {season}"
+
+    inner = f"""
+        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 4px;">{heading}</h1>
+        <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">{subheading}</p>
 
         <table style="width: 100%; border-collapse: collapse;">
             {statsRows}
         </table>
 
         {prizeHtml}
+        {leaderboardHtml}
         {teamHtml}
 
         <div style="margin-top: 24px; text-align: center;">
@@ -167,60 +220,61 @@ def sendDayReport(email: str, data: dict) -> bool:
                 View Full Standings
             </a>
         </div>
-
-        <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
-        <p style="font-size: 11px; color: #475569;">
-            You're receiving this because you have a Floosball account. To change email preferences, visit your profile settings in the app.
-        </p>
-    </div>
     """
-    return sendEmail(email, subject, html)
+    return sendEmail(email, subject, _wrapEmailHtml(inner))
 
 
 def sendSeasonReport(email: str, data: dict) -> bool:
-    """Send a season-end summary email."""
+    """Send a season-end summary email (after playoffs)."""
     season = data['season']
-    seasonFP = data.get('seasonFP', 0)
-    seasonRank = data.get('seasonRank', 0)
-    totalUsers = data.get('totalUsers', 0)
     totalFloobitsEarned = data.get('totalFloobitsEarned', 0)
     bestWeeklyRank = data.get('bestWeeklyRank')
     seasonPrize = data.get('seasonPrize')
     pickEm = data.get('pickEm', {})
     favTeam = data.get('favoriteTeam')
+    champion = data.get('champion')
 
     subject = f"Season {season} Final Report"
 
     # Build stats table
-    statsRows = _buildStatRow("Final Fantasy Points", f"{seasonFP:.1f} FP")
-    if totalUsers > 0:
-        statsRows += _buildStatRow("Final Rank", f"#{seasonRank} of {totalUsers}")
-    if bestWeeklyRank:
-        statsRows += _buildStatRow("Best Weekly Finish", f"#{bestWeeklyRank}")
+    statsRows = ""
     if totalFloobitsEarned > 0:
         statsRows += _buildStatRow("Floobits Earned (Season)", f"+{totalFloobitsEarned}", "#eab308")
+    if bestWeeklyRank:
+        statsRows += _buildStatRow("Best Weekly Finish", f"#{bestWeeklyRank}")
     if seasonPrize:
         statsRows += _buildStatRow("Season Leaderboard Prize", f"+{seasonPrize} Floobits", "#f59e0b")
 
-    # Pick-em
+    # Pick-em (full season including playoffs)
     if pickEm.get('total', 0) > 0:
         correct = pickEm.get('correct', 0)
         total = pickEm['total']
         pct = round(correct / total * 100) if total > 0 else 0
         statsRows += _buildStatRow("Pick-Em Record", f'{correct}/{total} ({pct}%)')
 
+    # Champion announcement
+    championHtml = ""
+    if champion:
+        championHtml = f"""
+        <div style="background: rgba(234,179,8,0.08); border: 1px solid rgba(234,179,8,0.25); border-radius: 8px; padding: 14px; margin-bottom: 16px; text-align: center;">
+            <div style="font-size: 11px; color: #a16207; font-weight: 600; margin-bottom: 4px;">Floosbowl Champions</div>
+            <div style="font-size: 16px; color: #fbbf24; font-weight: 700;">{champion}</div>
+        </div>"""
+
     # Favorite team
     teamHtml = _buildTeamSection(favTeam, isSeasonEnd=True)
 
-    html = f"""
-    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #0f172a; color: #e2e8f0; border-radius: 12px;">
-        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 4px;">Season {season} Complete</h1>
-        <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">Final standings are in.</p>
-
+    statsTable = f"""
         <table style="width: 100%; border-collapse: collapse;">
             {statsRows}
-        </table>
+        </table>""" if statsRows else ""
 
+    inner = f"""
+        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 4px;">Season {season} Complete</h1>
+        <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">The Floosbowl has been decided.</p>
+
+        {championHtml}
+        {statsTable}
         {teamHtml}
 
         <div style="margin-top: 24px; text-align: center;">
@@ -228,11 +282,5 @@ def sendSeasonReport(email: str, data: dict) -> bool:
                 View Season Results
             </a>
         </div>
-
-        <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
-        <p style="font-size: 11px; color: #475569;">
-            You're receiving this because you have a Floosball account. To change email preferences, visit your profile settings in the app.
-        </p>
-    </div>
     """
-    return sendEmail(email, subject, html)
+    return sendEmail(email, subject, _wrapEmailHtml(inner))

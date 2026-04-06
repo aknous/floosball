@@ -182,6 +182,8 @@ class SeasonManager:
         elif mode_str == 'playoff-test':
             self.timingManager.scheduleGap = scheduleGap
             self.setTimingMode(TimingMode.PLAYOFF_TEST)
+        elif mode_str == 'turbo-silent':
+            self.setTimingMode(TimingMode.TURBO_SILENT)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -231,8 +233,8 @@ class SeasonManager:
         # Restore reigning champion flag from DB
         self._restoreReigningChampion(seasonNumber)
 
-        # Load funding tiers from previous season (affects morale during games)
-        self._loadTeamFundingTiers(seasonNumber)
+        # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
+        self._initializeTeamFunding(seasonNumber)
 
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
@@ -245,6 +247,14 @@ class SeasonManager:
         self._saveSeasonToDatabase()
 
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
+
+        # Broadcast season_start so connected frontends update immediately
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            seasonStartEvent = SeasonEvent.seasonStart(
+                seasonNumber=seasonNumber,
+                totalWeeks=len(self.currentSeason.schedule),
+            )
+            broadcaster.broadcast_sync('season', seasonStartEvent)
 
     async def runSeasonSimulation(self, resumeFromWeek: int = 0) -> None:
         """Run full season simulation.
@@ -391,12 +401,19 @@ class SeasonManager:
             isCrossDayTransition = nextWeek in (8, 15, 22)
             earlyMinutes = 480 if isCrossDayTransition else 15  # 8 hours vs 15 min
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=earlyMinutes)
+
+            # For the very first week, advance currentWeek before the wait so that
+            # card equip API targets week 1 (not orphan week 0).
+            if self.currentSeason.currentWeek == 0:
+                self.currentSeason.currentWeek = nextWeek
+                self.currentSeason.currentWeekText = nextWeekText
+
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # ── Official week transition ──
             # Advance currentWeek AFTER the wait so that between-weeks API calls
             # still see the completed week's fantasy/card data (not the upcoming
-            # empty week).  Before this point, use the local `nextWeek` variable.
+            # empty week).  For week 1, this was already set above.
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
 
@@ -597,6 +614,9 @@ class SeasonManager:
             # Additional record checks (matches original)
             self.recordsManager.checkCareerRecords()
             self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber)
+
+            # Accumulate fatigue after each week
+            self._accumulateFatigue()
 
             # Checkpoint: save team + player season stats after each week so a restart
             # can recover mid-season state without losing accumulated stats.
@@ -2786,6 +2806,9 @@ class SeasonManager:
             except asyncio.CancelledError:
                 pass
 
+            # Accumulate fatigue after each playoff round
+            self._accumulateFatigue()
+
             # Clear active games so roster swaps are unlocked between rounds.
             # Keep a reference so the API can still serve them until next round.
             self.currentSeason.completedWeekGames = self.currentSeason.activeGames
@@ -2892,6 +2915,16 @@ class SeasonManager:
                         nextGameStartTime=nextStartIso,
                     )
                     broadcaster.broadcast_sync('season', weekEndEvent)
+            else:
+                # Floosbowl finished — broadcast week_end for the final round too
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                    weekEndEvent = SeasonEvent.weekEnd(
+                        seasonNumber=self.currentSeason.seasonNumber,
+                        weekNumber=28 + currentRound,
+                        results=[],
+                        nextGameStartTime=None,
+                    )
+                    broadcaster.broadcast_sync('season', weekEndEvent)
 
         # Clear PLAYOFF_TEST phase flag
         self.timingManager.playoffPhase = False
@@ -2907,32 +2940,10 @@ class SeasonManager:
             gameInstance.isRegularSeasonGame = False
             gameInstance.isPlayoff = True
 
-            # Wire fantasy tracker callback for each player (with Q4 tracking)
-            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
-            if fantasyTracker:
-                for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
-                    for player in team.rosterDict.values():
-                        if player:
-                            pid = player.id
-                            def _makeFpCallback(_pid, _game, _ft):
-                                def cb(pts):
-                                    _ft.addPlayerPoints(_pid, pts)
-                                    if _game.currentQuarter >= 4:
-                                        _ft.addPlayerQ4Points(_pid, pts)
-                                return cb
-                            player.stat_tracker._on_fantasy_points = _makeFpCallback(
-                                pid, gameInstance, fantasyTracker
-                            )
+            # No fantasy tracker callbacks for playoff games — FP is regular season only
 
             # Simulate the game
             await gameInstance.playGame()
-
-            # Clear fantasy tracker callbacks after game
-            if fantasyTracker:
-                for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
-                    for player in team.rosterDict.values():
-                        if player:
-                            player.stat_tracker._on_fantasy_points = None
 
             # Determine winner
             winner = game.homeTeam if gameInstance.homeScore > gameInstance.awayScore else game.awayTeam
@@ -3008,7 +3019,19 @@ class SeasonManager:
         # Update game state
         seasonNumber = self.currentSeason.seasonNumber
         self.serviceContainer.getService('game_state').setState('seasonsPlayed', seasonNumber)
-        
+
+        # Broadcast season_end so connected frontends know the season is over
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            championData = {}
+            if self.currentSeason.champion:
+                championData = {'name': self.currentSeason.champion.name, 'abbr': self.currentSeason.champion.abbr}
+            seasonEndEvent = SeasonEvent.seasonEnd(
+                seasonNumber=seasonNumber,
+                champion=championData,
+                standings=[],
+            )
+            broadcaster.broadcast_sync('season', seasonEndEvent)
+
         logger.info(f"Season {seasonNumber} completed. Champion: {self.currentSeason.champion.name if self.currentSeason.champion else 'None'}")
     
     async def handleOffseason(self) -> None:
@@ -3126,6 +3149,9 @@ class SeasonManager:
         # STEP 6: FA Draft
         logger.info("Step 6: Free agency draft")
         await self._processFreeAgency()
+
+        # STEP 6.5: Validate roster/FA integrity after draft
+        self._validateRosterIntegrity()
 
         # Disable broadcasting after draft for OFFSEASON_TEST mode
         if offseasonTestBroadcastEnabled:
@@ -3562,6 +3588,44 @@ class SeasonManager:
                         'event': {'text': f'{player.name} has become a Free Agent'}
                     })
     
+    def _validateRosterIntegrity(self) -> None:
+        """Fix player-team reference mismatches after FA draft.
+
+        Ensures every rostered player's .team points at the correct team object
+        and that self.freeAgents does not contain any rostered players.
+        """
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+
+        # Build lookup: playerId → team for all rostered players
+        rosteredLookup: dict = {}
+        for team in teamManager.teams:
+            for pos, player in team.rosterDict.items():
+                if player is not None:
+                    rosteredLookup[player.id] = team
+
+        fixes = 0
+        # Fix rostered players whose .team is wrong
+        for playerId, team in rosteredLookup.items():
+            for pos, player in team.rosterDict.items():
+                if player is not None and player.id == playerId:
+                    if not hasattr(player.team, 'id') or getattr(player.team, 'id', None) != team.id:
+                        logger.warning(f"Roster integrity fix: {player.name} on {team.name} had team='{player.team}', correcting")
+                        player.team = team
+                        fixes += 1
+                    break
+
+        # Remove rostered players from freeAgents list
+        faRemovals = 0
+        cleanFa = [p for p in self.playerManager.freeAgents if p.id not in rosteredLookup]
+        faRemovals = len(self.playerManager.freeAgents) - len(cleanFa)
+        if faRemovals > 0:
+            self.playerManager.freeAgents[:] = cleanFa
+
+        if fixes or faRemovals:
+            logger.info(f"Roster integrity: fixed {fixes} team refs, removed {faRemovals} rostered players from FA list")
+
     def _executePlayerRetirement(self, player, team, position, leagueHighlights):
         """Execute the retirement of a player from a team roster"""
         player.previousTeam = team.name
@@ -4089,7 +4153,13 @@ class SeasonManager:
         """Initialize season statistics tracking"""
         # Save roster history for each team at the start of the season
         self._saveRosterHistory()
-        
+
+        # Reset fatigue for all players at the start of a new season
+        for team in self.leagueManager.teams:
+            for player in team.rosterDict.values():
+                if player is not None:
+                    player.attributes.fatigue = 0.0
+
         # Initialize team season stats
         for team in self.leagueManager.teams:
             if not hasattr(team, 'seasonTeamStats'):
@@ -4784,33 +4854,62 @@ class SeasonManager:
                 # Pre-fetch team objects for name lookup
                 teamManager = self.serviceContainer.getService('team_manager')
 
+                # Day 4: compute playoff teams + season leaderboard
+                isDay4 = (dayNum == 4)
+                playoffTeamIds = set()
+                leaderboardTop = []
+                if isDay4:
+                    # Determine playoff teams: top half of each league by (winPerc, scoreDiff)
+                    for league in self.leagueManager.leagues:
+                        sortedTeams = sorted(
+                            league.teamList,
+                            key=lambda t: (t.seasonTeamStats.get('winPerc', 0), t.seasonTeamStats.get('scoreDiff', 0)),
+                            reverse=True,
+                        )
+                        cutoff = len(sortedTeams) // 2
+                        for t in sortedTeams[:cutoff]:
+                            playoffTeamIds.add(t.id)
+
+                    # Season leaderboard top 10
+                    for i, entry in enumerate(seasonRanked[:10]):
+                        leaderboardTop.append({
+                            'rank': i + 1,
+                            'username': entry['username'],
+                            'seasonTotal': round(entry['seasonTotal'], 1),
+                        })
+
                 sent = 0
                 for user in users:
                     try:
                         userEntry = fpByUser.get(user.id)
 
-                        # Day FP: sum weekTotal across the day's weeks
-                        # We need per-week FP — use weekly snapshots or compute from weekRange
+                        # Day FP: roster player FP + card bonus FP for this day's weeks
                         dayFP = 0.0
                         if userEntry:
-                            # weekTotal in snapshot is for the LATEST week only.
-                            # Query WeeklyPlayerFP for accurate day total.
-                            from database.models import WeeklyPlayerFP, FantasyRoster
+                            from database.models import WeeklyPlayerFP, WeeklyCardBonus, FantasyRoster
                             roster = session.query(FantasyRoster).filter_by(
                                 user_id=user.id, season=season
                             ).first()
                             if roster:
+                                from sqlalchemy import func
                                 rosterPlayerIds = [rp.player_id for rp in roster.players]
                                 if rosterPlayerIds:
-                                    from sqlalchemy import func
-                                    dayFPResult = session.query(
+                                    dayPlayerFP = session.query(
                                         func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0)
                                     ).filter(
                                         WeeklyPlayerFP.player_id.in_(rosterPlayerIds),
                                         WeeklyPlayerFP.season == season,
                                         WeeklyPlayerFP.week.in_(weekRange),
                                     ).scalar()
-                                    dayFP = float(dayFPResult or 0)
+                                    dayFP += float(dayPlayerFP or 0)
+                                dayCardBonus = session.query(
+                                    func.coalesce(func.sum(WeeklyCardBonus.bonus_fp), 0)
+                                ).filter(
+                                    WeeklyCardBonus.roster_id == roster.id,
+                                    WeeklyCardBonus.season == season,
+                                    WeeklyCardBonus.week.in_(weekRange),
+                                ).scalar()
+                                dayFP += float(dayCardBonus or 0)
 
                         seasonFP = userEntry['seasonTotal'] if userEntry else 0.0
                         seasonRank = rankByUser.get(user.id, 0)
@@ -4916,6 +5015,9 @@ class SeasonManager:
                                     'ties': favStats.get('ties', 0),
                                     'todayGames': todayGames,
                                 }
+                                if isDay4:
+                                    madePlayoffs = user.favorite_team_id in playoffTeamIds
+                                    favTeamData['madePlayoffs'] = madePlayoffs
 
                         data = {
                             'season': season,
@@ -4929,6 +5031,9 @@ class SeasonManager:
                             'pickEm': pickEmData,
                             'favoriteTeam': favTeamData,
                         }
+                        if isDay4:
+                            data['leaderboardTop'] = leaderboardTop
+                            data['userSeasonRank'] = rankByUser.get(user.id, 0)
                         sendDayReport(user.email, data)
                         sent += 1
                     except Exception as userErr:
@@ -4949,22 +5054,6 @@ class SeasonManager:
             from managers.emailManager import sendSeasonReport
             from sqlalchemy import func
 
-            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
-            if not fantasyTracker:
-                return
-
-            try:
-                snapshot = fantasyTracker.getSnapshot(completedSeason)
-            except Exception:
-                logger.warning("Could not get fantasy snapshot for season-end emails")
-                return
-
-            entries = snapshot.get('entries', [])
-            seasonRanked = sorted(entries, key=lambda e: e['seasonTotal'], reverse=True)
-            rankByUser = {e['userId']: i + 1 for i, e in enumerate(seasonRanked)}
-            fpByUser = {e['userId']: e for e in entries}
-            totalUsers = len(entries)
-
             session = get_session()
             try:
                 users = session.query(User).filter(
@@ -4977,13 +5066,15 @@ class SeasonManager:
                 pickemRepo = PickEmRepository(session)
                 teamManager = self.serviceContainer.getService('team_manager')
 
+                # Champion name (same for all users)
+                championName = None
+                if hasattr(self.currentSeason, 'champion') and self.currentSeason.champion:
+                    champ = self.currentSeason.champion
+                    championName = f"{champ.city} {champ.name}" if hasattr(champ, 'city') else champ.name
+
                 sent = 0
                 for user in users:
                     try:
-                        userEntry = fpByUser.get(user.id)
-                        seasonFP = userEntry['seasonTotal'] if userEntry else 0.0
-                        seasonRank = rankByUser.get(user.id, 0)
-
                         # Total floobits earned this season (positive transactions only)
                         totalFloobits = session.query(
                             func.coalesce(func.sum(CurrencyTransaction.amount), 0)
@@ -5065,14 +5156,12 @@ class SeasonManager:
 
                         data = {
                             'season': completedSeason,
-                            'seasonFP': seasonFP,
-                            'seasonRank': seasonRank,
-                            'totalUsers': totalUsers,
                             'totalFloobitsEarned': totalFloobits,
                             'bestWeeklyRank': bestWeeklyRank,
                             'seasonPrize': int(seasonPrize) if seasonPrize else None,
                             'pickEm': pickEmData,
                             'favoriteTeam': favTeamData,
+                            'champion': championName,
                         }
                         sendSeasonReport(user.email, data)
                         sent += 1
@@ -5085,91 +5174,178 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Error sending season-end emails: {e}")
 
+    def _accumulateFatigue(self) -> None:
+        """Increase fatigue for all rostered players based on resilience and team funding tier."""
+        from constants import (BASE_FATIGUE_PER_WEEK, FATIGUE_RESILIENCE_SCALE,
+                               FATIGUE_RESILIENCE_CEILING, FUNDING_FATIGUE_REDUCTION,
+                               RATING_SCALE_MIN, RATING_SCALE_MAX)
+        for team in self.leagueManager.teams:
+            fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
+            fundingReduction = FUNDING_FATIGUE_REDUCTION.get(fundingTier, 0.0)
+            for player in team.rosterDict.values():
+                if player is None:
+                    continue
+                resilience = getattr(player.attributes, 'resilience', 80)
+                resilienceFactor = (resilience - RATING_SCALE_MIN) / (RATING_SCALE_MAX - RATING_SCALE_MIN)
+                weeklyGain = BASE_FATIGUE_PER_WEEK * (FATIGUE_RESILIENCE_CEILING - FATIGUE_RESILIENCE_SCALE * resilienceFactor)
+                adjustedGain = weeklyGain * (1.0 - fundingReduction)
+                player.attributes.fatigue = min(1.0, (player.attributes.fatigue or 0.0) + adjustedGain)
+
     def _applySeasonEndTax(self, completedSeason: int) -> None:
-        """Deduct a percentage of each user's unspent Floobits between seasons.
-        Tax amounts are directed to the user's favorite team's funding pool."""
+        """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
+        Contributions update the existing TeamFunding records created at season start."""
         import math
-        from constants import SEASON_END_TAX_RATE
-        if SEASON_END_TAX_RATE <= 0:
-            return
+        from constants import DEFAULT_FUNDING_PCT
         try:
             from database.connection import get_session
-            from database.models import User
+            from database.models import User, TeamFunding
             from database.repositories.card_repositories import CurrencyRepository
             session = get_session()
             try:
                 currencyRepo = CurrencyRepository(session)
                 users = session.query(User).all()
-                taxed = 0
-                totalTaxCollected = 0
-                teamFundingAccum = {}  # teamId -> total tax collected
+                contributed = 0
+                totalCollected = 0
+                teamFundingAccum = {}  # teamId -> total collected
                 for user in users:
+                    pct = getattr(user, 'team_funding_pct', DEFAULT_FUNDING_PCT)
+                    if pct is None:
+                        pct = DEFAULT_FUNDING_PCT
+                    pct = max(0, min(100, pct))
+                    if pct <= 0:
+                        continue
+                    # No favorite team means no contribution (floobits stay)
+                    favTeamId = user.favorite_team_id
+                    if favTeamId is None:
+                        continue
                     currency = currencyRepo.getByUser(user.id)
                     balance = currency.balance if currency else 0
                     if balance <= 0:
                         continue
-                    taxAmount = math.floor(balance * SEASON_END_TAX_RATE)
-                    if taxAmount <= 0:
+                    contribution = math.floor(balance * pct / 100.0)
+                    if contribution <= 0:
                         continue
                     currencyRepo.spendFunds(
-                        user.id, taxAmount, 'season_end_tax',
-                        description=f'Season {completedSeason} end-of-season tax ({int(SEASON_END_TAX_RATE * 100)}%)',
+                        user.id, contribution, 'season_end_tax',
+                        description=f'Season {completedSeason} team funding ({pct}%)',
                         season=completedSeason,
                     )
-                    taxed += 1
-                    totalTaxCollected += taxAmount
-                    # Direct tax to favorite team's funding pool
-                    favTeamId = user.favorite_team_id
-                    if favTeamId is not None:
-                        teamFundingAccum[favTeamId] = teamFundingAccum.get(favTeamId, 0) + taxAmount
-                # Record team funding and assign tiers
-                self._recordTeamFunding(session, completedSeason, teamFundingAccum, totalTaxCollected)
+                    contributed += 1
+                    totalCollected += contribution
+                    teamFundingAccum[favTeamId] = teamFundingAccum.get(favTeamId, 0) + contribution
+
+                # Update existing TeamFunding records (created at season start)
+                records = session.query(TeamFunding).filter_by(season=completedSeason).all()
+                recordMap = {r.team_id: r for r in records}
+                for teamId, amount in teamFundingAccum.items():
+                    rec = recordMap.get(teamId)
+                    if rec:
+                        rec.fan_contributions = (rec.fan_contributions or 0) + amount
+                        rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
+                        rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
+
                 session.commit()
-                logger.info(f"Season-end tax applied to {taxed} users ({int(SEASON_END_TAX_RATE * 100)}%), total {totalTaxCollected}F collected")
+                logger.info(f"Season-end funding collected from {contributed} users, total {totalCollected}F")
             except Exception as e:
                 session.rollback()
-                logger.error(f"Error applying season-end tax: {e}")
+                logger.error(f"Error applying season-end funding: {e}")
             finally:
                 session.close()
         except ImportError:
             pass
 
-    def _recordTeamFunding(self, session, completedSeason: int, teamFundingAccum: dict, totalTaxCollected: int) -> None:
-        """Record collected taxes as team funding, computing decay carry-forward and assigning tiers."""
-        import math
-        from constants import FUNDING_DECAY_RATE
-        from database.models import TeamFunding
+    def contributeToTeam(self, userId: int, teamId: int, amount: int) -> dict:
+        """Allow a user to contribute Floobits to their favorite team's funding pool mid-season.
 
-        # Fetch previous season's effective funding for carry-forward
-        prevFunding = {}
-        if completedSeason > 1:
-            prevRecords = session.query(TeamFunding).filter_by(season=completedSeason - 1).all()
-            for rec in prevRecords:
-                prevFunding[rec.team_id] = rec.effective_funding
+        Contributions are tracked on the current season's record but do NOT change the
+        active funding tier — tiers are locked at season start. The contributions will
+        factor into next season's carry-forward when _initializeTeamFunding reads
+        effective_funding from the completed season.
 
-        # Get all team IDs to ensure every team gets a record
-        teamManager = self.serviceContainer.getService('team_manager')
-        allTeamIds = [t.id for t in teamManager.teams]
+        Returns dict with updated funding info and user balance, or raises ValueError on failure.
+        """
+        if amount <= 0:
+            raise ValueError("Contribution amount must be positive")
+        if not self.currentSeason:
+            raise ValueError("No active season")
 
-        for teamId in allTeamIds:
-            currentTax = teamFundingAccum.get(teamId, 0)
-            carriedFunding = math.floor(prevFunding.get(teamId, 0) * FUNDING_DECAY_RATE)
-            effectiveFunding = currentTax + carriedFunding
+        from database.connection import get_session
+        from database.models import User, TeamFunding
+        from database.repositories.card_repositories import CurrencyRepository
 
-            funding = TeamFunding(
-                team_id=teamId,
-                season=completedSeason,
-                current_funding=currentTax,
-                carried_funding=carriedFunding,
-                effective_funding=effectiveFunding,
+        session = get_session()
+        try:
+            user = session.query(User).filter_by(id=userId).first()
+            if not user:
+                raise ValueError("User not found")
+            if user.favorite_team_id != teamId:
+                raise ValueError("You can only contribute to your favorite team")
+
+            currencyRepo = CurrencyRepository(session)
+            currency = currencyRepo.getByUser(userId)
+            balance = currency.balance if currency else 0
+            if balance < amount:
+                raise ValueError(f"Insufficient balance ({balance}F available)")
+
+            # Deduct from user
+            currencyRepo.spendFunds(
+                userId, amount, 'team_contribution',
+                description=f'Season {self.currentSeason.seasonNumber} team contribution',
+                season=self.currentSeason.seasonNumber,
             )
-            session.add(funding)
 
-        session.flush()
-        self._assignFundingTiers(session, completedSeason, totalTaxCollected, len(allTeamIds))
+            # Update TeamFunding record — track contribution but don't change tier
+            rec = session.query(TeamFunding).filter_by(
+                team_id=teamId,
+                season=self.currentSeason.seasonNumber,
+            ).first()
+            if not rec:
+                raise ValueError("Team funding record not found for current season")
 
-    def _assignFundingTiers(self, session, season: int, totalTaxCollected: int, numTeams: int) -> None:
-        """Assign funding tiers based on dynamic thresholds relative to fair share."""
+            rec.fan_contributions = (rec.fan_contributions or 0) + amount
+            # Update totals for record-keeping, but tier stays locked from season start
+            rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
+            rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
+
+            session.commit()
+
+            # Re-read balance after spend
+            currency = currencyRepo.getByUser(userId)
+            newBalance = currency.balance if currency else 0
+
+            logger.info(f"User {userId} contributed {amount}F to team {teamId} (fan_contributions: {rec.fan_contributions}F, tier unchanged: {rec.funding_tier})")
+
+            return {
+                'teamId': teamId,
+                'amount': amount,
+                'newBalance': newBalance,
+                'funding': {
+                    'baselineFunding': rec.baseline_funding or 0,
+                    'fanContributions': rec.fan_contributions or 0,
+                    'carriedFunding': rec.carried_funding or 0,
+                    'currentFunding': rec.current_funding,
+                    'effectiveFunding': rec.effective_funding,
+                    'tier': rec.funding_tier,
+                    'tierRank': rec.tier_rank,
+                },
+            }
+        except ValueError:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error processing team contribution: {e}")
+            raise ValueError(f"Contribution failed: {e}")
+        finally:
+            session.close()
+
+    def _assignFundingTiers(self, session, season: int) -> None:
+        """Assign funding tiers based on fixed absolute thresholds.
+
+        Thresholds are fixed Floobits amounts (e.g., >= 2000 = MEGA, >= 1000 = LARGE,
+        >= 500 = MID, else SMALL). Stable and predictable — other teams' funding
+        never affects your tier.
+        """
         from database.models import TeamFunding
         from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
 
@@ -5177,13 +5353,10 @@ class SeasonManager:
         if not records:
             return
 
-        # Fair share: what each team would get if fans were evenly distributed
-        fairShare = totalTaxCollected / numTeams if numTeams > 0 and totalTaxCollected > 0 else 1
-
         for rec in records:
             tierAssigned = False
             for i, threshold in enumerate(FUNDING_TIER_THRESHOLDS):
-                if rec.effective_funding >= fairShare * threshold:
+                if rec.effective_funding >= threshold:
                     rec.funding_tier = FUNDING_TIER_NAMES[i]
                     rec.tier_rank = i + 1
                     tierAssigned = True
@@ -5194,7 +5367,7 @@ class SeasonManager:
 
         session.flush()
 
-        # Also update runtime team objects so offseason training can use the tiers immediately
+        # Also update runtime team objects so game effects apply immediately
         teamManager = self.serviceContainer.getService('team_manager')
         tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
         for team in teamManager.teams:
@@ -5205,7 +5378,7 @@ class SeasonManager:
         tierCounts = {}
         for rec in records:
             tierCounts[rec.funding_tier] = tierCounts.get(rec.funding_tier, 0) + 1
-        logger.info(f"Funding tiers assigned for season {season} (fair share: {fairShare:.0f}F): {tierCounts}")
+        logger.info(f"Funding tiers assigned for season {season}: {tierCounts}")
 
     def _restoreReigningChampion(self, currentSeason: int) -> None:
         """Restore the floosbowlChampion flag on the team that won last season."""
@@ -5227,35 +5400,76 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to restore reigning champion: {e}")
 
-    def _loadTeamFundingTiers(self, currentSeason: int) -> None:
-        """Load funding tiers from the previous completed season onto runtime team objects."""
+    def _initializeTeamFunding(self, currentSeason: int) -> None:
+        """Create TeamFunding records at season start with league baseline + carry-forward.
+        Assigns initial tiers so teams have funding effects from week 1."""
+        import math
+        from constants import FUNDING_BASELINE_PER_TEAM, FUNDING_DECAY_RATE
         previousSeason = currentSeason - 1
-        if previousSeason < 1:
-            logger.info("First season — all teams default to MID_MARKET funding tier")
-            return
         try:
             from database.connection import get_session
             from database.models import TeamFunding
             session = get_session()
             try:
-                records = session.query(TeamFunding).filter_by(season=previousSeason).all()
-                if not records:
-                    logger.info(f"No funding records for season {previousSeason} — all teams default to MID_MARKET")
+                # Fetch previous season's effective funding for carry-forward
+                prevFunding = {}
+                if previousSeason >= 1:
+                    prevRecords = session.query(TeamFunding).filter_by(season=previousSeason).all()
+                    for rec in prevRecords:
+                        prevFunding[rec.team_id] = rec.effective_funding
+
+                # Check if records already exist for this season (resume after restart)
+                existing = session.query(TeamFunding).filter_by(season=currentSeason).first()
+                if existing:
+                    # Records already created — just load tiers onto runtime teams
+                    records = session.query(TeamFunding).filter_by(season=currentSeason).all()
+                    tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    for team in teamManager.teams:
+                        tier, rank = tierMap.get(team.id, ('MID_MARKET', 3))
+                        team.fundingTier = tier
+                        team.fundingTierRank = rank
+                    tierCounts = {}
+                    for r in records:
+                        tierCounts[r.funding_tier] = tierCounts.get(r.funding_tier, 0) + 1
+                    logger.info(f"Resumed funding records for season {currentSeason}: {tierCounts}")
                     return
-                tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
+
+                # Create new records for every team
                 teamManager = self.serviceContainer.getService('team_manager')
                 for team in teamManager.teams:
-                    tier, rank = tierMap.get(team.id, ('MID_MARKET', 3))
-                    team.fundingTier = tier
-                    team.fundingTierRank = rank
-                tierCounts = {}
-                for r in records:
-                    tierCounts[r.funding_tier] = tierCounts.get(r.funding_tier, 0) + 1
-                logger.info(f"Loaded funding tiers from season {previousSeason}: {tierCounts}")
+                    carriedFunding = math.floor(prevFunding.get(team.id, 0) * FUNDING_DECAY_RATE)
+                    baseline = FUNDING_BASELINE_PER_TEAM
+                    currentFunding = baseline
+                    effectiveFunding = currentFunding + carriedFunding
+
+                    funding = TeamFunding(
+                        team_id=team.id,
+                        season=currentSeason,
+                        baseline_funding=baseline,
+                        fan_contributions=0,
+                        current_funding=currentFunding,
+                        carried_funding=carriedFunding,
+                        effective_funding=effectiveFunding,
+                    )
+                    session.add(funding)
+
+                session.flush()
+                self._assignFundingTiers(session, currentSeason)
+                session.commit()
+                logger.info(f"Initialized team funding for season {currentSeason} (baseline={FUNDING_BASELINE_PER_TEAM}F)")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error initializing team funding: {e}")
+                # Fall back to MID_MARKET defaults
+                teamManager = self.serviceContainer.getService('team_manager')
+                for team in teamManager.teams:
+                    team.fundingTier = 'MID_MARKET'
+                    team.fundingTierRank = 3
             finally:
                 session.close()
-        except Exception as e:
-            logger.warning(f"Could not load funding tiers: {e}")
+        except ImportError:
+            logger.info("First season — all teams default to MID_MARKET funding tier")
 
     def _getPickemWeek(self) -> int:
         """Return the effective week number for pick-em storage.

@@ -81,6 +81,32 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # Fatigue + funding preference columns (v0.8)
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN fatigue REAL DEFAULT 0.0"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.fatigue")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN team_funding_pct INTEGER DEFAULT 25"))
+            conn.commit()
+            logger.info("  Migration: added users.team_funding_pct")
+        except Exception:
+            conn.rollback()
+
+        # Team funding breakdown columns (v0.9)
+        for col, colDef in [
+            ('baseline_funding', 'INTEGER DEFAULT 0'),
+            ('fan_contributions', 'INTEGER DEFAULT 0'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE team_funding ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added team_funding.{col}")
+            except Exception:
+                conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [
@@ -507,6 +533,8 @@ def clear_db():
     Base.metadata.create_all(bind=engine)
     logger.info(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
+    # Run migrations for preserved tables (e.g. new columns on users)
+    _runPendingMigrations()
     _seedPackTypes()
     _seedBetaAllowlist()
 

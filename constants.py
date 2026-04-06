@@ -114,14 +114,23 @@ ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same
 WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
 WEEKLY_FP_FLOOBIT_CAP = 40      # Max Floobits earned from FP conversion per week
 
-SEASON_END_TAX_RATE = 0.25  # 25% of unspent floobits removed between seasons
+DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
-FUNDING_TIER_THRESHOLDS = [1.75, 1.0, 0.5]  # multipliers of fairShare: >= 1.75 = MEGA, >= 1.0 = LARGE, >= 0.5 = MID, else SMALL
+FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
+FUNDING_TIER_THRESHOLDS = [2000, 1000, 500]  # Fixed absolute thresholds: >= 2000 = MEGA, >= 1000 = LARGE, >= 500 = MID, else SMALL
 FUNDING_TIER_NAMES = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
 FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
+FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
+
+# ---- Player Fatigue ----
+BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
+FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
+FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
+FATIGUE_PHYSICAL_IMPACT = 1.0       # Full fatigue applied to physical attributes
+FATIGUE_MENTAL_IMPACT = 0.3         # 30% of fatigue applied to mental attributes
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {

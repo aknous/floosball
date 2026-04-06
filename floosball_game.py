@@ -2201,6 +2201,28 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
 
+        # ── Hail Mary: desperation deep throw when trailing in Q4 ──
+        # Time for only one play and too far for a FG — heave it toward the endzone
+        if (self.currentQuarter == 4 and scoreDiff < 0
+                and self.yardsToEndzone >= 30
+                and not self._isGarbageTime(scoreDiff)):
+            fgCanHelp = (scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg)
+            if not fgCanHelp:
+                isLastPlayByClock = self.gameClockSeconds <= 15
+                isLastPlayByDown = (self.down == 4 and self.gameClockSeconds <= 60)
+                if isLastPlayByClock or isLastPlayByDown:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'hailMary',
+                        'reason': 'Desperation — need a miracle score',
+                        'clockRemaining': self.gameClockSeconds,
+                        'yardsToEndzone': self.yardsToEndzone,
+                        'scoreDiff': scoreDiff,
+                        'down': self.down,
+                    }
+                    self.play.passPlay('Play9')
+                    self.play.targetSideline = False
+                    return
+
         # 4th down
         if self.down == 4:
             self._fourthDownCaller(scoreDiff, coach, isHome)
@@ -2644,6 +2666,10 @@ class Game:
                     self.leagueHighlights.insert(0, {'event': {'text': '{} {} are on a hot streak!'.format(self.winningTeam.city, self.winningTeam.name)}})
             else:
                 self.winningTeam.seasonTeamStats['streak'] = 1
+            winAbsStreak = abs(self.winningTeam.seasonTeamStats['streak'])
+            self.winningTeam.seasonTeamStats['peakStreak'] = max(
+                self.winningTeam.seasonTeamStats.get('peakStreak', 0), winAbsStreak
+            )
             self._accumulateDefenseStats(self.winningTeam)
 
             self.losingTeam.seasonTeamStats['priorStreak'] = self.losingTeam.seasonTeamStats['streak']
@@ -2654,6 +2680,10 @@ class Game:
                     self.leagueHighlights.insert(0, {'event': {'text': '{} {} ended the {} {} hot streak!'.format(self.winningTeam.city, self.winningTeam.name, self.losingTeam.city, self.losingTeam.name)}})
             else:
                 self.losingTeam.seasonTeamStats['streak'] -= 1
+            loseAbsStreak = abs(self.losingTeam.seasonTeamStats['streak'])
+            self.losingTeam.seasonTeamStats['peakStreak'] = max(
+                self.losingTeam.seasonTeamStats.get('peakStreak', 0), loseAbsStreak
+            )
             self._accumulateDefenseStats(self.losingTeam)
 
         self._calculateDefenseFantasyPoints(self.homeTeam)
@@ -2840,6 +2870,10 @@ class Game:
         # Apply funding morale modifiers (small pregame confidence/determination nudge)
         self._applyFundingMorale(self.homeTeam)
         self._applyFundingMorale(self.awayTeam)
+
+        # Apply fatigue penalties (accumulated over the season)
+        self._applyFatigue(self.homeTeam)
+        self._applyFatigue(self.awayTeam)
 
         x = batched_randint(0,1)
         if x == 0:
@@ -3985,6 +4019,36 @@ class Game:
             if player is not None and player.gameAttributes is not None:
                 player.updateInGameConfidence(modifier * 0.6)
                 player.updateInGameDetermination(modifier * 0.4)
+
+    def _applyFatigue(self, team):
+        """Reduce in-game attributes based on accumulated player fatigue."""
+        from constants import (FATIGUE_PHYSICAL_IMPACT, FATIGUE_MENTAL_IMPACT,
+                               RATING_SCALE_MIN)
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            fatigue = getattr(player.attributes, 'fatigue', 0.0) or 0.0
+            if fatigue <= 0:
+                continue
+
+            # Physical attributes: full fatigue impact
+            physMult = 1.0 - fatigue * FATIGUE_PHYSICAL_IMPACT
+            for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                         'accuracy', 'legStrength', 'reach'):
+                val = getattr(player.gameAttributes, attr, 0)
+                setattr(player.gameAttributes, attr,
+                        max(RATING_SCALE_MIN, round(val * physMult)))
+
+            # Mental/derived attributes: reduced impact
+            mentalMult = 1.0 - fatigue * FATIGUE_MENTAL_IMPACT
+            for attr in ('focus', 'discipline', 'routeRunning', 'vision'):
+                val = getattr(player.gameAttributes, attr, 0)
+                setattr(player.gameAttributes, attr,
+                        max(RATING_SCALE_MIN, round(val * mentalMult)))
+
+            # Recalculate derived attributes after fatigue adjustments
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
 
     def formatTime(self, seconds: int) -> str:
         """Format seconds into MM:SS display format"""

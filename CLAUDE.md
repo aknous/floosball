@@ -68,6 +68,9 @@ avatar_generator.py               # SVG team avatar generation + disk caching
 | `turbo` | Short pauses between games/weeks, no in-game delays |
 | `demo` | Fast but with visible offseason pick delays |
 | `test-scheduled` | Compressed scheduled (minutes apart, fast polling) |
+| `turbo-silent` | Sequential delays between games/weeks, no in-game delays, no broadcasting |
+| `playoff-test` | Fast regular season + compressed scheduled playoffs (with broadcasting) |
+| `offseason-test` | Fast regular season (no broadcast), interactive offseason |
 
 ### Season Structure
 - 28 regular season weeks across 4 game days (7 rounds/day), anchored to season start date

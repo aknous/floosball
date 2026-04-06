@@ -19,6 +19,7 @@ Timing Modes:
     --playoff-test                  Fast regular season + compressed scheduled playoffs (with broadcasting)
     --offseason-test                Fast regular season (no broadcast), interactive offseason (3 min FA window, live draft)
     --catchup, --timing=catchup     Backdate season to last Monday, catch up missed games, then switch to scheduled
+    --turbo-silent                   Turbo delays between weeks, no in-game delays, no broadcasting
 
 Options:
     --fresh                         Clear database and start fresh
@@ -78,6 +79,8 @@ def _resolveTimingMode(modeStr: str) -> TimingMode:
         'catch-up': TimingMode.CATCHUP,
         'fast-catchup': TimingMode.FAST_CATCHUP,
         'fast_catchup': TimingMode.FAST_CATCHUP,
+        'turbo-silent': TimingMode.TURBO_SILENT,
+        'turbo_silent': TimingMode.TURBO_SILENT,
     }
     return modeMap.get(modeStr, TimingMode.FAST)
 
@@ -116,27 +119,7 @@ def parse_args():
     # CLI args override env vars
     for arg in sys.argv[1:]:
         if arg.startswith('--timing='):
-            mode_str = arg.split('=')[1].lower()
-            if mode_str == 'fast':
-                args['timing_mode'] = TimingMode.FAST
-            elif mode_str == 'turbo':
-                args['timing_mode'] = TimingMode.TURBO
-            elif mode_str in ['sequential', 'slow']:
-                args['timing_mode'] = TimingMode.SEQUENTIAL
-            elif mode_str == 'scheduled':
-                args['timing_mode'] = TimingMode.SCHEDULED
-            elif mode_str == 'demo':
-                args['timing_mode'] = TimingMode.DEMO
-            elif mode_str == 'test-scheduled':
-                args['timing_mode'] = TimingMode.TEST_SCHEDULED
-            elif mode_str == 'playoff-test':
-                args['timing_mode'] = TimingMode.PLAYOFF_TEST
-            elif mode_str == 'offseason-test':
-                args['timing_mode'] = TimingMode.OFFSEASON_TEST
-            elif mode_str in ('catchup', 'catch-up'):
-                args['timing_mode'] = TimingMode.CATCHUP
-            elif mode_str in ('fast-catchup', 'fast_catchup'):
-                args['timing_mode'] = TimingMode.FAST_CATCHUP
+            args['timing_mode'] = _resolveTimingMode(arg.split('=')[1])
         elif arg in ['--timing-fast', '--fast']:
             args['timing_mode'] = TimingMode.FAST
         elif arg in ['--timing-turbo', '--turbo']:
@@ -157,6 +140,8 @@ def parse_args():
             args['timing_mode'] = TimingMode.CATCHUP
         elif arg == '--fast-catchup':
             args['timing_mode'] = TimingMode.FAST_CATCHUP
+        elif arg == '--turbo-silent':
+            args['timing_mode'] = TimingMode.TURBO_SILENT
         elif arg == '--fresh':
             args['fresh_start'] = True
         elif arg == '--card-reset':
@@ -204,7 +189,7 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
     set_floosball_app(floosball_app)
 
     # Enable broadcasting (skip in test-scheduled mode)
-    if timing_mode not in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST):
+    if timing_mode not in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST, TimingMode.TURBO_SILENT):
         broadcaster.enable(ws_manager)
         logger.info("Game broadcasting enabled")
     else:

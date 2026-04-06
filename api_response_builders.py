@@ -205,7 +205,10 @@ class PlayerResponseBuilder(ResponseBuilder):
         if hasattr(player, 'seasonPerformanceRating') and player.seasonPerformanceRating > 0:
             attr_dict['seasonPerformanceRatingStars'] = PlayerResponseBuilder.calculateStarRating(player.seasonPerformanceRating)
             attr_dict['seasonPerformanceRating'] = player.seasonPerformanceRating
-        
+
+        # Add fatigue (0-100 percentage)
+        attr_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
+
         player_dict['attributes'] = attr_dict
         return player_dict
     

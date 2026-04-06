@@ -883,6 +883,7 @@ class FantasyTracker:
         favoriteTeamElo = 1500.0
         favoriteTeamStreak = 0
         favoriteTeamPriorStreak = 0
+        favoriteTeamPeakStreak = 0
         favoriteTeamSeasonLosses = 0
         favoriteTeamInPlayoffs = False
         favoriteTeamWonThisWeek = False
@@ -918,6 +919,7 @@ class FantasyTracker:
                 favStats = getattr(favTeam, 'seasonTeamStats', {})
                 favoriteTeamStreak = favStats.get('streak', 0)
                 favoriteTeamPriorStreak = favStats.get('priorStreak', 0)
+                favoriteTeamPeakStreak = favStats.get('peakStreak', 0)
                 favoriteTeamSeasonLosses = favStats.get('losses', 0)
                 favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
 
@@ -1187,6 +1189,7 @@ class FantasyTracker:
             leagueAverageElo=leagueAverageElo,
             favoriteTeamStreak=favoriteTeamStreak,
             favoriteTeamPriorStreak=favoriteTeamPriorStreak,
+            favoriteTeamPeakStreak=favoriteTeamPeakStreak,
             favoriteTeamSeasonLosses=favoriteTeamSeasonLosses,
             favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
             favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
