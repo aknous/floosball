@@ -51,7 +51,7 @@ EFFECT_CATEGORY = {
     "expedition": "flat_fp",
     "goal_line_vulture": "floobits", "connection": "floobits",
     # conditional
-    "showoff": "conditional", "flourish": "conditional", "bandwagon": "conditional",
+    "showoff": "conditional", "bandwagon": "conditional",
     "upset_special": "conditional", "believe": "conditional", "schadenfreude": "conditional",
     "reclamation": "conditional", "pedigree": "conditional",
     "mismatch": "conditional", "team_chemistry": "conditional",
@@ -96,7 +96,7 @@ EFFECT_EDITION_TIER = {
     "resplendent": "base", "three_pointer": "base", "hot_hand": "base",
     "big_deal": "base", "bandwagon": "base", "rng": "base",
     "allowance": "base", "piggy_bank": "base", "buy_low": "base", "trust_fund": "base",
-    "showoff": "base", "flourish": "base", "schadenfreude": "base",
+    "showoff": "base", "schadenfreude": "base",
     "believe": "base", "reclamation": "base",
     "gunslinger": "base", "workhorse": "base", "expedition": "base",
     "possession": "base", "slippery": "base", "safety_blanket": "base",
@@ -219,7 +219,6 @@ EFFECT_DISPLAY_NAMES = {
     "highlight_reel": "Highlight Reel",
     # Conditional (TE)
     "showoff": "Showoff",
-    "flourish": "Glow Up",
     "bandwagon": "Bandwagon",
     "upset_special": "Upset Special",
     "believe": "Believe",
@@ -364,7 +363,6 @@ EFFECT_TAGLINES = {
     "highlight_reel": "Big play bonus",
     # Conditional (TE)
     "showoff": "Your {posLabel} showed up",
-    "flourish": "Your {posLabel} went off",
     "bandwagon": "Your team wins, you win",
     "upset_special": "Giant slayer",
     "believe": "Playoff or bust",
@@ -494,7 +492,6 @@ EFFECT_TOOLTIPS = {
     "highlight_reel": "Highlight reel material pays. Floobits for every big play your favorite team pulls off.",
     # Conditional (TE)
     "showoff": "Your {posLabel} had a career day. FP when your {posLabel} slot overperforms expectations in a single game.",
-    "flourish": "Your {posLabel} went off. FP when your {posLabel} slot overperforms expectations in a single game.",
     "bandwagon": "Bandwagoning has never been so rewarding. FPx whenever your favorite team wins.",
     "upset_special": "Giant killer. FP when your favorite team beats a higher-rated opponent.",
     "believe": "Keep the dream alive. FP as long as your favorite team holds a playoff spot.",
@@ -624,7 +621,6 @@ EFFECT_DETAIL_TEMPLATES = {
     "highlight_reel": "{rewardValue} Floobits per your favorite team's big plays",
     # Conditional (TE)
     "showoff": "+{rewardValue} FP when your {posLabel} slot has a strong game",
-    "flourish": "+{rewardValue} FP when your {posLabel} slot has a strong game",
     "bandwagon": "+{rewardValue} FPx when your favorite team wins",
     "upset_special": "+{rewardValue} FP when your favorite team beats a higher-ELO team",
     "believe": "+{rewardValue} FP while your favorite team is in a playoff spot",
@@ -731,7 +727,7 @@ SHARED_EFFECT_POOL = [
     "buy_low", "trust_fund",
     "feeding_frenzy", "highlight_reel",
     # conditional effects
-    "showoff", "flourish", "bandwagon", "upset_special",
+    "showoff", "bandwagon", "upset_special",
     "believe", "schadenfreude", "reclamation",
     "pedigree", "mismatch",
     # streak effects
@@ -834,15 +830,21 @@ class EffectResult:
     chanceTriggered: bool = False
 
 
-def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context, ctx=None):
-    """Build a standardized chance card equation string."""
+def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context, ctx=None, base=None):
+    """Build a standardized chance card equation string.
+
+    base  – e.g. "+4.0 FP" or "+8F", shown as guaranteed floor
+    reward – e.g. "+18 FP" or "+30F", shown as enhanced payout
+    context – e.g. "2 low-rated" or "56 ELO below avg"
+    """
     bonusStr = f"+{chanceBonus:.0%}" if chanceBonus > 0 else ""
     pctStr = f"({baseChance:.0%}{bonusStr})" if bonusStr else f"{totalChance:.0%}"
+    basePrefix = f"{base}. " if base else ""
     if ctx and getattr(ctx, 'gamesActive', False):
-        return f"{context} · {pctStr} chance"
+        return f"{basePrefix}{pctStr} chance ({context}) to win {reward}"
     if triggered:
-        return f"{context} · {pctStr} · hit → {reward}"
-    return f"{context} · {pctStr} · missed"
+        return f"{reward}. {pctStr} chance ({context}) triggered"
+    return f"{basePrefix}{pctStr} chance ({context}) missed"
 
 
 # ─── Primary Parameter Builders ──────────────────────────────────────────────
@@ -1125,8 +1127,6 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
     rn = playerRating - 60
 
     if effectName == "showoff":
-        return {"rewardType": "fp", "rewardValue": round((6 + rn * 0.25) * editionScale, 1)}
-    if effectName == "flourish":
         return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
     if effectName == "game_ball":
         return {"rewardType": "fp", "rewardValue": round((7 + rn * 0.25) * editionScale, 1)}
@@ -1614,7 +1614,7 @@ def _computeScrappy(primary, ctx, cardPlayerId, eqId):
     count = sum(1 for pid in ctx.rosterPlayerIds
                 if _playerStars(ctx.rosterPlayerRatings.get(pid, 60)) <= maxStars)
     if count <= 0:
-        eq = f"+{baseFP} FP (base — no {maxStars}★ or lower)"
+        eq = f"+{baseFP} FP. No {maxStars}★ or lower players"
         return EffectResult(fpBonus=baseFP, equation=eq)
     baseChance = min(0.75, count * 0.125 + 0.125)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
@@ -1623,9 +1623,7 @@ def _computeScrappy(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{count} low-rated", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFP} FP floor — " + eq
+                   f"+{enhancedFP} FP", f"{count} low-rated", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -1722,7 +1720,7 @@ def _computeBabysitter(primary, ctx, cardPlayerId, eqId):
     count = sum(1 for pid in ctx.rosterPlayerIds
                 if ctx.weekPlayerStats.get(pid, {}).get("fantasyPoints", 0) < threshold)
     if count <= 0:
-        eq = f"+{baseFP} FP (floor — no players under {threshold} FP)"
+        eq = f"+{baseFP} FP. No players under {threshold} FP"
         return EffectResult(fpBonus=baseFP, equation=eq)
     baseChance = min(0.70, count * 0.125 + 0.075)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
@@ -1731,9 +1729,7 @@ def _computeBabysitter(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{count} under {threshold} FP", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFP} FP floor — " + eq
+                   f"+{enhancedFP} FP", f"{count} under {threshold} FP", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -1758,7 +1754,7 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=enhancedMult, equation=f"{enhancedMult:.2f}x FPx (legacy enhanced)")
     # Gate: team must have lost this week
     if not ctx.favoriteTeamGameFinal or ctx.favoriteTeamWonThisWeek:
-        eq = f"+{baseFP} FP (floor — team won or game not final)"
+        eq = f"+{baseFP} FP. Team won or game not final"
         return EffectResult(fpBonus=baseFP, equation=eq)
     losses = ctx.favoriteTeamSeasonLosses
     baseChance = min(0.60, losses * 0.06 + 0.08) if losses >= 2 else (0.10 if losses == 1 else 0)
@@ -1768,19 +1764,18 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"team lost, {losses} season losses", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFP} FP floor — " + eq
+                   f"+{enhancedFP} FP", f"team lost, {losses} season losses", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
 
 def _computeJuggernaut(primary, ctx, cardPlayerId, eqId):
     streak = max(0, ctx.favoriteTeamStreak)
-    if streak == 0:
-        return EffectResult(equation="waiting for team win streak")
     baseX = primary.get("baseXMult", 1.1)
     growth = primary.get("growthPerWin", 0.1)
+    # Only pay out once the team wins this week, extending their streak
+    if not ctx.favoriteTeamWonThisWeek or streak <= 0:
+        return EffectResult(multBonus=1.0, equation="Waiting for win to extend streak")
     eq = f"{baseX}x base + ({growth}x × {streak} win streak)"
     return EffectResult(multBonus=baseX + growth * streak, equation=eq)
 
@@ -1833,7 +1828,7 @@ def _computeUnderdog(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=baseMult, equation=f"{baseMult:.2f}x FPx (legacy)")
     eloBelowAvg = max(0, ctx.leagueAverageElo - ctx.favoriteTeamElo)
     if eloBelowAvg <= 0:
-        eq = f"+{baseFP} FP (floor — team not below avg ELO)"
+        eq = f"+{baseFP} FP. Team not below avg ELO"
         return EffectResult(fpBonus=baseFP, equation=eq)
     baseChance = min(0.75, eloBelowAvg / 400)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
@@ -1843,9 +1838,7 @@ def _computeUnderdog(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{eloDiff} ELO below avg", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFP} FP floor — " + eq
+                   f"+{enhancedFP} FP", f"{eloDiff} ELO below avg", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -1938,7 +1931,7 @@ def _computeConsolationPrize(primary, ctx, cardPlayerId, eqId):
     count = sum(1 for pid in ctx.rosterPlayerIds
                 if ctx.weekPlayerStats.get(pid, {}).get("fantasyPoints", 0) < threshold)
     if count <= 0:
-        eq = f"+{baseFloobits}F (base — no players under {threshold} FP)"
+        eq = f"+{baseFloobits}F. No players under {threshold} FP"
         return EffectResult(floobits=baseFloobits, equation=eq)
     baseChance = min(0.70, count * 0.125 + 0.075)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
@@ -1948,9 +1941,7 @@ def _computeConsolationPrize(primary, ctx, cardPlayerId, eqId):
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     context = f"{count} under {threshold} FP"
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", context, ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFloobits}F floor — " + eq
+                   f"+{enhancedFloobits}F", context, ctx=ctx, base=f"+{baseFloobits}F")
     return EffectResult(floobits=floobitsVal, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -1968,7 +1959,7 @@ def _computeRockBottom(primary, ctx, cardPlayerId, eqId):
         return EffectResult(floobits=perStreak * lossStreak, equation=eq)
     lossStreak = max(0, -ctx.favoriteTeamStreak)
     if lossStreak <= 0:
-        eq = f"+{baseFloobits}F (base — no losing streak)"
+        eq = f"+{baseFloobits}F. No losing streak"
         return EffectResult(floobits=baseFloobits, equation=eq)
     baseChance = min(0.65, lossStreak * 0.10 + 0.10)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
@@ -1977,9 +1968,7 @@ def _computeRockBottom(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", f"{lossStreak} loss streak", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFloobits}F floor — " + eq
+                   f"+{enhancedFloobits}F", f"{lossStreak} loss streak", ctx=ctx, base=f"+{baseFloobits}F")
     return EffectResult(floobits=floobitsVal, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -2023,26 +2012,6 @@ def _computeShowoff(primary, ctx, cardPlayerId, eqId):
     pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
     if not pids:
         return EffectResult(equation="no roster player at position")
-    for pid in pids:
-        gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
-        baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-        if gamePerfRating > baseRating and gamePerfRating > 0:
-            playerName = ctx.rosterPlayerNames.get(pid, "?")
-            result = _conditionalReward(primary)
-            result.equation = f"{playerName} overperformed"
-            return result
-    names = [ctx.rosterPlayerNames.get(pid, "?") for pid in pids]
-    return EffectResult(equation=f"{' + '.join(names)}: did not overperform")
-
-
-def _computeGlowUp(primary, ctx, cardPlayerId, eqId):
-    # FP if player at card's position overperformed (after all games complete)
-    if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
-        return EffectResult(equation="Waiting for games to complete")
-    pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 4)
-    if not pids:
-        return EffectResult(equation="no roster player at position")
-    # Check each player at position — trigger if any overperformed
     for pid in pids:
         gamePerfRating = ctx.gamePerformanceRatings.get(pid, 0)
         baseRating = ctx.rosterPlayerRatings.get(pid, 60)
@@ -2659,7 +2628,7 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
         if under > worstUnder:
             worstUnder = under
     if worstUnder <= 0:
-        return EffectResult(floobits=baseFloobits, equation=f"+{baseFloobits}F — did not underperform")
+        return EffectResult(floobits=baseFloobits, equation=f"+{baseFloobits}F. Did not underperform")
     baseChance = min(0.70, worstUnder * 0.025 + 0.075)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
@@ -2667,9 +2636,7 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     floobitsVal = enhancedFloobits if triggered else baseFloobits
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFloobits}F", "underperformed", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFloobits}F floor — " + eq
+                   f"+{enhancedFloobits}F", "underperformed", ctx=ctx, base=f"+{baseFloobits}F")
     return EffectResult(floobits=floobitsVal, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -2719,7 +2686,7 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
     triggers = _getPositionTds(ctx, pos)
 
     if triggers <= 0:
-        eq = f"+{baseFP} FP floor — 0 {triggerLabel}"
+        eq = f"+{baseFP} FP. 0 {triggerLabel}"
         return EffectResult(fpBonus=baseFP, equation=eq)
 
     # During live games, show current escalated chance without rolling
@@ -2727,7 +2694,7 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
         currentBase = (baseChance + (triggers - 1) * chanceStep) / 100.0
         totalWithBonus = min(0.95, currentBase + ctx.chanceBonus)
         eq = _chanceEq(currentBase, ctx.chanceBonus, totalWithBonus, False,
-                       "pending", f"{triggers} {triggerLabel}", ctx=ctx)
+                       f"+{bonusFP} FP", f"{triggers} {triggerLabel}", ctx=ctx, base=f"+{baseFP} FP")
         return EffectResult(fpBonus=baseFP, equation=eq)
 
     # At week end: simulate sequential rolls per trigger
@@ -2745,14 +2712,12 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
     fp = bonusFP if hit else baseFP
     finalBase = (baseChance + (hitOnTrigger - 1 if hit else triggers - 1) * chanceStep) / 100.0
     finalChance = min(0.95, finalBase + ctx.chanceBonus)
+    bonusStr = f"+{ctx.chanceBonus:.0%}" if ctx.chanceBonus > 0 else ""
+    pctStr = f"({finalBase:.0%}{bonusStr})" if bonusStr else f"{finalChance:.0%}"
     if hit:
-        bonusStr = f"+{ctx.chanceBonus:.0%}" if ctx.chanceBonus > 0 else ""
-        pctStr = f"({finalBase:.0%}{bonusStr})" if bonusStr else f"{finalChance:.0%}"
-        eq = f"{triggers} {triggerLabel} · hit on #{hitOnTrigger} {pctStr} → +{bonusFP} FP"
+        eq = f"+{bonusFP} FP. Hit on {triggerLabel[:-1]} #{hitOnTrigger} of {triggers} ({pctStr})"
     else:
-        bonusStr = f"+{ctx.chanceBonus:.0%}" if ctx.chanceBonus > 0 else ""
-        pctStr = f"({finalBase:.0%}{bonusStr})" if bonusStr else f"{finalChance:.0%}"
-        eq = f"+{baseFP} FP floor — {triggers} {triggerLabel} · maxed at {pctStr} · missed"
+        eq = f"+{baseFP} FP. {triggers} {triggerLabel}, maxed at {pctStr}, missed"
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(rng.random(), 4), chanceThreshold=round(finalChance, 4), chanceTriggered=hit)
 
@@ -2811,7 +2776,7 @@ def _computeTraverse(primary, ctx, cardPlayerId, eqId):
 
     if getattr(ctx, 'gamesActive', False):
         eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, False,
-                       "pending", f"{yards} {yardType} yds", ctx=ctx)
+                       f"+{bonusFP} FP", f"{yards} {yardType} yds", ctx=ctx, base=f"+{baseFP} FP")
         return EffectResult(fpBonus=baseFP, equation=eq)
 
     rng = _chanceRoll(ctx, eqId)
@@ -2820,9 +2785,7 @@ def _computeTraverse(primary, ctx, cardPlayerId, eqId):
     fp = bonusFP if triggered else baseFP
 
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{bonusFP} FP", f"{yards} {yardType} yds", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFP} FP floor — " + eq
+                   f"+{bonusFP} FP", f"{yards} {yardType} yds", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -3194,7 +3157,7 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0 and b.primaryMult <= 0)
     if failedCount <= 0:
-        eq = f"+{baseFP} FP (floor — all cards triggered)"
+        eq = f"+{baseFP} FP. All cards triggered"
         return EffectResult(fpBonus=baseFP, equation=eq)
     baseChance = min(0.70, failedCount * 0.14 + 0.01)
     totalChance = min(0.95, baseChance + ctx.chanceBonus)
@@ -3203,9 +3166,7 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"{failedCount} cards failed", ctx=ctx)
-    if not triggered:
-        eq = f"+{baseFP} FP floor — " + eq
+                   f"+{enhancedFP} FP", f"{failedCount} cards failed", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
@@ -3409,8 +3370,6 @@ def _computeProsperity(primary, ctx, cardPlayerId, eqId):
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     """Growing chance — base FP that can permanently increase each week.
     streak_count tracks how many times the base has grown."""
-    if ctx.gamesActive:
-        return EffectResult(equation="Waiting for games to complete")
     baseFP = primary.get("baseFP", 4.0)
     growthFP = primary.get("growthFP", 2.0)
     # streak_count tracks number of successful growths (starts at 1 = no growth)
@@ -3424,8 +3383,9 @@ def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     baseChance = primary.get("baseChance", 20)
     chancePerTrigger = primary.get("chancePerTrigger", 5)
     growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
-    eq = f"+{currentFP} FP (base {baseFP} + {growthFP}×{growthLevel} growths). "
-    eq += f"Next growth: {growthChance}% ({baseChance}% + {chancePerTrigger}%×{triggerCount} {triggerLabel})"
+    nextFP = round(currentFP + growthFP, 1)
+    triggerNote = f" ({triggerCount} {triggerLabel})" if triggerCount > 0 else ""
+    eq = f"+{currentFP} FP. {growthChance}% chance{triggerNote} to increase to +{nextFP} FP"
     return EffectResult(fpBonus=currentFP, equation=eq)
 
 
@@ -3487,7 +3447,6 @@ EFFECT_REGISTRY = {
     # Conditional (TE)
     "ace_up_the_sleeve": _computeAceUpTheSleeve,
     "showoff": _computeShowoff,
-    "flourish": _computeGlowUp,
     "bandwagon": _computeBandwagon,
     "upset_special": _computeUpsetSpecial,
     "believe": _computeBelieve,

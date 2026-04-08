@@ -209,6 +209,14 @@ class PlayerResponseBuilder(ResponseBuilder):
         # Add fatigue (0-100 percentage)
         attr_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
 
+        # Mood + demeanor
+        demeanor = getattr(player.attributes, 'demeanor', None)
+        if demeanor:
+            mood, moodTier = player.attributes.getMood()
+            attr_dict['mood'] = mood
+            attr_dict['moodTier'] = moodTier
+            attr_dict['demeanor'] = demeanor.capitalize()
+
         player_dict['attributes'] = attr_dict
         return player_dict
     

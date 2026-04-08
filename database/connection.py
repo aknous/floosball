@@ -22,6 +22,9 @@ engine = create_engine(
     DB_URL,
     echo=False,  # Set to True for SQL debugging
     future=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=60,
     connect_args={
         "timeout": 5,  # Timeout for busy database
         "check_same_thread": False  # Allow multiple threads (needed for async)
@@ -115,6 +118,14 @@ def _runPendingMigrations():
                         logger.info(f"  Migration: added team_funding.{col}")
                     except Exception:
                         conn.rollback()
+        except Exception:
+            conn.rollback()
+
+        # Demeanor column on player_attributes (v0.8)
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN demeanor VARCHAR(20)"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.demeanor")
         except Exception:
             conn.rollback()
 

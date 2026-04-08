@@ -422,6 +422,7 @@ class PlayerManager:
                 player.attributes.determinationModifier = attrs.determination_modifier
                 player.attributes.luckModifier = attrs.luck_modifier
                 player.attributes.fatigue = getattr(attrs, 'fatigue', 0.0) or 0.0
+                player.attributes.demeanor = getattr(attrs, 'demeanor', None)
 
             # Load career stats from related table
             if db_player.career_stats:
@@ -1239,6 +1240,7 @@ class PlayerManager:
                             determination_modifier=attrs.determinationModifier,
                             luck_modifier=attrs.luckModifier,
                             fatigue=attrs.fatigue,
+                            demeanor=attrs.demeanor,
                         )
                         self.db_session.add(db_attrs)
                     else:
@@ -1280,6 +1282,7 @@ class PlayerManager:
                         db_attrs.determination_modifier = attrs.determinationModifier
                         db_attrs.luck_modifier = attrs.luckModifier
                         db_attrs.fatigue = attrs.fatigue
+                        db_attrs.demeanor = attrs.demeanor
 
                 # Save career stats (season 0 = career totals)
                 if hasattr(player, 'careerStatsDict') and player.careerStatsDict:

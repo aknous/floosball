@@ -705,6 +705,14 @@ class FantasyTracker:
                     weekCardBonus = stored["fp"]
                     cardBreakdowns = stored.get("breakdowns", [])
                     eqSummary = stored.get("equationSummary", {})
+                    # Re-derive outputType from current effect definitions
+                    # (fixes stale stored data from older computations)
+                    from managers.cardEffects import _deriveOutputType as _reDeriveOT, EFFECT_CATEGORY as _EC
+                    for bd in cardBreakdowns:
+                        eName = bd.get("effectName", "")
+                        if eName:
+                            cat = bd.get("category") or _EC.get(eName, "flat_fp")
+                            bd["outputType"] = _reDeriveOT(cat, eName, bd)
 
                 # Season card bonus = stored weeks + live current week
                 seasonCardBonus = storedSeasonCardBonus
