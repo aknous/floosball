@@ -170,7 +170,7 @@ async def game_websocket(websocket: WebSocket, game_id: int):
                 except:
                     break
             
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         ws_manager.disconnect(websocket, channel)
         logger.info(f"Client disconnected from game {game_id}")
 
@@ -207,7 +207,7 @@ async def season_websocket(websocket: WebSocket):
                 except:
                     break
             
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         ws_manager.disconnect(websocket, channel)
         logger.info("Client disconnected from season updates")
 
@@ -242,7 +242,7 @@ async def standings_websocket(websocket: WebSocket):
                 except:
                     break
             
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         ws_manager.disconnect(websocket, channel)
         logger.info("Client disconnected from standings updates")
 
@@ -1839,7 +1839,7 @@ def admin_list_users(q: Optional[str] = Query(default=None),
     """List registered users, optionally filtered by search query."""
     _check_admin_password(x_admin_password)
     from database.connection import get_session
-    from database.models import User, UserCurrency, Team
+    from database.models import User, UserCurrency, Team, BetaAllowlist, BetaAccessRequest
 
     session = get_session()
     try:
@@ -1857,10 +1857,28 @@ def admin_list_users(q: Optional[str] = Query(default=None),
         teamIds = {u.favorite_team_id for u in users if u.favorite_team_id}
         teams = {t.id: t for t in session.query(Team).filter(Team.id.in_(teamIds)).all()} if teamIds else {}
 
+        # Batch-load beta status: allowlist + requests
+        userEmails = [u.email.lower().strip() for u in users]
+        allowedEmails = set()
+        requestStatuses = {}
+        if userEmails:
+            from sqlalchemy import func
+            for row in session.query(BetaAllowlist.email).all():
+                allowedEmails.add(row.email.lower().strip())
+            for row in session.query(BetaAccessRequest.email, BetaAccessRequest.status).all():
+                requestStatuses[row.email.lower().strip()] = row.status
+
         result = []
         for u in users:
             currency = currencies.get(u.id)
             favTeam = teams.get(u.favorite_team_id) if u.favorite_team_id else None
+            email = u.email.lower().strip()
+            if email in allowedEmails:
+                betaStatus = "approved"
+            elif email in requestStatuses:
+                betaStatus = requestStatuses[email]  # pending or denied
+            else:
+                betaStatus = "no_request"
             result.append({
                 "id": u.id,
                 "email": u.email,
@@ -1874,6 +1892,7 @@ def admin_list_users(q: Optional[str] = Query(default=None),
                 "createdAt": u.created_at.isoformat() if u.created_at else None,
                 "isActive": u.is_active,
                 "lastLoginAt": u.last_login_at.isoformat() if u.last_login_at else None,
+                "betaStatus": betaStatus,
             })
         return build_success_response({"users": result, "total": len(result)})
     finally:
@@ -2135,6 +2154,64 @@ def admin_reroll_username(userId: int, x_admin_password: Optional[str] = Header(
         session.close()
 
 
+@app.delete("/api/admin/users/{userId}")
+def admin_delete_user(userId: int, x_admin_password: Optional[str] = Header(None)):
+    """Admin: permanently delete a user and all related data."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import (
+        User as _UserModel, UserCurrency, CurrencyTransaction, UserCard,
+        EquippedCard, CardUpgradeLog, WeeklyCardBonus, PackOpening,
+        FeaturedShopCard, ShopPurchase, UserModifierOverride,
+        FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap,
+        UserNotification, GmVote, GmFaBallot, PickEmPick,
+    )
+    session = get_session()
+    try:
+        dbUser = session.query(_UserModel).filter(_UserModel.id == userId).first()
+        if not dbUser:
+            raise HTTPException(status_code=404, detail="User not found")
+        email = dbUser.email
+        username = dbUser.username
+
+        # Delete child records in dependency order
+        rosterIds = [r.id for r in session.query(FantasyRoster.id).filter_by(user_id=userId).all()]
+        if rosterIds:
+            session.query(FantasyRosterSwap).filter(FantasyRosterSwap.roster_id.in_(rosterIds)).delete(synchronize_session=False)
+            session.query(FantasyRosterPlayer).filter(FantasyRosterPlayer.roster_id.in_(rosterIds)).delete(synchronize_session=False)
+            session.query(WeeklyCardBonus).filter(WeeklyCardBonus.roster_id.in_(rosterIds)).delete(synchronize_session=False)
+        session.query(FantasyRoster).filter_by(user_id=userId).delete(synchronize_session=False)
+
+        session.query(EquippedCard).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(CardUpgradeLog).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(UserCard).filter_by(user_id=userId).delete(synchronize_session=False)
+
+        session.query(PackOpening).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(FeaturedShopCard).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(ShopPurchase).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(UserModifierOverride).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(CurrencyTransaction).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(UserCurrency).filter_by(user_id=userId).delete(synchronize_session=False)
+
+        session.query(UserNotification).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(GmVote).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(GmFaBallot).filter_by(user_id=userId).delete(synchronize_session=False)
+        session.query(PickEmPick).filter_by(user_id=userId).delete(synchronize_session=False)
+
+        session.delete(dbUser)
+        session.commit()
+        logger.info(f"Admin deleted user {userId} ({email})")
+        return build_success_response({"userId": userId, "email": email, "username": username})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error deleting user {userId}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/admin/monitor")
 async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
     """Admin: comprehensive monitoring dashboard data"""
@@ -2297,6 +2374,261 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
         },
         "websockets": ws_manager.get_stats(),
     })
+
+
+@app.get("/api/admin/analytics")
+async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)):
+    """Admin: analytics dashboard — economy, cards, fantasy, users, funding, pick-em."""
+    _check_admin_password(x_admin_password)
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    from database.connection import get_session
+    from database.models import (
+        User, UserCurrency, CurrencyTransaction, CardTemplate, UserCard,
+        EquippedCard, PackOpening, PackType, FantasyRoster, FantasyRosterPlayer,
+        FantasyRosterSwap, PickEmPick, TeamFunding, Team, Player,
+        BetaAccessRequest, BetaAllowlist,
+    )
+    from sqlalchemy import func, case
+    from datetime import timedelta
+
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason
+    seasonNum = getattr(season, 'seasonNumber', 1) if season else 1
+
+    session = get_session()
+    try:
+        now = datetime.utcnow()
+        sevenDaysAgo = now - timedelta(days=7)
+        thirtyDaysAgo = now - timedelta(days=30)
+
+        # ── Economy Health ──────────────────────────────────────────────
+        circulationRow = session.query(
+            func.coalesce(func.sum(UserCurrency.balance), 0),
+            func.coalesce(func.sum(UserCurrency.lifetime_earned), 0),
+            func.coalesce(func.sum(UserCurrency.lifetime_spent), 0),
+        ).first()
+        totalCirculation = circulationRow[0]
+        totalEarned = circulationRow[1]
+        totalSpent = circulationRow[2]
+
+        earningsRows = session.query(
+            CurrencyTransaction.transaction_type,
+            func.sum(CurrencyTransaction.amount),
+        ).filter(CurrencyTransaction.amount > 0
+        ).group_by(CurrencyTransaction.transaction_type).all()
+        earningsBreakdown = {t: int(v) for t, v in earningsRows}
+
+        spendingRows = session.query(
+            CurrencyTransaction.transaction_type,
+            func.sum(func.abs(CurrencyTransaction.amount)),
+        ).filter(CurrencyTransaction.amount < 0
+        ).group_by(CurrencyTransaction.transaction_type).all()
+        spendingBreakdown = {t: int(v) for t, v in spendingRows}
+
+        seasonEarnings = session.query(
+            func.coalesce(func.sum(CurrencyTransaction.amount), 0),
+        ).filter(
+            CurrencyTransaction.season == seasonNum,
+            CurrencyTransaction.amount > 0,
+        ).scalar()
+
+        seasonSpending = session.query(
+            func.coalesce(func.sum(func.abs(CurrencyTransaction.amount)), 0),
+        ).filter(
+            CurrencyTransaction.season == seasonNum,
+            CurrencyTransaction.amount < 0,
+        ).scalar()
+
+        # ── Card Analytics ──────────────────────────────────────────────
+        totalCards = session.query(func.count(UserCard.id)).scalar()
+
+        cardsByEdition = session.query(
+            CardTemplate.edition, func.count(UserCard.id),
+        ).join(CardTemplate, UserCard.card_template_id == CardTemplate.id
+        ).group_by(CardTemplate.edition).all()
+
+        cardsBySource = session.query(
+            UserCard.acquired_via, func.count(UserCard.id),
+        ).group_by(UserCard.acquired_via).all()
+
+        # Top equipped effects this season — use Python Counter as safe fallback
+        from collections import Counter
+        from sqlalchemy.orm import joinedload
+        equippedRows = session.query(EquippedCard).filter(
+            EquippedCard.season == seasonNum,
+        ).options(
+            joinedload(EquippedCard.user_card).joinedload(UserCard.card_template)
+        ).all()
+        effectCounts = Counter()
+        for eq in equippedRows:
+            if eq.user_card and eq.user_card.card_template:
+                cfg = eq.user_card.card_template.effect_config or {}
+                eName = cfg.get("effectName", "")
+                if eName:
+                    effectCounts[eName] += 1
+        topEffects = [{"effectName": n, "count": c} for n, c in effectCounts.most_common(5)]
+
+        packRows = session.query(
+            PackType.name, func.count(PackOpening.id),
+        ).join(PackType, PackOpening.pack_type_id == PackType.id
+        ).group_by(PackType.name).all()
+        packOpenings = {n: c for n, c in packRows}
+
+        # ── Fantasy Engagement ──────────────────────────────────────────
+        rosterRow = session.query(
+            func.count(FantasyRoster.id),
+            func.coalesce(func.avg(FantasyRoster.total_points), 0),
+            func.coalesce(func.avg(FantasyRoster.card_bonus_points), 0),
+            func.coalesce(func.sum(FantasyRoster.purchased_swaps), 0),
+        ).filter(FantasyRoster.season == seasonNum).first()
+        totalRosters = rosterRow[0]
+        avgTotalPoints = round(float(rosterRow[1]), 1)
+        avgCardBonus = round(float(rosterRow[2]), 1)
+        totalPurchasedSwaps = rosterRow[3]
+
+        totalSwapsUsed = session.query(func.count(FantasyRosterSwap.id)).join(
+            FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
+        ).filter(FantasyRoster.season == seasonNum).scalar()
+
+        topRosteredRows = session.query(
+            Player.name, func.count(FantasyRosterPlayer.id).label('cnt'),
+        ).join(
+            FantasyRosterPlayer, FantasyRosterPlayer.player_id == Player.id,
+        ).join(
+            FantasyRoster, FantasyRosterPlayer.roster_id == FantasyRoster.id,
+        ).filter(
+            FantasyRoster.season == seasonNum,
+        ).group_by(Player.id, Player.name).order_by(
+            func.count(FantasyRosterPlayer.id).desc(),
+        ).limit(5).all()
+        topRosteredPlayers = [{"name": n, "count": c} for n, c in topRosteredRows]
+
+        # ── User Engagement ─────────────────────────────────────────────
+        totalUsers = session.query(func.count(User.id)).scalar()
+        active7d = session.query(func.count(User.id)).filter(User.last_login_at >= sevenDaysAgo).scalar()
+        active30d = session.query(func.count(User.id)).filter(User.last_login_at >= thirtyDaysAgo).scalar()
+        onboardedCount = session.query(func.count(User.id)).filter(User.has_completed_onboarding == True).scalar()
+        onboardingRate = round((onboardedCount / totalUsers * 100), 1) if totalUsers > 0 else 0
+
+        favTeamRows = session.query(
+            Team.name, func.count(User.id).label('cnt'),
+        ).join(Team, User.favorite_team_id == Team.id
+        ).group_by(Team.id, Team.name
+        ).order_by(func.count(User.id).desc()).limit(10).all()
+        favoriteTeams = [{"team": n, "count": c} for n, c in favTeamRows]
+
+        usersWithRoster = session.query(func.count(func.distinct(FantasyRoster.user_id))).filter(
+            FantasyRoster.season == seasonNum).scalar()
+        usersWithCards = session.query(func.count(func.distinct(UserCard.user_id))).scalar()
+        usersWithPicks = session.query(func.count(func.distinct(PickEmPick.user_id))).filter(
+            PickEmPick.season == seasonNum).scalar()
+        usersWhoFunded = session.query(func.count(func.distinct(CurrencyTransaction.user_id))).filter(
+            CurrencyTransaction.season == seasonNum,
+            CurrencyTransaction.transaction_type == 'team_funding',
+        ).scalar()
+
+        # Beta funnel: users who signed up but never requested access
+        allUserEmails = set(
+            e.lower().strip() for (e,) in session.query(User.email).all()
+        )
+        requestedEmails = set(
+            e.lower().strip() for (e,) in session.query(BetaAccessRequest.email).all()
+        )
+        allowedEmails = set(
+            e.lower().strip() for (e,) in session.query(BetaAllowlist.email).all()
+        )
+        signupOnlyCount = len(allUserEmails - requestedEmails - allowedEmails)
+
+        # ── Team Funding ────────────────────────────────────────────────
+        totalFanContributions = session.query(
+            func.coalesce(func.sum(TeamFunding.fan_contributions), 0),
+        ).filter(TeamFunding.season == seasonNum).scalar()
+
+        tierRows = session.query(
+            TeamFunding.funding_tier, func.count(TeamFunding.id),
+        ).filter(TeamFunding.season == seasonNum
+        ).group_by(TeamFunding.funding_tier).all()
+        tierDistribution = {(t or "none"): c for t, c in tierRows}
+
+        topFundedRows = session.query(
+            Team.name, TeamFunding.fan_contributions, TeamFunding.funding_tier,
+        ).join(Team, TeamFunding.team_id == Team.id).filter(
+            TeamFunding.season == seasonNum,
+        ).order_by(TeamFunding.fan_contributions.desc()).limit(5).all()
+        topFundedTeams = [{"team": n, "contributions": int(c), "tier": t} for n, c, t in topFundedRows]
+
+        # ── Pick-Em ─────────────────────────────────────────────────────
+        pickEmRow = session.query(
+            func.count(PickEmPick.id),
+            func.count(case((PickEmPick.correct == True, 1))),
+            func.count(case((PickEmPick.correct.isnot(None), 1))),
+            func.count(func.distinct(PickEmPick.user_id)),
+        ).filter(PickEmPick.season == seasonNum).first()
+        totalPicks = pickEmRow[0]
+        correctPicks = pickEmRow[1]
+        resolvedPicks = pickEmRow[2]
+        pickEmParticipants = pickEmRow[3]
+        pickEmAccuracy = round((correctPicks / resolvedPicks * 100), 1) if resolvedPicks > 0 else 0
+
+        return build_success_response({
+            "seasonNumber": seasonNum,
+            "economy": {
+                "totalCirculation": int(totalCirculation),
+                "totalEarned": int(totalEarned),
+                "totalSpent": int(totalSpent),
+                "earningsBreakdown": earningsBreakdown,
+                "spendingBreakdown": spendingBreakdown,
+                "seasonEarnings": int(seasonEarnings),
+                "seasonSpending": int(seasonSpending),
+            },
+            "cards": {
+                "totalCards": totalCards,
+                "byEdition": {e: c for e, c in cardsByEdition},
+                "bySource": {s: c for s, c in cardsBySource},
+                "topEffects": topEffects,
+                "packOpenings": packOpenings,
+            },
+            "fantasy": {
+                "totalRosters": totalRosters,
+                "avgTotalPoints": avgTotalPoints,
+                "avgCardBonus": avgCardBonus,
+                "totalSwapsUsed": totalSwapsUsed,
+                "totalPurchasedSwaps": totalPurchasedSwaps,
+                "topRosteredPlayers": topRosteredPlayers,
+            },
+            "users": {
+                "totalUsers": totalUsers,
+                "active7d": active7d,
+                "active30d": active30d,
+                "onboardingRate": onboardingRate,
+                "onboardedCount": onboardedCount,
+                "favoriteTeams": favoriteTeams,
+                "adoption": {
+                    "fantasy": usersWithRoster,
+                    "cards": usersWithCards,
+                    "pickEm": usersWithPicks,
+                    "funding": usersWhoFunded,
+                },
+                "signupOnly": signupOnlyCount,
+            },
+            "funding": {
+                "totalFanContributions": int(totalFanContributions),
+                "tierDistribution": tierDistribution,
+                "topTeams": topFundedTeams,
+            },
+            "pickEm": {
+                "totalPicks": totalPicks,
+                "accuracy": pickEmAccuracy,
+                "participants": pickEmParticipants,
+            },
+        })
+    except Exception as e:
+        logger.error(f"Error fetching analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 
 from api.auth import getOptionalUser as _getOptionalUser

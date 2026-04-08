@@ -496,11 +496,12 @@ def _computeCardPass(
                           "perPlayerFloobits", "perStreakFloobits", "enhancedFloobits",
                           "baseFloobits"}
         rewardType = effectConfig.get("rewardType") or effectConfig.get("primary", {}).get("rewardType")
+        configAndPrimary = set(effectConfig.keys()) | set(effectConfig.get("primary", {}).keys())
         if rewardType in ("mult", "floobits"):
             outputType = rewardType
-        elif any(k in effectConfig for k in _MULT_KEYS):
+        elif any(k in configAndPrimary for k in _MULT_KEYS):
             outputType = "mult"
-        elif category == "floobits" or any(k in effectConfig for k in _FLOOBITS_KEYS):
+        elif category == "floobits" or any(k in configAndPrimary for k in _FLOOBITS_KEYS):
             outputType = "floobits"
 
     return CardBreakdown(
@@ -534,8 +535,8 @@ def _computeCardPass(
         chanceRoll=primary.chanceRoll,
         chanceThreshold=primary.chanceThreshold,
         chanceTriggered=primary.chanceTriggered,
-        streakActive=ctx.liveStreakConditionsMet.get(eq.id) if category == "streak" else None,
-        streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" else 0,
+        streakActive=ctx.liveStreakConditionsMet.get(eq.id) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else None,
+        streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else 0,
     )
 
 

@@ -22,6 +22,9 @@ engine = create_engine(
     DB_URL,
     echo=False,  # Set to True for SQL debugging
     future=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=60,
     connect_args={
         "timeout": 5,  # Timeout for busy database
         "check_same_thread": False  # Allow multiple threads (needed for async)

@@ -344,10 +344,18 @@ class SeasonManager:
             self.currentSeason.currentWeek = resumeFromWeek
             self.currentSeason.currentWeekText = f'Week {resumeFromWeek}'
             # Clean up orphaned game data from any interrupted week
-            # (the next week will replay from scratch, generating new records)
+            # (the next week will replay from scratch with original matchups)
             self._cleanupOrphanedWeekGames(
                 self.currentSeason.seasonNumber, resumeFromWeek + 1
             )
+            # Reset in-memory Game objects for the interrupted week so games
+            # loaded as Final from the DB are replayed instead of skipped.
+            interruptedIdx = resumeFromWeek  # 0-indexed schedule position
+            if interruptedIdx < len(self.currentSeason.schedule):
+                for game in self.currentSeason.schedule[interruptedIdx]['games']:
+                    game.status = FloosGame.GameStatus.Scheduled
+                    game.homeScore = 0
+                    game.awayScore = 0
 
         for week in self.currentSeason.schedule:
             roundIndex = self.currentSeason.schedule.index(week)  # 0-indexed
@@ -549,21 +557,6 @@ class SeasonManager:
             if nextStart:
                 self._cachedNextGameStart = nextStart
 
-            # Notify about week completion (for state saving)
-            await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
-
-            # Note: Week game data is now stored in the database, JSON output disabled
-            # gameDict = {}
-            # for game_idx, game in enumerate(weekGames):
-            #     strGame = f'Game {game_idx + 1}'
-            #     gameResults = game.gameDict
-            #     gameDict[strGame] = gameResults
-            # from serializers import serialize_object
-            # weekDict = serialize_object(gameDict)
-            # jsonFile = open(os.path.join(weekFilePath, '{}.json'.format(self.currentSeason.currentWeekText)), "w+")
-            # jsonFile.write(json.dumps(weekDict, indent=4))
-            # jsonFile.close()
-
             # Post-week processing (matches original floosball.py lines 688-699)
             self._updateWeeklyStats()
             self._updateStandings()
@@ -618,12 +611,19 @@ class SeasonManager:
             # Accumulate fatigue after each week
             self._accumulateFatigue()
 
-            # Checkpoint: save team + player season stats after each week so a restart
-            # can recover mid-season state without losing accumulated stats.
+            # Checkpoint: save team + player stats BEFORE advancing the week
+            # checkpoint.  If the process dies between here and _onWeekComplete,
+            # the week replays on restart (stats get overwritten — safe).
+            # Old order (checkpoint first, stats later) caused a lost week on
+            # crash: checkpoint said "done" but stats were never persisted.
             self._saveTeamSeasonStatsToDatabase()
             playerManager = self.serviceContainer.getService('player_manager')
             if playerManager:
                 playerManager.savePlayerData()
+
+            # NOW advance the week checkpoint — must be LAST so a crash before
+            # this point causes the week to replay rather than be silently skipped.
+            await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
 
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -1303,6 +1303,11 @@ class SeasonManager:
                     )
                     rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
 
+                    # Season swaps used (for Vagabond card effect)
+                    seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(
+                        roster_id=roster.id
+                    ).count()
+
                     # Check for user-level modifier override (Modifier Nullifier power-up)
                     userModifier = activeModifier
                     try:
@@ -1379,6 +1384,7 @@ class SeasonManager:
                         rosterPlayerNames=rosterPlayerNames,
                         activeModifier=userModifier,
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+                        seasonSwapsUsed=seasonSwapsUsed,
                         positionAvgFPs=positionAvgFPs,
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
                     )
@@ -1494,7 +1500,7 @@ class SeasonManager:
                             from managers.cardEffects import STREAK_CONFIGS
                             # Bonsai: probabilistic growth instead of auto-increment
                             if effectName == "bonsai":
-                                self._rollCultivationGrowth(eq, effectConfig, calcCtx)
+                                self._rollCultivationGrowth(eq, effectConfig, calcCtx, weekBonus)
                                 continue
                             # Ironclad modifier: streaks can't reset this week
                             if activeModifier == "ironclad":
@@ -1589,12 +1595,12 @@ class SeasonManager:
             logger.info(f"Memory cleanup: cleared play-by-play data from {cleaned} completed games")
 
     def _cleanupOrphanedWeekGames(self, season: int, week: int) -> None:
-        """Remove Game + GamePlayerStats records left behind by an interrupted week.
+        """Reset completed games from an interrupted week so they replay cleanly.
 
-        When the app crashes mid-week, completed games were already saved to the DB.
-        On resume the week replays from scratch, creating new records.  The old
-        records must be deleted first so queries (e.g. _getFullWeekPlayerStats)
-        don't return duplicate/stale data.
+        When the app crashes mid-week, some games may already be saved as 'final'.
+        Instead of deleting them (which loses the matchup and leaves teams without
+        a game that week), reset them to 'scheduled' and wipe their stats.  The
+        simulation will then replay the full week with all original matchups intact.
         """
         if not DB_IMPORTS_AVAILABLE or not USE_DATABASE:
             return
@@ -1608,17 +1614,48 @@ class SeasonManager:
                 session.close()
                 return
             gameIds = [g.id for g in orphanedGames]
-            # Delete player stats first (FK dependency)
+            # Delete player stats (they'll be regenerated on replay)
             deleted = session.query(DBGamePlayerStats).filter(
                 DBGamePlayerStats.game_id.in_(gameIds)
             ).delete(synchronize_session='fetch')
+            # Reset games to scheduled instead of deleting — preserves matchups
             for g in orphanedGames:
-                session.delete(g)
+                g.status = 'scheduled'
+                g.home_score = None
+                g.away_score = None
+                g.home_score_q1 = None
+                g.home_score_q2 = None
+                g.home_score_q3 = None
+                g.home_score_q4 = None
+                g.home_score_ot = None
+                g.away_score_q1 = None
+                g.away_score_q2 = None
+                g.away_score_q3 = None
+                g.away_score_q4 = None
+                g.away_score_ot = None
+                g.is_overtime = False
+                g.total_plays = None
+                g.home_rush_yards = None
+                g.home_pass_yards = None
+                g.home_rush_tds = None
+                g.home_pass_tds = None
+                g.home_fgs = None
+                g.home_sacks = None
+                g.home_ints = None
+                g.home_fum_rec = None
+                g.away_rush_yards = None
+                g.away_pass_yards = None
+                g.away_rush_tds = None
+                g.away_pass_tds = None
+                g.away_fgs = None
+                g.away_sacks = None
+                g.away_ints = None
+                g.away_fum_rec = None
             session.commit()
             session.close()
             logger.info(
-                f"Cleaned up {len(orphanedGames)} orphaned games and "
-                f"{deleted} player stat records for S{season}W{week}"
+                f"Reset {len(orphanedGames)} orphaned games to 'scheduled' and "
+                f"deleted {deleted} player stat records for S{season}W{week}"
             )
         except Exception as e:
             logger.warning(f"Failed to clean up orphaned week games: {e}")
@@ -2201,11 +2238,14 @@ class SeasonManager:
             logger.info(f"Recalculated start times for {patched}/{len(self.currentSeason.schedule)} weeks")
 
     def _fillMissingScheduleWeeks(self, seasonNumber: int) -> None:
-        """Detect and fill missing weeks in the DB before schedule load.
+        """Detect and fill missing or incomplete weeks in the DB before schedule load.
 
-        If a week's games were deleted (e.g., by orphan cleanup during
-        multi-deploy), regenerate random matchups and insert them so
-        _loadScheduleFromDatabase sees a complete schedule.
+        Handles two scenarios:
+        1. Entire week missing (all games deleted by old orphan cleanup)
+        2. Incomplete week (some games deleted, leaving teams without a matchup)
+
+        For missing weeks, generates random matchups.  For incomplete weeks,
+        pairs up only the unscheduled teams and inserts new games.
         """
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo):
             return
@@ -2215,31 +2255,41 @@ class SeasonManager:
             return
 
         expectedWeeks = int(((leagueTeamCount - 1) * 2) + (leagueTeamCount / 2))
-
-        # Query distinct weeks present in DB
-        from sqlalchemy import distinct
-        existingWeeks = set(
-            w for (w,) in self.db_session.query(distinct(DBGame.week)).filter_by(season=seasonNumber).all()
-        )
-        missingWeeks = set(range(1, expectedWeeks + 1)) - existingWeeks
-        if not missingWeeks:
-            return
-
-        logger.warning(f"Detected {len(missingWeeks)} missing week(s) in schedule: {sorted(missingWeeks)}")
+        expectedGamesPerWeek = leagueTeamCount // 2
 
         import random
+        from sqlalchemy import distinct, func
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
         allTeams = list(teamManager.teams)
+        allTeamIds = {t.id for t in allTeams}
+        teamById = {t.id: t for t in allTeams}
         now = datetime.datetime.utcnow()
 
-        # Build matchup sets per week for back-to-back avoidance
+        # Query game counts per week and teams scheduled per week
         rows = self.game_repo.get_by_season_ordered(seasonNumber)
-        weekMatchups: Dict[int, set] = {}
+        weekTeams: Dict[int, set] = {}   # week → set of team IDs with games
+        weekMatchups: Dict[int, set] = {}  # week → set of (min_id, max_id) pairs
         for row in rows:
+            weekTeams.setdefault(row.week, set()).update({row.home_team_id, row.away_team_id})
             pair = (min(row.home_team_id, row.away_team_id), max(row.home_team_id, row.away_team_id))
             weekMatchups.setdefault(row.week, set()).add(pair)
+
+        existingWeeks = set(weekTeams.keys())
+        missingWeeks = set(range(1, expectedWeeks + 1)) - existingWeeks
+        incompleteWeeks = {
+            w for w in existingWeeks
+            if w <= expectedWeeks and len(weekTeams.get(w, set())) < leagueTeamCount
+        }
+
+        if not missingWeeks and not incompleteWeeks:
+            return
+
+        if missingWeeks:
+            logger.warning(f"Detected {len(missingWeeks)} missing week(s): {sorted(missingWeeks)}")
+        if incompleteWeeks:
+            logger.warning(f"Detected {len(incompleteWeeks)} incomplete week(s): {sorted(incompleteWeeks)}")
 
         for missingWeek in sorted(missingWeeks):
             avoidPairs = weekMatchups.get(missingWeek - 1, set()) | weekMatchups.get(missingWeek + 1, set())
@@ -2280,6 +2330,49 @@ class SeasonManager:
                 logger.info(f"Reconstructed week {missingWeek} with {len(pairings)} games")
             except Exception as e:
                 logger.error(f"Failed to reconstruct week {missingWeek}: {e}")
+                self.db_session.rollback()
+
+        # Fill incomplete weeks: pair up teams that have no game in that week
+        for incWeek in sorted(incompleteWeeks):
+            scheduledTeamIds = weekTeams.get(incWeek, set())
+            missingTeamIds = allTeamIds - scheduledTeamIds
+            if len(missingTeamIds) < 2:
+                continue
+            missingTeamList = [teamById[tid] for tid in missingTeamIds if tid in teamById]
+            if len(missingTeamList) % 2 != 0:
+                logger.warning(f"Odd number of unscheduled teams ({len(missingTeamList)}) for week {incWeek}, skipping one")
+                missingTeamList = missingTeamList[:-1]
+
+            avoidPairs = weekMatchups.get(incWeek - 1, set()) | weekMatchups.get(incWeek + 1, set())
+            pairings = None
+            for _attempt in range(200):
+                random.shuffle(missingTeamList)
+                candidate = [(missingTeamList[i], missingTeamList[i + 1]) for i in range(0, len(missingTeamList), 2)]
+                candidatePairs = {(min(h.id, a.id), max(h.id, a.id)) for h, a in candidate}
+                if not candidatePairs & avoidPairs:
+                    pairings = candidate
+                    break
+            if pairings is None:
+                random.shuffle(missingTeamList)
+                pairings = [(missingTeamList[i], missingTeamList[i + 1]) for i in range(0, len(missingTeamList), 2)]
+
+            weekIdx = incWeek - 1
+            startTime = self.getWeekStartTime(now, weekIdx)
+            for homeTeam, awayTeam in pairings:
+                dbRow = DBGame(
+                    season=seasonNumber,
+                    week=incWeek,
+                    home_team_id=homeTeam.id,
+                    away_team_id=awayTeam.id,
+                    game_date=startTime,
+                    status='scheduled',
+                )
+                self.game_repo.save(dbRow)
+            try:
+                self.db_session.commit()
+                logger.info(f"Filled incomplete week {incWeek}: added {len(pairings)} games for {len(missingTeamIds)} unscheduled teams")
+            except Exception as e:
+                logger.error(f"Failed to fill incomplete week {incWeek}: {e}")
                 self.db_session.rollback()
 
     def _restoreSeasonStartDate(self, seasonNumber: int) -> None:
@@ -4613,11 +4706,14 @@ class SeasonManager:
         except ImportError:
             pass
 
-    def _rollCultivationGrowth(self, eq, effectConfig, calcCtx):
+    def _rollCultivationGrowth(self, eq, effectConfig, calcCtx, weekBonus=None):
         """Roll for Cultivation card growth. streak_count tracks growth level."""
         import random as _rand
+        import json as _json
         from managers.cardEffects import CULTIVATION_TRIGGER_POOL, _countCultivationTriggers
         primary = effectConfig.get("primary", {})
+        baseFP = primary.get("baseFP", 4.0)
+        growthFP = primary.get("growthFP", 2.0)
         baseChance = primary.get("baseChance", 20)
         chancePerTrigger = primary.get("chancePerTrigger", 5)
         triggerEvent = primary.get("triggerEvent", "pass_td")
@@ -4628,19 +4724,36 @@ class SeasonManager:
         if calcCtx.hasAdvantage:
             roll2 = _rand.randint(1, 100)
             roll = min(roll, roll2)
-        if roll <= growthChance:
+        growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
+        currentFP = round(baseFP + growthFP * growthLevel, 1)
+        grew = roll <= growthChance
+        if grew:
             eq.streak_count = getattr(eq, 'streak_count', 0) + 1
-            growthFP = primary.get("growthFP", 2.0)
-            level = eq.streak_count - 1  # streak_count starts at 1
+            newFP = round(currentFP + growthFP, 1)
+            resultEq = f"+{newFP} FP. Increased by +{growthFP} this week"
             logger.info(
                 f"Cultivation growth! eq={eq.id} roll={roll}≤{growthChance}% "
-                f"triggers={triggerCount} level={level} (+{growthFP} FP)"
+                f"triggers={triggerCount} level={growthLevel + 1} (+{growthFP} FP)"
             )
         else:
+            resultEq = f"+{currentFP} FP. Did not increase this week"
             logger.debug(
                 f"Cultivation no growth: eq={eq.id} roll={roll}>{growthChance}% "
                 f"triggers={triggerCount}"
             )
+        # Patch the stored breakdown with the roll result
+        if weekBonus and weekBonus.breakdowns_json:
+            try:
+                stored = _json.loads(weekBonus.breakdowns_json)
+                for bd in stored.get("breakdowns", []):
+                    if bd.get("effectName") == "bonsai":
+                        bd["equation"] = resultEq
+                        if grew:
+                            bd["primaryFP"] = round(currentFP + growthFP, 1)
+                            bd["totalFP"] = round(currentFP + growthFP, 1)
+                weekBonus.breakdowns_json = _json.dumps(stored)
+            except Exception:
+                pass
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
         """Award Floobits to all users based on a percentage of their weekly FP."""

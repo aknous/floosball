@@ -2820,6 +2820,19 @@ class Game:
 
 
     async def playGame(self):
+        # Reset scores so replayed games don't start with stale values
+        self.homeScore = 0
+        self.awayScore = 0
+        self.homeScoreQ1 = 0
+        self.homeScoreQ2 = 0
+        self.homeScoreQ3 = 0
+        self.homeScoreQ4 = 0
+        self.homeScoreOT = 0
+        self.awayScoreQ1 = 0
+        self.awayScoreQ2 = 0
+        self.awayScoreQ3 = 0
+        self.awayScoreQ4 = 0
+        self.awayScoreOT = 0
         self.totalPlays = 0
         possReset = 80
         coinFlipWinner = None
@@ -4431,6 +4444,9 @@ class Game:
             return batched_randint(4, 6)
 
         elif playType == PlayType.Pass:
+            # Hail mary: deep heave with long hang time
+            if getattr(self.play, 'passType', None) is PassType.hailMary:
+                return batched_randint(8, 12)
             if self.play.isPassCompletion and isInBounds:
                 return batched_randint(4, 7)  # Completion in bounds — catch + tackle
             elif self.play.isPassCompletion and not isInBounds:

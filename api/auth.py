@@ -51,6 +51,16 @@ _USERNAME_FIRSTS = [
     "Standby", "Borrowed", "Stray", "Rented", "Botched",
     "Crunchy", "Soggy", "Tepid", "Stuffy", "Musty",
     "Gnarled", "Wobbly", "Janky", "Clunky", "Grimy",
+    # Expanded III
+    "Refurbished", "Artisanal", "Disgruntled", "Provisional", "Condemned",
+    "Impounded", "Overclocked", "Undercooked", "Petrified", "Quarantined",
+    "Geriatric", "Prehistoric", "Dubious", "Infamous", "Wayward",
+    "Delinquent", "Ornamental", "Remedial", "Curbside", "Fermented",
+    "Broiled", "Charred", "Peppered", "Archaic", "Peculiar",
+    "Reckless", "Vagrant", "Honorary", "Interim", "Auxiliary",
+    "Forfeited", "Embargoed", "Suspended", "Expired", "Sanctioned",
+    "Defective", "Unverified", "Classified", "Redacted", "Restricted",
+    "Surplus", "Armored", "Confiscated", "Repossessed", "Unclaimed",
 ]
 
 _USERNAME_LASTS = [
@@ -85,6 +95,17 @@ _USERNAME_LASTS = [
     "Crowbar", "Pickaxe", "Sandbag", "Haymaker", "Uppercut",
     "Corkscrew", "Wrenchford", "Crankshaft", "Sprocket", "Gasket",
     "Gearbox", "Camshaft", "Flywheel", "Axlegrease", "Dipstick",
+    # Expanded III
+    "Thunderclap", "Dustpan", "Breadstick", "Doorknob", "Chowderhead",
+    "Drawbridge", "Catapult", "Windmill", "Scaffolding", "Cannonball",
+    "Wheelbarrow", "Filibuster", "Bureaucrat", "Armistice", "Turnstile",
+    "Fishstick", "Meatloaf", "Tenderfoot", "Doohickey", "Thingamajig",
+    "Contraption", "Whirligig", "Buckshot", "Portcullis", "Cobblestone",
+    "Dumbwaiter", "Clothesline", "Cheapshot", "Trainwreck", "Carbuncle",
+    "Blunderbuss", "Curveball", "Piledriver", "Steamroller", "Wrecking",
+    "Jackhammer", "Crowsnest", "Tumblebum", "Hornblower", "Frogmouth",
+    "Jetsam", "Nightcap", "Gutterball", "Pratfall", "Sideburns",
+    "Potluck", "Corkboard", "Thumbtack", "Paperweight", "Sockpuppet",
 ]
 
 
