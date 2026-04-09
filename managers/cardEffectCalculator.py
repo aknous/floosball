@@ -196,7 +196,7 @@ class CardBonusResult:
 # Effects that use the roster player's stats at the card's position
 _ROSTER_POSITION_EFFECTS = {
     "luminary", "squire", "cha_ching", "ace_up_the_sleeve",
-    "showoff", "flourish", "spotlight_moment", "schadenfreude", "hot_hand",
+    "showoff", "spotlight_moment", "schadenfreude", "hot_hand",
     # New position-based effects
     "gunslinger", "air_raid", "workhorse", "goal_line_vulture",
     "possession", "trebuchet", "double_trouble",

@@ -137,6 +137,14 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Q4 fantasy points on game_player_stats (v0.9)
+        try:
+            conn.execute(text("ALTER TABLE game_player_stats ADD COLUMN q4_fantasy_points INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added game_player_stats.q4_fantasy_points")
+        except Exception:
+            conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [

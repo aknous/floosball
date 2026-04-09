@@ -1954,9 +1954,13 @@ class SeasonManager:
                     gameFP = getattr(player, '_lastGameFantasyPoints', None)
                     if gameFP is None:
                         gameFP = gd.get('fantasyPoints', 0)
+                    # Get Q4 FP from fantasy tracker (in-memory accumulator)
+                    fantasyTracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
+                    q4FP = fantasyTracker._weekQ4FP.get(player.id, 0) if fantasyTracker else 0
                     playerStats[player.id] = {
                         'teamId': team.id,
                         'fantasyPoints': gameFP,
+                        'q4FantasyPoints': q4FP,
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -1974,6 +1978,7 @@ class SeasonManager:
                         player_id=player_id,
                         team_id=stats.get('teamId', 0),
                         fantasy_points=stats.get('fantasyPoints', 0),
+                        q4_fantasy_points=stats.get('q4FantasyPoints', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
                         receiving_stats=stats.get('receiving'),

@@ -1185,6 +1185,10 @@ class TeamManager:
             name = _random.choice(self._coachNamePool)
             self._coachNamePool.remove(name)
             coach.name = name
+            # Persist removal so restarts don't reassign this name to a player
+            playerMgr = getattr(self.serviceContainer, 'playerManager', None)
+            if playerMgr:
+                playerMgr.saveUnusedNames()
         else:
             coach.generateName()
         return coach
@@ -1249,6 +1253,9 @@ class TeamManager:
             coach.clockManagement = dbCoach.clock_management
             coach.playerDevelopment = dbCoach.player_development
             team.coach = coach
+            # Remove coach name from unused pool so no future player gets it
+            if coach.name in self._coachNamePool:
+                self._coachNamePool.remove(coach.name)
             self.logger.debug(f"Loaded coach {coach.name} from DB for {team.name}")
             return True
         except Exception as e:

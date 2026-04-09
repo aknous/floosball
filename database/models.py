@@ -490,6 +490,7 @@ class GamePlayerStats(Base):
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
+    q4_fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game", back_populates="player_stats")
