@@ -18,10 +18,11 @@ primary_region = "ord"
   [[http_service.checks]]
     type = "http"
     port = 8080
-    path = "/api/season"
+    path = "/health"
     interval = "15s"
-    timeout = "10s"
+    timeout = "5s"
     grace_period = "60s"
+    method = "GET"
 
   [http_service.concurrency]
     type = "connections"

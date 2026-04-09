@@ -1621,36 +1621,36 @@ class SeasonManager:
             # Reset games to scheduled instead of deleting — preserves matchups
             for g in orphanedGames:
                 g.status = 'scheduled'
-                g.home_score = None
-                g.away_score = None
-                g.home_score_q1 = None
-                g.home_score_q2 = None
-                g.home_score_q3 = None
-                g.home_score_q4 = None
-                g.home_score_ot = None
-                g.away_score_q1 = None
-                g.away_score_q2 = None
-                g.away_score_q3 = None
-                g.away_score_q4 = None
-                g.away_score_ot = None
+                g.home_score = 0
+                g.away_score = 0
+                g.home_score_q1 = 0
+                g.home_score_q2 = 0
+                g.home_score_q3 = 0
+                g.home_score_q4 = 0
+                g.home_score_ot = 0
+                g.away_score_q1 = 0
+                g.away_score_q2 = 0
+                g.away_score_q3 = 0
+                g.away_score_q4 = 0
+                g.away_score_ot = 0
                 g.is_overtime = False
-                g.total_plays = None
-                g.home_rush_yards = None
-                g.home_pass_yards = None
-                g.home_rush_tds = None
-                g.home_pass_tds = None
-                g.home_fgs = None
-                g.home_sacks = None
-                g.home_ints = None
-                g.home_fum_rec = None
-                g.away_rush_yards = None
-                g.away_pass_yards = None
-                g.away_rush_tds = None
-                g.away_pass_tds = None
-                g.away_fgs = None
-                g.away_sacks = None
-                g.away_ints = None
-                g.away_fum_rec = None
+                g.total_plays = 0
+                g.home_rush_yards = 0
+                g.home_pass_yards = 0
+                g.home_rush_tds = 0
+                g.home_pass_tds = 0
+                g.home_fgs = 0
+                g.home_sacks = 0
+                g.home_ints = 0
+                g.home_fum_rec = 0
+                g.away_rush_yards = 0
+                g.away_pass_yards = 0
+                g.away_rush_tds = 0
+                g.away_pass_tds = 0
+                g.away_fgs = 0
+                g.away_sacks = 0
+                g.away_ints = 0
+                g.away_fum_rec = 0
             session.commit()
             session.close()
             logger.info(

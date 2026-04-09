@@ -5,6 +5,7 @@ Uses refactored manager system with clean separation of concerns
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Header, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -57,6 +58,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "x-admin-password"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 # Global reference to FloosballApplication (set during startup)
 floosball_app = None
@@ -270,13 +276,14 @@ def _buildCoachDict(team) -> Optional[dict]:
 
 
 @app.get("/api/teams", response_model=Dict[str, Any])
-async def get_teams(league: Optional[str] = None):
+async def get_teams(response: Response, league: Optional[str] = None):
     """
     Get all teams, optionally filtered by league
-    
+
     Returns:
         List of team objects with basic info and current season stats
     """
+    response.headers["Cache-Control"] = "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -309,13 +316,14 @@ async def get_teams(league: Optional[str] = None):
 
 
 @app.get("/api/teams/{team_id}", response_model=Dict[str, Any])
-async def get_team(team_id: int):
+async def get_team(team_id: int, response: Response):
     """
     Get detailed information about a specific team
-    
+
     Returns:
         Full team object with ratings, roster, history, and stats
     """
+    response.headers["Cache-Control"] = "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -533,7 +541,7 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
         tertiaryColor = getattr(team, 'tertiaryColor', team.color)
 
         cacheHeaders = {
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "public, max-age=86400, immutable",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
             "Access-Control-Allow-Headers": "*"
@@ -567,7 +575,7 @@ async def get_league_logo(size: int = Query(default=256, ge=16, le=1024), format
         if floosball_app and hasattr(floosball_app, 'teamManager'):
             teamColors = [t.color for t in floosball_app.teamManager.teams if t.color]
         cacheHeaders = {
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "public, max-age=86400, immutable",
             "Content-Disposition": "inline",
             "Access-Control-Allow-Origin": "*",
         }
@@ -587,6 +595,7 @@ async def get_league_logo(size: int = Query(default=256, ge=16, le=1024), format
 
 @app.get("/api/players", response_model=Dict[str, Any])
 async def get_players(
+    response: Response,
     position: Optional[str] = None,
     team_id: Optional[int] = None,
     status: Optional[str] = None  # 'active', 'retired', 'fa', 'hof'
@@ -602,6 +611,7 @@ async def get_players(
     Returns:
         List of player objects
     """
+    response.headers["Cache-Control"] = "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -690,13 +700,14 @@ async def get_players(
 
 
 @app.get("/api/players/{player_id}", response_model=Dict[str, Any])
-async def get_player(player_id: int):
+async def get_player(player_id: int, response: Response):
     """
     Get detailed information about a specific player
-    
+
     Returns:
         Full player object with attributes, stats, and history
     """
+    response.headers["Cache-Control"] = "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -800,13 +811,14 @@ async def get_player(player_id: int):
 # ============================================================================
 
 @app.get("/api/currentGames", response_model=List[Dict[str, Any]])
-async def get_current_games():
+async def get_current_games(response: Response):
     """
     Get all currently scheduled, active, and recently completed games
-    
+
     Returns:
         List of games with real-time scores, status, and win probabilities
     """
+    response.headers["Cache-Control"] = "public, max-age=3"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -933,19 +945,20 @@ def _buildMatchupPreview(game) -> dict:
 
 
 @app.get("/api/games/{game_id}", response_model=Dict[str, Any])
-async def get_game_by_id(game_id: int):
+async def get_game_by_id(game_id: int, response: Response):
     """
     Get a specific game by ID
-    
+
     Args:
         game_id: The game ID
-        
+
     Returns:
         Game data with scores, status, win probabilities, and play info
     """
+    response.headers["Cache-Control"] = "public, max-age=3"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    
+
     try:
         season_mgr = floosball_app.seasonManager
         current_season = season_mgr.currentSeason
@@ -1059,19 +1072,20 @@ async def get_game_by_id(game_id: int):
 
 
 @app.get("/api/gameStats", response_model=Dict[str, Any])
-async def get_game_stats(id: int):
+async def get_game_stats(id: int, response: Response):
     """
     Get detailed statistics for a specific game
-    
+
     Args:
         id: Game ID
-    
+
     Returns:
         Full game statistics including player stats, team stats, and play-by-play
     """
+    response.headers["Cache-Control"] = "public, max-age=3"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    
+
     try:
         season_mgr = floosball_app.seasonManager
         current_season = season_mgr.currentSeason
@@ -1103,16 +1117,17 @@ async def get_game_stats(id: int):
 
 
 @app.get("/api/highlights", response_model=List[Dict[str, Any]])
-async def get_highlights(limit: int = Query(default=20, ge=1, le=100)):
+async def get_highlights(response: Response, limit: int = Query(default=20, ge=1, le=100)):
     """
     Get recent highlight plays from active games
-    
+
     Args:
         limit: Maximum number of highlights to return
-    
+
     Returns:
         List of highlight plays (touchdowns, turnovers, big plays)
     """
+    response.headers["Cache-Control"] = "public, max-age=10"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -1174,13 +1189,14 @@ async def get_highlights(limit: int = Query(default=20, ge=1, le=100)):
 
 
 @app.get("/api/season", response_model=Dict[str, Any])
-async def get_season_info():
+async def get_season_info(response: Response):
     """
     Get current season information
-    
+
     Returns:
         Season number, current week, schedule, standings
     """
+    response.headers["Cache-Control"] = "public, max-age=10"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -1257,13 +1273,14 @@ async def get_season_info():
 
 
 @app.get("/api/standings", response_model=List[Dict[str, Any]])
-async def get_standings():
+async def get_standings(response: Response):
     """
     Get current league standings
-    
+
     Returns:
         Standings for all leagues sorted by record
     """
+    response.headers["Cache-Control"] = "public, max-age=10"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -1285,8 +1302,9 @@ async def get_standings():
 
 
 @app.get("/api/reigning-champion")
-async def get_reigning_champion():
+async def get_reigning_champion(response: Response):
     """Return the previous season's Floosbowl champion (for navbar display)."""
+    response.headers["Cache-Control"] = "public, max-age=600"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     try:
@@ -1416,11 +1434,13 @@ _VALID_POSITIONS = {'ALL', 'QB', 'RB', 'WR', 'TE', 'K'}
 
 @app.get("/api/stats/leaders", response_model=Dict[str, Any])
 async def get_stat_leaders(
+    response: Response,
     category: str = Query(default="fantasy_points"),
     position: str = Query(default="ALL"),
     limit: int = Query(default=10, ge=1, le=50),
 ):
     """Get statistical leaders filtered by position and category"""
+    response.headers["Cache-Control"] = "public, max-age=120"
     if category not in _VALID_STAT_CATEGORIES:
         raise HTTPException(
             status_code=400,
@@ -1510,9 +1530,11 @@ async def get_stat_leaders(
 
 @app.get("/api/stats/mvp-rankings", response_model=Dict[str, Any])
 async def get_mvp_rankings(
+    response: Response,
     limit: int = Query(default=10, ge=1, le=50),
 ):
     """Get MVP race rankings — players ranked by z-score across all positions"""
+    response.headers["Cache-Control"] = "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
 
@@ -1615,6 +1637,17 @@ async def admin_create_player(payload: Dict[str, Any], x_admin_password: Optiona
                 "tier": player.playerTier.name,
             })
     return {"created": created, "unusedNamesRemaining": len(pm.unusedNames)}
+
+
+@app.get("/api/beta/access-mode")
+async def get_beta_access_mode():
+    """Public endpoint — returns the current access mode (request or waitlist)."""
+    try:
+        from config_manager import get_config
+        mode = get_config().get("accessMode", "request")
+    except Exception:
+        mode = "request"
+    return {"mode": mode}
 
 
 @app.post("/api/beta/request-access")
@@ -1833,8 +1866,36 @@ async def admin_deny_beta_request(requestId: int, x_admin_password: Optional[str
         session.close()
 
 
+@app.get("/api/admin/beta/access-mode")
+async def admin_get_access_mode(x_admin_password: Optional[str] = Header(default=None)):
+    """Get current access mode."""
+    _check_admin_password(x_admin_password)
+    try:
+        from config_manager import get_config
+        mode = get_config().get("accessMode", "request")
+    except Exception:
+        mode = "request"
+    return {"mode": mode}
+
+
+@app.post("/api/admin/beta/access-mode")
+async def admin_set_access_mode(payload: Dict[str, Any],
+                                x_admin_password: Optional[str] = Header(default=None)):
+    """Toggle access mode between 'request' and 'waitlist'."""
+    _check_admin_password(x_admin_password)
+    mode = payload.get("mode", "").lower().strip()
+    if mode not in ("request", "waitlist"):
+        raise HTTPException(status_code=400, detail="Mode must be 'request' or 'waitlist'")
+    from config_manager import save_config_value
+    save_config_value(mode, "accessMode")
+    logger.info(f"Access mode changed to '{mode}'")
+    return {"mode": mode}
+
+
 @app.get("/api/admin/users")
 def admin_list_users(q: Optional[str] = Query(default=None),
+                     sort: Optional[str] = Query(default=None),
+                     filter: Optional[str] = Query(default=None),
                      x_admin_password: Optional[str] = Header(default=None)):
     """List registered users, optionally filtered by search query."""
     _check_admin_password(x_admin_password)
@@ -1849,7 +1910,25 @@ def admin_list_users(q: Optional[str] = Query(default=None),
             query = query.filter(
                 (User.email.ilike(term)) | (User.username.ilike(term))
             )
-        users = query.order_by(User.created_at.desc()).limit(100).all()
+        # Status filter
+        if filter == 'active':
+            query = query.filter(User.has_completed_onboarding == True, User.is_active == True)
+        elif filter == 'pending':
+            query = query.filter(User.has_completed_onboarding == False, User.is_active == True)
+        elif filter == 'inactive':
+            query = query.filter(User.is_active == False)
+
+        # Sort order
+        if sort == 'last_login':
+            query = query.order_by(User.last_login_at.desc().nullslast())
+        elif sort == 'username':
+            query = query.order_by(User.username.asc().nullslast())
+        elif sort == 'oldest':
+            query = query.order_by(User.created_at.asc())
+        else:
+            query = query.order_by(User.created_at.desc())
+
+        users = query.limit(200).all()
 
         # Batch-load currencies and favorite teams
         userIds = [u.id for u in users]
@@ -1895,6 +1974,41 @@ def admin_list_users(q: Optional[str] = Query(default=None),
                 "betaStatus": betaStatus,
             })
         return build_success_response({"users": result, "total": len(result)})
+    finally:
+        session.close()
+
+
+@app.post("/api/admin/users/send-onboarding-reminders")
+def admin_send_onboarding_reminders(x_admin_password: Optional[str] = Header(default=None)):
+    """Send reminder emails to users who haven't completed onboarding."""
+    _check_admin_password(x_admin_password)
+    from database.connection import get_session
+    from database.models import User
+    from managers.emailManager import sendOnboardingReminderEmail
+
+    session = get_session()
+    try:
+        pendingUsers = session.query(User).filter(
+            User.has_completed_onboarding == False,
+            User.is_active == True,
+            User.email.isnot(None),
+        ).all()
+
+        sent = 0
+        failed = 0
+        for u in pendingUsers:
+            if u.email and u.email.strip():
+                if sendOnboardingReminderEmail(u.email.strip()):
+                    sent += 1
+                else:
+                    failed += 1
+
+        logger.info(f"Onboarding reminders: {sent} sent, {failed} failed, {len(pendingUsers)} total pending")
+        return build_success_response({
+            "sent": sent,
+            "failed": failed,
+            "totalPending": len(pendingUsers),
+        })
     finally:
         session.close()
 
@@ -2388,7 +2502,7 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
         User, UserCurrency, CurrencyTransaction, CardTemplate, UserCard,
         EquippedCard, PackOpening, PackType, FantasyRoster, FantasyRosterPlayer,
         FantasyRosterSwap, PickEmPick, TeamFunding, Team, Player,
-        BetaAccessRequest, BetaAllowlist,
+        BetaAccessRequest, BetaAllowlist, CardUpgradeLog,
     )
     from sqlalchemy import func, case
     from datetime import timedelta
@@ -2441,6 +2555,55 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
             CurrencyTransaction.amount < 0,
         ).scalar()
 
+        # Average & median balance
+        avgBalanceRow = session.query(
+            func.coalesce(func.avg(UserCurrency.balance), 0),
+        ).first()
+        avgBalance = round(float(avgBalanceRow[0]), 1)
+
+        allBalances = [
+            b for (b,) in session.query(UserCurrency.balance).order_by(UserCurrency.balance).all()
+        ]
+        if allBalances:
+            midIdx = len(allBalances) // 2
+            medianBalance = (allBalances[midIdx] if len(allBalances) % 2 == 1
+                             else round((allBalances[midIdx - 1] + allBalances[midIdx]) / 2, 1))
+        else:
+            medianBalance = 0
+
+        # Weekly FP cap hit rate
+        from constants import WEEKLY_FP_FLOOBIT_CAP
+        lastPaidWeek = session.query(func.max(CurrencyTransaction.week)).filter(
+            CurrencyTransaction.season == seasonNum,
+            CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
+        ).scalar()
+        if lastPaidWeek:
+            totalFpRecipients = session.query(func.count(CurrencyTransaction.id)).filter(
+                CurrencyTransaction.season == seasonNum,
+                CurrencyTransaction.week == lastPaidWeek,
+                CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
+            ).scalar()
+            capHitters = session.query(func.count(CurrencyTransaction.id)).filter(
+                CurrencyTransaction.season == seasonNum,
+                CurrencyTransaction.week == lastPaidWeek,
+                CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
+                CurrencyTransaction.amount >= WEEKLY_FP_FLOOBIT_CAP,
+            ).scalar()
+            capHitRate = round((capHitters / totalFpRecipients * 100), 1) if totalFpRecipients > 0 else 0
+            capHitWeek = lastPaidWeek
+        else:
+            capHitRate = 0
+            capHitters = 0
+            totalFpRecipients = 0
+            capHitWeek = None
+
+        # Richest users (top 5)
+        richestRows = session.query(
+            User.username, UserCurrency.balance,
+        ).join(User, UserCurrency.user_id == User.id
+        ).order_by(UserCurrency.balance.desc()).limit(5).all()
+        richestUsers = [{"username": u or "(no name)", "balance": int(b)} for u, b in richestRows]
+
         # ── Card Analytics ──────────────────────────────────────────────
         totalCards = session.query(func.count(UserCard.id)).scalar()
 
@@ -2469,12 +2632,27 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
                 if eName:
                     effectCounts[eName] += 1
         topEffects = [{"effectName": n, "count": c} for n, c in effectCounts.most_common(5)]
+        allEffects = effectCounts.most_common()
+        allEffects.reverse()
+        bottomEffects = [{"effectName": n, "count": c} for n, c in allEffects[:5]] if len(allEffects) >= 5 else []
 
         packRows = session.query(
             PackType.name, func.count(PackOpening.id),
         ).join(PackType, PackOpening.pack_type_id == PackType.id
         ).group_by(PackType.name).all()
         packOpenings = {n: c for n, c in packRows}
+
+        # Combine / upgrade usage
+        combineRows = session.query(
+            CardUpgradeLog.upgrade_type, func.count(CardUpgradeLog.id),
+        ).group_by(CardUpgradeLog.upgrade_type).all()
+        combineUsage = {t: c for t, c in combineRows}
+        totalCombineUses = sum(c for _, c in combineRows)
+
+        # Users who equipped cards this season
+        usersWhoEquipped = session.query(
+            func.count(func.distinct(EquippedCard.user_id)),
+        ).filter(EquippedCard.season == seasonNum).scalar()
 
         # ── Fantasy Engagement ──────────────────────────────────────────
         rosterRow = session.query(
@@ -2541,6 +2719,34 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
         )
         signupOnlyCount = len(allUserEmails - requestedEmails - allowedEmails)
 
+        # Churn risk — onboarded users inactive 14+ days
+        fourteenDaysAgo = now - timedelta(days=14)
+        churnRiskCount = session.query(func.count(User.id)).filter(
+            User.has_completed_onboarding == True,
+            User.last_login_at < fourteenDaysAgo,
+        ).scalar()
+
+        # Daily active users (last 28 days)
+        twentyEightDaysAgo = now - timedelta(days=28)
+        dailyActiveRows = session.query(
+            func.date(User.last_login_at),
+            func.count(User.id),
+        ).filter(
+            User.last_login_at >= twentyEightDaysAgo,
+        ).group_by(func.date(User.last_login_at)).order_by(func.date(User.last_login_at)).all()
+        dailyActiveUsers = [{"date": str(d), "count": c} for d, c in dailyActiveRows if d]
+
+        # Onboarding funnel
+        funnelPickedUsername = session.query(func.count(User.id)).filter(
+            User.username.isnot(None),
+        ).scalar()
+        funnelChoseFavTeam = session.query(func.count(User.id)).filter(
+            User.favorite_team_id.isnot(None),
+        ).scalar()
+        funnelDraftedRoster = session.query(
+            func.count(func.distinct(FantasyRoster.user_id)),
+        ).scalar()
+
         # ── Team Funding ────────────────────────────────────────────────
         totalFanContributions = session.query(
             func.coalesce(func.sum(TeamFunding.fan_contributions), 0),
@@ -2572,6 +2778,16 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
         pickEmParticipants = pickEmRow[3]
         pickEmAccuracy = round((correctPicks / resolvedPicks * 100), 1) if resolvedPicks > 0 else 0
 
+        # Pick-em participation trend by week
+        pickEmTrendRows = session.query(
+            PickEmPick.week,
+            func.count(func.distinct(PickEmPick.user_id)),
+            func.count(PickEmPick.id),
+        ).filter(
+            PickEmPick.season == seasonNum,
+        ).group_by(PickEmPick.week).order_by(PickEmPick.week).all()
+        pickEmTrend = [{"week": w, "participants": p, "picks": pk} for w, p, pk in pickEmTrendRows]
+
         return build_success_response({
             "seasonNumber": seasonNum,
             "economy": {
@@ -2582,13 +2798,23 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
                 "spendingBreakdown": spendingBreakdown,
                 "seasonEarnings": int(seasonEarnings),
                 "seasonSpending": int(seasonSpending),
+                "avgBalance": avgBalance,
+                "medianBalance": medianBalance,
+                "capHitRate": capHitRate,
+                "capHitters": capHitters,
+                "capHitWeek": capHitWeek,
+                "richestUsers": richestUsers,
             },
             "cards": {
                 "totalCards": totalCards,
                 "byEdition": {e: c for e, c in cardsByEdition},
                 "bySource": {s: c for s, c in cardsBySource},
                 "topEffects": topEffects,
+                "bottomEffects": bottomEffects,
                 "packOpenings": packOpenings,
+                "combineUsage": combineUsage,
+                "totalCombineUses": totalCombineUses,
+                "usersWhoEquipped": usersWhoEquipped,
             },
             "fantasy": {
                 "totalRosters": totalRosters,
@@ -2612,6 +2838,15 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
                     "funding": usersWhoFunded,
                 },
                 "signupOnly": signupOnlyCount,
+                "churnRiskCount": churnRiskCount,
+                "dailyActiveUsers": dailyActiveUsers,
+                "onboardingFunnel": {
+                    "hasAccount": totalUsers,
+                    "pickedUsername": funnelPickedUsername,
+                    "choseFavTeam": funnelChoseFavTeam,
+                    "draftedRoster": funnelDraftedRoster,
+                    "hasCards": usersWithCards,
+                },
             },
             "funding": {
                 "totalFanContributions": int(totalFanContributions),
@@ -2622,6 +2857,7 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
                 "totalPicks": totalPicks,
                 "accuracy": pickEmAccuracy,
                 "participants": pickEmParticipants,
+                "trend": pickEmTrend,
             },
         })
     except Exception as e:
@@ -3731,9 +3967,10 @@ def _computeLeaderboardData(seasonNum: int = None) -> dict:
 
 
 @app.get("/api/fantasy/snapshot")
-def get_fantasy_snapshot(season: Optional[int] = Query(default=None),
+def get_fantasy_snapshot(response: Response, season: Optional[int] = Query(default=None),
                          user: Optional[_User] = Depends(_getOptionalUser)):
     """Get full fantasy snapshot — single source of truth for roster + leaderboard."""
+    response.headers["Cache-Control"] = "public, max-age=10"
     if not floosball_app:
         return build_success_response(
             {"season": None, "week": 0, "gamesActive": False, "entries": []}
@@ -3763,8 +4000,9 @@ def get_fantasy_snapshot(season: Optional[int] = Query(default=None),
 
 
 @app.get("/api/fantasy/weekly-modifier")
-def get_weekly_modifier():
+def get_weekly_modifier(response: Response):
     """Get the active weekly modifier for the current season/week."""
+    response.headers["Cache-Control"] = "public, max-age=120"
     from database.connection import get_session
     from database.models import WeeklyModifier
 
@@ -3800,14 +4038,16 @@ def get_weekly_modifier():
 
 
 @app.get("/api/fantasy/leaderboard")
-def get_fantasy_leaderboard(season: Optional[int] = Query(default=None)):
+def get_fantasy_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
     """Get fantasy leaderboard for a season (defaults to current)."""
+    response.headers["Cache-Control"] = "public, max-age=10"
     return build_success_response(_computeLeaderboardData(season))
 
 
 @app.get("/api/fantasy/leaderboard/weekly")
-def get_fantasy_weekly_leaderboard(season: Optional[int] = Query(default=None)):
+def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
     """Get fantasy leaderboard broken down by week."""
+    response.headers["Cache-Control"] = "public, max-age=10"
     from database.connection import get_session
     from database.models import FantasyRoster, FantasyRosterPlayer, User, Game, GamePlayerStats, WeeklyCardBonus
 
@@ -4500,8 +4740,9 @@ def _requireShopOpen():
 
 
 @app.get("/api/packs/types")
-def getPackTypes(user: Optional[_User] = Depends(_getOptionalUser)):
+def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
     """Get available pack types with costs and daily purchase limits."""
+    response.headers["Cache-Control"] = "public, max-age=600"
     from database.connection import get_session
     from database.models import PackOpening
     from database.repositories.card_repositories import PackTypeRepository
@@ -5646,10 +5887,11 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
 
 
 @app.get("/api/pickem/week")
-def get_pickem_week(user: Optional[_User] = Depends(_getOptionalUser)):
+def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
     """Get this week's matchups with the user's existing picks (if any).
     Each game has per-game pickability and current multiplier based on quarter.
     """
+    response.headers["Cache-Control"] = "public, max-age=10"
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 

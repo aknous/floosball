@@ -461,12 +461,16 @@ class TimingManager:
         if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             logger.debug(f"{self.mode.value} mode: quarter break delay {self.delays['quarter_break']}s")
             await asyncio.sleep(self.delays['quarter_break'])
+        else:
+            await asyncio.sleep(0)
 
     async def waitForHalftime(self) -> None:
         """Wait during halftime"""
         if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
             logger.debug(f"{self.mode.value} mode: halftime delay {self.delays['halftime']}s")
             await asyncio.sleep(self.delays['halftime'])
+        else:
+            await asyncio.sleep(0)
 
     async def waitBetweenPlays(self) -> None:
         """Wait between individual plays in a game"""
@@ -475,6 +479,8 @@ class TimingManager:
             delay = random.uniform(self.delays['between_plays'] * 0.6, self.delays['between_plays'] * 1.4)
             logger.debug(f"{self.mode.value} mode: between plays delay {delay:.1f}s")
             await asyncio.sleep(delay)
+        else:
+            await asyncio.sleep(0)
 
     async def waitAfterKickoff(self) -> None:
         """Brief pause after kickoff broadcast, before first play of new drive."""
@@ -486,6 +492,8 @@ class TimingManager:
             )
             logger.debug(f"{self.mode.value} mode: after kickoff delay {delay:.1f}s")
             await asyncio.sleep(delay)
+        else:
+            await asyncio.sleep(0)
 
     async def waitBetweenOffseasonPicks(self) -> None:
         """Wait between offseason free agency pick broadcasts"""

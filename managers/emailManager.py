@@ -57,6 +57,24 @@ def sendAccessApprovedEmail(email: str) -> bool:
     return sendEmail(email, subject, _wrapEmailHtml(inner))
 
 
+def sendOnboardingReminderEmail(email: str) -> bool:
+    """Send a reminder to users who signed up but haven't completed onboarding."""
+    subject = "Finish setting up your Floosball account"
+    inner = """
+        <h1 style="font-size: 22px; color: #e2e8f0; margin-bottom: 8px;">You're almost there</h1>
+        <p style="font-size: 15px; color: #94a3b8; line-height: 1.6;">
+            You created a Floosball account but haven't finished setting up yet.
+            Pick a username and choose a favorite team to start playing.
+        </p>
+        <div style="background: #1e293b; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center;">
+            <a href="https://floosball.com" style="color: #3b82f6; font-size: 16px; font-weight: 600; text-decoration: none;">
+                Finish Setup
+            </a>
+        </div>
+    """
+    return sendEmail(email, subject, _wrapEmailHtml(inner))
+
+
 def _buildStatRow(label: str, value: str, color: str = "#e2e8f0") -> str:
     """Build a single stat row for email templates."""
     return f"""

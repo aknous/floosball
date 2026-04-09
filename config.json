@@ -2,6 +2,7 @@
     "adminPassword": "floosball",
     "clerkJwksUrl": "https://capable-dragon-13.clerk.accounts.dev/.well-known/jwks.json",
     "betaEnabled": true,
+    "accessMode": "request",
     "betaAllowlist": [
         "andrewknous@gmail.com"
     ],
