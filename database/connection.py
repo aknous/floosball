@@ -129,6 +129,14 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Demeanor column on player_attributes (v0.8)
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN demeanor VARCHAR(20)"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.demeanor")
+        except Exception:
+            conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [

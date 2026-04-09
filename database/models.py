@@ -209,6 +209,9 @@ class PlayerAttributes(Base):
     # Fatigue (0.0 = fresh, 1.0 = fully fatigued)
     fatigue: Mapped[float] = mapped_column(Float, default=0.0)
 
+    # Personality
+    demeanor: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="attributes")
 
