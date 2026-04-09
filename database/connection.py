@@ -98,6 +98,14 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Admin flag (v0.9)
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added users.is_admin")
+        except Exception:
+            conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist

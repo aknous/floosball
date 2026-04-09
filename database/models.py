@@ -589,6 +589,7 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True)
     hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     pending_favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     favorite_team_locked_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

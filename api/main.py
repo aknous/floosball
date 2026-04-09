@@ -1349,86 +1349,6 @@ async def get_reigning_champion(response: Response):
         return build_success_response(None)
 
 
-@app.get("/api/admin/schedule-debug")
-async def schedule_debug():
-    """Diagnostic: show schedule times and startDate for debugging."""
-    if floosball_app is None:
-        raise HTTPException(status_code=503, detail="Application not initialized")
-    season = floosball_app.seasonManager.currentSeason
-    if not season:
-        return build_success_response({"error": "no season"})
-    import math
-    import datetime as dt
-    from managers.timingManager import _isEdtDate
-    startDate = season.startDate
-    # Manual ET conversion for display
-    etOffset = 4 if _isEdtDate(startDate) else 5
-    startDateEt = startDate - dt.timedelta(hours=etOffset)
-    weeks = []
-    for i, week in enumerate(season.schedule):
-        userWeek = i + 1
-        startTime = week.get('startTime')
-        games = week.get('games', [])
-        gameStartTime = games[0].startTime if games else None
-        # Recalculate what getWeekStartTime would return
-        weekIdx = i  # 0-indexed
-        etHour = [12, 13, 14, 15, 16, 17, 18][weekIdx % 7]
-        dayNumber = math.floor(weekIdx / 7)
-        targetDate = (startDate + dt.timedelta(days=dayNumber)).date()
-        utcHour = etHour + (4 if _isEdtDate(targetDate) else 5)
-        # Call getWeekStartTime live to see what it returns NOW
-        liveStartTime = floosball_app.seasonManager.getWeekStartTime(dt.datetime.utcnow(), weekIdx)
-        weeks.append({
-            "userWeek": userWeek,
-            "weekIdx": weekIdx,
-            "weekIdx_mod7": weekIdx % 7,
-            "etHour": etHour,
-            "utcHour": utcHour,
-            "edtActive": _isEdtDate(targetDate),
-            "dayNumber": dayNumber,
-            "targetDate": str(targetDate),
-            "weekStartTime": startTime.isoformat() if startTime else None,
-            "liveGetWeekStartTime": liveStartTime.isoformat() if liveStartTime else None,
-            "gameStartTime": gameStartTime.isoformat() if gameStartTime else None,
-            "gameStartTimeTs": gameStartTime.timestamp() if gameStartTime else None,
-            "gameCount": len(games),
-        })
-    # Also check if _isEdt from seasonManager works
-    from managers.seasonManager import _isEdt
-    testDate = dt.date(2026, 3, 31)
-
-    # Query DB directly — how many games per week?
-    dbWeekCounts = {}
-    teamsPerLeague = None
-    try:
-        from database.connection import get_session as _gs
-        from database.models import Game as _G
-        from sqlalchemy import func
-        _s = _gs()
-        rows = _s.query(_G.week, _G.status, func.count(_G.id)).filter_by(
-            season=season.seasonNumber
-        ).group_by(_G.week, _G.status).order_by(_G.week).all()
-        for w, st, cnt in rows:
-            dbWeekCounts.setdefault(w, {})[st] = cnt
-        _s.close()
-    except Exception as e:
-        dbWeekCounts = {"error": str(e)}
-    try:
-        lm = floosball_app.seasonManager.leagueManager
-        teamsPerLeague = [len(lg.teamList) for lg in lm.leagues]
-    except Exception:
-        pass
-
-    return build_success_response({
-        "seasonStartDate": startDate.isoformat(),
-        "seasonStartDateET": startDateEt.isoformat(),
-        "scheduleLength": len(season.schedule),
-        "teamsPerLeague": teamsPerLeague,
-        "dbWeekCounts": dbWeekCounts,
-        "weeks": weeks,
-    })
-
-
 # ============================================================================
 # REST API - STATS & RECORDS
 # ============================================================================
@@ -1575,22 +1495,37 @@ async def get_websocket_stats():
 # ADMIN ENDPOINTS
 # ============================================================================
 
-def _check_admin_password(password: Optional[str]) -> None:
-    """Raise 403 if the provided password doesn't match config"""
+from api.auth import getAdminUser as _getAdminUser
+from database.models import User as _AdminUser
+
+def _checkAdminAuth(
+    adminUser: Optional[_AdminUser] = Depends(_getAdminUser),
+    x_admin_password: Optional[str] = Header(default=None),
+) -> None:
+    """Authorize admin access via admin-user JWT OR legacy password.
+
+    Checks:
+    1. If Authorization header has a valid JWT for a user with is_admin=True, allow.
+    2. If X-Admin-Password header matches config adminPassword, allow.
+    3. Raise 403.
+    """
+    if adminUser is not None:
+        return
     try:
         from config_manager import get_config
         cfg = get_config()
         expected = cfg.get("adminPassword", "")
     except Exception:
         expected = ""
-    if not expected or password != expected:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    if expected and x_admin_password == expected:
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @app.post("/api/admin/names")
-async def admin_add_names(payload: Dict[str, Any], x_admin_password: Optional[str] = Header(default=None)):
+async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
     """Add names to the unused player name pool"""
-    _check_admin_password(x_admin_password)
+
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     names = payload.get("names", [])
@@ -1607,9 +1542,9 @@ async def admin_add_names(payload: Dict[str, Any], x_admin_password: Optional[st
 
 
 @app.post("/api/admin/players")
-async def admin_create_player(payload: Dict[str, Any], x_admin_password: Optional[str] = Header(default=None)):
+async def admin_create_player(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
     """Create a player and add them to the free agent pool for next season"""
-    _check_admin_password(x_admin_password)
+
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     from random import randint
@@ -1694,9 +1629,9 @@ async def request_beta_access(payload: Dict[str, Any]):
 
 
 @app.get("/api/admin/beta/allowlist")
-async def admin_get_beta_allowlist(x_admin_password: Optional[str] = Header(default=None)):
+async def admin_get_beta_allowlist(_auth: None = Depends(_checkAdminAuth)):
     """List all emails on the beta allowlist."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import BetaAllowlist
     session = get_session()
@@ -1716,9 +1651,9 @@ async def admin_get_beta_allowlist(x_admin_password: Optional[str] = Header(defa
 
 
 @app.post("/api/admin/beta/allowlist")
-async def admin_add_beta_emails(payload: Dict[str, Any], x_admin_password: Optional[str] = Header(default=None)):
+async def admin_add_beta_emails(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
     """Add email(s) to beta allowlist."""
-    _check_admin_password(x_admin_password)
+
     rawEmails = payload.get("emails", [])
     if isinstance(rawEmails, str):
         rawEmails = [e.strip() for e in rawEmails.split(",") if e.strip()]
@@ -1752,9 +1687,9 @@ async def admin_add_beta_emails(payload: Dict[str, Any], x_admin_password: Optio
 
 
 @app.delete("/api/admin/beta/allowlist/{email}")
-async def admin_remove_beta_email(email: str, x_admin_password: Optional[str] = Header(default=None)):
+async def admin_remove_beta_email(email: str, _auth: None = Depends(_checkAdminAuth)):
     """Remove an email from beta allowlist."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import BetaAllowlist
 
@@ -1780,9 +1715,9 @@ async def admin_remove_beta_email(email: str, x_admin_password: Optional[str] = 
 
 
 @app.get("/api/admin/beta/requests")
-async def admin_get_beta_requests(x_admin_password: Optional[str] = Header(default=None)):
+async def admin_get_beta_requests(_auth: None = Depends(_checkAdminAuth)):
     """List pending beta access requests."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import BetaAccessRequest
 
@@ -1807,9 +1742,9 @@ async def admin_get_beta_requests(x_admin_password: Optional[str] = Header(defau
 
 
 @app.post("/api/admin/beta/requests/{requestId}/approve")
-async def admin_approve_beta_request(requestId: int, x_admin_password: Optional[str] = Header(default=None)):
+async def admin_approve_beta_request(requestId: int, _auth: None = Depends(_checkAdminAuth)):
     """Approve a beta access request — adds email to allowlist and sends notification."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import BetaAccessRequest, BetaAllowlist
     from managers.emailManager import sendAccessApprovedEmail
@@ -1846,9 +1781,9 @@ async def admin_approve_beta_request(requestId: int, x_admin_password: Optional[
 
 
 @app.post("/api/admin/beta/requests/{requestId}/deny")
-async def admin_deny_beta_request(requestId: int, x_admin_password: Optional[str] = Header(default=None)):
+async def admin_deny_beta_request(requestId: int, _auth: None = Depends(_checkAdminAuth)):
     """Deny a beta access request."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import BetaAccessRequest
 
@@ -1876,9 +1811,9 @@ async def admin_deny_beta_request(requestId: int, x_admin_password: Optional[str
 
 
 @app.get("/api/admin/beta/access-mode")
-async def admin_get_access_mode(x_admin_password: Optional[str] = Header(default=None)):
+async def admin_get_access_mode(_auth: None = Depends(_checkAdminAuth)):
     """Get current access mode."""
-    _check_admin_password(x_admin_password)
+
     try:
         from config_manager import get_config
         mode = get_config().get("accessMode", "request")
@@ -1889,9 +1824,9 @@ async def admin_get_access_mode(x_admin_password: Optional[str] = Header(default
 
 @app.post("/api/admin/beta/access-mode")
 async def admin_set_access_mode(payload: Dict[str, Any],
-                                x_admin_password: Optional[str] = Header(default=None)):
+                                _auth: None = Depends(_checkAdminAuth)):
     """Toggle access mode between 'request' and 'waitlist'."""
-    _check_admin_password(x_admin_password)
+
     mode = payload.get("mode", "").lower().strip()
     if mode not in ("request", "waitlist"):
         raise HTTPException(status_code=400, detail="Mode must be 'request' or 'waitlist'")
@@ -1905,9 +1840,9 @@ async def admin_set_access_mode(payload: Dict[str, Any],
 def admin_list_users(q: Optional[str] = Query(default=None),
                      sort: Optional[str] = Query(default=None),
                      filter: Optional[str] = Query(default=None),
-                     x_admin_password: Optional[str] = Header(default=None)):
+                     _auth: None = Depends(_checkAdminAuth)):
     """List registered users, optionally filtered by search query."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import User, UserCurrency, Team, BetaAllowlist, BetaAccessRequest
 
@@ -1981,6 +1916,7 @@ def admin_list_users(q: Optional[str] = Query(default=None),
                 "isActive": u.is_active,
                 "lastLoginAt": u.last_login_at.isoformat() if u.last_login_at else None,
                 "betaStatus": betaStatus,
+                "isAdmin": getattr(u, 'is_admin', False),
             })
         return build_success_response({"users": result, "total": len(result)})
     finally:
@@ -1988,9 +1924,9 @@ def admin_list_users(q: Optional[str] = Query(default=None),
 
 
 @app.post("/api/admin/users/send-onboarding-reminders")
-def admin_send_onboarding_reminders(x_admin_password: Optional[str] = Header(default=None)):
+def admin_send_onboarding_reminders(_auth: None = Depends(_checkAdminAuth)):
     """Send reminder emails to users who haven't completed onboarding."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import User
     from managers.emailManager import sendOnboardingReminderEmail
@@ -2023,9 +1959,9 @@ def admin_send_onboarding_reminders(x_admin_password: Optional[str] = Header(def
 
 
 @app.get("/api/admin/card-options")
-def admin_card_options(x_admin_password: Optional[str] = Header(default=None)):
+def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
     """Return available editions, effects, and classifications for the card grant tool."""
-    _check_admin_password(x_admin_password)
+
     from managers.cardEffects import (
         SHARED_EFFECT_POOL, POSITION_EXCLUSIVE_POOLS,
         EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY, EFFECT_EDITION_TIER,
@@ -2058,9 +1994,9 @@ def admin_card_options(x_admin_password: Optional[str] = Header(default=None)):
 
 @app.get("/api/admin/players/search")
 def admin_search_players(q: str = Query(..., min_length=1),
-                         x_admin_password: Optional[str] = Header(default=None)):
+                         _auth: None = Depends(_checkAdminAuth)):
     """Search players by name for the card grant tool."""
-    _check_admin_password(x_admin_password)
+
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     pm = floosball_app.playerManager
@@ -2082,9 +2018,9 @@ def admin_search_players(q: str = Query(..., min_length=1),
 
 @app.post("/api/admin/grant-card")
 def admin_grant_card(payload: Dict[str, Any],
-                     x_admin_password: Optional[str] = Header(default=None)):
+                     _auth: None = Depends(_checkAdminAuth)):
     """Grant a card to a user with specific edition, effect, and classification."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import User, CardTemplate, UserCard
     from managers.cardEffects import buildEffectConfig
@@ -2204,9 +2140,9 @@ def admin_grant_card(payload: Dict[str, Any],
 
 @app.post("/api/admin/grant-floobits")
 def admin_grant_floobits(payload: Dict[str, Any],
-                         x_admin_password: Optional[str] = Header(default=None)):
+                         _auth: None = Depends(_checkAdminAuth)):
     """Grant Floobits to a user."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import User
     from database.repositories.card_repositories import CurrencyRepository
@@ -2248,9 +2184,9 @@ def admin_grant_floobits(payload: Dict[str, Any],
 
 
 @app.post("/api/admin/users/{userId}/reroll-username")
-def admin_reroll_username(userId: int, x_admin_password: Optional[str] = Header(None)):
+def admin_reroll_username(userId: int, _auth: None = Depends(_checkAdminAuth)):
     """Admin: re-roll a user's username."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import User as _UserModel
     from api.auth import _generateUsernameCandidate
@@ -2278,9 +2214,9 @@ def admin_reroll_username(userId: int, x_admin_password: Optional[str] = Header(
 
 
 @app.delete("/api/admin/users/{userId}")
-def admin_delete_user(userId: int, x_admin_password: Optional[str] = Header(None)):
+def admin_delete_user(userId: int, _auth: None = Depends(_checkAdminAuth)):
     """Admin: permanently delete a user and all related data."""
-    _check_admin_password(x_admin_password)
+
     from database.connection import get_session
     from database.models import (
         User as _UserModel, UserCurrency, CurrencyTransaction, UserCard,
@@ -2335,10 +2271,35 @@ def admin_delete_user(userId: int, x_admin_password: Optional[str] = Header(None
         session.close()
 
 
+@app.post("/api/admin/users/{userId}/toggle-admin")
+def admin_toggle_admin(userId: int, _auth: None = Depends(_checkAdminAuth)):
+    """Toggle is_admin for a user."""
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    session = get_session()
+    try:
+        user = session.query(_UserModel).filter(_UserModel.id == userId).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.is_admin = not getattr(user, 'is_admin', False)
+        session.commit()
+        return build_success_response({
+            "userId": user.id,
+            "isAdmin": user.is_admin,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/admin/monitor")
-async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
+async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
     """Admin: comprehensive monitoring dashboard data"""
-    _check_admin_password(x_admin_password)
+
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
 
@@ -2501,9 +2462,9 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
 
 
 @app.get("/api/admin/analytics")
-async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)):
+async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
     """Admin: analytics dashboard — economy, cards, fantasy, users, funding, pick-em."""
-    _check_admin_password(x_admin_password)
+
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
 
@@ -3107,6 +3068,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailDayReport": user.email_day_report,
             "emailSeasonReport": user.email_season_report,
             "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
+            "isAdmin": getattr(user, 'is_admin', False),
         }
     finally:
         session.close()

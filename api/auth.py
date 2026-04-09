@@ -354,3 +354,21 @@ def getOptionalUser(
         return getCurrentUser(creds)
     except Exception:
         return None
+
+
+def getAdminUser(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_optionalBearerScheme),
+) -> Optional[User]:
+    """Return the authenticated User only if they have is_admin=True, else None.
+
+    Does NOT raise — allows downstream code to fall back to password auth.
+    """
+    if creds is None:
+        return None
+    try:
+        user = getCurrentUser(creds)
+        if user and getattr(user, 'is_admin', False):
+            return user
+        return None
+    except Exception:
+        return None
