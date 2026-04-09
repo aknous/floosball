@@ -18,10 +18,13 @@ class ConnectionManager:
     def __init__(self):
         # Dictionary mapping channel names to sets of websocket connections
         self.active_connections: Dict[str, Set[WebSocket]] = {}
-        
+
         # Track connection metadata
         self.connection_metadata: Dict[WebSocket, Dict[str, Any]] = {}
-        
+
+        # Track user IDs per connection for unique user count
+        self.connection_user_ids: Dict[WebSocket, int] = {}
+
         logger.info("WebSocket ConnectionManager initialized")
     
     async def connect(self, websocket: WebSocket, channel: str, metadata: Optional[Dict[str, Any]] = None):
@@ -68,7 +71,11 @@ class ConnectionManager:
         # Remove metadata
         if websocket in self.connection_metadata:
             del self.connection_metadata[websocket]
-        
+
+        # Remove user ID tracking
+        if websocket in self.connection_user_ids:
+            del self.connection_user_ids[websocket]
+
         logger.info(f"WebSocket disconnected from channel '{channel}'")
     
     async def send_personal_message(self, message: Dict[str, Any], websocket: WebSocket):
@@ -132,6 +139,10 @@ class ConnectionManager:
         tasks = [self.broadcast(message, channel) for channel in channels]
         await asyncio.gather(*tasks)
     
+    def identify(self, websocket: WebSocket, userId: int):
+        """Associate a user ID with a WebSocket connection."""
+        self.connection_user_ids[websocket] = userId
+
     def get_channel_count(self, channel: str) -> int:
         """Get the number of active connections for a channel"""
         return len(self.active_connections.get(channel, set()))
@@ -144,11 +155,13 @@ class ConnectionManager:
         """Get statistics about active connections"""
         total_connections = sum(len(conns) for conns in self.active_connections.values())
         
+        uniqueUsers = len(set(self.connection_user_ids.values()))
+
         return {
             'total_connections': total_connections,
-            'active_channels': len(self.active_connections),
+            'unique_users': uniqueUsers,
             'channels': {
-                channel: len(connections) 
+                channel: len(connections)
                 for channel, connections in self.active_connections.items()
             }
         }

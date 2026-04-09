@@ -205,6 +205,13 @@ async def season_websocket(websocket: WebSocket):
             try:
                 # Wait for client message or timeout after 30 seconds
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                try:
+                    import json as _json
+                    msg = _json.loads(data)
+                    if msg.get("type") == "identify" and msg.get("userId"):
+                        ws_manager.identify(websocket, msg["userId"])
+                except Exception:
+                    pass
                 logger.debug(f"Received from season client: {data}")
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
@@ -2481,6 +2488,7 @@ async def admin_monitor(x_admin_password: Optional[str] = Header(default=None)):
         },
         "memory": {
             "rssMb": rssMb,
+            "totalMb": round(os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / (1024 * 1024)),
             "scheduleGames": scheduleGames,
             "gamesWithPlays": gamesWithPlays,
             "totalPlaysInMemory": totalPlays,
@@ -2530,14 +2538,18 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
         earningsRows = session.query(
             CurrencyTransaction.transaction_type,
             func.sum(CurrencyTransaction.amount),
-        ).filter(CurrencyTransaction.amount > 0
+        ).filter(
+            CurrencyTransaction.season == seasonNum,
+            CurrencyTransaction.amount > 0,
         ).group_by(CurrencyTransaction.transaction_type).all()
         earningsBreakdown = {t: int(v) for t, v in earningsRows}
 
         spendingRows = session.query(
             CurrencyTransaction.transaction_type,
             func.sum(func.abs(CurrencyTransaction.amount)),
-        ).filter(CurrencyTransaction.amount < 0
+        ).filter(
+            CurrencyTransaction.season == seasonNum,
+            CurrencyTransaction.amount < 0,
         ).group_by(CurrencyTransaction.transaction_type).all()
         spendingBreakdown = {t: int(v) for t, v in spendingRows}
 
@@ -2625,16 +2637,19 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
             joinedload(EquippedCard.user_card).joinedload(UserCard.card_template)
         ).all()
         effectCounts = Counter()
+        effectTooltips = {}
         for eq in equippedRows:
             if eq.user_card and eq.user_card.card_template:
                 cfg = eq.user_card.card_template.effect_config or {}
                 eName = cfg.get("effectName", "")
                 if eName:
                     effectCounts[eName] += 1
-        topEffects = [{"effectName": n, "count": c} for n, c in effectCounts.most_common(5)]
+                    if eName not in effectTooltips:
+                        effectTooltips[eName] = cfg.get("tooltip", "")
+        topEffects = [{"effectName": n, "count": c, "tooltip": effectTooltips.get(n, "")} for n, c in effectCounts.most_common(5)]
         allEffects = effectCounts.most_common()
         allEffects.reverse()
-        bottomEffects = [{"effectName": n, "count": c} for n, c in allEffects[:5]] if len(allEffects) >= 5 else []
+        bottomEffects = [{"effectName": n, "count": c, "tooltip": effectTooltips.get(n, "")} for n, c in allEffects[:5]] if len(allEffects) >= 5 else []
 
         packRows = session.query(
             PackType.name, func.count(PackOpening.id),
@@ -2704,7 +2719,7 @@ async def admin_analytics(x_admin_password: Optional[str] = Header(default=None)
             PickEmPick.season == seasonNum).scalar()
         usersWhoFunded = session.query(func.count(func.distinct(CurrencyTransaction.user_id))).filter(
             CurrencyTransaction.season == seasonNum,
-            CurrencyTransaction.transaction_type == 'team_funding',
+            CurrencyTransaction.transaction_type == 'team_contribution',
         ).scalar()
 
         # Beta funnel: users who signed up but never requested access
