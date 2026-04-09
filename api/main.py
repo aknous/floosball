@@ -221,6 +221,8 @@ async def season_websocket(websocket: WebSocket):
                     break
             
     except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
         ws_manager.disconnect(websocket, channel)
         logger.info("Client disconnected from season updates")
 
