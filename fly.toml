@@ -30,7 +30,7 @@ primary_region = "ord"
     soft_limit = 200
 
 [[vm]]
-  memory = "1gb"
+  memory = "2gb"
   cpu_kind = "performance"
   cpus = 1
 
