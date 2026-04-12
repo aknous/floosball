@@ -812,6 +812,34 @@ async def get_player(player_id: int, response: Response):
         
         # Build detailed response
         player_dict = PlayerResponseBuilder.buildPlayerWithAttributes(player)
+
+        # Demeanor drift direction — look at the most recent demeanor change
+        # in PlayerPersonalityHistory and compare spectrum index.
+        try:
+            from database.connection import get_session as _getSession
+            from database.models import PlayerPersonalityHistory as _PPH
+            from managers.personalityData import DEMEANOR_INDEX as _DI
+            _sess = _getSession()
+            lastDemeanorChange = _sess.query(_PPH).filter(
+                _PPH.player_id == player.id,
+                _PPH.change_type == 'demeanor'
+            ).order_by(_PPH.created_at.desc()).first()
+            _sess.close()
+            if lastDemeanorChange and lastDemeanorChange.from_value and lastDemeanorChange.to_value:
+                fromIdx = _DI.get(lastDemeanorChange.from_value)
+                toIdx = _DI.get(lastDemeanorChange.to_value)
+                if fromIdx is not None and toIdx is not None and 'attributes' in player_dict:
+                    direction = 'volatile' if toIdx > fromIdx else ('composed' if toIdx < fromIdx else None)
+                    if direction:
+                        player_dict['attributes']['demeanorDrift'] = {
+                            'direction': direction,
+                            'from': lastDemeanorChange.from_value,
+                            'season': lastDemeanorChange.season,
+                            'week': lastDemeanorChange.week,
+                        }
+        except Exception:
+            pass
+
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
@@ -1125,6 +1153,7 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
                                 'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
                                 'insights': getattr(play_data, 'insights', None),
+                                'personalityEvent': getattr(play_data, 'personalityEvent', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:

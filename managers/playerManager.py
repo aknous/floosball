@@ -433,6 +433,8 @@ class PlayerManager:
                 player.attributes.defensiveTalent = getattr(attrs, 'defensive_talent', 0) or 0
                 player.attributes.fatigue = getattr(attrs, 'fatigue', 0.0) or 0.0
                 player.attributes.demeanor = getattr(attrs, 'demeanor', None)
+                player.attributes.archetype = getattr(attrs, 'archetype', None)
+                player.attributes.quirk = getattr(attrs, 'quirk', None)
 
             # Load career stats from related table
             if db_player.career_stats:
@@ -1374,6 +1376,8 @@ class PlayerManager:
                             defensive_talent=getattr(attrs, 'defensiveTalent', 0),
                             fatigue=attrs.fatigue,
                             demeanor=attrs.demeanor,
+                            archetype=getattr(attrs, 'archetype', None),
+                            quirk=getattr(attrs, 'quirk', None),
                         )
                         self.db_session.add(db_attrs)
                     else:
@@ -1417,6 +1421,8 @@ class PlayerManager:
                         db_attrs.defensive_talent = getattr(attrs, 'defensiveTalent', 0)
                         db_attrs.fatigue = attrs.fatigue
                         db_attrs.demeanor = attrs.demeanor
+                        db_attrs.archetype = getattr(attrs, 'archetype', None)
+                        db_attrs.quirk = getattr(attrs, 'quirk', None)
 
                 # Save career stats (season 0 = career totals)
                 if hasattr(player, 'careerStatsDict') and player.careerStatsDict:

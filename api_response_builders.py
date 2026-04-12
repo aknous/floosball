@@ -257,6 +257,21 @@ class PlayerResponseBuilder(ResponseBuilder):
                 for k, v in defAttrs.items()
             }
 
+        # Archetype + quirk (Personality System)
+        archetype = getattr(player.attributes, 'archetype', None)
+        quirk = getattr(player.attributes, 'quirk', None)
+        if archetype or quirk:
+            from managers import personalityData as _PD
+            personality = {}
+            if archetype:
+                personality['archetype'] = archetype
+                personality['archetypeLabel'] = _PD.getArchetypeLabel(archetype)
+            if quirk:
+                personality['quirk'] = quirk
+                personality['quirkLabel'] = _PD.getQuirkLabel(quirk)
+                personality['quirkTier'] = _PD.getQuirkTier(quirk)
+            attr_dict['personality'] = personality
+
         player_dict['attributes'] = attr_dict
         return player_dict
     

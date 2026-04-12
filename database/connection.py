@@ -253,6 +253,17 @@ def _runPendingMigrations():
             logger.info("  Migration: added users.auto_pick_mode")
         except Exception:
             conn.rollback()
+        # Archetype + quirk columns on player_attributes (personality system)
+        for col, colDef in [
+            ('archetype', 'VARCHAR(30)'),
+            ('quirk', 'VARCHAR(30)'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
 
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)

@@ -16,6 +16,7 @@ from managers.leagueManager import LeagueManager
 from managers.seasonManager import SeasonManager
 from managers.recordManager import RecordManager
 from managers.fantasyTracker import FantasyTracker
+from managers.personalityManager import PersonalityManager
 
 logger = get_logger("floosball.application")
 
@@ -37,6 +38,7 @@ class FloosballApplication:
         self.teamManager = TeamManager(serviceContainer)
         self.leagueManager = LeagueManager(serviceContainer)
         self.recordsManager = RecordManager(serviceContainer)
+        self.personalityManager = PersonalityManager(serviceContainer)
         
         # Override each manager's session with the shared one to prevent lock conflicts
         if self.shared_db_session:
@@ -88,6 +90,7 @@ class FloosballApplication:
         self.serviceContainer.registerService('season_manager', self.seasonManager)
         self.serviceContainer.registerService('records_manager', self.recordsManager)
         self.serviceContainer.registerService('fantasy_tracker', self.fantasyTracker)
+        self.serviceContainer.registerService('personality_manager', self.personalityManager)
         
         logger.info("Registered all managers with service container")
     
@@ -105,6 +108,22 @@ class FloosballApplication:
         logger.info("Setting up players...")
         self.playerManager.generatePlayers(config, force_fresh=force_fresh)
         self.playerManager.sortPlayersByPosition()
+
+        # Assign personality (archetype / demeanor / quirk) to the full player pool.
+        # Runs after generation so Unique/Common caps are applied league-wide in a
+        # single pass. Existing players with archetype already set are left alone
+        # unless they came from a pre-personality schema (nullable archetype).
+        logger.info("Assigning personality traits...")
+        allPlayers = (
+            self.playerManager.activePlayers
+            + self.playerManager.freeAgents
+            + self.playerManager.rookieDraftList
+        )
+        summary = self.personalityManager.assignToPlayerPool(allPlayers)
+        logger.info(
+            f"Personality assigned: {summary['quirked']}/{summary['total']} quirked, "
+            f"{len(summary['activeUniques'])} active uniques"
+        )
         
         # Generate teams (but don't initialize yet - need players first)
         logger.info("Setting up teams...")

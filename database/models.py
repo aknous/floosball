@@ -234,12 +234,39 @@ class PlayerAttributes(Base):
 
     # Personality
     demeanor: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    archetype: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    quirk: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="attributes")
 
     def __repr__(self):
         return f"<PlayerAttributes(player_id={self.player_id}, overall={self.overall_rating})>"
+
+
+class PlayerPersonalityHistory(Base):
+    """Tracks demeanor drift and quirk swaps over a player's career."""
+    __tablename__ = "player_personality_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    change_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'demeanor' | 'quirk'
+    from_value: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    to_value: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_personality_history_player", "player_id"),
+        Index("idx_personality_history_season", "season"),
+    )
+
+    def __repr__(self):
+        return (f"<PlayerPersonalityHistory(player_id={self.player_id}, "
+                f"season={self.season}, week={self.week}, "
+                f"{self.change_type}: {self.from_value}->{self.to_value})>")
 
 
 class PlayerCareerStats(Base):

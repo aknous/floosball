@@ -609,7 +609,7 @@ def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
 class Game:
-    def __init__(self, homeTeam, awayTeam, timingManager=None):
+    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None):
         self.id = None  # Integer ID assigned by SeasonManager
         self.seasonNumber = None  # Which season this game belongs to
         self.week = None  # Week number for regular season
@@ -617,6 +617,7 @@ class Game:
         self.gameType = 'regular'  # 'regular' or 'playoff'
         self.gameNumber = None  # Game number within the week/round
         self.status = None
+        self.personalityManager = personalityManager  # Layer 1/2/3 template firing
         self.homeTeam : FloosTeam.Team = homeTeam
         self.awayTeam : FloosTeam.Team = awayTeam
         self.awayScore = 0
@@ -703,6 +704,7 @@ class Game:
         self.winningTeam: FloosTeam.Team = None
         self.losingTeam: FloosTeam.Team = None
         self.play: Play = None
+        self._personalityEventsFired = 0  # Per-game counter for frequency gating
         self.gameDict = {}
         self.gameFeed = []
         self.highlights = []
@@ -4249,6 +4251,164 @@ class Game:
             'away': teamSnapshot(self.awayTeam),
         }
 
+    def _resolvePersonalityTrigger(self):
+        """
+        Inspect self.play and decide which (player, eventKey) should fire a
+        Layer 1 personality line, if any. Returns (player, eventKey) or None.
+        Only offensive-attributable events are resolved (we don't track
+        individual defenders on defensive plays).
+        """
+        play = self.play
+        if play is None:
+            return None
+
+        def _pickPassSkill():
+            """On a pass play, 50/50 split between receiver and passer so QBs
+            also get positive reactions on TDs / big gains / 3rd down converts."""
+            candidates = [p for p in (play.receiver, play.passer) if p is not None]
+            if not candidates:
+                return None
+            return batched_choice(candidates)
+
+        # Touchdowns — highest priority
+        if getattr(play, 'isTd', False):
+            if getattr(play, 'isPassCompletion', False):
+                featured = _pickPassSkill()
+                if featured is not None:
+                    return (featured, 'td_scored')
+            if play.runner is not None:
+                return (play.runner, 'td_scored')
+            return None
+
+        # Interception thrown (offensive attribution — QB)
+        if getattr(play, 'isInterception', False) and play.passer is not None:
+            return (play.passer, 'int_thrown')
+
+        # Fumble lost — runner or passer
+        if getattr(play, 'isFumbleLost', False):
+            if play.runner is not None:
+                return (play.runner, 'fumble_lost')
+            if play.passer is not None:
+                return (play.passer, 'fumble_lost')
+
+        # Sack taken — passer
+        if getattr(play, 'isSack', False) and play.passer is not None:
+            return (play.passer, 'sack_taken')
+
+        # Field goal made/missed
+        if getattr(play, 'fgDistance', 0) and play.kicker is not None:
+            if getattr(play, 'isFgGood', False):
+                return (play.kicker, 'fg_made')
+            return (play.kicker, 'fg_missed')
+
+        # Third down conversion
+        preDown = getattr(play, 'down', 0)
+        yardage = getattr(play, 'yardage', 0)
+        yardsTo1st = getattr(play, 'yardsTo1st', None)
+        if preDown == 3 and isinstance(yardsTo1st, (int, float)) and yardage >= yardsTo1st and yardage > 0:
+            if getattr(play, 'isPassCompletion', False):
+                featured = _pickPassSkill()
+                if featured is not None:
+                    return (featured, 'third_down_conversion')
+            if play.runner is not None:
+                return (play.runner, 'third_down_conversion')
+
+        # Big gain (25+ yards, non-scoring, non-turnover)
+        if yardage >= 25 and not getattr(play, 'isTd', False):
+            if getattr(play, 'isPassCompletion', False):
+                featured = _pickPassSkill()
+                if featured is not None:
+                    return (featured, 'big_gain')
+            if play.runner is not None:
+                return (play.runner, 'big_gain')
+
+        return None
+
+    def _buildPersonalityEvent(self):
+        """
+        Layer 1 firing hook. Called from broadcastGameState. Returns a dict
+        shaped for the WebSocket game feed, or None if no line fires this play.
+        Frequency-gated to target ~3-5 events per game.
+        """
+        if self.personalityManager is None:
+            return None
+        # Hard cap on events per game to avoid runaway spam in extreme games
+        if self._personalityEventsFired >= 30:
+            return None
+
+        trigger = self._resolvePersonalityTrigger()
+        if trigger is None:
+            return None
+        player, eventKey = trigger
+        if player is None:
+            return None
+
+        attrs = getattr(player, 'attributes', None)
+        archetype = getattr(attrs, 'archetype', None) if attrs else None
+        demeanor = getattr(attrs, 'demeanor', None) if attrs else None
+        if not archetype:
+            return None
+
+        # Gating — scoring plays, turnovers, sacks, and big plays ALWAYS fire.
+        # Third-down conversions are frequent so they fire at a lower rate.
+        alwaysFire = eventKey in (
+            'td_scored', 'int_thrown', 'fumble_lost',
+            'fg_made', 'fg_missed', 'sack_taken', 'big_gain',
+        )
+        if not alwaysFire:
+            # third_down_conversion
+            if batched_random() > 0.20:
+                return None
+
+        playerKey = f"{self.id}-{getattr(player, 'id', id(player))}"
+        entry = self.personalityManager.selectArchetypeLine(
+            archetype=archetype,
+            demeanor=demeanor,
+            event=eventKey,
+            playerKey=playerKey,
+        )
+        if entry is None:
+            return None
+
+        # Opponent team for token context
+        try:
+            playerTeam = getattr(player, 'team', None)
+            oppTeam = self.awayTeam if playerTeam is self.homeTeam else self.homeTeam
+            oppAbbr = getattr(oppTeam, 'abbr', '') if oppTeam else ''
+        except Exception:
+            oppAbbr = ''
+
+        tokens = {
+            'name': getattr(player, 'name', ''),
+            'oppTeam': oppAbbr,
+            'yards': getattr(self.play, 'yardage', 0),
+            'quarter': self.currentQuarter,
+            'teammate': 'a teammate',
+            'defender': 'the defender',
+            'score': f"{self.homeScore}-{self.awayScore}",
+        }
+        text = self.personalityManager.renderTemplate(entry, tokens)
+        if not text:
+            return None
+
+        self._personalityEventsFired += 1
+        eventDict = {
+            'layer': 'archetype',
+            'text': text,
+            'playerId': getattr(player, 'id', None),
+            'playerName': getattr(player, 'name', ''),
+            'archetype': archetype,
+            'demeanor': demeanor,
+            'quirk': getattr(attrs, 'quirk', None) if attrs else None,
+            'event': eventKey,
+        }
+        # Attach to the play object so it persists in gameFeed references too
+        try:
+            self.play.personalityEvent = eventDict
+        except Exception:
+            pass
+        return eventDict
+
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """
         Broadcast comprehensive game state after a play or game event.
@@ -4260,6 +4420,12 @@ class Game:
             isPossessionChange: If True, omit ball position fields so frontend keeps its current state
             isFinalBroadcast: If True, broadcast even in TURBO mode (used for game-end state)
         """
+        # Layer 1 personality events fire regardless of broadcast availability
+        # so they persist on the Play object (and in gameFeed references) even
+        # when no WebSocket clients are connected.
+        if includeLastPlay and hasattr(self, 'play') and self.play and eventMessage is None:
+            self._buildPersonalityEvent()
+
         if not BROADCASTING_AVAILABLE or not broadcaster.is_enabled():
             return
 
@@ -4388,6 +4554,7 @@ class Game:
                 'isChokePlay': getattr(self.play, 'isChokePlay', False),
                 'isMomentumShift': getattr(self.play, 'isMomentumShift', False),
                 'insights': getattr(self.play, 'insights', None),
+                'personalityEvent': self._buildPersonalityEvent(),
             }
 
         # Determine possession team abbreviation and booleans
