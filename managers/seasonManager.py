@@ -923,6 +923,19 @@ class SeasonManager:
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
+        # Run weekly personality drift check across all active players
+        try:
+            personalityManager = self.serviceContainer.getService('personality_manager')
+            if personalityManager:
+                personalityManager.checkWeeklyDrift(
+                    self.playerManager.activePlayers,
+                    self.currentSeason.seasonNumber,
+                    week,
+                    dbSession=self.playerManager.db_session,
+                )
+        except Exception as e:
+            logger.error(f"Personality drift check failed: {e}")
+
         # Unlock equipped cards now that week is over
         try:
             from database.connection import get_session as _getSession
@@ -2057,7 +2070,7 @@ class SeasonManager:
                     game = weekGames[x]
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
-                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager)
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'))
                     
                     # Assign unique integer ID and metadata
                     self._gameIdCounter += 1
@@ -2132,7 +2145,8 @@ class SeasonManager:
 
             self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
-                                     timingManager=self.timingManager)
+                                     timingManager=self.timingManager,
+                                     personalityManager=self.serviceContainer.getService('personality_manager'))
             newGame.id = self._gameIdCounter
             newGame.dbId = row.id
             newGame.seasonNumber = seasonNumber

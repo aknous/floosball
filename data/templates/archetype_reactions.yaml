@@ -1,0 +1,1524 @@
+# Layer 1: Archetype Voice - in-play color commentary
+#
+# Schema:
+#   <archetype_key>:
+#     <event_key>:
+#       - text: "sentence with {tokens}"
+#         demeanor: optional -- restricts line to players with this demeanor
+#         weight: optional integer (default 1)
+#
+# Tokens: {name} {oppTeam} {yards} {quarter} {teammate} {defender} {score}
+# All lines are third-person observation. Quoted speech is allowed when
+# embedded in a descriptive sentence ("...as he tells the bench, '...'")
+#
+# Events (offensive players only):
+#   td_scored, third_down_conversion, big_gain, sack_taken, int_thrown,
+#   fumble_lost, fg_made, fg_missed
+#
+# Demeanor coloring: each archetype/event has variants tagged with the
+# demeanor they fit best (stoic/cool/intense/melancholy/fiery/dramatic).
+# Demeanor-tagged lines take precedence for matching players; untagged
+# lines serve as archetype-level fallback.
+#
+# Fallback cascade: (archetype, demeanor, event) -> (archetype, event) ->
+# (generic, event). The 'generic' archetype provides safety-net lines.
+
+# Leader — Selfless, slightly unhinged.
+# The one teammates follow. Vocal, takes blame, rallies.
+leader:
+  td_scored:
+    # stoic
+    - text: "{name} hands the ball to the ref and nods once at every lineman on the walk back."
+      demeanor: stoic
+    # cool
+    - text: "{name} points at the linemen on his way back, making sure they get the credit."
+      demeanor: cool
+    # intense
+    - text: "{name} is already barking the next formation before his teammates reach him."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} rallies the offense on the sideline — the whole unit feeds off it."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} jogs back, slaps every teammate on the helmet, and calls for more."
+      demeanor: dramatic
+    # untagged
+    - text: "{name} makes sure everyone else gets the credit on the walk back."
+  third_down_conversion:
+    # stoic
+    - text: "{name} gives the line a single nod on the walk back, his only reaction."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives a measured clap to the line on the way back."
+      demeanor: cool
+    # intense
+    - text: "{name} immediately starts waving the offense back to the line."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} walks back and the bench erupts around him."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} turns the first down into a full-bench revival."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    - text: "{name} jogs back to the line like nothing happened."
+      demeanor: stoic
+    # cool
+    - text: "{name} turns to usher the whole offense downfield."
+      demeanor: cool
+    # intense
+    - text: "{name} is already pointing to the next play call on the walk back."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} is shouting at his line the whole way back."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} turns the jog back into a sideline sermon."
+      demeanor: dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} stands up and walks back without a word."
+      demeanor: stoic
+    # cool
+    - text: "{name} pulls his line together in the huddle. No finger-pointing."
+      demeanor: cool
+    # intense
+    - text: "{name} gets up pointing to himself — he's taking the blame."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} pops up and is already firing up the huddle."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} staggers up and delivers a speech to his line that lasts three seconds too long."
+      demeanor: dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks off silently, already watching the defense take the field."
+      demeanor: stoic
+    # cool
+    - text: "{name} owns it on the sideline, meeting every receiver's eye."
+      demeanor: cool
+    # intense
+    - text: "{name} walks off with his head up, already telling the defense he'll get it back."
+      demeanor: intense
+    # melancholy
+    - text: "{name} trudges to the bench, head down, and waits for the defense to come back."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} immediately starts rallying the bench for the next drive."
+      demeanor: fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} gets up and walks off without breaking stride."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives a quick nod to the defense as they take the field."
+      demeanor: cool
+    # intense
+    - text: "{name} is the first one on his feet, rallying the defense."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} hits his own chest twice and sprints off shouting encouragement."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} delivers a full apology to every teammate he passes on the walk off."
+      demeanor: dramatic
+  fg_made:
+    # stoic
+    - text: "{name} gives the kicker one nod and walks to the bench."
+      demeanor: stoic
+    # cool
+    # intense
+    - text: "{name} meets the kicker at the numbers, already talking about the next drive."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} is first onto the field, mobbing the kicker like he scored the game-winner."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} lifts the kicker off the ground and parades him toward the bench."
+      demeanor: dramatic
+    # untagged
+    - text: "{name} runs onto the field first to celebrate with the kicker."
+  fg_missed:
+    # stoic
+    - text: "{name} pats the kicker once and keeps walking."
+      demeanor: stoic
+    # cool
+    - text: "{name} jogs to the kicker before anyone else gets a word in."
+      demeanor: cool
+    # intense
+    - text: "{name} is at the kicker's side before his helmet comes off, already talking."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks to the kicker, puts an arm around him, and says nothing."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} meets the kicker head-on and fires him up for the next one."
+      demeanor: fiery
+    # dramatic
+
+# Guardian — Selfless, disciplined.
+# Protects teammates. Sacrifices stats for the team. Quiet, dependable.
+guardian:
+  td_scored:
+    # stoic
+    - text: "{name} hands the ball to the ref without breaking stride."
+      demeanor: stoic
+    # cool
+    - text: "{name} hands the ball to the ref and points back at the offensive line."
+      demeanor: cool
+    # intense
+    - text: "{name} is already asking the coordinator about the extra point protection."
+      demeanor: intense
+    # melancholy
+    - text: "{name} turns around to check on the blockers who sprung him."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} shouts a thank-you to the tackle who held his block."
+      demeanor: fiery
+    # dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} helps his own blocker up without a word."
+      demeanor: stoic
+    # cool
+    - text: "{name} immediately helps {teammate} off the turf."
+      demeanor: cool
+    # intense
+    - text: "{name} is scanning for anyone who needs help up before celebrating."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks back quietly, already worried about the teammate who took the hit."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  big_gain:
+    # stoic
+    - text: "{name} trots back checking the line for cuts and bruises."
+      demeanor: stoic
+    # cool
+    - text: "{name} has his eyes on the trailing blockers before the whistle finishes."
+      demeanor: cool
+    # intense
+    - text: "{name} immediately finds the guard who made the key block."
+      demeanor: intense
+    # melancholy
+    - text: "{name} looks back to make sure the line survived the play."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} walks back to the huddle without a word."
+      demeanor: stoic
+    # cool
+    - text: "{name} is the first to tell the tackle it wasn't on him."
+      demeanor: cool
+    # intense
+    - text: "{name} gets up fast and shields his left tackle from the position coach's stare."
+      demeanor: intense
+    # melancholy
+    - text: "{name} sits in the huddle looking a little more tired than before."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks his line off the field quietly."
+      demeanor: stoic
+    # cool
+    - text: "{name} meets his line at the sideline and quietly tells them it was on him."
+      demeanor: cool
+    # intense
+    - text: "{name} is already gathering the unit for a correction."
+      demeanor: intense
+    # melancholy
+    - text: "{name} stares at the turf for a long beat before jogging off."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} walks off with his jaw set."
+      demeanor: stoic
+    # cool
+    - text: "{name} drops to a knee, shaking his head once before getting up."
+      demeanor: cool
+    # intense
+    - text: "{name} is on his feet immediately, hunting the ball carrier he failed to block for."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks to the bench with the weight of it obvious."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_made:
+    # stoic
+    - text: "{name} trots off with the unit, already thinking about the next series."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the kicker a quiet thumbs-up on the way past."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} nods at the kicker without a smile. The job's not done."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_missed:
+    # stoic
+    # cool
+    - text: "{name} is the first to the kicker, hand on his shoulder pad."
+      demeanor: cool
+    # intense
+    - text: "{name} is on the kicker immediately, resetting him for the next attempt."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks to the kicker with his head down and sits with him on the bench."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+
+# Grinder — Selfless, disciplined.
+# Outworks everyone, no shortcuts. First in, last out. No flash.
+grinder:
+  td_scored:
+    # stoic
+    - text: "{name} hands the ball to the ref and walks off like it was a practice rep."
+      demeanor: stoic
+    # cool
+    - text: "{name} jogs to the sideline without a word. Onto the next drive."
+      demeanor: cool
+    # intense
+    - text: "{name} is already calling for the special teams unit to get ready."
+      demeanor: intense
+    # melancholy
+    - text: "{name} heads to the bench looking tired but not pleased yet."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} walks back to the huddle at the same pace as always."
+      demeanor: stoic
+    # cool
+    - text: "{name} is already jogging back to the huddle before the crowd reacts."
+      demeanor: cool
+    # intense
+    - text: "{name} is the first one back to the line."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks back with the look of a man who expected nothing less from himself."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  big_gain:
+    # stoic
+    - text: "{name} hands the ball to the ref before the whistle's done."
+      demeanor: stoic
+    # cool
+    - text: "{name} pops up asking for the next call."
+      demeanor: cool
+    # intense
+    - text: "{name} sprints back to the line, ready for the next snap."
+      demeanor: intense
+    # melancholy
+    - text: "{name} jogs back without looking at the scoreboard."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} stands up and re-ties his gloves without a word."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back to the huddle at the same pace as always."
+      demeanor: cool
+    # intense
+    - text: "{name} pops up and is already calling the next play."
+      demeanor: intense
+    # melancholy
+    - text: "{name} takes a little longer than usual to get up."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks to the sideline with the same look he had before the play."
+      demeanor: stoic
+    # cool
+    - text: "{name} trots off and immediately starts flipping through the play sheet."
+      demeanor: cool
+    # intense
+    - text: "{name} is off the field and onto the next play before anyone can say a word to him."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks off looking a little heavier than when he walked on."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} gets up and starts the long jog back to the bench, jaw clenched."
+      demeanor: stoic
+    # cool
+    - text: "{name} jogs to the sideline without a change in pace."
+      demeanor: cool
+    # intense
+    - text: "{name} pops up already demanding the ball on the next series."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks back to the bench with his jaw tight."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_made:
+    # stoic
+    - text: "{name} nods once at the kicker and heads to the bench."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the kicker a flat pat on the helmet and keeps walking."
+      demeanor: cool
+    # intense
+    - text: "{name} is already on the sideline watching the next series unfold in his head."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks past the kicker with a short nod and sits down heavily."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} nods once and keeps walking. On to the next."
+      demeanor: stoic
+    # cool
+    - text: "{name} pats the kicker twice and heads off without slowing down."
+      demeanor: cool
+    # intense
+    - text: "{name} is already grabbing his helmet for the next series."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks off the field staring at the grass."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+
+# Technician — Selfish-neutral, disciplined.
+# Precision, mastery of craft. Film study, exploits edges. Cerebral.
+technician:
+  td_scored:
+    # stoic
+    - text: "{name} quietly diagrams the coverage he just beat in his head."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks off the field reviewing the coverage he just beat with the QB."
+      demeanor: cool
+    # intense
+    - text: "{name} immediately diagrams something in the air to the position coach."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} delivers a lecture to the nearest teammate about the concept he just ran."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} walks back having hit exactly where he'd marked the soft spot in the zone during film."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back having hit the exact leverage read he practiced all week."
+      demeanor: cool
+    # intense
+    - text: "{name} is already pointing out the next coverage tell to the QB."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} visibly mouths 'I told you so' to the position coach."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    - text: "{name} jogs back, the route he's been setting up since the first quarter finally cashing in."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back with the small satisfaction of a double-move he'd teed up three drives ago."
+      demeanor: cool
+    # intense
+    - text: "{name} is already marking the soft spot for the next call."
+      demeanor: intense
+    # melancholy
+    - text: "{name} mutters something about the angle he could have gotten."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} walks back to the huddle mentally rewriting the protection."
+      demeanor: stoic
+    # cool
+    - text: "{name} is already adjusting the protection call for next snap."
+      demeanor: cool
+    # intense
+    - text: "{name} pops up sharp and is already arguing with the center about the mike call."
+      demeanor: intense
+    # melancholy
+    - text: "{name} spends the walk back replaying the read in his head."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks off silently, already re-running the coverage in his head."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks off already diagnosing what he missed."
+      demeanor: cool
+    # intense
+    - text: "{name} walks off grinding his teeth, re-running the coverage in his head."
+      demeanor: intense
+    # melancholy
+    - text: "{name} sits on the bench staring at the play sheet."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} calmly checks the stitching of his gloves on the bench."
+      demeanor: stoic
+    # cool
+    - text: "{name} spends the walk to the bench staring at his gloves."
+      demeanor: cool
+    # intense
+    - text: "{name} is already pacing the sideline replaying the handoff mechanics."
+      demeanor: intense
+    # melancholy
+    - text: "{name} sits with the play sheet unopened in his hands."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_made:
+    # stoic
+    - text: "{name} watches the kick's trajectory, already calculating the next coverage."
+      demeanor: stoic
+    # cool
+    - text: "{name} tracks the kick like a physics problem and nods once when it's good."
+      demeanor: cool
+    # intense
+    - text: "{name} is already questioning the kicker about his steps before he's off the field."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} quietly notes the wind direction for next time."
+      demeanor: stoic
+    # cool
+    - text: "{name} takes a mental note of the wind and goes back to his chart."
+      demeanor: cool
+    # intense
+    - text: "{name} is already at the kicker's side asking about the snap timing."
+      demeanor: intense
+    # melancholy
+    - text: "{name} stares at the goalposts for a long beat, doing math."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+
+# Prodigy — Neutral.
+# Natural talent, effortless. Makes it look easy. Untouched by effort.
+prodigy:
+  td_scored:
+    # stoic
+    - text: "{name} walks back like he was going to be there anyway."
+      demeanor: stoic
+    # cool
+    - text: "{name} strolls to the sideline. It looked casual. It wasn't."
+      demeanor: cool
+    # intense
+    - text: "{name} makes it look like the easiest thing in the world."
+      demeanor: intense
+    # melancholy
+    - text: "{name} wanders back to the sideline without much expression."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+    - text: "{name} adds a high-step on the walk to the bench for the benefit of the cameras."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} hops up without breaking stride."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back like a child at recess."
+      demeanor: cool
+    # intense
+    - text: "{name} immediately sets up the next read."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} flashes a grin at the cameras before jogging back."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    - text: "{name} jogs back having not been touched once."
+      demeanor: stoic
+    # cool
+    - text: "{name} glides back looking like the defense was running underwater."
+      demeanor: cool
+    # intense
+    - text: "{name} walks back at a speed his own teammates look surprised by."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} turns the walk back into a showcase."
+      demeanor: dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} stands up and walks back without a change in expression."
+      demeanor: stoic
+    # cool
+    - text: "{name} pops up looking mildly annoyed, like someone interrupted him mid-thought."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} spends a little too long staring at the sky."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+    - text: "{name} gets to his feet with theatrical disbelief."
+      demeanor: dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} shakes his head once. The rare off-note."
+      demeanor: stoic
+    # cool
+    - text: "{name} shakes his head once and jogs to the bench without a word."
+      demeanor: cool
+    # intense
+    - text: "{name} walks off with his eyes sharpened. A lesson he'll remember."
+      demeanor: intense
+    # melancholy
+    - text: "{name} sits alone on the bench for a beat."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} stares at his own hands like they betrayed him."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks off looking mildly inconvenienced."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks off looking very human for a moment."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+    - text: "{name} throws his hands skyward in theatrical disbelief."
+      demeanor: dramatic
+  fg_made:
+    # stoic
+    - text: "{name} nods appreciatively. Nice kick."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the kicker a small, knowing smile."
+      demeanor: cool
+    # intense
+    - text: "{name} meets the kicker with a sharp nod and heads back to chart the next series."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} raises an eyebrow and heads to the bench."
+      demeanor: stoic
+    # cool
+    - text: "{name} shrugs at the uprights and jogs off."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} looks at the uprights for a long second."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+    - text: "{name} puts a hand to his heart and pretends to stagger."
+      demeanor: dramatic
+
+# Showman — Selfish, slightly unhinged.
+# Lives for the spotlight. Celebrations, crowd interaction, theatrics.
+showman:
+  td_scored:
+    # stoic
+    # cool
+    - text: "{name} celebrates in the end zone and the cameras eat it up."
+      demeanor: cool
+    # intense
+    - text: "{name} hits a new celebration. The sideline already knows the choreography."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} lights up the end zone with a full routine."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} dedicates the touchdown to his mother, his agent, and a man he met in an elevator last Tuesday."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    # cool
+    - text: "{name} mimes a first down signal with theatrical flair."
+      demeanor: cool
+    # intense
+    - text: "{name} mimes throwing the chains in the opposing corner's face."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} points at the crowd with both hands on the walk back."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} delivers a full first-down pantomime with invisible props."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    # cool
+    - text: "{name} plays to the nearest camera all the way back to the line."
+      demeanor: cool
+    # intense
+    - text: "{name} locks eyes with the broadcast camera on the walk back."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} adds a high-step to the final five yards of the walk back."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} turns the walk back into a one-man parade."
+      demeanor: dramatic
+  sack_taken:
+    # stoic
+    # cool
+    - text: "{name} checks the nearest camera before getting up."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} lies still long enough for the crowd to notice."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} pops up and yells at the broadcast to make sure they got the replay angle."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} spends a full beat lying on the turf before the trainer waves him off."
+      demeanor: dramatic
+  int_thrown:
+    # stoic
+    # cool
+    - text: "{name} pleads to the official with a rueful smile."
+      demeanor: cool
+    # intense
+    - text: "{name} immediately pleads his case to three different officials."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} unloads on the nearest official for two full seconds."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} falls to one knee for the benefit of the broadcast."
+      demeanor: dramatic
+  fumble_lost:
+    # stoic
+    # cool
+    - text: "{name} delivers a slow shrug to the cameras."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} drops his head for a camera-friendly beat of sorrow."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} screams at no one in particular until the camera finds him."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} throws his hands to the sky like the stadium lights are to blame."
+      demeanor: dramatic
+  fg_made:
+    # stoic
+    # cool
+    # intense
+    - text: "{name} mobs the kicker before he can even lower his leg."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} sprints onto the field to pick up the kicker and spin him around."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} lifts the kicker on his shoulders and parades him toward the cameras."
+      demeanor: dramatic
+  fg_missed:
+    # stoic
+    # cool
+    - text: "{name} shakes his head, then waves to the crowd anyway."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} stares at the uprights with exaggerated heartbreak."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} throws his towel at the bench and waves to the crowd for sympathy."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} falls dramatically to one knee, hands on helmet."
+      demeanor: dramatic
+
+# Competitor — Selfish, unhinged.
+# Hates losing more than loves winning. Grudges, revenge games, personal.
+competitor:
+  td_scored:
+    # stoic
+    # cool
+    - text: "{name} gives the defender a long, slow look on the walk back."
+      demeanor: cool
+    # intense
+    - text: "{name} stares down the defender he beat all the way back to the huddle."
+      demeanor: intense
+    # melancholy
+    - text: "{name} gives the defender a glare colder than usual."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} makes sure {defender} sees him point right at him."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} immediately starts a shouting match with the opposing sideline."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    # cool
+    - text: "{name} shoots the nearest defender a look that says plenty."
+      demeanor: cool
+    # intense
+    - text: "{name} barks something in the direction of the opposing sideline."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} screams at the opposing bench for a solid three seconds."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} delivers a long monologue to anyone in the opposing huddle."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    # cool
+    - text: "{name} gives the defender he beat a slow, measured clap."
+      demeanor: cool
+    # intense
+    - text: "{name} keeps jawing through the post-play pile."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} is screaming at {defender} all the way back to the huddle."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} delivers a full verbal essay to the corner he beat."
+      demeanor: dramatic
+  sack_taken:
+    # stoic
+    # cool
+    # intense
+    - text: "{name} is already plotting the next play's revenge."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks off with his jaw locked. Someone is paying for this."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} is screaming at the defender before he hits the ground."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} stays on the turf just long enough to bark at the refs."
+      demeanor: dramatic
+  int_thrown:
+    # stoic
+    # cool
+    # intense
+    - text: "{name} walks off with his jaw locked. Someone is paying for it before the game ends."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks to the bench with his jaw tight. He is keeping a list."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} unleashes a tirade at the nearest defender."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} starts a one-sided argument with the cornerback during the return."
+      demeanor: dramatic
+  fumble_lost:
+    # stoic
+    # cool
+    # intense
+    - text: "{name} tracks the defender who stripped him for the rest of the drive."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks off looking like he's marking it in a ledger."
+      demeanor: melancholy
+    # fiery
+    - text: "{name} slams his helmet onto the turf and picks it back up in the same motion."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} nearly ejects himself screaming at the recovery pile."
+      demeanor: dramatic
+  fg_made:
+    # stoic
+    # cool
+    - text: "{name} gives the kicker a quick pat and a long glare at the opposing sideline."
+      demeanor: cool
+    # intense
+    - text: "{name} slaps the kicker's helmet and stares across the field."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} bull-rushes the kicker and points across the field screaming."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} lifts the kicker off the ground while jawing at the opposing bench."
+      demeanor: dramatic
+  fg_missed:
+    # stoic
+    # cool
+    - text: "{name} walks off, jaw clenched, eyes locked on the opposing sideline."
+      demeanor: cool
+    # intense
+    - text: "{name} stalks back to the sideline like someone personally wronged him."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} storms off the field screaming at no one in particular."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} throws his helmet toward the bench and storms off."
+      demeanor: dramatic
+
+# Enforcer — Selfish-neutral, unhinged.
+# Physical, intimidating, dominant. Presence felt. Runs through people.
+enforcer:
+  td_scored:
+    # stoic
+    - text: "{name} walks off without a glance."
+      demeanor: stoic
+    # cool
+    - text: "{name} flexes once and walks off without looking back."
+      demeanor: cool
+    # intense
+    - text: "{name} walks off shaking the defenders still clinging to him."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} roars into the helmet of the defender who tried to stop him."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} flexes long enough that the cameras cut away."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} walks back like nothing happened."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back without a glance at the defender he ran through."
+      demeanor: cool
+    # intense
+    - text: "{name} stares down the defenders he ran through on the walk back."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} screams on his way back to the huddle."
+      demeanor: fiery
+    # dramatic
+  big_gain:
+    # stoic
+    - text: "{name} stiff-arms the last tackler off him and jogs back."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back past the bodies in his wake."
+      demeanor: cool
+    # intense
+    - text: "{name} leaves a trail of defenders on the turf behind him."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} screams into the face of the last defender he trucked."
+      demeanor: fiery
+    # dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} shoves the defender off him on the way up."
+      demeanor: stoic
+    # cool
+    - text: "{name} keeps his feet long enough to shove the defender off him."
+      demeanor: cool
+    # intense
+    - text: "{name} is already staring down the guy who hit him."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} comes up ready to settle it right there."
+      demeanor: fiery
+    # dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks off the field without breaking pace."
+      demeanor: stoic
+    # cool
+    - text: "{name} immediately starts hunting the return man with his eyes."
+      demeanor: cool
+    # intense
+    - text: "{name} starts hunting the return man."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} sprints downfield to personally deliver the tackle."
+      demeanor: fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} walks off without reacting."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the defender a small, approving nod."
+      demeanor: cool
+    # intense
+    - text: "{name} makes sure the closest defender hears about it anyway."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} starts shoving the recovery pile before the whistle finishes."
+      demeanor: fiery
+    # dramatic
+  fg_made:
+    # stoic
+    # cool
+    - text: "{name} chest-bumps the kicker hard enough to knock him back a step."
+      demeanor: cool
+    # intense
+    - text: "{name} bull-rushes the kicker for a chest bump that nearly knocks him over."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} slams his helmet into the kicker's hard enough to make him stagger."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} picks the kicker up and sets him down a yard away like a trophy."
+      demeanor: dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} walks past the kicker without a word."
+      demeanor: stoic
+    # cool
+    - text: "{name} pats the kicker too hard and keeps walking."
+      demeanor: cool
+    # intense
+    - text: "{name} mutters something to his position coach and storms off the field."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} slams his helmet into the bench and stays standing."
+      demeanor: fiery
+    # dramatic
+
+# Maverick — Selfless-neutral, unhinged.
+# Does things their own way. Unconventional, surprises everyone. Off-script.
+maverick:
+  td_scored:
+    # stoic
+    - text: "{name} walks back from a play nobody on the sideline recognized."
+      demeanor: stoic
+    # cool
+    - text: "{name} wears a small, private smile on the walk back."
+      demeanor: cool
+    # intense
+    - text: "{name} grins back at a coach covering his face."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} celebrates alone on a play nobody called."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} delivers a bow to his own bench."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    # cool
+    - text: "{name} walks back from a route that definitely wasn't in the playbook."
+      demeanor: cool
+    # intense
+    - text: "{name} walks back with wild eyes after ad-libbing his way there."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} walks back from a play that was half invented mid-snap."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} delivers a speech about it in the huddle."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    - text: "{name} jogs back. Whatever works."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back from a route that was apparently his idea alone."
+      demeanor: cool
+    # intense
+    - text: "{name} walks back from a play the coaches haven't even designed yet."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} walks back from a route he made up in the huddle."
+      demeanor: dramatic
+  sack_taken:
+    # stoic
+    # cool
+    - text: "{name} picks himself up after holding the ball four seconds too long on a hunch."
+      demeanor: cool
+    # intense
+    - text: "{name} is already diagramming his next unauthorized plan on the sideline."
+      demeanor: intense
+    # melancholy
+    - text: "{name} gets up slowly from a play that might have been brilliant."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+    - text: "{name} immediately pitches a better idea to the coordinator."
+      demeanor: dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks off from a play the coaching staff will study for days."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks off with an expression of private satisfaction."
+      demeanor: cool
+    # intense
+    - text: "{name} is already drawing up an alternative version on his glove."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} pitches the coordinator on his next crazy idea before the bench catches up."
+      demeanor: dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} walks off from something that might have been brilliant."
+      demeanor: stoic
+    # cool
+    - text: "{name} heads to the bench from a play that was either genius or a disaster."
+      demeanor: cool
+    # intense
+    - text: "{name} is already pitching the next off-script concept."
+      demeanor: intense
+    # melancholy
+    - text: "{name} stares at his gloves like they're the problem."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_made:
+    # stoic
+    - text: "{name} nods once, like he knew it all along."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the kicker a small, knowing wink."
+      demeanor: cool
+    # intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} runs up and whispers something in the kicker's ear that makes him laugh."
+      demeanor: dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} shrugs and trots off. Onto the next improvisation."
+      demeanor: stoic
+    # cool
+    - text: "{name} smiles at the kicker like it was part of some larger plan."
+      demeanor: cool
+    # intense
+    - text: "{name} is already pitching the special teams coach on a fake for next time."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+    - text: "{name} cartwheels back to the bench. Nobody asks."
+      demeanor: dramatic
+
+# Wild Card — Selfish, very unhinged.
+# Unpredictable. You never know which version shows up. Chaos.
+wild_card:
+  td_scored:
+    # stoic
+    # cool
+    - text: "{name} walks back from something that will be replayed for weeks. Nobody is sure what just happened."
+      demeanor: cool
+    # intense
+    - text: "{name} celebrates with a move his own teammates look confused by."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} screams something nobody can translate."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} dedicates the touchdown to a person, place, or idea nobody on the broadcast can identify."
+      demeanor: dramatic
+  third_down_conversion:
+    # stoic
+    # cool
+    - text: "{name} wears a small, private grin that makes the bench uneasy."
+      demeanor: cool
+    # intense
+    - text: "{name} does a full lap of the huddle before sitting down."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} screams at a teammate who wasn't even on the play."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} celebrates in the most unnecessarily dramatic way possible."
+      demeanor: dramatic
+  big_gain:
+    # stoic
+    # cool
+    - text: "{name} walks back leaving the booth scrambling to describe it."
+      demeanor: cool
+    # intense
+    - text: "{name} walks back from what looked like three separate mistakes."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} is already shouting something into the camera on the walk back."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} walks back from a move that was either genius or an error."
+      demeanor: dramatic
+  sack_taken:
+    # stoic
+    # cool
+    - text: "{name} gets up with what appears to be a smile."
+      demeanor: cool
+    # intense
+    - text: "{name} pops up cackling."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} screams with what might be joy."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} lies on the turf making snow angels."
+      demeanor: dramatic
+  int_thrown:
+    # stoic
+    # cool
+    - text: "{name} laughs. Actually laughs."
+      demeanor: cool
+    # intense
+    - text: "{name} watches the return with an unsettling calm."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} starts cheering for the defense."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} gives the cornerback a slow, appreciative clap."
+      demeanor: dramatic
+  fumble_lost:
+    # stoic
+    # cool
+    - text: "{name} stands there with his hands on his head for a long, confused beat."
+      demeanor: cool
+    # intense
+    - text: "{name} stares at the ball on the turf like it insulted him."
+      demeanor: intense
+    # melancholy
+    - text: "{name} sits down on the field until a teammate drags him off."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+    - text: "{name} delivers a rambling speech to a teammate who was not asking."
+      demeanor: dramatic
+  fg_made:
+    # stoic
+    # cool
+    # intense
+    - text: "{name} stares at the kicker with what might be admiration or a threat."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} sprints onto the field and tackles the kicker in celebration."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} bows to the kicker. Bows."
+      demeanor: dramatic
+  fg_missed:
+    # stoic
+    # cool
+    - text: "{name} laughs, hugs the kicker, and walks off."
+      demeanor: cool
+    # intense
+    - text: "{name} laughs and then whispers something to the kicker nobody else can hear."
+      demeanor: intense
+    # melancholy
+    # fiery
+    - text: "{name} slaps the kicker on the helmet and screams about next time."
+      demeanor: fiery
+    # dramatic
+    - text: "{name} falls to his knees and raises his arms like the football gods have forsaken him."
+      demeanor: dramatic
+
+# Professional — Neutral, disciplined.
+# Competent, no drama. Does the job, goes home. The ~10% baseline.
+professional:
+  td_scored:
+    # stoic
+    - text: "{name} hands the ball to the ref and heads to the bench."
+      demeanor: stoic
+    # cool
+    - text: "{name} nods at nobody in particular and jogs off."
+      demeanor: cool
+    # intense
+    - text: "{name} is already reviewing the play card for the next series."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks back with the same flat look he had on the walk on."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} walks back to the huddle at a professional pace."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the line a quick thumbs-up."
+      demeanor: cool
+    # intense
+    - text: "{name} is already scanning the next down and distance."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+  big_gain:
+    # stoic
+    - text: "{name} jogs back. Nothing more, nothing less."
+      demeanor: stoic
+    # cool
+    - text: "{name} jogs back to the line without a word."
+      demeanor: cool
+    # intense
+    - text: "{name} is back to the line before the whistle finishes."
+      demeanor: intense
+    # melancholy
+    - text: "{name} walks back with no change in expression."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} stands up and resets."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back to the huddle like it's on his checklist."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks back looking a little older."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks off without reaction."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks to the sideline and immediately starts going over the play sheet."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} sits down heavier than usual."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} quietly returns to the sideline."
+      demeanor: stoic
+    # cool
+    - text: "{name} heads off the field without a word."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks off staring at his feet."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_made:
+    # stoic
+    - text: "{name} gives a quick fist bump and heads off."
+      demeanor: stoic
+    # cool
+    - text: "{name} meets the kicker with a measured pat on the back."
+      demeanor: cool
+    # intense
+    - text: "{name} gives the kicker a curt nod and is already reviewing the kickoff plan."
+      demeanor: intense
+    # melancholy
+    # fiery
+    # dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} nods at the kicker and keeps walking."
+      demeanor: stoic
+    # cool
+    - text: "{name} gives the kicker a flat pat on the back and heads off."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks to the bench without meeting the kicker's eye."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+
+# Journeyman — Neutral.
+# Solid, dependable, forgettable. Seen it all, says little.
+journeyman:
+  td_scored:
+    # stoic
+    - text: "{name} walks off quietly. He's done this a hundred times in a dozen uniforms."
+      demeanor: stoic
+    # cool
+    - text: "{name} makes it look routine, because for him, it is."
+      demeanor: cool
+    # intense
+    - text: "{name} jogs back checking the clock."
+      demeanor: intense
+    # melancholy
+    - text: "{name} jogs back looking faintly tired."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  third_down_conversion:
+    # stoic
+    - text: "{name} jogs back without a glance at the crowd."
+      demeanor: stoic
+    # cool
+    - text: "{name} lets {teammate} take the celebration lead."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks back with the quiet of a man who has done it for years."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  big_gain:
+    # stoic
+    - text: "{name} walks back the way only veterans can."
+      demeanor: stoic
+    # cool
+    - text: "{name} jogs back like he's done it a hundred times."
+      demeanor: cool
+    # intense
+    - text: "{name} is back in the huddle before the crowd reacts."
+      demeanor: intense
+    # melancholy
+    - text: "{name} jogs back feeling every yard of it."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  sack_taken:
+    # stoic
+    - text: "{name} pops up and walks off like it's a Tuesday practice."
+      demeanor: stoic
+    # cool
+    - text: "{name} walks back without a change in pace."
+      demeanor: cool
+    # intense
+    - text: "{name} pops up fast and is already resetting the protection call."
+      demeanor: intense
+    # melancholy
+    - text: "{name} sits in the huddle for an extra beat."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  int_thrown:
+    # stoic
+    - text: "{name} walks it off. He's seen worse."
+      demeanor: stoic
+    # cool
+    - text: "{name} trots off and starts flipping through the play sheet."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks to the bench with the look of a man filing it away with the rest."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fumble_lost:
+    # stoic
+    - text: "{name} shakes his head exactly once on the walk back."
+      demeanor: stoic
+    # cool
+    - text: "{name} sits down on the bench without a word."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} walks off carrying it somewhere inside."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_made:
+    # stoic
+    - text: "{name} gives the kicker a quiet nod."
+      demeanor: stoic
+    # cool
+    - text: "{name} pats the kicker on the back and heads off."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} acknowledges the kicker without a smile."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+  fg_missed:
+    # stoic
+    - text: "{name} pats the kicker on the back. He's been there."
+      demeanor: stoic
+    # cool
+    - text: "{name} meets the kicker's eye briefly and keeps walking."
+      demeanor: cool
+    # intense
+    # melancholy
+    - text: "{name} sits next to the kicker on the bench without a word."
+      demeanor: melancholy
+    # fiery
+    # dramatic
+
+# Generic fallback pool -- used when no archetype line matches.
+generic:
+  td_scored:
+    - text: "{name} walks back to the sideline after the score."
+    - text: "{name} jogs off the field to meet his teammates."
+  third_down_conversion:
+    - text: "{name} jogs back to the huddle after moving the chains."
+  big_gain:
+    - text: "{name} pops up and jogs back after the long gain."
+  sack_taken:
+    - text: "{name} pops up and walks back to the huddle."
+  int_thrown:
+    - text: "{name} walks off the field after the turnover."
+  fumble_lost:
+    - text: "{name} walks off the field after the turnover."
+  fg_made:
+    - text: "{name} jogs off celebrating the kick."
+  fg_missed:
+    - text: "{name} heads to the bench after the miss."

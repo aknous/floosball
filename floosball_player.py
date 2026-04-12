@@ -1,7 +1,7 @@
 import enum
 from os import stat
 import math
-from random import randint, choice
+from random import randint
 from random_batch import batched_randint, batched_random
 import copy
 from stats_optimization import OptimizedPlayerStats, get_optimized_stats
@@ -378,27 +378,19 @@ class Player:
         self.stat_tracker.add_fantasy_points(-3)
 
 
+# Demeanor spectrum — 6 emotional states from Composed to Volatile.
+# Drift moves at most one step per shift along this order.
 DEMEANOR_TYPES = [
-    'stoic', 'fiery', 'goofy', 'dramatic', 'cool',
-    'intense', 'shy', 'melancholy', 'rude', 'wholesome',
-    'paranoid', 'enigmatic', 'superstitious', 'oblivious',
+    'stoic', 'cool', 'intense', 'melancholy', 'fiery', 'dramatic',
 ]
 
 MOOD_LABELS = {
-    'stoic':         {5: 'Immovable',    4: 'Composed',    3: 'Measured',     2: 'Distant',      1: 'Hollow'},
-    'fiery':         {5: 'Blazing',      4: 'Fired Up',    3: 'Simmering',    2: 'Fuming',       1: 'Volcanic'},
-    'goofy':         {5: 'Vibing',       4: 'Playful',     3: 'Restless',     2: 'Deflated',     1: 'Lost'},
-    'dramatic':      {5: 'Euphoric',     4: 'Inspired',    3: 'Brooding',     2: 'Anguished',    1: 'Shattered'},
-    'cool':          {5: 'Untouchable',  4: 'Smooth',      3: 'Unbothered',   2: 'Detached',     1: 'Cracked'},
-    'intense':       {5: 'Locked In',    4: 'Focused',     3: 'Calculating',  2: 'Overthinking',  1: 'Unraveling'},
-    'shy':           {5: 'Glowing',      4: 'Hopeful',     3: 'Guarded',      2: 'Withdrawn',    1: 'Invisible'},
-    'melancholy':    {5: 'Wistful',      4: 'Reflective',  3: 'Pensive',      2: 'Heavy',        1: 'Haunted'},
-    'rude':          {5: 'Insufferable', 4: 'Cocky',       3: 'Annoyed',      2: 'Bitter',       1: 'Hostile'},
-    'wholesome':     {5: 'Radiant',      4: 'Warm',        3: 'Gentle',       2: 'Worried',      1: 'Heartbroken'},
-    'paranoid':      {5: 'Vindicated',   4: 'Suspicious',  3: 'Watchful',     2: 'Rattled',      1: 'Cornered'},
-    'enigmatic':     {5: 'Transcendent', 4: 'Cryptic',     3: 'Inscrutable',  2: 'Distant',      1: 'Void'},
-    'superstitious': {5: 'Blessed',      4: 'Ritualistic', 3: 'Uneasy',       2: 'Jinxed',       1: 'Cursed'},
-    'oblivious':     {5: 'Oblivious',    4: 'Cheerful',    3: 'Confused',     2: 'Clueless',     1: 'Vacant'},
+    'stoic':      {5: 'Immovable',    4: 'Composed',    3: 'Measured',     2: 'Distant',      1: 'Hollow'},
+    'cool':       {5: 'Untouchable',  4: 'Smooth',      3: 'Unbothered',   2: 'Detached',     1: 'Cracked'},
+    'intense':    {5: 'Locked In',    4: 'Focused',     3: 'Calculating',  2: 'Overthinking', 1: 'Unraveling'},
+    'melancholy': {5: 'Wistful',      4: 'Reflective',  3: 'Pensive',      2: 'Heavy',        1: 'Haunted'},
+    'fiery':      {5: 'Blazing',      4: 'Fired Up',    3: 'Simmering',    2: 'Fuming',       1: 'Volcanic'},
+    'dramatic':   {5: 'Euphoric',     4: 'Inspired',    3: 'Brooding',     2: 'Anguished',    1: 'Shattered'},
 }
 
 MOOD_TIER_NAMES = {5: 'electric', 4: 'confident', 3: 'steady', 2: 'frustrated', 1: 'miserable'}
@@ -459,8 +451,10 @@ class PlayerAttributes:
         # Fatigue (0.0 = fresh, accumulates over the season)
         self.fatigue = 0.0
 
-        # Personality
+        # Personality (three-layer: archetype permanent, demeanor drifts, quirk optional)
+        self.archetype = None
         self.demeanor = None
+        self.quirk = None
 
         
     def getMood(self):
@@ -628,9 +622,9 @@ class PlayerAttributes:
         self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
         self.resilience = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
 
-        # Assign demeanor if not already set (new players)
-        if not self.demeanor:
-            self.demeanor = choice(DEMEANOR_TYPES)
+        # Personality (archetype/demeanor/quirk) is assigned by personalityManager
+        # via playerManager after this method returns, because quirk assignment
+        # requires league-wide context (Unique tier caps, Common tier soft caps).
 
     def changeStat(self, value):
         if value >= 95:
