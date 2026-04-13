@@ -1310,6 +1310,22 @@ async def get_standings(response: Response):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/cards/effects")
+async def get_card_effects(response: Response):
+    """Public listing of all card effects with display name, tooltip, and tier."""
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    from managers.cardEffects import EFFECT_DISPLAY_NAMES, EFFECT_TOOLTIPS, EFFECT_EDITION_TIER
+    effects = []
+    for key, displayName in EFFECT_DISPLAY_NAMES.items():
+        effects.append({
+            "effectName": key,
+            "displayName": displayName,
+            "tooltip": EFFECT_TOOLTIPS.get(key, ""),
+            "tier": EFFECT_EDITION_TIER.get(key, "base"),
+        })
+    return effects
+
+
 @app.get("/api/reigning-champion")
 async def get_reigning_champion(response: Response):
     """Return the previous season's Floosbowl champion (for navbar display)."""
@@ -1939,6 +1955,7 @@ def admin_send_onboarding_reminders(_auth: None = Depends(_checkAdminAuth)):
             User.email.isnot(None),
         ).all()
 
+        import time
         sent = 0
         failed = 0
         for u in pendingUsers:
@@ -1947,6 +1964,8 @@ def admin_send_onboarding_reminders(_auth: None = Depends(_checkAdminAuth)):
                     sent += 1
                 else:
                     failed += 1
+                # Rate limit: max ~4 per second to stay under provider limits
+                time.sleep(0.3)
 
         logger.info(f"Onboarding reminders: {sent} sent, {failed} failed, {len(pendingUsers)} total pending")
         return build_success_response({

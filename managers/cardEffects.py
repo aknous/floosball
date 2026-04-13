@@ -1084,6 +1084,8 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
     if effectName == "rock_bottom":
         return {"baseFloobits": int(round(8 * editionScale)), "enhancedFloobits": int(round((30 + rn * 0.4) * editionScale)),
                 "isChanceEffect": True}
+    if effectName == "windfall":
+        return {"perPlayerFloobits": int(round((5 + rn * 0.20) * editionScale))}
     if effectName == "buy_low":
         return {"perPlayerFloobits": int(round((4 + rn * 0.2) * editionScale))}
     if effectName == "trust_fund":

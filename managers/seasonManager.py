@@ -203,11 +203,21 @@ class SeasonManager:
         
         self.currentSeason = Season(seasonNumber)
 
-        # CATCHUP mode: backdate season start to last Monday so schedule anchors to the past
+        # Anchor season start to the correct Monday
         from managers.timingManager import TimingMode, TimingManager
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
+            # CATCHUP: backdate to last Monday so schedule anchors to the past
             self.currentSeason.startDate = TimingManager._lastMondayUtc(hour=4)
             logger.info(f"{self.timingManager.mode.value} mode: season start backdated to {self.currentSeason.startDate.isoformat()}")
+        elif self.timingManager._isScheduledMode:
+            # SCHEDULED: anchor to next Monday (or today if already Monday)
+            now = datetime.datetime.utcnow()
+            daysUntilMonday = (7 - now.weekday()) % 7  # 0 if already Monday
+            nextMonday = (now + datetime.timedelta(days=daysUntilMonday)).replace(
+                hour=4, minute=0, second=0, microsecond=0
+            )
+            self.currentSeason.startDate = nextMonday
+            logger.info(f"Scheduled mode: season start anchored to {nextMonday.isoformat()}")
 
         # Clear previous season data
         self._clearSeasonData()
@@ -452,7 +462,7 @@ class SeasonManager:
                 week_event = SeasonEvent.weekStart(
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=self.currentSeason.currentWeek,
-                    games=[],
+                    gamesCount=len(week.get('games', [])),
                     weekText=self.currentSeason.currentWeekText,
                     modifier=weeklyModifier,
                     modifierInfo=modInfo,
@@ -941,10 +951,19 @@ class SeasonManager:
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             nextStart = self.getNextGameStartTime(week)
             nextStartIso = nextStart.isoformat() + 'Z' if nextStart else None
+            weekResults = []
+            completedGames = self.currentSeason.completedWeekGames or []
+            for g in completedGames:
+                weekResults.append({
+                    "homeTeam": {"name": g.homeTeam.name, "abbr": g.homeTeam.abbr},
+                    "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
+                    "homeScore": g.homeScore,
+                    "awayScore": g.awayScore,
+                })
             weekEndEvent = SeasonEvent.weekEnd(
                 seasonNumber=self.currentSeason.seasonNumber,
                 weekNumber=week,
-                results=[],
+                results=weekResults,
                 nextGameStartTime=nextStartIso,
             )
             broadcaster.broadcast_sync('season', weekEndEvent)
@@ -2856,7 +2875,7 @@ class SeasonManager:
                 await broadcaster.broadcast_season_event(SeasonEvent.weekStart(
                     seasonNumber=self.currentSeason.seasonNumber,
                     weekNumber=28 + currentRound,
-                    games=[],
+                    gamesCount=len(playoffGamesList),
                     weekText=self.currentWeekText,
                     nextGameStartTime=nextStartIso,
                 ))
@@ -3006,20 +3025,36 @@ class SeasonManager:
                         'League Championship' if currentRound + 1 == numOfRounds - 1 else
                         f'Playoffs Round {currentRound + 1}'
                     )
+                    playoffResults = []
+                    for g in (self.currentSeason.completedWeekGames or []):
+                        playoffResults.append({
+                            "homeTeam": {"name": g.homeTeam.name, "abbr": g.homeTeam.abbr},
+                            "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
+                            "homeScore": g.homeScore,
+                            "awayScore": g.awayScore,
+                        })
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
-                        results=[],
+                        results=playoffResults,
                         nextGameStartTime=nextStartIso,
                     )
                     broadcaster.broadcast_sync('season', weekEndEvent)
             else:
                 # Floosbowl finished — broadcast week_end for the final round too
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+                    finalResults = []
+                    for g in (self.currentSeason.completedWeekGames or []):
+                        finalResults.append({
+                            "homeTeam": {"name": g.homeTeam.name, "abbr": g.homeTeam.abbr},
+                            "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
+                            "homeScore": g.homeScore,
+                            "awayScore": g.awayScore,
+                        })
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
                         weekNumber=28 + currentRound,
-                        results=[],
+                        results=finalResults,
                         nextGameStartTime=None,
                     )
                     broadcaster.broadcast_sync('season', weekEndEvent)

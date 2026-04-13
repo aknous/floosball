@@ -981,8 +981,8 @@ class FantasyTracker:
 
         # Player performance ratings — snapshot on first access each week so
         # post-game recalculation doesn't drop card output mid-week
+        pm = self._playerManager
         if not self._weekPerfRatingSnapshot:
-            pm = self._playerManager
             if pm:
                 for p in pm.activePlayers:
                     perfRating = getattr(p, 'seasonPerformanceRating', 0)
