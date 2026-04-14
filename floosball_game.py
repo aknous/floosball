@@ -4177,6 +4177,7 @@ class Game:
                     'id': p.id,
                     'name': p.name,
                     'position': p.position.name if hasattr(p, 'position') and p.position else None,
+                    'defensivePosition': p.defensivePosition.value if hasattr(p, 'defensivePosition') and p.defensivePosition else None,
                     'teamId': p.team.id if hasattr(p, 'team') and hasattr(p.team, 'id') else None,
                     'playerRating': rating,
                     'ratingStars': max(1, min(5, stars)),
