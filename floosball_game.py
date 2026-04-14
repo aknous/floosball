@@ -1274,6 +1274,7 @@ class Game:
         else:
             self.awayTimeoutsRemaining = max(0, self.awayTimeoutsRemaining - 1)
         self.clockRunning = False
+        self._timeoutCalled = True
         timeoutEvent = {
             'text': f'{self.offensiveTeam.name} calls timeout',
             'quarter': self.currentQuarter,
@@ -1334,6 +1335,7 @@ class Game:
         else:
             self.awayTimeoutsRemaining = max(0, self.awayTimeoutsRemaining - 1)
         self.clockRunning = False
+        self._timeoutCalled = True
         timeoutEvent = {
             'text': f'{self.defensiveTeam.name} calls timeout',
             'quarter': self.currentQuarter,
@@ -3258,7 +3260,10 @@ class Game:
                     self._pendingPossessionChange = False
 
                 # POST-PLAY: Defense can call timeout to stop the clock
+                self._timeoutCalled = False
                 self._checkDefensiveTimeout()
+                if self._timeoutCalled and self.timingManager:
+                    await self.timingManager.waitAfterTimeout()
 
                 # Recalculate game pressure before each play
                 self.gamePressure = self.calculateGamePressure()
@@ -3268,7 +3273,10 @@ class Game:
                 self._applyMomentumEffect()
 
                 # Call and execute play
+                self._timeoutCalled = False
                 self.playCaller()
+                if self._timeoutCalled and self.timingManager:
+                    await self.timingManager.waitAfterTimeout()
 
                 # PRE-SNAP: Consume huddle/snap time AFTER play type is known.
                 # Skip for kneels and spikes — they handle their own clock internally.
@@ -3388,7 +3396,10 @@ class Game:
 
                     # After kneel: defense gets a chance to call timeout before play clock drains
                     if self.play.playType is PlayType.Kneel:
+                        self._timeoutCalled = False
                         self._checkDefensiveTimeout()
+                        if self._timeoutCalled and self.timingManager:
+                            await self.timingManager.waitAfterTimeout()
                         if self.clockRunning and self.gameClockSeconds > 0:
                             # No timeout called — drain the play clock (time between plays)
                             playClockDrain = min(36, self.gameClockSeconds)

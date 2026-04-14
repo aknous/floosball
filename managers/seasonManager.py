@@ -952,7 +952,8 @@ class SeasonManager:
             nextStart = self.getNextGameStartTime(week)
             nextStartIso = nextStart.isoformat() + 'Z' if nextStart else None
             weekResults = []
-            completedGames = self.currentSeason.completedWeekGames or []
+            completedGames = (self.currentSeason.completedWeekGames
+                              or self.currentSeason.activeGames or [])
             for g in completedGames:
                 weekResults.append({
                     "homeTeam": {"name": g.homeTeam.name, "abbr": g.homeTeam.abbr},
