@@ -1373,6 +1373,7 @@ _VALID_STAT_CATEGORIES = {
     'fantasy_points', 'passing_yards', 'passing_tds', 'rushing_yards', 'rushing_tds',
     'receiving_yards', 'receiving_tds', 'receptions', 'fg_made', 'fg_pct',
     'performance_rating',
+    'def_sacks', 'def_ints', 'def_tackles', 'def_tfl', 'def_forced_fumbles', 'def_pass_breakups',
 }
 _VALID_POSITIONS = {'ALL', 'QB', 'RB', 'WR', 'TE', 'K'}
 
@@ -1420,6 +1421,12 @@ async def get_stat_leaders(
                 return round(k.get('fgs', 0) / att * 100, 1) if att > 0 else 0.0
             if cat == 'performance_rating':
                 return getattr(player, 'seasonPerformanceRating', 0)
+            if cat == 'def_sacks':         return sd.get('defense', {}).get('sacks', 0)
+            if cat == 'def_ints':          return sd.get('defense', {}).get('ints', 0)
+            if cat == 'def_tackles':       return sd.get('defense', {}).get('tackles', 0)
+            if cat == 'def_tfl':           return sd.get('defense', {}).get('tfl', 0)
+            if cat == 'def_forced_fumbles': return sd.get('defense', {}).get('forcedFumbles', 0)
+            if cat == 'def_pass_breakups': return sd.get('defense', {}).get('passBreakups', 0)
             return 0
 
         players = floosball_app.playerManager.activePlayers
@@ -1464,6 +1471,9 @@ async def get_stat_leaders(
                 entry['receiving'] = {k: sd.get('receiving', {}).get(k, 0) for k in ('yards', 'tds', 'receptions', 'targets', 'ypr')}
             elif pos == 'K':
                 entry['kicking'] = {k: sd.get('kicking', {}).get(k, 0) for k in ('fgs', 'fgAtt', 'fgPerc', 'longest')}
+            # Include defensive stats for all non-K players
+            if pos != 'K':
+                entry['defense'] = {k: sd.get('defense', {}).get(k, 0) for k in ('sacks', 'ints', 'tackles', 'tfl', 'forcedFumbles', 'passBreakups')}
             leaders.append(entry)
 
         return build_success_response({'category': category, 'position': position, 'leaders': leaders})

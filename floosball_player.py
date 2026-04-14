@@ -19,6 +19,21 @@ class Position(enum.Enum):
     TE = 4
     K = 5
 
+class DefensivePosition(enum.Enum):
+    S = 'S'     # Safety (QB)
+    LB = 'LB'   # Linebacker (RB)
+    CB = 'CB'   # Cornerback (WR)
+    DE = 'DE'   # Defensive End (TE)
+
+# Offensive → Defensive position mapping
+DEFENSIVE_POSITION_MAP = {
+    Position.QB: DefensivePosition.S,
+    Position.RB: DefensivePosition.LB,
+    Position.WR: DefensivePosition.CB,
+    Position.TE: DefensivePosition.DE,
+    Position.K: None,  # Kickers don't play defense
+}
+
 class PlayerTier(enum.Enum):
     TierS = 5
     TierA = 4
@@ -73,8 +88,8 @@ playerStatsDict =   {
                             'longest': 0
                         },
                         'kicking': {
-                            'fgAtt': 0, 
-                            'fgs': 0, 
+                            'fgAtt': 0,
+                            'fgs': 0,
                             'fgPerc': 0,
                             'fgYards': 0,
                             'fgAvg': 0,
@@ -92,6 +107,14 @@ playerStatsDict =   {
                             'fgOver50': 0,
                             'fgOver50perc': 0,
                             'longest': 0
+                        },
+                        'defense': {
+                            'sacks': 0,
+                            'ints': 0,
+                            'tackles': 0,
+                            'tfl': 0,
+                            'forcedFumbles': 0,
+                            'passBreakups': 0,
                         }
                     }
 
@@ -175,6 +198,9 @@ class Player:
         self.capHit = 0
         self.seasonPerformanceRating = 0
         self.playerRating = 0
+        self.offensiveRating = 0
+        self.defensiveRating = 0
+        self.defensivePosition = None
         self.freeAgentYears = 0
         self.serviceTime = PlayerServiceTime.Rookie
         self.leagueChampionships = []
@@ -628,9 +654,95 @@ class PlayerAttributes:
         self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
         self.resilience = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
 
+        # Generate any missing core physical attributes (needed for defensive ratings)
+        # Core 5: speed, power, agility, hands, reach — every player needs these
+        coreAttrs = {'speed': self.speed, 'power': self.power, 'agility': self.agility,
+                     'hands': self.hands, 'reach': self.reach}
+        for attr, val in coreAttrs.items():
+            if val == 0:
+                generated = int(np.clip(np.random.normal(physicalSeed, stdDev), 60, 100))
+                setattr(self, attr, generated)
+
         # Assign demeanor if not already set (new players)
         if not self.demeanor:
             self.demeanor = choice(DEMEANOR_TYPES)
+
+    # ── Defensive attribute calculations ─────────────────────────────────
+    # Derived from the same base athletics using different formulas per
+    # defensive position.  No random variance — the difference between
+    # offensive and defensive skill comes from different weightings.
+
+    def calculateDefensiveRating(self, position):
+        """Calculate defensive skill rating based on offensive position → defensive position."""
+        defPos = DEFENSIVE_POSITION_MAP.get(position)
+        if defPos is None:
+            return 0  # Kickers don't play defense
+
+        if defPos == DefensivePosition.CB:
+            return self._calculateCBRating()
+        elif defPos == DefensivePosition.S:
+            return self._calculateSafetyRating()
+        elif defPos == DefensivePosition.LB:
+            return self._calculateLBRating()
+        elif defPos == DefensivePosition.DE:
+            return self._calculateDERating()
+        return 0
+
+    def _calculateCBRating(self):
+        """Cornerback: coverage + tackling."""
+        coverage = round(0.4 * self.speed + 0.3 * self.agility + 0.2 * self.instinct + 0.1 * self.discipline)
+        tackling = round(0.5 * self.power + 0.3 * self.speed + 0.2 * self.discipline)
+        return round((coverage * 1.5 + tackling * 0.5) / 2)
+
+    def _calculateSafetyRating(self):
+        """Safety: coverage + play reading + tackling."""
+        coverage = round(0.3 * self.vision + 0.3 * self.instinct + 0.2 * self.agility + 0.2 * self.focus)
+        playReading = round(0.4 * self.vision + 0.3 * self.instinct + 0.3 * self.focus)
+        tackling = round(0.4 * self.power + 0.3 * self.discipline + 0.3 * self.agility)
+        return round((coverage + playReading + tackling) / 3)
+
+    def _calculateLBRating(self):
+        """Linebacker: tackling + run defense + blitzing."""
+        tackling = round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.discipline)
+        runDefense = round(0.4 * self.power + 0.3 * self.instinct + 0.2 * self.discipline + 0.1 * self.speed)
+        blitzing = round(0.4 * self.speed + 0.3 * self.power + 0.2 * self.agility + 0.1 * self.instinct)
+        return round((tackling + runDefense + blitzing) / 3)
+
+    def _calculateDERating(self):
+        """Defensive End: pass rush + run defense."""
+        passRush = round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.instinct)
+        runDefense = round(0.5 * self.power + 0.3 * self.discipline + 0.2 * self.instinct)
+        return round((passRush * 1.3 + runDefense * 0.7) / 2)
+
+    def getDefensiveAttributes(self, position):
+        """Return individual defensive attributes for the player's defensive position."""
+        defPos = DEFENSIVE_POSITION_MAP.get(position)
+        if defPos is None:
+            return {}
+
+        if defPos == DefensivePosition.CB:
+            return {
+                'coverage': round(0.4 * self.speed + 0.3 * self.agility + 0.2 * self.instinct + 0.1 * self.discipline),
+                'tackling': round(0.5 * self.power + 0.3 * self.speed + 0.2 * self.discipline),
+            }
+        elif defPos == DefensivePosition.S:
+            return {
+                'coverage': round(0.3 * self.vision + 0.3 * self.instinct + 0.2 * self.agility + 0.2 * self.focus),
+                'playReading': round(0.4 * self.vision + 0.3 * self.instinct + 0.3 * self.focus),
+                'tackling': round(0.4 * self.power + 0.3 * self.discipline + 0.3 * self.agility),
+            }
+        elif defPos == DefensivePosition.LB:
+            return {
+                'tackling': round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.discipline),
+                'runDefense': round(0.4 * self.power + 0.3 * self.instinct + 0.2 * self.discipline + 0.1 * self.speed),
+                'blitzing': round(0.4 * self.speed + 0.3 * self.power + 0.2 * self.agility + 0.1 * self.instinct),
+            }
+        elif defPos == DefensivePosition.DE:
+            return {
+                'passRush': round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.instinct),
+                'runDefense': round(0.5 * self.power + 0.3 * self.discipline + 0.2 * self.instinct),
+            }
+        return {}
 
     def changeStat(self, value):
         if value >= 95:
@@ -645,9 +757,9 @@ class PlayerQB(Player, CachedRatingMixin):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.QB
+        self.defensivePosition = DefensivePosition.S
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
-        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialArmStrength = self.attributes.armStrength + randint(0,30)
         self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
@@ -671,21 +783,24 @@ class PlayerQB(Player, CachedRatingMixin):
     def _calculate_skill_rating(self) -> float:
         """Calculate QB-specific skill rating"""
         return round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
-    
+
     def updateRating(self):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
-        
+
         # Use cached calculations
         self.attributes.skillRating = self.get_cached_skill_rating()
         self.attributes.overallRating = self.get_cached_overall_rating()
-    
+        self.offensiveRating = self.attributes.overallRating
+        self.defensiveRating = self.attributes.calculateDefensiveRating(self.position)
+        self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
+
     def updateInGameRating(self):
         # Invalidate cache when game attributes change
         self.invalidate_rating_cache()
         self.gameAttributes.calculateIntangibles()
         self.gameAttributes.calculateSkills()
-        
+
         # For game ratings, we still calculate directly since they change frequently
         self.gameAttributes.skillRating = round(((self.gameAttributes.armStrength*1.2) + (self.gameAttributes.accuracy*1.3) + (self.gameAttributes.agility*.5))/3)
         self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
@@ -701,10 +816,10 @@ class PlayerRB(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.RB
+        self.defensivePosition = DefensivePosition.LB
         self.isOpen = False
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
-        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
         self.attributes.potentialPower = self.attributes.power + randint(0,30)
@@ -733,6 +848,9 @@ class PlayerRB(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.power*1.3) + (self.attributes.agility*1))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
+        self.offensiveRating = self.attributes.overallRating
+        self.defensiveRating = self.attributes.calculateDefensiveRating(self.position)
+        self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
 
 
     def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
@@ -743,10 +861,10 @@ class PlayerWR(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.WR
+        self.defensivePosition = DefensivePosition.CB
         self.isOpen = False
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
-        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
         self.attributes.potentialHands = self.attributes.hands + randint(0,30)
@@ -775,6 +893,9 @@ class PlayerWR(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.speed*.7) + (self.attributes.hands*1.5) + (self.attributes.agility*.8))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
+        self.offensiveRating = self.attributes.overallRating
+        self.defensiveRating = self.attributes.calculateDefensiveRating(self.position)
+        self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
 
 
     def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
@@ -785,10 +906,10 @@ class PlayerTE(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.TE
+        self.defensivePosition = DefensivePosition.DE
         self.isOpen = False
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
-        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialHands = self.attributes.hands + randint(0,30)
         self.attributes.potentialReach = self.attributes.reach + randint(0,30)
@@ -817,7 +938,9 @@ class PlayerTE(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round(((self.attributes.power*1.3) + (self.attributes.hands*1) + (self.attributes.agility*.7))/3)
         self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
-        self.playerRating = self.attributes.overallRating
+        self.offensiveRating = self.attributes.overallRating
+        self.defensiveRating = self.attributes.calculateDefensiveRating(self.position)
+        self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
 
 
     def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
@@ -828,10 +951,10 @@ class PlayerK(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.K
+        self.defensivePosition = None
         self.maxFgDistance = 0
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
-        self.playerRating = self.attributes.overallRating
 
         self.attributes.potentialLegStrength = self.attributes.legStrength + randint(0,30)
         self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
@@ -854,6 +977,9 @@ class PlayerK(Player):
         self.attributes.calculateSkills()
         self.attributes.skillRating = round((self.attributes.legStrength + self.attributes.accuracy)/2)
         self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
+        self.offensiveRating = self.attributes.overallRating
+        self.defensiveRating = self.offensiveRating  # Kickers: no defensive role, rating = offensive
+        self.playerRating = self.attributes.overallRating
         self.maxFgDistance = round(70*(self.attributes.legStrength/100))
 
 

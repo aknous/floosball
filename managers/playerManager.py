@@ -255,6 +255,9 @@ class PlayerManager:
             if not hasattr(player, 'seasonStatsDict') or player.seasonStatsDict is None:
                 player.seasonStatsDict = player.careerStatsDict.copy() if hasattr(player, 'careerStatsDict') else {}
 
+            # Recalculate dual ratings (offensive/defensive) from loaded attributes
+            player.updateRating()
+
             return player
             
         except Exception as e:
@@ -437,7 +440,10 @@ class PlayerManager:
                             'gamesPlayed': stat_record.games_played,
                             'fantasyPoints': stat_record.fantasy_points,
                         }
-            
+
+            # Recalculate dual ratings (offensive/defensive) from loaded attributes
+            player.updateRating()
+
             return player
             
         except Exception as e:
@@ -1160,6 +1166,8 @@ class PlayerManager:
                 # Create or update player record
                 db_player = self.db_session.query(DBPlayer).filter_by(id=player.id).first()
                 
+                defPosValue = player.defensivePosition.value if hasattr(player, 'defensivePosition') and player.defensivePosition else None
+
                 if db_player is None:
                     # Create new player
                     db_player = DBPlayer(
@@ -1175,6 +1183,9 @@ class PlayerManager:
                         term_remaining=player.termRemaining,
                         cap_hit=player.capHit,
                         player_rating=player.playerRating,
+                        offensive_rating=getattr(player, 'offensiveRating', None),
+                        defensive_rating=getattr(player, 'defensiveRating', None),
+                        defensive_position=defPosValue,
                         free_agent_years=player.freeAgentYears,
                         service_time=player.serviceTime.name if hasattr(player, 'serviceTime') else None,
                     )
@@ -1192,6 +1203,9 @@ class PlayerManager:
                     db_player.term_remaining = player.termRemaining
                     db_player.cap_hit = player.capHit
                     db_player.player_rating = player.playerRating
+                    db_player.offensive_rating = getattr(player, 'offensiveRating', None)
+                    db_player.defensive_rating = getattr(player, 'defensiveRating', None)
+                    db_player.defensive_position = defPosValue
                     db_player.free_agent_years = player.freeAgentYears
                     db_player.service_time = player.serviceTime.name if hasattr(player, 'serviceTime') else None
                 

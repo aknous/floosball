@@ -130,15 +130,9 @@ class Team:
             wr2_rating = self.rosterDict.get('wr2').attributes.overallRating if self.rosterDict.get('wr2') else 50
             te_rating = self.rosterDict.get('te').attributes.overallRating if self.rosterDict.get('te') else 50
             k_rating = self.rosterDict.get('k').attributes.overallRating if self.rosterDict.get('k') else 50
-            
+
             self.offenseRating = round(((qb_rating*1.2)+(rb_rating*1.1)+(wr1_rating*.5)+(wr2_rating*.5)+(te_rating*.9)+(k_rating*.8))/5)
-            self.defensePassCoverageRating = randint(70, 90)
-            self.defensePassRushRating = randint(70, 90)
-            self.defenseRunCoverageRating = randint(70, 90)
-            self.defensePassRating = round(((self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*.8))/2)
-                   
-            self.defenseRating = round((((self.defenseRunCoverageRating*.8)+(self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*1))/3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination)/2))
-            self.overallRating = round(statistics.mean([self.offenseRating, self.defenseRunCoverageRating, self.defensePassCoverageRating]))
+            self.deriveDefenseFromRoster()
             if self.defenseSeasonPerformanceRating > 0:
                 self.defenseOverallRating = round(((self.defenseRating*1.2)+(self.defenseSeasonPerformanceRating*.8))/2)
             else:
@@ -147,11 +141,54 @@ class Team:
     def updateInGameDefenseRating(self):
         self.defenseRating = round((((self.defenseRunCoverageRating*.8)+(self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*1))/3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination)/2))
 
+    def deriveDefenseFromRoster(self):
+        """Derive team defense ratings from player defensive attributes.
+
+        Replaces old random 70-90 generation and weekly drift.
+        Called whenever roster changes (trades, free agency, setup).
+        """
+        # Get defensive attributes for each roster position
+        qb = self.rosterDict.get('qb')
+        rb = self.rosterDict.get('rb')
+        wr1 = self.rosterDict.get('wr1')
+        wr2 = self.rosterDict.get('wr2')
+        te = self.rosterDict.get('te')
+
+        # Safety (QB) attributes
+        sAttrs = qb.attributes.getDefensiveAttributes(qb.position) if qb else {}
+        # Linebacker (RB) attributes
+        lbAttrs = rb.attributes.getDefensiveAttributes(rb.position) if rb else {}
+        # Cornerback (WR1) attributes
+        cb1Attrs = wr1.attributes.getDefensiveAttributes(wr1.position) if wr1 else {}
+        # Cornerback (WR2) attributes
+        cb2Attrs = wr2.attributes.getDefensiveAttributes(wr2.position) if wr2 else {}
+        # Defensive End (TE) attributes
+        deAttrs = te.attributes.getDefensiveAttributes(te.position) if te else {}
+
+        # Pass coverage: CB1 35% + CB2 35% + S 30%
+        cb1Cov = cb1Attrs.get('coverage', 70)
+        cb2Cov = cb2Attrs.get('coverage', 70)
+        sCov = sAttrs.get('coverage', 70)
+        self.defensePassCoverageRating = round(0.35 * cb1Cov + 0.35 * cb2Cov + 0.30 * sCov)
+
+        # Pass rush: DE 60% passRush + LB 25% blitzing + DE 15% runDefense
+        dePassRush = deAttrs.get('passRush', 70)
+        lbBlitz = lbAttrs.get('blitzing', 70)
+        deRunDef = deAttrs.get('runDefense', 70)
+        self.defensePassRushRating = round(0.60 * dePassRush + 0.25 * lbBlitz + 0.15 * deRunDef)
+
+        # Run coverage: LB 40% runDefense + DE 30% runDefense + LB 20% tackling + S 10% tackling
+        lbRunDef = lbAttrs.get('runDefense', 70)
+        lbTackle = lbAttrs.get('tackling', 70)
+        sTackle = sAttrs.get('tackling', 70)
+        self.defenseRunCoverageRating = round(0.40 * lbRunDef + 0.30 * deRunDef + 0.20 * lbTackle + 0.10 * sTackle)
+
+        # Derived composite ratings
+        self.defensePassRating = round(((self.defensePassCoverageRating * 1.2) + (self.defensePassRushRating * 0.8)) / 2)
+        self.defenseRating = round((((self.defenseRunCoverageRating * 0.8) + (self.defensePassCoverageRating * 1.2) + (self.defensePassRushRating * 1)) / 3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination) / 2))
+        self.overallRating = round(statistics.mean([self.offenseRating, self.defenseRunCoverageRating, self.defensePassCoverageRating]))
 
     def updateRating(self):
-        self.defensePassRating = round(((self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*.8))/2)
-        self.defenseRating = round((((self.defenseRunCoverageRating*.8)+(self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*1))/3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination)/2))
-        
         # Calculate offense rating with defensive checks for None positions
         qb_rating = self.rosterDict.get('qb').attributes.overallRating if self.rosterDict.get('qb') else 50
         rb_rating = self.rosterDict.get('rb').attributes.overallRating if self.rosterDict.get('rb') else 50
@@ -159,35 +196,15 @@ class Team:
         wr2_rating = self.rosterDict.get('wr2').attributes.overallRating if self.rosterDict.get('wr2') else 50
         te_rating = self.rosterDict.get('te').attributes.overallRating if self.rosterDict.get('te') else 50
         k_rating = self.rosterDict.get('k').attributes.overallRating if self.rosterDict.get('k') else 50
-        
+
         self.offenseRating = round(((qb_rating*1.2)+(rb_rating*1.1)+(wr1_rating*.5)+(wr2_rating*.5)+(te_rating*.9)+(k_rating*.8))/5)
-        self.overallRating = round(statistics.mean([self.offenseRating, self.defenseRunCoverageRating, self.defensePassCoverageRating]))
+        self.deriveDefenseFromRoster()
         if self.defenseSeasonPerformanceRating < 0:
             self.defenseOverallRating = self.defenseRating
 
     def updateDefense(self):
-        if self.defensePassCoverageRating > 90:
-            self.defensePassCoverageRating = self.defensePassCoverageRating + randint(-15, -3)
-        elif self.defensePassCoverageRating < 70:
-            self.defensePassCoverageRating = self.defensePassCoverageRating + randint(3, 15)
-        else:
-            self.defensePassCoverageRating = self.defensePassCoverageRating + randint(-10, 10)
-
-        if self.defensePassRushRating > 90:
-            self.defensePassRushRating = self.defensePassRushRating + randint(-15, -3)
-        elif self.defensePassRushRating < 70:
-            self.defensePassRushRating = self.defensePassRushRating + randint(3, 15)
-        else:
-            self.defensePassRushRating = self.defensePassRushRating + randint(-10, 10)
-
-        if self.defenseRunCoverageRating > 90:
-            self.defenseRunCoverageRating = self.defenseRunCoverageRating + randint(-15, -3)
-        elif self.defenseRunCoverageRating < 70:
-            self.defenseRunCoverageRating = self.defenseRunCoverageRating + randint(3, 15)
-        else:
-            self.defenseRunCoverageRating = self.defenseRunCoverageRating + randint(-10, 10)
-
-        self.updateRating()
+        """Recalculate defense from roster. No more random drift."""
+        self.deriveDefenseFromRoster()
 
     def getAverages(self, season=None):
         """Compute season averages from the database Game table.
