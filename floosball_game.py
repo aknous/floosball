@@ -4132,7 +4132,7 @@ class Game:
                     + p.gameStatsDict.get('rushing', {}).get('tds', 0)
                     + p.gameStatsDict.get('receiving', {}).get('tds', 0)
                 )
-                return {
+                result = {
                     'id': p.id,
                     'name': p.name,
                     'position': p.position.name if hasattr(p, 'position') and p.position else None,
@@ -4144,6 +4144,11 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
+                # Include defense stats if any are non-zero
+                defStats = p.gameStatsDict.get('defense', {})
+                if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
+                    result['defense'] = dict(defStats)
+                return result
 
             return {
                 'team': {
