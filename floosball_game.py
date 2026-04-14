@@ -1643,14 +1643,16 @@ class Game:
                 return
             elif self.currentQuarter >= 3:
                 x = batched_randint(1, 10)
-                if x <= 9:
+                fgThresh = max(5, min(10, round(9 - aggrNorm * 2)))
+                if x <= fgThresh:
                     self.play.playType = PlayType.FieldGoal
                     return
                 self.play.passPlay(self._selectPassPlay('medium'))
                 return
             else:
                 x = batched_randint(1, 10)
-                if x <= 7:
+                fgThresh = max(4, min(9, round(7 - aggrNorm * 2)))
+                if x <= fgThresh:
                     self.play.playType = PlayType.FieldGoal
                     return
                 self.play.passPlay(self._selectPassPlay('medium'))
@@ -1661,6 +1663,7 @@ class Game:
             secs = self.gameClockSeconds
             if self.currentQuarter == 4:
                 gameIQ = self._coachClockIQ(coach)
+                aggrMod = aggrNorm * 0.15  # risk tolerance: aggressive +0.15, conservative -0.15
 
                 # Under 2.5 min: must go for it — punting is conceding
                 if secs < 150:
@@ -1684,8 +1687,8 @@ class Game:
                             self.play.passPlay(self._selectPassPlay('medium'))
                             return
                         else:
-                            # Long yardage: good coaches go for it, bad coaches punt
-                            if _random.random() < 0.3 + 0.5 * gameIQ:
+                            # Long yardage: good/aggressive coaches go for it, bad/conservative punt
+                            if _random.random() < 0.3 + 0.5 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
                     elif deficit <= 16:
@@ -1693,11 +1696,11 @@ class Game:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
                         elif self.yardsToFirstDown <= 5:
-                            if _random.random() < 0.5 + 0.3 * gameIQ:
+                            if _random.random() < 0.7 + 0.2 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('medium'))
                                 return
                         else:
-                            if _random.random() < 0.3 + 0.3 * gameIQ:
+                            if _random.random() < 0.55 + 0.3 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
                     else:
@@ -1709,6 +1712,11 @@ class Game:
                 if deficit <= 8 and self.yardsToFirstDown <= 2:
                     self.play.passPlay(self._selectPassPlay('short'))
                     return
+                elif deficit <= 8 and self.yardsToFirstDown <= 5:
+                    # Aggressive coaches willing to attempt short yardage with time
+                    if _random.random() < max(0, 0.1 + aggrMod):
+                        self.play.passPlay(self._selectPassPlay('short'))
+                        return
 
             # Q2 two-minute drill: go for it past midfield with under 60 sec
             elif self.currentQuarter == 2 and secs < 60 and self.yardsToSafety > 50:
@@ -1790,26 +1798,27 @@ class Game:
                 return
 
         else:
+            # Tied or trailing (outside Q4 urgency), out of FG range
             if self.yardsToFirstDown == 1:
-                if self.yardsToSafety > 50 or (scoreDiff < -14 and self.currentQuarter >= 3):
+                if self.yardsToSafety >= 50 or (scoreDiff < -14 and self.currentQuarter >= 3):
                     x = batched_randint(1, 10)
-                    if x <= 3:
+                    if x <= max(1, min(7, goForItThreshold - 1)):
                         self.play.runPlay()
                         return
                 self.play.playType = PlayType.Punt
                 return
             elif self.yardsToFirstDown == 2:
-                if scoreDiff < -21 and self.currentQuarter == 4 and self.gameClockSeconds < 600:
+                if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -21 and self.currentQuarter == 4 and self.gameClockSeconds < 600):
                     x = batched_randint(1, 10)
-                    if x <= 2:
+                    if x <= max(1, min(5, goForItThreshold - 3)):
                         self.play.passPlay(self._selectPassPlay('short'))
                         return
                 self.play.playType = PlayType.Punt
                 return
             else:
-                if scoreDiff < -17 and self.currentQuarter == 4 and self.gameClockSeconds < 300:
-                    x = batched_randint(1, 100)
-                    if x <= 10:
+                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < -17 and self.currentQuarter == 4 and self.gameClockSeconds < 300):
+                    x = batched_randint(1, 10)
+                    if x <= max(1, min(4, goForItThreshold - 4)):
                         self.play.passPlay(self._selectPassPlay('medium'))
                         return
                 self.play.playType = PlayType.Punt

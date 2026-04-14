@@ -862,16 +862,16 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
                 "isChanceEffect": True}
     # ── Hand Composition Effects ──
     if effectName == "full_roster":
-        return {"rewardType": "mult", "rewardValue": round(1 + (0.20 + rn * 0.01) * editionScale, 2)}
+        return {"rewardType": "mult", "rewardValue": round(1 + (0.40 + rn * 0.005) * editionScale, 2)}
     if effectName == "all_in":
         return {"rewardType": "mult", "baseXMult": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "perDuplicateXMult": round((0.08 + rn * 0.004) * editionScale, 2)}
     if effectName == "diversified":
-        return {"rewardType": "fp", "perTypeFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+        return {"rewardType": "fp", "perTypeFP": round((5.0 + rn * 0.12) * editionScale, 1)}
     if effectName == "gold_rush":
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stacked_deck":
-        return {"perCardMult": round((0.05 + rn * 0.003) * editionScale, 2)}
+        return {"perCardMult": round((0.08 + rn * 0.003) * editionScale, 2)}
     # ── Trigger-Chain Effects (second pass) ──
     if effectName == "copycat":
         return {"rewardType": "fp", "_noParams": True}  # No params needed — copies highest flat FP from other cards
@@ -881,17 +881,17 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     # ── Chance Synergy Effects (second pass) ──
     if effectName == "high_roller":
-        return {"rewardType": "mult", "perCardMult": round((0.10 + rn * 0.005) * editionScale, 2)}
+        return {"rewardType": "mult", "perCardMult": round((0.15 + rn * 0.005) * editionScale, 2)}
     if effectName == "jackpot":
-        return {"rewardType": "fp", "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((30 + rn * 0.8) * editionScale, 1)}
     # ── Streak Synergy Effects (second pass) ──
     if effectName == "fortitude":
-        return {"rewardType": "mult", "perCardMult": round((0.10 + rn * 0.005) * editionScale, 2)}
+        return {"rewardType": "mult", "perCardMult": round((0.15 + rn * 0.005) * editionScale, 2)}
     if effectName == "immaculate":
-        return {"rewardType": "fp", "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((30 + rn * 0.8) * editionScale, 1)}
     # ── Tradeoff Effects (second pass) ──
     if effectName == "double_down":
-        return {"rewardType": "mult", "rewardValue": min(3.0, round(1 + (0.40 + rn * 0.02) * editionScale, 2))}
+        return {"rewardType": "mult", "rewardValue": min(3.0, round(1 + (0.60 + rn * 0.02) * editionScale, 2))}
     if effectName == "last_resort":
         return {"rewardType": "fp", "baseFP": round(5.0 * editionScale, 1),
                 "enhancedFP": round((20 + rn * 0.4) * editionScale, 1),
@@ -1111,12 +1111,10 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"ceilingBonus": ceilingBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
-        # Edition scaling: higher editions = lower FP threshold, lower baseline, higher max
-        # Base:     12 FP/1%, baseline 55, max 10%
-        # Diamond:  7 FP/1%, baseline 30, max 20%
-        fpPer1Pct = max(7, int(round(12 - 1.25 * (editionScale - 1))))
-        baseline = max(30, int(round(55 - 8.33 * (editionScale - 1))))
-        maxBoostPct = min(20, int(round(10 + 3.33 * (editionScale - 1))))
+        # Lower FP threshold + higher max = easier to activate, higher ceiling
+        fpPer1Pct = 7
+        baseline = 30
+        maxBoostPct = 20
         baseFloobits = int(round((3 + rn * 0.15) * editionScale))
         return {"fpPer1Pct": fpPer1Pct, "baseline": baseline,
                 "maxBoost": maxBoostPct / 100, "maxBoostDisplay": maxBoostPct,
