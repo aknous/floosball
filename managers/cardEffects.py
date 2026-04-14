@@ -471,7 +471,7 @@ EFFECT_TOOLTIPS = {
     "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your {posLabel} slot earns.",
     "squire": "The crowd goes wild. FP that stacks with each TD your {posLabel} slot scores.",
     "babysitter": "Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
-    "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's ELO below average.",
+    "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's season losses.",
     "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's win streak.",
     "resplendent": "When they're hot, they're HOT. FP per overperforming roster player.",
     "underdog": "The worse they are, the better the odds. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
@@ -1752,9 +1752,8 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
         if not ctx.favoriteTeamGameFinal or ctx.favoriteTeamWonThisWeek:
             return EffectResult(multBonus=baseMult, equation=f"{baseMult:.2f}x FPx (legacy base)")
         return EffectResult(multBonus=enhancedMult, equation=f"{enhancedMult:.2f}x FPx (legacy enhanced)")
-    # Gate: team must have lost this week
-    if not ctx.favoriteTeamGameFinal or ctx.favoriteTeamWonThisWeek:
-        eq = f"+{baseFP} FP. Team won or game not final"
+    if not ctx.favoriteTeamGameFinal:
+        eq = f"+{baseFP} FP. Game not final"
         return EffectResult(fpBonus=baseFP, equation=eq)
     losses = ctx.favoriteTeamSeasonLosses
     baseChance = min(0.60, losses * 0.06 + 0.08) if losses >= 2 else (0.10 if losses == 1 else 0)
@@ -1764,7 +1763,7 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"team lost, {losses} season losses", ctx=ctx, base=f"+{baseFP} FP")
+                   f"+{enhancedFP} FP", f"{losses} season losses", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 
