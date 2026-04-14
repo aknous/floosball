@@ -408,6 +408,38 @@ def _computeCardPass(
     detail = effectConfig.get("detail", "")
     category = effectConfig.get("category", "")
 
+    # Rebuild stale primary params — test stored primary against current template
+    # to detect missing keys, regardless of whether detail was already patched.
+    if effectName:
+        import re as _re
+        from managers.cardEffects import (
+            rebuildPrimaryParams, EFFECT_DETAIL_TEMPLATES, STAT_DISPLAY_NAMES,
+            POSITION_LABELS,
+        )
+        storedPrimary = effectConfig.get("primary", {})
+        detailTpl = EFFECT_DETAIL_TEMPLATES.get(effectName, "")
+        if detailTpl:
+            testDetail = detailTpl
+            for key, val in storedPrimary.items():
+                testDetail = testDetail.replace("{" + key + "}", str(val))
+            statKey = storedPrimary.get("stat", "")
+            if statKey:
+                testDetail = testDetail.replace("{statDisplay}", STAT_DISPLAY_NAMES.get(statKey, statKey))
+            if _re.search(r'\{[a-zA-Z_]+\}', testDetail):
+                # Stored primary is missing keys — rebuild from current builder
+                edScale = effectConfig.get("editionScale", 1.0)
+                freshPrimary = rebuildPrimaryParams(effectName, template.player_rating, edScale)
+                freshPrimary["posLabel"] = storedPrimary.get(
+                    "posLabel", POSITION_LABELS.get(position, "??"))
+                effectConfig["primary"] = freshPrimary
+                # Rebuild detail with fresh params
+                detail = detailTpl
+                for key, val in freshPrimary.items():
+                    detail = detail.replace("{" + key + "}", str(val))
+                if statKey:
+                    detail = detail.replace("{statDisplay}", STAT_DISPLAY_NAMES.get(statKey, statKey))
+                detail = _re.sub(r'\{[a-zA-Z_]+\}', '?', detail)
+
     # Set card position on context for roster-position lookups
     ctx.cardPosition = position
 

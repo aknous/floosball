@@ -495,6 +495,19 @@ class TimingManager:
         else:
             await asyncio.sleep(0)
 
+    async def waitAfterTimeout(self) -> None:
+        """Pause after a timeout is called, before the next play resumes."""
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
+            import random
+            delay = random.uniform(
+                self.delays.get('after_timeout', 3.0) * 0.6,
+                self.delays.get('after_timeout', 3.0) * 1.4
+            )
+            logger.debug(f"{self.mode.value} mode: after timeout delay {delay:.1f}s")
+            await asyncio.sleep(delay)
+        else:
+            await asyncio.sleep(0)
+
     async def waitBetweenOffseasonPicks(self) -> None:
         """Wait between offseason free agency pick broadcasts"""
         if self._isFastCatchingUp:

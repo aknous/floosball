@@ -6294,6 +6294,163 @@ def get_pickem_history(user: _User = Depends(_getCurrentUser)):
 
 
 # ============================================================================
+# BOT API (Discord bot ↔ backend)
+# ============================================================================
+
+def _checkBotAuth(x_bot_key: str = Header(...)):
+    """Authorize Discord bot via shared API key."""
+    from config_manager import get_config
+    expected = get_config().get("botApiKey", "")
+    if not expected or x_bot_key != expected:
+        raise HTTPException(status_code=403, detail="Invalid bot key")
+
+
+class _BotLinkBody(BaseModel):
+    discordId: str
+    username: str
+
+class _BotUnlinkBody(BaseModel):
+    discordId: str
+
+class _BotRemindersBody(BaseModel):
+    discordId: str
+    enabled: bool
+
+
+@app.post("/api/bot/link")
+def bot_link_user(body: _BotLinkBody, _auth: None = Depends(_checkBotAuth)):
+    """Link a Discord user to a Floosball account by username."""
+    from database.connection import get_session
+    from database.models import User
+    session = get_session()
+    try:
+        # Find user by username (case-insensitive)
+        user = session.query(User).filter(User.username.ilike(body.username)).first()
+        if not user:
+            raise HTTPException(404, "Username not found")
+
+        # Clear discord_id from any other user that has it (re-link)
+        existing = session.query(User).filter(User.discord_id == body.discordId).first()
+        if existing and existing.id != user.id:
+            existing.discord_id = None
+            existing.discord_dm_reminders = False
+
+        user.discord_id = body.discordId
+        session.commit()
+        return build_success_response({"username": user.username})
+    finally:
+        session.close()
+
+
+@app.delete("/api/bot/link")
+def bot_unlink_user(body: _BotUnlinkBody, _auth: None = Depends(_checkBotAuth)):
+    """Unlink a Discord user from their Floosball account."""
+    from database.connection import get_session
+    from database.models import User
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.discord_id == body.discordId).first()
+        if user:
+            user.discord_id = None
+            user.discord_dm_reminders = False
+            session.commit()
+        return build_success_response({"unlinked": True})
+    finally:
+        session.close()
+
+
+@app.post("/api/bot/reminders")
+def bot_set_reminders(body: _BotRemindersBody, _auth: None = Depends(_checkBotAuth)):
+    """Toggle DM reminders for a linked Discord user."""
+    from database.connection import get_session
+    from database.models import User
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.discord_id == body.discordId).first()
+        if not user:
+            raise HTTPException(404, "Account not linked — use /link first")
+        user.discord_dm_reminders = body.enabled
+        session.commit()
+        return build_success_response({"enabled": body.enabled})
+    finally:
+        session.close()
+
+
+@app.get("/api/bot/unsubmitted")
+def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
+    """Get Discord IDs of users who opted into reminders but haven't submitted roster/picks."""
+    from database.connection import get_session
+    from database.models import User, FantasyRoster, PickEmPick
+    from sqlalchemy import func
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        return build_success_response({"rosterMissing": [], "picksMissing": [], "week": 0, "nextGameStart": None})
+
+    seasonNum = currentSeason.seasonNumber
+    pickemWeek = sm._getPickemWeek()
+
+    session = get_session()
+    try:
+        # All users with reminders enabled
+        reminderUsers = session.query(User).filter(
+            User.discord_dm_reminders == True,
+            User.discord_id.isnot(None),
+        ).all()
+
+        if not reminderUsers:
+            return build_success_response({"rosterMissing": [], "picksMissing": [], "week": pickemWeek, "nextGameStart": None})
+
+        userIds = [u.id for u in reminderUsers]
+        discordMap = {u.id: u.discord_id for u in reminderUsers}
+
+        # Users missing locked roster for this season
+        lockedUserIds = set(
+            uid for (uid,) in session.query(FantasyRoster.user_id).filter(
+                FantasyRoster.season == seasonNum,
+                FantasyRoster.is_locked == True,
+                FantasyRoster.user_id.in_(userIds),
+            ).all()
+        )
+        rosterMissing = [discordMap[uid] for uid in userIds if uid not in lockedUserIds]
+
+        # Users missing picks for this week
+        pickedUserIds = set(
+            uid for (uid,) in session.query(func.distinct(PickEmPick.user_id)).filter(
+                PickEmPick.season == seasonNum,
+                PickEmPick.week == pickemWeek,
+                PickEmPick.user_id.in_(userIds),
+            ).all()
+        )
+        picksMissing = [discordMap[uid] for uid in userIds if uid not in pickedUserIds]
+
+        # Next game start time
+        nextGameStart = None
+        schedule = currentSeason.schedule
+        currentWeek = currentSeason.currentWeek
+        if schedule and currentWeek and isinstance(currentWeek, int):
+            weekIdx = currentWeek - 1
+            if 0 <= weekIdx < len(schedule):
+                weekEntry = schedule[weekIdx]
+                startTime = weekEntry.get('startTime') if isinstance(weekEntry, dict) else None
+                if startTime:
+                    nextGameStart = startTime.isoformat() if hasattr(startTime, 'isoformat') else str(startTime)
+
+        return build_success_response({
+            "rosterMissing": rosterMissing,
+            "picksMissing": picksMissing,
+            "week": pickemWeek,
+            "nextGameStart": nextGameStart,
+        })
+    finally:
+        session.close()
+
+
+# ============================================================================
 # HEALTH CHECK
 # ============================================================================
 

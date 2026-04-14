@@ -873,7 +873,7 @@ class FantasyTracker:
         gamesActive=False,
     ):
         """Build a CardCalcContext for card bonus computation."""
-        from database.models import FantasyRosterSwap, Game, User
+        from database.models import FantasyRosterSwap, Game, User, UserCurrency
         from managers.cardEffectCalculator import CardCalcContext
 
         sm = self._seasonManager
@@ -1136,12 +1136,14 @@ class FantasyTracker:
         # User Floobits balance (for balance-based card effects)
         userFloobitsBalance = 0
         try:
-            from database.models import UserCurrency
             uc = session.query(UserCurrency).filter_by(user_id=userId).first()
             if uc:
+                session.refresh(uc)  # Force fresh read from DB
                 userFloobitsBalance = uc.balance or 0
-        except Exception:
-            pass
+            else:
+                logger.warning(f"No UserCurrency row for user {userId}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
 
         # Compute chanceBonus from Fortune's Favor + fortunate modifier
         chanceBonus = 0.0
