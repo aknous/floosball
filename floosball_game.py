@@ -2426,14 +2426,16 @@ class Game:
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
+                yds = self.play.yardage
+                gainText = 'no gain' if yds == 0 else 'a loss of {} yards'.format(abs(yds)) if yds < 0 else '{} yards'.format(yds)
                 if self.play.isFumbleLost:
                     forcedBy = self.play.forcedFumbleBy
                     if forcedBy:
-                        text = '{} runs for {} yards, {} forces the fumble, {} recover'.format(self.play.runner.name, self.play.yardage, forcedBy.name, self.play.defense.abbr)
+                        text = '{} runs for {}, {} forces the fumble, {} recover'.format(self.play.runner.name, gainText, forcedBy.name, self.play.defense.abbr)
                     else:
-                        text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.abbr)
+                        text = '{} runs for {} and fumbles, {} recover'.format(self.play.runner.name, gainText, self.play.defense.abbr)
                 else:
-                    text = '{} runs for {} yards and fumbles, {} recovers'.format(self.play.runner.name, self.play.yardage, self.play.runner.name)
+                    text = '{} runs for {} and fumbles, {} recovers'.format(self.play.runner.name, gainText, self.play.runner.name)
             else:
                 if self.play.yardage <= 0:
                     tackler = self.play.tackledBy

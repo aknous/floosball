@@ -482,6 +482,11 @@ class PlayerAttributes:
         self.determinationModifier = randint(-2, 2)
         self.luckModifier = randint(-5, 5)
 
+        # Defensive talent: persistent modifier that shifts defensive rating
+        # Creates real spread between offensive and defensive ability
+        # Range: -15 to +10 (skewed negative — most players are better on offense)
+        self.defensiveTalent = randint(-15, 10)
+
         # Fatigue (0.0 = fresh, accumulates over the season)
         self.fatigue = 0.0
 
@@ -669,8 +674,8 @@ class PlayerAttributes:
 
     # ── Defensive attribute calculations ─────────────────────────────────
     # Derived from the same base athletics using different formulas per
-    # defensive position.  No random variance — the difference between
-    # offensive and defensive skill comes from different weightings.
+    # defensive position, shifted by the player's defensiveTalent modifier
+    # to create real spread between offensive and defensive ability.
 
     def calculateDefensiveRating(self, position):
         """Calculate defensive skill rating based on offensive position → defensive position."""
@@ -679,14 +684,18 @@ class PlayerAttributes:
             return 0  # Kickers don't play defense
 
         if defPos == DefensivePosition.CB:
-            return self._calculateCBRating()
+            base = self._calculateCBRating()
         elif defPos == DefensivePosition.S:
-            return self._calculateSafetyRating()
+            base = self._calculateSafetyRating()
         elif defPos == DefensivePosition.LB:
-            return self._calculateLBRating()
+            base = self._calculateLBRating()
         elif defPos == DefensivePosition.DE:
-            return self._calculateDERating()
-        return 0
+            base = self._calculateDERating()
+        else:
+            return 0
+
+        talent = getattr(self, 'defensiveTalent', 0)
+        return max(60, min(100, base + talent))
 
     def _calculateCBRating(self):
         """Cornerback: coverage + tackling."""
@@ -715,32 +724,36 @@ class PlayerAttributes:
         return round((passRush * 1.3 + runDefense * 0.7) / 2)
 
     def getDefensiveAttributes(self, position):
-        """Return individual defensive attributes for the player's defensive position."""
+        """Return individual defensive attributes for the player's defensive position.
+        Each attribute is shifted by the player's defensiveTalent modifier."""
         defPos = DEFENSIVE_POSITION_MAP.get(position)
         if defPos is None:
             return {}
 
+        talent = getattr(self, 'defensiveTalent', 0)
+        clamp = lambda v: max(60, min(100, v + talent))
+
         if defPos == DefensivePosition.CB:
             return {
-                'coverage': round(0.4 * self.speed + 0.3 * self.agility + 0.2 * self.instinct + 0.1 * self.discipline),
-                'tackling': round(0.5 * self.power + 0.3 * self.speed + 0.2 * self.discipline),
+                'coverage': clamp(round(0.4 * self.speed + 0.3 * self.agility + 0.2 * self.instinct + 0.1 * self.discipline)),
+                'tackling': clamp(round(0.5 * self.power + 0.3 * self.speed + 0.2 * self.discipline)),
             }
         elif defPos == DefensivePosition.S:
             return {
-                'coverage': round(0.3 * self.vision + 0.3 * self.instinct + 0.2 * self.agility + 0.2 * self.focus),
-                'playReading': round(0.4 * self.vision + 0.3 * self.instinct + 0.3 * self.focus),
-                'tackling': round(0.4 * self.power + 0.3 * self.discipline + 0.3 * self.agility),
+                'coverage': clamp(round(0.3 * self.vision + 0.3 * self.instinct + 0.2 * self.agility + 0.2 * self.focus)),
+                'playReading': clamp(round(0.4 * self.vision + 0.3 * self.instinct + 0.3 * self.focus)),
+                'tackling': clamp(round(0.4 * self.power + 0.3 * self.discipline + 0.3 * self.agility)),
             }
         elif defPos == DefensivePosition.LB:
             return {
-                'tackling': round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.discipline),
-                'runDefense': round(0.4 * self.power + 0.3 * self.instinct + 0.2 * self.discipline + 0.1 * self.speed),
-                'blitzing': round(0.4 * self.speed + 0.3 * self.power + 0.2 * self.agility + 0.1 * self.instinct),
+                'tackling': clamp(round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.discipline)),
+                'runDefense': clamp(round(0.4 * self.power + 0.3 * self.instinct + 0.2 * self.discipline + 0.1 * self.speed)),
+                'blitzing': clamp(round(0.4 * self.speed + 0.3 * self.power + 0.2 * self.agility + 0.1 * self.instinct)),
             }
         elif defPos == DefensivePosition.DE:
             return {
-                'passRush': round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.instinct),
-                'runDefense': round(0.5 * self.power + 0.3 * self.discipline + 0.2 * self.instinct),
+                'passRush': clamp(round(0.4 * self.power + 0.3 * self.speed + 0.2 * self.agility + 0.1 * self.instinct)),
+                'runDefense': clamp(round(0.5 * self.power + 0.3 * self.discipline + 0.2 * self.instinct)),
             }
         return {}
 

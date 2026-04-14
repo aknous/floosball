@@ -424,6 +424,7 @@ class PlayerManager:
                 player.attributes.confidenceModifier = attrs.confidence_modifier
                 player.attributes.determinationModifier = attrs.determination_modifier
                 player.attributes.luckModifier = attrs.luck_modifier
+                player.attributes.defensiveTalent = getattr(attrs, 'defensive_talent', 0) or 0
                 player.attributes.fatigue = getattr(attrs, 'fatigue', 0.0) or 0.0
                 player.attributes.demeanor = getattr(attrs, 'demeanor', None)
 
@@ -1253,6 +1254,7 @@ class PlayerManager:
                             confidence_modifier=attrs.confidenceModifier,
                             determination_modifier=attrs.determinationModifier,
                             luck_modifier=attrs.luckModifier,
+                            defensive_talent=getattr(attrs, 'defensiveTalent', 0),
                             fatigue=attrs.fatigue,
                             demeanor=attrs.demeanor,
                         )
@@ -1295,6 +1297,7 @@ class PlayerManager:
                         db_attrs.confidence_modifier = attrs.confidenceModifier
                         db_attrs.determination_modifier = attrs.determinationModifier
                         db_attrs.luck_modifier = attrs.luckModifier
+                        db_attrs.defensive_talent = getattr(attrs, 'defensiveTalent', 0)
                         db_attrs.fatigue = attrs.fatigue
                         db_attrs.demeanor = attrs.demeanor
 
