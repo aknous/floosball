@@ -194,6 +194,7 @@ longRunOutsideList = [
                     'bolts to the sideline for',
                 ]
 
+# Loss run (no defender) — args: none, used as verb phrase
 lossRunList =   [
                     'is stuffed',
                     'is stopped',
@@ -206,6 +207,19 @@ lossRunList =   [
                     'is smothered',
                     'is stonewalled',
                     'is met at the line',
+                ]
+
+# Loss run with defender — args: (runner.name, defender.name, yardage)
+lossRunDefenderList = [
+                    '{} is stuffed by {} for {} yards',
+                    '{} is stopped by {} for {} yards',
+                    '{} is dropped by {} for {} yards',
+                    '{} is tackled in the backfield by {} for {} yards',
+                    '{} is brought down by {} for {} yards',
+                    '{} is wrapped up by {} for {} yards',
+                    '{} is stopped cold by {} for {} yards',
+                    '{} is stonewalled by {} for {} yards',
+                    '{} is met at the line by {} for {} yards',
                 ]
 
 shortPassList = [
@@ -306,15 +320,16 @@ sidelineLongPassList = [
 
 # Clutch/choke play text suffixes — appended to standard play text
 # Sack text — args: (passer.name, yardage)
+# Sack — args: (passer.name, defender.name, yardage)
 sackList = [
-                    '{} sacked for {} yards',
-                    '{} is brought down for {} yards',
-                    '{} goes down, sacked for {} yards',
-                    '{} is taken down behind the line for {} yards',
-                    '{} has nowhere to throw, sacked for {} yards',
-                    '{} is wrapped up and sacked for {} yards',
-                    '{} is crushed for {} yards',
-                    '{} is buried for {} yards',
+                    '{} sacked by {} for {} yards',
+                    '{} is brought down by {} for {} yards',
+                    '{} goes down, sacked by {} for {} yards',
+                    '{} is taken down by {} behind the line for {} yards',
+                    '{} has nowhere to throw, {} brings him down for {} yards',
+                    '{} is wrapped up by {} and sacked for {} yards',
+                    '{} is crushed by {} for {} yards',
+                    '{} is buried by {} for {} yards',
                 ]
 
 # Short incomplete — args: (passer.name, receiver.name)
@@ -377,7 +392,7 @@ deepDropList = [
                     '{} puts it perfectly for {}, drops it, incomplete',
                 ]
 
-# Interception — args: (passer.name, defense.abbr)
+# Interception — args: (passer.name, defender.name)
 interceptionList = [
                     '{} pass intercepted by {}',
                     '{} picked off by {}',
@@ -2412,12 +2427,20 @@ class Game:
             isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
                 if self.play.isFumbleLost:
-                    text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.abbr)
+                    forcedBy = self.play.forcedFumbleBy
+                    if forcedBy:
+                        text = '{} runs for {} yards, {} forces the fumble, {} recover'.format(self.play.runner.name, self.play.yardage, forcedBy.name, self.play.defense.abbr)
+                    else:
+                        text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.abbr)
                 else:
                     text = '{} runs for {} yards and fumbles, {} recovers'.format(self.play.runner.name, self.play.yardage, self.play.runner.name)
             else:
                 if self.play.yardage <= 0:
-                    text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
+                    tackler = self.play.tackledBy
+                    if tackler:
+                        text = choice(lossRunDefenderList).format(self.play.runner.name, tackler.name, self.play.yardage)
+                    else:
+                        text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
                 elif self.play.yardage > 0 and self.play.yardage <= 3:
                     runList = shortRunOutsideList if isOutside else shortRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
@@ -2429,13 +2452,19 @@ class Game:
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
         elif self.play.playType is PlayType.Pass:
             if self.play.isSack:
+                sacker = self.play.sackedBy
+                sackerName = sacker.name if sacker else self.play.defense.abbr
                 if self.play.isFumble:
+                    forcedBy = self.play.forcedFumbleBy
                     if self.play.isFumbleLost:
-                        text = '{} sacked and fumbles, {} recovers'.format(self.play.passer.name, self.play.defense.name)
+                        if forcedBy:
+                            text = '{} sacked by {}, fumbles, {} recovers'.format(self.play.passer.name, sackerName, self.play.defense.name)
+                        else:
+                            text = '{} sacked and fumbles, {} recovers'.format(self.play.passer.name, self.play.defense.name)
                     else:
-                        text = '{} sacked and fumbles, {} recovers'.format(self.play.passer.name, self.play.passer.name)
+                        text = '{} sacked by {} and fumbles, {} recovers'.format(self.play.passer.name, sackerName, self.play.passer.name)
                 else:
-                    text = choice(sackList).format(self.play.passer.name, self.play.yardage)
+                    text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
                 if self.play.targetSideline:
                     if self.play.passType is PassType.short:
@@ -2454,8 +2483,20 @@ class Game:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(extraLongPassList), self.play.receiver.name, self.play.yardage)
                 else:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, self.play.yardage)
+                # Fumble after catch
+                if self.play.isFumble:
+                    forcedBy = self.play.forcedFumbleBy
+                    if self.play.isFumbleLost:
+                        if forcedBy:
+                            text += ', {} forces the fumble, {} recover'.format(forcedBy.name, self.play.defense.abbr)
+                        else:
+                            text += ', fumbles, {} recover'.format(self.play.defense.abbr)
+                    else:
+                        text += ', fumbles, {} recovers'.format(self.play.receiver.name)
             elif self.play.playResult is PlayResult.Interception:
-                text = choice(interceptionList).format(self.play.passer.name, self.play.defense.abbr)
+                interceptor = self.play.interceptedBy
+                interceptorName = interceptor.name if interceptor else self.play.defense.abbr
+                text = choice(interceptionList).format(self.play.passer.name, interceptorName)
             else:
                 if self.play.passType is PassType.short:
                     if self.play.passIsDropped:
