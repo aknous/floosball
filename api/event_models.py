@@ -271,17 +271,17 @@ class SeasonEvent:
         }
     
     @staticmethod
-    def weekStart(seasonNumber: int, weekNumber: int, games: List[Dict], weekText: str = None, modifier: str = None,
-                  modifierInfo: dict = None, nextGameStartTime: str = None) -> Dict[str, Any]:
+    def weekStart(seasonNumber: int, weekNumber: int, games: List[Dict] = None, weekText: str = None, modifier: str = None,
+                  modifierInfo: dict = None, nextGameStartTime: str = None, gamesCount: int = None) -> Dict[str, Any]:
         """Create a week start event"""
         text = weekText or f'Week {weekNumber}'
+        count = gamesCount if gamesCount is not None else len(games or [])
         event = {
             'event': EventType.WEEK_START.value,
             'seasonNumber': seasonNumber,
             'weekNumber': weekNumber,
             'weekText': text,
-            'gamesCount': len(games),
-            'games': games,
+            'gamesCount': count,
             'message': f"{text} begins"
         }
         if modifier:

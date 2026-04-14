@@ -490,6 +490,7 @@ class GamePlayerStats(Base):
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
+    q4_fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game", back_populates="player_stats")
@@ -601,6 +602,8 @@ class User(Base):
     email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
     email_day_report: Mapped[bool] = mapped_column(Boolean, default=True)
     email_season_report: Mapped[bool] = mapped_column(Boolean, default=True)
+    discord_id: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
+    discord_dm_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

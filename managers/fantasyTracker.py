@@ -106,8 +106,11 @@ class FantasyTracker:
         # Tracks current week's FP, banked to DB at week end
         self._weekFP: Dict[int, float] = {}
         # Q4+ fantasy points: {playerId: float} — tracks FP earned in Q4/OT only
-        # Used by Overtime card effect; not persisted to DB
+        # Used by Closer card effect; persisted to game_player_stats
         self._weekQ4FP: Dict[int, float] = {}
+        # Snapshot of player season performance ratings, locked on first access
+        # each week so post-game recalculation doesn't alter card output mid-week
+        self._weekPerfRatingSnapshot: Dict[int, float] = {}
         # Week number for which _weekFP was last banked (None = not yet banked)
         self._bankedWeek: int = None
 
@@ -252,6 +255,7 @@ class FantasyTracker:
         """
         self._weekFP.clear()
         self._weekQ4FP.clear()
+        self._weekPerfRatingSnapshot.clear()
         self._bankedWeek = None
 
     @property
@@ -869,7 +873,7 @@ class FantasyTracker:
         gamesActive=False,
     ):
         """Build a CardCalcContext for card bonus computation."""
-        from database.models import FantasyRosterSwap, Game, User
+        from database.models import FantasyRosterSwap, Game, User, UserCurrency
         from managers.cardEffectCalculator import CardCalcContext
 
         sm = self._seasonManager
@@ -975,14 +979,16 @@ class FantasyTracker:
             if allTeams:
                 leagueAverageElo = sum(getattr(t, 'elo', 1500.0) for t in allTeams) / len(allTeams)
 
-        # Player performance ratings from live objects
-        playerPerfRatings = {}
+        # Player performance ratings — snapshot on first access each week so
+        # post-game recalculation doesn't drop card output mid-week
         pm = self._playerManager
-        if pm:
-            for p in pm.activePlayers:
-                perfRating = getattr(p, 'seasonPerformanceRating', 0)
-                if perfRating > 0:
-                    playerPerfRatings[p.id] = perfRating
+        if not self._weekPerfRatingSnapshot:
+            if pm:
+                for p in pm.activePlayers:
+                    perfRating = getattr(p, 'seasonPerformanceRating', 0)
+                    if perfRating > 0:
+                        self._weekPerfRatingSnapshot[p.id] = perfRating
+        playerPerfRatings = self._weekPerfRatingSnapshot
 
         # Roster unchanged weeks
         lastSwap = (
@@ -1130,12 +1136,14 @@ class FantasyTracker:
         # User Floobits balance (for balance-based card effects)
         userFloobitsBalance = 0
         try:
-            from database.models import UserCurrency
             uc = session.query(UserCurrency).filter_by(user_id=userId).first()
             if uc:
+                session.refresh(uc)  # Force fresh read from DB
                 userFloobitsBalance = uc.balance or 0
-        except Exception:
-            pass
+            else:
+                logger.warning(f"No UserCurrency row for user {userId}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
 
         # Compute chanceBonus from Fortune's Favor + fortunate modifier
         chanceBonus = 0.0
@@ -1169,8 +1177,21 @@ class FantasyTracker:
                 if effectName in STREAK_CONFIGS and not STREAK_CONFIGS[effectName].get("isWeekly", False):
                     liveStreakConditionsMet[eq.id] = False
 
-        # Inject Q4 fantasy points into weekPlayerStats for Overtime card effect
-        for pid, q4fp in self._weekQ4FP.items():
+        # Inject Q4 fantasy points into weekPlayerStats for Closer card effect.
+        # During live games _weekQ4FP is populated in memory; between weeks or
+        # after restarts we fall back to persisted GamePlayerStats rows.
+        q4Source = self._weekQ4FP
+        if not q4Source:
+            from database.models import GamePlayerStats as GPSModelQ4
+            q4Rows = (
+                session.query(GPSModelQ4.player_id, GPSModelQ4.q4_fantasy_points)
+                .join(Game, GPSModelQ4.game_id == Game.id)
+                .filter(Game.season == season, Game.week == currentWeek,
+                        GPSModelQ4.q4_fantasy_points > 0)
+                .all()
+            )
+            q4Source = {row.player_id: row.q4_fantasy_points for row in q4Rows}
+        for pid, q4fp in q4Source.items():
             if pid in weekPlayerStats:
                 weekPlayerStats[pid]["q4FantasyPoints"] = q4fp
 

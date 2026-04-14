@@ -265,11 +265,9 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
     try:
         user = session.query(User).filter(User.clerk_id == clerkUserId).first()
         if user is None:
-            # Auto-provision: create local user record on first API call
-            # Try to extract email from Clerk JWT claims
+            # Extract email from JWT claims
             email = payload.get("email", "")
             if not email:
-                # Clerk sometimes nests email in different claim structures
                 emailAddresses = payload.get("email_addresses", [])
                 if emailAddresses and isinstance(emailAddresses, list):
                     email = emailAddresses[0].get("email_address", "")
@@ -278,21 +276,36 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
             else:
                 email = email.lower().strip()
 
-            user = User(
-                clerk_id=clerkUserId,
-                email=email,
-                username=None,
-                hashed_password="",
-            )
-            session.add(user)
-            session.flush()  # Get user.id without committing yet
+            # Check if existing user with this email (Clerk instance migration)
+            from sqlalchemy import func
+            existingByEmail = session.query(User).filter(
+                func.lower(User.email) == email.lower()
+            ).first()
 
-            # Provision starter currency (100 Floobits)
-            _provisionStarterPack(session, user)
+            if existingByEmail:
+                # Migrating from dev→prod Clerk: update clerk_id
+                oldClerkId = existingByEmail.clerk_id
+                existingByEmail.clerk_id = clerkUserId
+                session.commit()
+                session.refresh(existingByEmail)
+                logger.info(f"Migrated Clerk ID for user {existingByEmail.id}: {oldClerkId} -> {clerkUserId}")
+                user = existingByEmail
+            else:
+                # Truly new user — auto-provision
+                user = User(
+                    clerk_id=clerkUserId,
+                    email=email,
+                    username=None,
+                    hashed_password="",
+                )
+                session.add(user)
+                session.flush()
 
-            session.commit()
-            session.refresh(user)
-            logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email} (username pending)")
+                _provisionStarterPack(session, user)
+
+                session.commit()
+                session.refresh(user)
+                logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email} (username pending)")
         else:
             # Existing user — update email if JWT now provides a real one
             jwtEmail = payload.get("email", "")
@@ -364,11 +377,16 @@ def getAdminUser(
     Does NOT raise — allows downstream code to fall back to password auth.
     """
     if creds is None:
+        logger.debug("getAdminUser: no credentials provided")
         return None
     try:
         user = getCurrentUser(creds)
         if user and getattr(user, 'is_admin', False):
+            logger.debug(f"getAdminUser: admin user authenticated: {user.id} ({user.email})")
             return user
+        if user:
+            logger.warning(f"getAdminUser: user {user.id} ({user.email}) is not admin (is_admin={user.is_admin})")
         return None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"getAdminUser: auth failed: {e}")
         return None
