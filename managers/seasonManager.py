@@ -1959,6 +1959,15 @@ class SeasonManager:
                     continue
                 gd = player.gameStatsDict
                 # Only include players who actually participated
+                defStats = gd.get('defense', {})
+                hasDefenseStats = (
+                    defStats.get('sacks', 0) > 0
+                    or defStats.get('ints', 0) > 0
+                    or defStats.get('tackles', 0) > 0
+                    or defStats.get('tfl', 0) > 0
+                    or defStats.get('forcedFumbles', 0) > 0
+                    or defStats.get('passBreakups', 0) > 0
+                )
                 hasStats = (
                     gd.get('passing', {}).get('att', 0) > 0
                     or gd.get('rushing', {}).get('carries', 0) > 0
@@ -1966,6 +1975,7 @@ class SeasonManager:
                     or gd.get('kicking', {}).get('fgAtt', 0) > 0
                     or gd.get('kicking', {}).get('xpAtt', 0) > 0
                     or gd.get('fantasyPoints', 0) != 0
+                    or hasDefenseStats
                 )
                 if hasStats:
                     # _accumulatePostgameStats zeroes gd['fantasyPoints'] inside
@@ -1985,6 +1995,7 @@ class SeasonManager:
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
                         'kicking': gd.get('kicking'),
+                        'defense': gd.get('defense'),
                     }
         return playerStats
 

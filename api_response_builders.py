@@ -108,7 +108,12 @@ class PlayerResponseBuilder(ResponseBuilder):
             'teamAbbr': team.abbr if hasTeamObj else None,
             'seasonsPlayed': player.seasonsPlayed,
             'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
-            'playerRating': player.playerRating
+            'playerRating': player.playerRating,
+            'offensiveRating': player.offensiveRating,
+            'offensiveRatingStars': PlayerResponseBuilder.calculateStarRating(player.offensiveRating),
+            'defensiveRating': player.defensiveRating,
+            'defensiveRatingStars': PlayerResponseBuilder.calculateStarRating(player.defensiveRating),
+            'defensivePosition': player.defensivePosition.value if player.defensivePosition else None,
         }
     
     @staticmethod
@@ -217,6 +222,14 @@ class PlayerResponseBuilder(ResponseBuilder):
             attr_dict['moodTier'] = moodTier
             attr_dict['demeanor'] = demeanor.capitalize()
 
+        # Defensive attributes (position-specific)
+        defAttrs = player.attributes.getDefensiveAttributes(player.position)
+        if defAttrs:
+            attr_dict['defensiveAttributes'] = {
+                k: {'value': v, 'stars': PlayerResponseBuilder.calculateStarRating(v)}
+                for k, v in defAttrs.items()
+            }
+
         player_dict['attributes'] = attr_dict
         return player_dict
     
@@ -263,7 +276,12 @@ class PlayerResponseBuilder(ResponseBuilder):
         for category in ['rushing']:
             if any(value > 0 for value in stats[category].values() if isinstance(value, (int, float))):
                 stats_dict[category] = stats[category]
-        
+
+        # Defense stats
+        defenseStats = stats.get('defense', {})
+        if any(v > 0 for v in defenseStats.values() if isinstance(v, (int, float))):
+            stats_dict['defense'] = defenseStats
+
         stats_dict['fantasyPoints'] = stats['fantasyPoints']
         stats_dict['gp'] = stats['gp']
         

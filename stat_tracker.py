@@ -6,6 +6,7 @@ class StatCategory(Enum):
     RECEIVING = 'receiving'
     RUSHING = 'rushing'
     KICKING = 'kicking'
+    DEFENSE = 'defense'
 
 class StatType(Enum):
     GAME = 'game'
@@ -161,3 +162,28 @@ class StatTracker:
             self.add_fantasy_points(4)
         else:
             self.add_fantasy_points(3)
+
+    # Defensive statistics methods
+    def add_defensive_sack(self, isRegularSeason: bool = True):
+        """Add defensive sack"""
+        self.add_stat(StatCategory.DEFENSE, 'sacks', 1, isRegularSeason)
+
+    def add_defensive_int(self, isRegularSeason: bool = True):
+        """Add defensive interception"""
+        self.add_stat(StatCategory.DEFENSE, 'ints', 1, isRegularSeason)
+
+    def add_tackle(self, isRegularSeason: bool = True):
+        """Add tackle"""
+        self.add_stat(StatCategory.DEFENSE, 'tackles', 1, isRegularSeason)
+
+    def add_tfl(self, isRegularSeason: bool = True):
+        """Add tackle for loss"""
+        self.add_stat(StatCategory.DEFENSE, 'tfl', 1, isRegularSeason)
+
+    def add_forced_fumble(self, isRegularSeason: bool = True):
+        """Add forced fumble"""
+        self.add_stat(StatCategory.DEFENSE, 'forcedFumbles', 1, isRegularSeason)
+
+    def add_pass_breakup(self, isRegularSeason: bool = True):
+        """Add pass breakup"""
+        self.add_stat(StatCategory.DEFENSE, 'passBreakups', 1, isRegularSeason)

@@ -172,6 +172,34 @@ class KickingStats:
         self.xpPerc = 0.0
 
 @dataclass
+class DefenseStats:
+    """Optimized defensive statistics structure"""
+    sacks: int = 0
+    ints: int = 0
+    tackles: int = 0
+    tfl: int = 0
+    forcedFumbles: int = 0
+    passBreakups: int = 0
+
+    def reset(self):
+        """Reset all stats to zero"""
+        self.sacks = 0
+        self.ints = 0
+        self.tackles = 0
+        self.tfl = 0
+        self.forcedFumbles = 0
+        self.passBreakups = 0
+
+    def copy_from(self, other: 'DefenseStats'):
+        """Copy values from another DefenseStats instance"""
+        self.sacks = other.sacks
+        self.ints = other.ints
+        self.tackles = other.tackles
+        self.tfl = other.tfl
+        self.forcedFumbles = other.forcedFumbles
+        self.passBreakups = other.passBreakups
+
+@dataclass
 class OptimizedPlayerStats:
     """Optimized player statistics using dataclass structures"""
     team: Optional[str] = None
@@ -184,6 +212,7 @@ class OptimizedPlayerStats:
     rushing: RushingStats = field(default_factory=RushingStats)
     receiving: ReceivingStats = field(default_factory=ReceivingStats)
     kicking: KickingStats = field(default_factory=KickingStats)
+    defense: DefenseStats = field(default_factory=DefenseStats)
     
     def reset_for_new_game(self):
         """Reset game stats (much faster than deepcopy)"""
@@ -193,6 +222,7 @@ class OptimizedPlayerStats:
         self.rushing.reset()
         self.receiving.reset()
         self.kicking.reset()
+        self.defense.reset()
     
     def copy_from(self, other: 'OptimizedPlayerStats'):
         """Copy stats from another instance (faster than deepcopy)"""
@@ -267,6 +297,14 @@ class OptimizedPlayerStats:
                 'xpAtt': self.kicking.xpAtt,
                 'xps': self.kicking.xps,
                 'xpPerc': self.kicking.xpPerc
+            },
+            'defense': {
+                'sacks': self.defense.sacks,
+                'ints': self.defense.ints,
+                'tackles': self.defense.tackles,
+                'tfl': self.defense.tfl,
+                'forcedFumbles': self.defense.forcedFumbles,
+                'passBreakups': self.defense.passBreakups,
             }
         }
     
@@ -328,7 +366,17 @@ class OptimizedPlayerStats:
             stats.kicking.longest = k.get('longest', 0)
             stats.kicking.fg45_plus = k.get('fg45+', 0)
             # ... other kicking stats as needed
-        
+
+        # Load defense stats
+        if 'defense' in data:
+            d = data['defense']
+            stats.defense.sacks = d.get('sacks', 0)
+            stats.defense.ints = d.get('ints', 0)
+            stats.defense.tackles = d.get('tackles', 0)
+            stats.defense.tfl = d.get('tfl', 0)
+            stats.defense.forcedFumbles = d.get('forcedFumbles', 0)
+            stats.defense.passBreakups = d.get('passBreakups', 0)
+
         return stats
 
 class StatsPool:

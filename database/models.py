@@ -134,6 +134,9 @@ class Player(Base):
     term_remaining: Mapped[Optional[int]] = mapped_column(Integer)
     cap_hit: Mapped[Optional[int]] = mapped_column(Integer)
     player_rating: Mapped[Optional[int]] = mapped_column(Integer)
+    offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_position: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     free_agent_years: Mapped[Optional[int]] = mapped_column(Integer)
     service_time: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -205,6 +208,7 @@ class PlayerAttributes(Base):
     confidence_modifier: Mapped[int] = mapped_column(Integer)
     determination_modifier: Mapped[int] = mapped_column(Integer)
     luck_modifier: Mapped[int] = mapped_column(Integer)
+    defensive_talent: Mapped[int] = mapped_column(Integer, default=0)
 
     # Fatigue (0.0 = fresh, 1.0 = fully fatigued)
     fatigue: Mapped[float] = mapped_column(Float, default=0.0)
