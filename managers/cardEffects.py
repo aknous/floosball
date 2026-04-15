@@ -471,7 +471,7 @@ EFFECT_TOOLTIPS = {
     "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your {posLabel} slot earns.",
     "squire": "The crowd goes wild. FP that stacks with each TD your {posLabel} slot scores.",
     "babysitter": "Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
-    "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's ELO below average.",
+    "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's season losses.",
     "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's win streak.",
     "resplendent": "When they're hot, they're HOT. FP per overperforming roster player.",
     "underdog": "The worse they are, the better the odds. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
@@ -862,16 +862,16 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
                 "isChanceEffect": True}
     # ── Hand Composition Effects ──
     if effectName == "full_roster":
-        return {"rewardType": "mult", "rewardValue": round(1 + (0.20 + rn * 0.01) * editionScale, 2)}
+        return {"rewardType": "mult", "rewardValue": round(1 + (0.40 + rn * 0.005) * editionScale, 2)}
     if effectName == "all_in":
         return {"rewardType": "mult", "baseXMult": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "perDuplicateXMult": round((0.08 + rn * 0.004) * editionScale, 2)}
     if effectName == "diversified":
-        return {"rewardType": "fp", "perTypeFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+        return {"rewardType": "fp", "perTypeFP": round((5.0 + rn * 0.12) * editionScale, 1)}
     if effectName == "gold_rush":
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stacked_deck":
-        return {"perCardMult": round((0.05 + rn * 0.003) * editionScale, 2)}
+        return {"perCardMult": round((0.08 + rn * 0.003) * editionScale, 2)}
     # ── Trigger-Chain Effects (second pass) ──
     if effectName == "copycat":
         return {"rewardType": "fp", "_noParams": True}  # No params needed — copies highest flat FP from other cards
@@ -881,17 +881,17 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     # ── Chance Synergy Effects (second pass) ──
     if effectName == "high_roller":
-        return {"rewardType": "mult", "perCardMult": round((0.10 + rn * 0.005) * editionScale, 2)}
+        return {"rewardType": "mult", "perCardMult": round((0.15 + rn * 0.005) * editionScale, 2)}
     if effectName == "jackpot":
-        return {"rewardType": "fp", "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((30 + rn * 0.8) * editionScale, 1)}
     # ── Streak Synergy Effects (second pass) ──
     if effectName == "fortitude":
-        return {"rewardType": "mult", "perCardMult": round((0.10 + rn * 0.005) * editionScale, 2)}
+        return {"rewardType": "mult", "perCardMult": round((0.15 + rn * 0.005) * editionScale, 2)}
     if effectName == "immaculate":
-        return {"rewardType": "fp", "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((30 + rn * 0.8) * editionScale, 1)}
     # ── Tradeoff Effects (second pass) ──
     if effectName == "double_down":
-        return {"rewardType": "mult", "rewardValue": min(3.0, round(1 + (0.40 + rn * 0.02) * editionScale, 2))}
+        return {"rewardType": "mult", "rewardValue": min(3.0, round(1 + (0.60 + rn * 0.02) * editionScale, 2))}
     if effectName == "last_resort":
         return {"rewardType": "fp", "baseFP": round(5.0 * editionScale, 1),
                 "enhancedFP": round((20 + rn * 0.4) * editionScale, 1),
@@ -1111,12 +1111,10 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"ceilingBonus": ceilingBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
-        # Edition scaling: higher editions = lower FP threshold, lower baseline, higher max
-        # Base:     12 FP/1%, baseline 55, max 10%
-        # Diamond:  7 FP/1%, baseline 30, max 20%
-        fpPer1Pct = max(7, int(round(12 - 1.25 * (editionScale - 1))))
-        baseline = max(30, int(round(55 - 8.33 * (editionScale - 1))))
-        maxBoostPct = min(20, int(round(10 + 3.33 * (editionScale - 1))))
+        # Lower FP threshold + higher max = easier to activate, higher ceiling
+        fpPer1Pct = 7
+        baseline = 30
+        maxBoostPct = 20
         baseFloobits = int(round((3 + rn * 0.15) * editionScale))
         return {"fpPer1Pct": fpPer1Pct, "baseline": baseline,
                 "maxBoost": maxBoostPct / 100, "maxBoostDisplay": maxBoostPct,
@@ -1754,9 +1752,8 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
         if not ctx.favoriteTeamGameFinal or ctx.favoriteTeamWonThisWeek:
             return EffectResult(multBonus=baseMult, equation=f"{baseMult:.2f}x FPx (legacy base)")
         return EffectResult(multBonus=enhancedMult, equation=f"{enhancedMult:.2f}x FPx (legacy enhanced)")
-    # Gate: team must have lost this week
-    if not ctx.favoriteTeamGameFinal or ctx.favoriteTeamWonThisWeek:
-        eq = f"+{baseFP} FP. Team won or game not final"
+    if not ctx.favoriteTeamGameFinal:
+        eq = f"+{baseFP} FP. Game not final"
         return EffectResult(fpBonus=baseFP, equation=eq)
     losses = ctx.favoriteTeamSeasonLosses
     baseChance = min(0.60, losses * 0.06 + 0.08) if losses >= 2 else (0.10 if losses == 1 else 0)
@@ -1766,7 +1763,7 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
     fp = enhancedFP if triggered else baseFP
     eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, triggered,
-                   f"+{enhancedFP} FP", f"team lost, {losses} season losses", ctx=ctx, base=f"+{baseFP} FP")
+                   f"+{enhancedFP} FP", f"{losses} season losses", ctx=ctx, base=f"+{baseFP} FP")
     return EffectResult(fpBonus=fp, equation=eq,
                         chanceRoll=round(roll, 4), chanceThreshold=round(totalChance, 4), chanceTriggered=triggered)
 

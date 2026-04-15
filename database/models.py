@@ -608,6 +608,7 @@ class User(Base):
     email_season_report: Mapped[bool] = mapped_column(Boolean, default=True)
     discord_id: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
     discord_dm_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_pick_favorites: Mapped[bool] = mapped_column(Boolean, default=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -1209,6 +1210,7 @@ class PickEmPick(Base):
     picked_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
     correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     points_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    underdog_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     points_earned: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

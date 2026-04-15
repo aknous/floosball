@@ -22,9 +22,11 @@ class PickEmRepository:
 
     def submitPick(self, userId: int, season: int, week: int, gameIndex: int,
                    homeTeamId: int, awayTeamId: int, pickedTeamId: int,
-                   pointsMultiplier: float = 1.0) -> PickEmPick:
+                   pointsMultiplier: float = 1.0,
+                   underdogMultiplier: float = 1.0) -> PickEmPick:
         """Submit or update a pick. Only allowed if correct IS NULL (game not resolved).
         pointsMultiplier is set based on game quarter at time of pick.
+        underdogMultiplier is set from pre-game ELO (only >1.0 for pre-game underdog picks).
         """
         existing = self.session.query(PickEmPick).filter_by(
             user_id=userId, season=season, week=week, game_index=gameIndex,
@@ -35,6 +37,7 @@ class PickEmRepository:
                 raise ValueError("Cannot change a resolved pick")
             existing.picked_team_id = pickedTeamId
             existing.points_multiplier = pointsMultiplier
+            existing.underdog_multiplier = underdogMultiplier
             self.session.flush()
             return existing
 
@@ -47,6 +50,7 @@ class PickEmRepository:
             away_team_id=awayTeamId,
             picked_team_id=pickedTeamId,
             points_multiplier=pointsMultiplier,
+            underdog_multiplier=underdogMultiplier,
         )
         self.session.add(pick)
         self.session.flush()
@@ -66,8 +70,9 @@ class PickEmRepository:
         for pick in picks:
             isCorrect = (pick.picked_team_id == winningTeamId)
             pick.correct = isCorrect
-            multiplier = pick.points_multiplier if pick.points_multiplier is not None else 1.0
-            pick.points_earned = int(PICKEM_BASE_POINTS * multiplier) if isCorrect else 0
+            timingMult = pick.points_multiplier if pick.points_multiplier is not None else 1.0
+            underdogMult = pick.underdog_multiplier if pick.underdog_multiplier is not None else 1.0
+            pick.points_earned = int(PICKEM_BASE_POINTS * timingMult * underdogMult) if isCorrect else 0
 
         self.session.flush()
         return len(picks)

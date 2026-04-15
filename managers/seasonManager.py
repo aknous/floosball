@@ -531,6 +531,12 @@ class SeasonManager:
             except Exception as e:
                 logger.error(f"Failed to auto-lock cards/rosters for week {self.currentSeason.currentWeek}: {e}")
 
+            # Auto-pick favorites for users who opted in
+            try:
+                self._autoPickFavorites(week['games'])
+            except Exception as e:
+                logger.error(f"Auto-pick favorites failed for week {self.currentSeason.currentWeek}: {e}")
+
             # Add game start highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
@@ -2917,6 +2923,12 @@ class SeasonManager:
                 logger.error(f"Failed to lock equipped cards for playoff round {currentRound}: {e}")
 
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
+
+            # Auto-pick favorites for users who opted in
+            try:
+                self._autoPickFavorites(playoffGamesList)
+            except Exception as e:
+                logger.error(f"Auto-pick favorites failed for playoff round {currentRound}: {e}")
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
@@ -5644,6 +5656,57 @@ class SeasonManager:
             return 28 + playoffRound
         week = self.currentSeason.currentWeek
         return week if isinstance(week, int) else 0
+
+    def _autoPickFavorites(self, games) -> None:
+        """Auto-submit picks for users with auto_pick_favorites enabled.
+        For each unpicked game, picks the higher-ELO team (home breaks ties).
+        Uses 1.0x timing (pre-game) and ELO-based favorite penalty."""
+        from constants import calculateUnderdogMultiplier
+        seasonNum = self.currentSeason.seasonNumber
+        week = self._getPickemWeek()
+        try:
+            from database.connection import get_session
+            from database.models import User
+            from database.repositories.pickem_repository import PickEmRepository
+            session = get_session()
+            try:
+                autoUsers = session.query(User).filter_by(auto_pick_favorites=True).all()
+                if not autoUsers:
+                    return
+
+                pickemRepo = PickEmRepository(session)
+                totalAutoPicks = 0
+                for user in autoUsers:
+                    existingPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
+                    pickedIndices = {p.game_index for p in existingPicks}
+                    for i, game in enumerate(games):
+                        if i in pickedIndices:
+                            continue
+                        homeTeam = game.homeTeam
+                        awayTeam = game.awayTeam
+                        homeElo = getattr(homeTeam, 'elo', 1500)
+                        awayElo = getattr(awayTeam, 'elo', 1500)
+                        # Pick the favorite (higher ELO); home breaks ties
+                        favoriteId = homeTeam.id if homeElo >= awayElo else awayTeam.id
+                        pickedIsHome = (favoriteId == homeTeam.id)
+                        underdogMult = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
+                        pickemRepo.submitPick(
+                            user.id, seasonNum, week, i,
+                            homeTeam.id, awayTeam.id, favoriteId,
+                            pointsMultiplier=1.0,
+                            underdogMultiplier=underdogMult,
+                        )
+                        totalAutoPicks += 1
+                session.commit()
+                if totalAutoPicks > 0:
+                    logger.info(f"Auto-picked {totalAutoPicks} favorites for {len(autoUsers)} users (week {week})")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error auto-picking favorites for week {week}: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
 
     def _resolvePickEmGame(self, gameIndex: int, game) -> None:
         """Resolve pick-em picks for a single game immediately when it ends."""

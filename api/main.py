@@ -3102,6 +3102,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailDayReport": user.email_day_report,
             "emailSeasonReport": user.email_season_report,
             "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
+            "autoPickFavorites": getattr(user, 'auto_pick_favorites', False),
             "isAdmin": getattr(user, 'is_admin', False),
         }
     finally:
@@ -3185,6 +3186,8 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
         if "teamFundingPct" in payload:
             pct = int(payload["teamFundingPct"])
             dbUser.team_funding_pct = max(0, min(100, pct))
+        if "autoPickFavorites" in payload:
+            dbUser.auto_pick_favorites = bool(payload["autoPickFavorites"])
         session.commit()
         return {
             "ok": True,
@@ -3192,6 +3195,7 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             "emailDayReport": dbUser.email_day_report,
             "emailSeasonReport": dbUser.email_season_report,
             "teamFundingPct": dbUser.team_funding_pct,
+            "autoPickFavorites": dbUser.auto_pick_favorites,
         }
     except Exception as e:
         session.rollback()
@@ -5908,7 +5912,8 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
-    from constants import PICKEM_QUARTER_MULTIPLIERS
+    from constants import (PICKEM_QUARTER_MULTIPLIERS, calculateUnderdogMultiplier,
+                           calculateCertaintyMultiplier, calculateWinProbMultiplier)
 
     sm = floosball_app.seasonManager
     currentSeason = sm.currentSeason
@@ -5928,16 +5933,33 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
             rawStatus = getattr(liveGame, 'status', None)
             statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
 
+            homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+            awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+
             if statusVal == 3:
                 pickable = False
                 currentMultiplier = 0.0
             elif statusVal == 2:
                 pickable = True
                 quarter = getattr(liveGame, 'currentQuarter', 1)
-                currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+                homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+                currentMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
             else:
                 pickable = True
                 currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
+            # Win-prob multiplier info: use live win prob for active, ELO for pre-game
+            if statusVal == 2:
+                liveWp = (getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0) / 100.0
+                underdogInfo = {
+                    "homeMultiplier": calculateWinProbMultiplier(liveWp),
+                    "awayMultiplier": calculateWinProbMultiplier(1.0 - liveWp),
+                }
+            else:
+                underdogInfo = {
+                    "homeMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, True),
+                    "awayMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, False),
+                }
 
             matchup = {
                 "gameIndex": i,
@@ -5947,7 +5969,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                     "abbr": liveGame.homeTeam.abbr,
                     "color": liveGame.homeTeam.color,
                     "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
-                    "elo": getattr(liveGame.homeTeam, 'elo', 1500),
+                    "elo": homeElo,
                 },
                 "awayTeam": {
                     "id": liveGame.awayTeam.id,
@@ -5955,12 +5977,14 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                     "abbr": liveGame.awayTeam.abbr,
                     "color": liveGame.awayTeam.color,
                     "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
-                    "elo": getattr(liveGame.awayTeam, 'elo', 1500),
+                    "elo": awayElo,
                 },
                 "userPick": None,
                 "pointsMultiplier": None,
+                "underdogMultiplier": None,
                 "pickable": pickable,
                 "currentMultiplier": currentMultiplier,
+                "underdogInfo": underdogInfo,
                 "result": None,
             }
             if statusVal == 3 and getattr(liveGame, 'winningTeam', None):
@@ -5987,6 +6011,9 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
             # Compare by enum value to avoid identity issues across module reloads
             statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
 
+            homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+            awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+
             # Determine per-game pickability and current multiplier
             if statusVal == 3:  # Final
                 pickable = False
@@ -5994,11 +6021,25 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
             elif statusVal == 2:  # Active
                 pickable = True
                 quarter = getattr(liveGame, 'currentQuarter', 1)
-                currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+                homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+                currentMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
             else:
                 # Scheduled (1) or not yet set
                 pickable = True
                 currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
+            # Win-prob multiplier info: use live win prob for active, ELO for pre-game
+            if statusVal == 2:
+                liveWp = (getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0) / 100.0
+                underdogInfo = {
+                    "homeMultiplier": calculateWinProbMultiplier(liveWp),
+                    "awayMultiplier": calculateWinProbMultiplier(1.0 - liveWp),
+                }
+            else:
+                underdogInfo = {
+                    "homeMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, True),
+                    "awayMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, False),
+                }
 
             matchup = {
                 "gameIndex": i,
@@ -6008,7 +6049,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                     "abbr": liveGame.homeTeam.abbr,
                     "color": liveGame.homeTeam.color,
                     "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
-                    "elo": getattr(liveGame.homeTeam, 'elo', 1500),
+                    "elo": homeElo,
                 },
                 "awayTeam": {
                     "id": liveGame.awayTeam.id,
@@ -6016,12 +6057,14 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                     "abbr": liveGame.awayTeam.abbr,
                     "color": liveGame.awayTeam.color,
                     "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
-                    "elo": getattr(liveGame.awayTeam, 'elo', 1500),
+                    "elo": awayElo,
                 },
                 "userPick": None,
                 "pointsMultiplier": None,
+                "underdogMultiplier": None,
                 "pickable": pickable,
                 "currentMultiplier": currentMultiplier,
+                "underdogInfo": underdogInfo,
                 "result": None,
             }
             # Attach result if game is final
@@ -6047,6 +6090,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                 if pick:
                     g["userPick"] = pick.picked_team_id
                     g["pointsMultiplier"] = pick.points_multiplier
+                    g["underdogMultiplier"] = pick.underdog_multiplier
                     if pick.correct is not None:
                         g["result"] = g.get("result") or {}
                         g["result"]["correct"] = pick.correct
@@ -6086,7 +6130,8 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
-    from constants import PICKEM_QUARTER_MULTIPLIERS
+    from constants import (PICKEM_QUARTER_MULTIPLIERS, calculateUnderdogMultiplier,
+                           calculateCertaintyMultiplier, calculateWinProbMultiplier)
 
     gameIndex = body.get("gameIndex")
     pickedTeamId = body.get("pickedTeamId")
@@ -6136,16 +6181,31 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
     if statusVal == 3:  # Final
         raise HTTPException(409, "This game has ended — pick cannot be changed")
 
-    # Determine multiplier based on game quarter
+    # Determine timing multiplier based on game quarter
+    homeTeamId = liveGame.homeTeam.id
+    awayTeamId = liveGame.awayTeam.id
+    isPreGame = (statusVal != 2)
+
     if statusVal == 2:  # Active
         quarter = getattr(liveGame, 'currentQuarter', 1)
-        pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+        homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+        pointsMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
     else:
         # Scheduled (pre-game) — full multiplier
         pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
 
-    homeTeamId = liveGame.homeTeam.id
-    awayTeamId = liveGame.awayTeam.id
+    # Win-prob multiplier: underdogs get bonus, favorites get penalty
+    homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+    awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+    pickedIsHome = (pickedTeamId == homeTeamId)
+
+    if statusVal == 2:  # Active — use live win probability
+        homeWinProbLive = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+        pickedWp = (homeWinProbLive / 100.0) if pickedIsHome else (1.0 - homeWinProbLive / 100.0)
+        underdogMultiplier = calculateWinProbMultiplier(pickedWp)
+    else:
+        # Pre-game — use ELO
+        underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
 
     if pickedTeamId not in (homeTeamId, awayTeamId):
         raise HTTPException(400, "pickedTeamId must be home or away team")
@@ -6159,8 +6219,22 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
             user.id, seasonNum, week, gameIndex,
             homeTeamId, awayTeamId, pickedTeamId,
             pointsMultiplier=pointsMultiplier,
+            underdogMultiplier=underdogMultiplier,
         )
         session.commit()
+
+        # Compute current underdogInfo so frontend can refresh display
+        if statusVal == 2:
+            liveWp = (getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0) / 100.0
+            currentUnderdogInfo = {
+                "homeMultiplier": calculateWinProbMultiplier(liveWp),
+                "awayMultiplier": calculateWinProbMultiplier(1.0 - liveWp),
+            }
+        else:
+            currentUnderdogInfo = {
+                "homeMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, True),
+                "awayMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, False),
+            }
 
         # Count how many picks user has made this week
         allPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
@@ -6169,7 +6243,9 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
                 "gameIndex": pick.game_index,
                 "pickedTeamId": pick.picked_team_id,
                 "pointsMultiplier": pick.points_multiplier,
+                "underdogMultiplier": pick.underdog_multiplier,
             },
+            "underdogInfo": currentUnderdogInfo,
             "weekProgress": {"picked": len(allPicks), "total": totalGames},
         })
     except ValueError as e:
