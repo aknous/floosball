@@ -6473,6 +6473,7 @@ def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAu
         equippedRepo = EquippedCardRepository(session)
         equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
+        posLabels = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
         cards = []
         for eq in equipped:
             template = eq.user_card.card_template
@@ -6481,7 +6482,7 @@ def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAu
                 "slotNumber": eq.slot_number,
                 "displayName": effectConfig.get("displayName", "Unknown"),
                 "edition": template.edition,
-                "position": template.position,
+                "position": posLabels.get(template.position, "??"),
                 "playerName": template.player_name,
                 "teamAbbr": getattr(template.team, 'abbr', '') if template.team else "",
                 "teamName": getattr(template.team, 'name', '') if template.team else "",

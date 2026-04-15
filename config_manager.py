@@ -94,6 +94,7 @@ class ConfigManager:
                 'clerkJwksUrl': os.environ.get('CLERK_JWKS_URL'),
                 'resendApiKey': os.environ.get('RESEND_API_KEY'),
                 'emailFrom': os.environ.get('EMAIL_FROM'),
+                'botApiKey': os.environ.get('BOT_API_KEY'),
             }
             for key, val in _envOverrides.items():
                 if val is not None:
