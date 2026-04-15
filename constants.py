@@ -286,3 +286,44 @@ PICKEM_WEEKLY_TOP_PCT_PRIZE = 3
 PICKEM_SEASON_PRIZES = {1: 75, 2: 50, 3: 25}
 PICKEM_SEASON_TOP_PCT = 0.25
 PICKEM_SEASON_TOP_PCT_PRIZE = 10
+
+# Win-probability multiplier (applies at any pick time)
+PICKEM_UNDERDOG_MAX = 3.0           # Max multiplier for extreme underdogs
+PICKEM_FAVORITE_MIN = 0.4           # Floor multiplier for heavy favorites
+PICKEM_UNDERDOG_EXPONENT = 1.2     # Power applied to underdog multipliers (>1 = EV edge)
+
+# Certainty-adjusted decay
+PICKEM_MIN_DECAY_FRACTION = 0.3     # 30% of normal decay applies even in close games
+
+
+def calculateWinProbMultiplier(pickedWinProb):
+    """Calculate payout multiplier from picked team's win probability (0.0-1.0).
+    Underdogs (< 50%) get > 1.0x bonus with EV edge via exponent.
+    Favorites (> 50%) get < 1.0x penalty at exactly fair odds."""
+    baseMult = 0.5 / max(pickedWinProb, 0.01)
+    if baseMult > 1.0:
+        rawMult = baseMult ** PICKEM_UNDERDOG_EXPONENT
+    else:
+        rawMult = baseMult
+    return round(max(PICKEM_FAVORITE_MIN, min(PICKEM_UNDERDOG_MAX, rawMult)), 2)
+
+
+def calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome):
+    """Calculate payout multiplier from pre-game ELO.
+    Underdogs get up to PICKEM_UNDERDOG_MAX, favorites down to PICKEM_FAVORITE_MIN."""
+    eloDiff = homeElo - awayElo
+    homeWp = 1.0 / (1.0 + 10 ** (-eloDiff / 400))
+    pickedWp = homeWp if pickedIsHome else (1.0 - homeWp)
+    return calculateWinProbMultiplier(pickedWp)
+
+
+def calculateCertaintyMultiplier(quarter, homeWinProb):
+    """Calculate points multiplier adjusted for game certainty.
+    Close games retain more value; blowouts decay faster. Pre-game always 1.0."""
+    if quarter == 0:
+        return 1.0
+    baseMult = PICKEM_QUARTER_MULTIPLIERS.get(quarter, 0.2)
+    certainty = min(1.0, max(0.0, abs(homeWinProb - 50.0) / 50.0))
+    fullDecay = 1.0 - baseMult
+    effectiveDecay = fullDecay * (PICKEM_MIN_DECAY_FRACTION + (1.0 - PICKEM_MIN_DECAY_FRACTION) * certainty)
+    return round(1.0 - effectiveDecay, 2)

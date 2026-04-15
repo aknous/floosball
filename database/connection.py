@@ -145,6 +145,39 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Discord linking columns (v0.9)
+        # Note: SQLite doesn't support UNIQUE in ALTER TABLE ADD COLUMN,
+        # so we add the column first, then create a unique index separately.
+        for col, colDef in [
+            ('discord_id', 'VARCHAR(30)'),
+            ('discord_dm_reminders', 'BOOLEAN DEFAULT 0'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added users.{col}")
+            except Exception:
+                conn.rollback()
+        try:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_discord_id ON users(discord_id)"))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+        # Pick-em underdog + auto-pick columns (v0.10)
+        try:
+            conn.execute(text("ALTER TABLE pick_em_picks ADD COLUMN underdog_multiplier REAL"))
+            conn.commit()
+            logger.info("  Migration: added pick_em_picks.underdog_multiplier")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN auto_pick_favorites BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added users.auto_pick_favorites")
+        except Exception:
+            conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [
