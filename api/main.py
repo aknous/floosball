@@ -4486,7 +4486,27 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, lookback)
                 if prevEquipped:
                     break
+            # Check if user qualifies for slot 6 this week (MVP or active powerup)
+            hasExtraSlotForCarry = False
+            if any(prev.slot_number == 6 for prev in prevEquipped):
+                from database.repositories.shop_repository import ShopPurchaseRepository
+                # Check for MVP card in the carry-forward set
+                for prev in prevEquipped:
+                    uc = session.get(UserCard, prev.user_card_id)
+                    if uc:
+                        tmpl = session.get(CardTemplate, uc.card_template_id)
+                        if tmpl and tmpl.classification and "mvp" in tmpl.classification:
+                            hasExtraSlotForCarry = True
+                            break
+                if not hasExtraSlotForCarry:
+                    shopRepo = ShopPurchaseRepository(session)
+                    activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeason, currentWeek)
+                    hasExtraSlotForCarry = activeSlot is not None
+
             for prev in prevEquipped:
+                # Skip slot 6 if user no longer qualifies for extra slot
+                if prev.slot_number == 6 and not hasExtraSlotForCarry:
+                    continue
                 # Verify card still exists and is active season
                 userCard = session.get(UserCard, prev.user_card_id)
                 if not userCard:

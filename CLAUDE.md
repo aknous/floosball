@@ -138,10 +138,21 @@ fly ssh console -C "touch /data/.fresh" && fly deploy  # Fresh start
 - Never use `FRESH_START` env var in prod — survives restarts
 
 ## Git Workflow
-- `feature/*` → `development` → `main`
+Three-tier branch strategy with seasonal cadence:
+
+```
+main              ← production (Fly.io)
+└── development   ← staging / integration
+     ├── hotfix/*      → merge to dev → main immediately (in-season fixes)
+     ├── next-season   → merge to dev when season ends (between-season changes)
+     └── feature/*     → long-term features, merge when ready
+```
+
 - Always merge (no rebase) into development and main
 - Tags: `vX.Y.Z` on both repos
-- Backend feature branch: `feature/card-game`
+- `hotfix/*`: urgent in-season fixes — branch from dev, merge to dev → main, deploy
+- `next-season`: accumulates gameplay/balance changes for next season
+- `feature/*`: larger features (e.g., `feature/defense-frontend`, `feature/player-reactions`)
 - Frontend feature branch: `feature/typescript-websocket-refactor`
 
 ## Files Not to Touch

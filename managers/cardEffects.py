@@ -589,7 +589,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
     "rng": "Random +{minFP}–{maxFP} FP each week",
-    "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th+={td4}",
+    "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged. Resets on swap",
     "spotlight_moment": "+{rewardValue} FP when your {posLabel} slot scores a TD. WR counts both slots combined",
@@ -805,13 +805,14 @@ STREAK_CONFIGS = {
 # doubles trigger frequency.
 CULTIVATION_TRIGGER_POOL = [
     # statPaths: list of (category, key) tuples — all are summed across roster players.
+    # chanceRate: per-trigger growth chance bonus (low-volume=5, high-volume=2)
     # pass_td counts for both QBs (passer) and WR/TEs (receiver) for double events.
-    {"event": "pass_td",      "label": "passing/receiving TDs",   "statPaths": [("passing_stats", "tds"), ("receiving_stats", "rcvTds")]},
-    {"event": "rush_td",      "label": "rushing TDs",             "statPaths": [("rushing_stats", "runTds")]},
-    {"event": "reception",    "label": "receptions",              "statPaths": [("receiving_stats", "receptions")]},
-    {"event": "fg_made",      "label": "field goals made",        "statPaths": [("kicking_stats", "fgs")]},
-    {"event": "carry",        "label": "rushing attempts",        "statPaths": [("rushing_stats", "carries")]},
-    {"event": "yac",          "label": "yards after catch",       "statPaths": [("receiving_stats", "yac")]},
+    {"event": "pass_td",      "label": "passing/receiving TDs",   "chanceRate": 5, "statPaths": [("passing_stats", "tds"), ("receiving_stats", "rcvTds")]},
+    {"event": "rush_td",      "label": "rushing TDs",             "chanceRate": 5, "statPaths": [("rushing_stats", "runTds")]},
+    {"event": "reception",    "label": "receptions",              "chanceRate": 2, "statPaths": [("receiving_stats", "receptions")]},
+    {"event": "fg_made",      "label": "field goals made",        "chanceRate": 5, "statPaths": [("kicking_stats", "fgs")]},
+    {"event": "carry",        "label": "rushing attempts",        "chanceRate": 2, "statPaths": [("rushing_stats", "carries")]},
+    {"event": "yac",          "label": "yards after catch",       "chanceRate": 1, "statPaths": [("receiving_stats", "yac")]},
 ]
 
 
@@ -1548,15 +1549,21 @@ def _computeRng(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeAvalanche(primary, ctx, cardPlayerId, eqId):
-    """Escalating FP per roster TD within a week. Each TD pays more than the last."""
-    gates = [primary.get("td1", 2), primary.get("td2", 4), primary.get("td3", 7), primary.get("td4", 11)]
+    """Escalating FP per roster TD within a week. First 3 TDs use fixed gates,
+    then TD4+ uses sqrt decay: td4 / sqrt(n-3) where n is the TD number."""
+    import math
+    gates = [primary.get("td1", 2), primary.get("td2", 4), primary.get("td3", 7)]
+    peakFP = primary.get("td4", 11)
     tds = ctx.rosterTotalTds
     if tds == 0:
         return EffectResult(equation="No roster TDs this week")
     totalFP = 0
     details = []
     for i in range(tds):
-        gateFP = gates[min(i, len(gates) - 1)]
+        if i < len(gates):
+            gateFP = gates[i]
+        else:
+            gateFP = round(peakFP / math.sqrt(i - 2), 1)
         totalFP += gateFP
         label = f"TD{i + 1}=+{gateFP}"
         details.append(label)
@@ -3366,6 +3373,15 @@ def _computeProsperity(primary, ctx, cardPlayerId, eqId):
     return EffectResult(floobits=0, equation=f"+{ceilingBonus} cap raise (effective cap: {newCap}F)")
 
 
+def _getCultivationChanceRate(triggerEvent, defaultRate):
+    """Look up the per-trigger chance rate from the trigger pool.
+    High-volume stats (carries, receptions, YAC) use lower rates."""
+    for t in CULTIVATION_TRIGGER_POOL:
+        if t["event"] == triggerEvent:
+            return t.get("chanceRate", defaultRate)
+    return defaultRate
+
+
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     """Growing chance — base FP that can permanently increase each week.
     streak_count tracks how many times the base has grown."""
@@ -3378,9 +3394,9 @@ def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     triggerEvent = primary.get("triggerEvent", "pass_td")
     triggerLabel = primary.get("triggerLabel", "events")
     triggerCount = _countCultivationTriggers(triggerEvent, ctx)
-    # Calculate growth chance
+    # Calculate growth chance — use trigger-specific rate (high-volume stats get lower rate)
     baseChance = primary.get("baseChance", 20)
-    chancePerTrigger = primary.get("chancePerTrigger", 5)
+    chancePerTrigger = _getCultivationChanceRate(triggerEvent, primary.get("chancePerTrigger", 5))
     growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
     nextFP = round(currentFP + growthFP, 1)
     triggerNote = f" ({triggerCount} {triggerLabel})" if triggerCount > 0 else ""
