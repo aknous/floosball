@@ -1212,6 +1212,7 @@ class PickEmPick(Base):
     points_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     underdog_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     points_earned: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -1225,3 +1226,80 @@ class PickEmPick(Base):
 
     def __repr__(self):
         return f"<PickEmPick(user={self.user_id}, S{self.season}W{self.week}, game={self.game_index}, picked={self.picked_team_id})>"
+
+
+class Achievement(Base):
+    """Achievement template — static definition of an unlockable goal."""
+    __tablename__ = "achievements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)  # programmatic lookup (e.g. "rookie", "prognosticator")
+    name: Mapped[str] = mapped_column(String(100), nullable=False)  # display name
+    description: Mapped[str] = mapped_column(String(300), nullable=False)
+    category: Mapped[str] = mapped_column(String(20), nullable=False)  # onboarding, guidance
+    scope: Mapped[str] = mapped_column(String(20), default="once", nullable=False)  # "once" | "per_season"
+    target: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # progress needed to complete
+    reward_config: Mapped[dict] = mapped_column(JSON, nullable=False)  # {floobits, packs:[slug], powerups:[slug], deferred}
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Achievement(key='{self.key}', name='{self.name}', scope='{self.scope}')>"
+
+
+class UserAchievement(Base):
+    """Per-user progress and completion state for an achievement.
+    season=0 for one-time ('once' scope) achievements; per_season achievements store
+    the season they were earned for, so users can re-earn them each year."""
+    __tablename__ = "user_achievements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    achievement_id: Mapped[int] = mapped_column(Integer, ForeignKey("achievements.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # when reward actually granted
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    achievement: Mapped["Achievement"] = relationship("Achievement")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "achievement_id", "season", name="uq_user_achievement_season"),
+        Index("idx_user_achievements_user", "user_id"),
+        Index("idx_user_achievements_achievement", "achievement_id"),
+    )
+
+    def __repr__(self):
+        return f"<UserAchievement(user={self.user_id}, achievement={self.achievement_id}, season={self.season}, progress={self.progress}, completed={self.completed_at is not None})>"
+
+
+class PendingReward(Base):
+    """A pack or powerup owed to a user. Created on achievement completion (or other grants).
+    Claimed via a dedicated endpoint — packs open like a regular pack, powerups activate as ShopPurchases.
+    available_at lets us defer rewards by timestamp (legacy). defer_until_season lets the
+    user choose to hold a pack reward until a future season — the claim endpoint blocks
+    until current season >= defer_until_season."""
+    __tablename__ = "pending_rewards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # "pack" | "powerup"
+    slug: Mapped[str] = mapped_column(String(30), nullable=False)  # pack name or powerup slug ("random" allowed)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g. "achievement:prognosticator"
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    defer_until_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_pending_rewards_user_claimed", "user_id", "claimed_at"),
+    )
+
+    def __repr__(self):
+        return f"<PendingReward(user={self.user_id}, {self.kind}={self.slug}, claimed={self.claimed_at is not None})>"

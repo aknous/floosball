@@ -293,6 +293,16 @@ class CurrencyRepository:
         )
         self.session.add(tx)
         self.session.flush()
+
+        # Achievement hook — Tycoon (per-season floobits). Requires season context;
+        # skip for achievement grants (avoids recursion) and for grants without a season.
+        if transactionType != "achievement" and season:
+            try:
+                from managers import achievementManager as _am
+                _am.onFloobitsEarned(self.session, userId, season)
+            except Exception:
+                pass  # never break a grant over an achievement hook
+
         return currency
 
     def spendFunds(self, userId: int, amount: int, transactionType: str,
@@ -315,6 +325,15 @@ class CurrencyRepository:
         )
         self.session.add(tx)
         self.session.flush()
+
+        # Achievement hook — Magnate (per-season floobits spent). Requires season context.
+        if season:
+            try:
+                from managers import achievementManager as _am
+                _am.onSeasonFloobitsSpent(self.session, userId, season)
+            except Exception:
+                pass  # never break a spend over an achievement hook
+
         return currency
 
     def getTransactions(self, userId: int, limit: int = 20, offset: int = 0) -> List[CurrencyTransaction]:

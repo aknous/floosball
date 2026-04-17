@@ -23,10 +23,12 @@ class PickEmRepository:
     def submitPick(self, userId: int, season: int, week: int, gameIndex: int,
                    homeTeamId: int, awayTeamId: int, pickedTeamId: int,
                    pointsMultiplier: float = 1.0,
-                   underdogMultiplier: float = 1.0) -> PickEmPick:
+                   underdogMultiplier: float = 1.0,
+                   isAuto: bool = False) -> PickEmPick:
         """Submit or update a pick. Only allowed if correct IS NULL (game not resolved).
         pointsMultiplier is set based on game quarter at time of pick.
         underdogMultiplier is set from pre-game ELO (only >1.0 for pre-game underdog picks).
+        isAuto flags auto-pick inserts; manual updates clear the flag.
         """
         existing = self.session.query(PickEmPick).filter_by(
             user_id=userId, season=season, week=week, game_index=gameIndex,
@@ -38,6 +40,9 @@ class PickEmRepository:
             existing.picked_team_id = pickedTeamId
             existing.points_multiplier = pointsMultiplier
             existing.underdog_multiplier = underdogMultiplier
+            # Manual updates override auto flag; auto-pick never overwrites an existing row
+            if not isAuto:
+                existing.is_auto = False
             self.session.flush()
             return existing
 
@@ -51,6 +56,7 @@ class PickEmRepository:
             picked_team_id=pickedTeamId,
             points_multiplier=pointsMultiplier,
             underdog_multiplier=underdogMultiplier,
+            is_auto=isAuto,
         )
         self.session.add(pick)
         self.session.flush()

@@ -55,6 +55,7 @@ def init_db():
     _runPendingMigrations()
     _seedPackTypes()
     _seedBetaAllowlist()
+    _seedAchievements()
     logger.info(f"Database initialized at {DB_PATH}")
 
 
@@ -171,6 +172,66 @@ def _runPendingMigrations():
             logger.info("  Migration: added pick_em_picks.underdog_multiplier")
         except Exception:
             conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE pick_em_picks ADD COLUMN is_auto BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added pick_em_picks.is_auto")
+        except Exception:
+            conn.rollback()
+
+        # Achievement scope + per-season (v0.10)
+        try:
+            conn.execute(text("ALTER TABLE achievements ADD COLUMN scope VARCHAR(20) DEFAULT 'once' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added achievements.scope")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_achievements ADD COLUMN season INTEGER DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_achievements.season")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE pending_rewards ADD COLUMN defer_until_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added pending_rewards.defer_until_season")
+        except Exception:
+            conn.rollback()
+
+        # Rename windfall_* achievement keys to racket_* (collision with card effect name)
+        try:
+            renameMap = {
+                "windfall_i": "racket_i",
+                "windfall_ii": "racket_ii",
+                "windfall_iii": "racket_iii",
+                "windfall_iv": "racket_iv",
+            }
+            totalRenamed = 0
+            for oldKey, newKey in renameMap.items():
+                # If the new key already exists (e.g. from a prior partial migration or fresh seed),
+                # delete the stale row instead of renaming on top of it.
+                exists = conn.execute(text(
+                    "SELECT 1 FROM achievements WHERE key = :k LIMIT 1"
+                ), {"k": newKey}).fetchone()
+                if exists:
+                    conn.execute(text(
+                        "DELETE FROM achievements WHERE key = :k"
+                    ), {"k": oldKey})
+                else:
+                    result = conn.execute(text(
+                        "UPDATE achievements SET key = :new WHERE key = :old"
+                    ), {"new": newKey, "old": oldKey})
+                    if result.rowcount:
+                        totalRenamed += result.rowcount
+            if totalRenamed:
+                conn.commit()
+                logger.info(f"  Migration: renamed {totalRenamed} windfall_* achievements to racket_*")
+            else:
+                conn.rollback()
+        except Exception as e:
+            conn.rollback()
+            logger.info(f"  Migration: windfall→racket rename skipped ({e})")
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN auto_pick_favorites BOOLEAN DEFAULT 0"))
             conn.commit()
@@ -608,6 +669,7 @@ def clear_db():
     _runPendingMigrations()
     _seedPackTypes()
     _seedBetaAllowlist()
+    _seedAchievements()
 
 
 def _seedPackTypes():
@@ -620,6 +682,175 @@ def _seedPackTypes():
         session.commit()
     except Exception:
         session.rollback()
+    finally:
+        session.close()
+
+
+def _seedAchievements():
+    """Seed achievement templates if they don't already exist.
+
+    Achievement keys are the canonical identifier used by achievementManager to
+    look up definitions. Safe to re-run — only inserts missing rows.
+    Reward config shape: {floobits, packs:[slug,...], powerups:[slug,...], deferred}
+    """
+    from database.models import Achievement
+    session = SessionLocal()
+    try:
+        defaults = [
+            # Onboarding — one-time milestones (floobit-only so the reward is always useful)
+            {"key": "rookie", "name": "New Fan", "category": "onboarding", "scope": "once", "sort_order": 10, "target": 1,
+             "description": "Pick a favorite team.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "prognosticator", "name": "Prognosticator", "category": "onboarding", "scope": "once", "sort_order": 20, "target": 1,
+             "description": "Submit your first prognostication.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "pack_popper", "name": "Pack Popper", "category": "onboarding", "scope": "once", "sort_order": 30, "target": 1,
+             "description": "Open your first card pack.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "field_general", "name": "Field General", "category": "onboarding", "scope": "once", "sort_order": 40, "target": 1,
+             "description": "Set your first fantasy roster.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "deck_builder", "name": "Deck Builder", "category": "onboarding", "scope": "once", "sort_order": 50, "target": 1,
+             "description": "Equip your first card.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "patron", "name": "Patron", "category": "onboarding", "scope": "once", "sort_order": 60, "target": 1,
+             "description": "Make your first team contribution.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            # Guidance — re-earn each season, pack/powerup rewards stay relevant
+            {"key": "sharp", "name": "Sharp", "category": "guidance", "scope": "per_season", "sort_order": 110, "target": 1,
+             "description": "Earn a Clairvoyant this season (hit the weekly points threshold in prognostications).",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            # Dedicated — manual pick weeks (auto-picks don't count)
+            {"key": "dedicated_i", "name": "Dedicated I", "category": "guidance", "scope": "per_season", "sort_order": 120, "target": 5,
+             "description": "Submit prognostications for 5 weeks this season (not counting autopicks).",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dedicated_ii", "name": "Dedicated II", "category": "guidance", "scope": "per_season", "sort_order": 121, "target": 10,
+             "description": "Submit prognostications for 10 weeks this season (not counting autopicks).",
+             "reward_config": {"floobits": 100, "packs": ["humble"], "powerups": [], "deferred": False}},
+            {"key": "dedicated_iii", "name": "Dedicated III", "category": "guidance", "scope": "per_season", "sort_order": 122, "target": 15,
+             "description": "Submit prognostications for 15 weeks this season (not counting autopicks).",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "dedicated_iv", "name": "Dedicated IV", "category": "guidance", "scope": "per_season", "sort_order": 123, "target": 20,
+             "description": "Submit prognostications for 20 weeks this season (not counting autopicks).",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "dedicated_v", "name": "Dedicated V", "category": "guidance", "scope": "per_season", "sort_order": 124, "target": 25,
+             "description": "Submit prognostications for 25 weeks this season (not counting autopicks).",
+             "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "dedicated_vi", "name": "Dedicated VI", "category": "guidance", "scope": "per_season", "sort_order": 125, "target": 28,
+             "description": "Submit prognostications every week of the regular season (not counting autopicks).",
+             "reward_config": {"floobits": 0, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            {"key": "curator", "name": "Curator", "category": "guidance", "scope": "per_season", "sort_order": 130, "target": 15,
+             "description": "Collect 15 unique cards this season.",
+             "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "tycoon", "name": "Tycoon", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 1000,
+             "description": "Earn 1,000 floobits in a single season.",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": ["random"], "deferred": False}},
+            {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
+             "description": "Set a fantasy roster for 20+ weeks of the regular season.",
+             "reward_config": {"floobits": 500, "packs": [], "powerups": ["random"], "deferred": False}},
+            # Banner Week tiers — FP earned in a single week
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 150,
+             "description": "Earn 150+ fantasy points in a single week.",
+             "reward_config": {"floobits": 50, "packs": ["humble"], "powerups": [], "deferred": False}},
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 200,
+             "description": "Earn 200+ fantasy points in a single week.",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 250,
+             "description": "Earn 250+ fantasy points in a single week.",
+             "reward_config": {"floobits": 100, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 300,
+             "description": "Earn 300+ fantasy points in a single week.",
+             "reward_config": {"floobits": 0, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            # Racket tiers — floobits earned from card effects in a single week
+            # (renamed from Windfall to avoid clashing with the card effect of the same name)
+            {"key": "racket_i", "name": "Racket I", "category": "guidance", "scope": "per_season", "sort_order": 190, "target": 50,
+             "description": "Earn 50+ floobits from card effects in a single week.",
+             "reward_config": {"floobits": 50, "packs": ["humble"], "powerups": [], "deferred": False}},
+            {"key": "racket_ii", "name": "Racket II", "category": "guidance", "scope": "per_season", "sort_order": 191, "target": 100,
+             "description": "Earn 100+ floobits from card effects in a single week.",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "racket_iii", "name": "Racket III", "category": "guidance", "scope": "per_season", "sort_order": 192, "target": 150,
+             "description": "Earn 150+ floobits from card effects in a single week.",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 200,
+             "description": "Earn 200+ floobits from card effects in a single week.",
+             "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Dynamo tiers — cumulative season fantasy points
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 1000,
+             "description": "Earn 1,000 total fantasy points this season.",
+             "reward_config": {"floobits": 50, "packs": ["humble"], "powerups": [], "deferred": False}},
+            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 2000,
+             "description": "Earn 2,000 total fantasy points this season.",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 3500,
+             "description": "Earn 3,500 total fantasy points this season.",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 5000,
+             "description": "Earn 5,000 total fantasy points this season.",
+             "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Oracle tiers — cumulative season prognostication points
+            {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
+             "description": "Earn 300 total prognostication points this season.",
+             "reward_config": {"floobits": 50, "packs": ["humble"], "powerups": [], "deferred": False}},
+            {"key": "oracle_ii", "name": "Oracle II", "category": "guidance", "scope": "per_season", "sort_order": 211, "target": 700,
+             "description": "Earn 700 total prognostication points this season.",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "oracle_iii", "name": "Oracle III", "category": "guidance", "scope": "per_season", "sort_order": 212, "target": 1200,
+             "description": "Earn 1,200 total prognostication points this season.",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "oracle_iv", "name": "Oracle IV", "category": "guidance", "scope": "per_season", "sort_order": 213, "target": 1800,
+             "description": "Earn 1,800 total prognostication points this season.",
+             "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Magnate tiers — cumulative season floobits spent
+            {"key": "magnate_i", "name": "Magnate I", "category": "guidance", "scope": "per_season", "sort_order": 220, "target": 500,
+             "description": "Spend 500 floobits this season.",
+             "reward_config": {"floobits": 50, "packs": ["humble"], "powerups": [], "deferred": False}},
+            {"key": "magnate_ii", "name": "Magnate II", "category": "guidance", "scope": "per_season", "sort_order": 221, "target": 1500,
+             "description": "Spend 1,500 floobits this season.",
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "magnate_iii", "name": "Magnate III", "category": "guidance", "scope": "per_season", "sort_order": 222, "target": 3000,
+             "description": "Spend 3,000 floobits this season.",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "magnate_iv", "name": "Magnate IV", "category": "guidance", "scope": "per_season", "sort_order": 223, "target": 5000,
+             "description": "Spend 5,000 floobits this season.",
+             "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "sparkler", "name": "Sparkler", "category": "guidance", "scope": "per_season", "sort_order": 170, "target": 1,
+             "description": "Open your first Diamond card of the season.",
+             "reward_config": {"floobits": 100, "packs": ["proper"], "powerups": [], "deferred": False}},
+            {"key": "perfect_week", "name": "Perfect Week", "category": "guidance", "scope": "per_season", "sort_order": 180, "target": 1,
+             "description": "Get every prognostication correct in a single week.",
+             "reward_config": {"floobits": 0, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+        ]
+        added = 0
+        updated = 0
+        # Template-level fields that are safe to refresh without resetting user progress.
+        # reward_config changes affect future grants only; already-completed achievements
+        # keep whatever reward the user received at the time of completion.
+        refreshFields = ("name", "description", "category", "scope", "target", "sort_order", "reward_config")
+        for d in defaults:
+            existing = session.query(Achievement).filter(Achievement.key == d["key"]).first()
+            if existing:
+                changed = False
+                for f in refreshFields:
+                    if getattr(existing, f) != d[f]:
+                        setattr(existing, f, d[f])
+                        changed = True
+                if changed:
+                    updated += 1
+                continue
+            session.add(Achievement(**d))
+            added += 1
+        if added or updated:
+            session.commit()
+            if added:
+                logger.info(f"  Seeded {added} achievement templates")
+            if updated:
+                logger.info(f"  Refreshed {updated} achievement templates")
+        else:
+            session.rollback()
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"  Achievement seed failed: {e}")
     finally:
         session.close()
 

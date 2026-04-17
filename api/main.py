@@ -119,7 +119,13 @@ def _areGamesScheduled() -> bool:
 async def startup_event():
     """Initialize the application on startup"""
     logger.info("Starting Floosball API server")
-    
+
+    # Register the running event loop so sync code (REST threadpool) can dispatch
+    # WebSocket broadcasts via run_coroutine_threadsafe.
+    import asyncio as _asyncio
+    from api.game_broadcaster import broadcaster as _broadcaster
+    _broadcaster.set_main_loop(_asyncio.get_running_loop())
+
     # The FloosballApplication will be injected by the main entry point
     # For now, log that we're ready
     logger.info("API server ready - waiting for FloosballApplication initialization")
@@ -2879,6 +2885,76 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
         session.close()
 
 
+@app.get("/api/admin/achievements")
+async def admin_achievements(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: per-achievement unlock counts and completion rates.
+
+    For `per_season` achievements, counts are scoped to the current season.
+    For `once` achievements, counts are all-time.
+    """
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    from database.connection import get_session
+    from database.models import Achievement, UserAchievement, User
+    from sqlalchemy import func
+
+    sm = floosball_app.seasonManager
+    seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        totalUsers = session.query(func.count(User.id)).scalar() or 0
+
+        # Count distinct users who completed each achievement, season-scoped for per_season
+        rows = (
+            session.query(
+                Achievement.id,
+                Achievement.key,
+                Achievement.name,
+                Achievement.category,
+                Achievement.scope,
+                Achievement.target,
+                Achievement.sort_order,
+                func.count(func.distinct(UserAchievement.user_id)).label("unlocks"),
+                func.coalesce(func.avg(UserAchievement.progress), 0).label("avgProgress"),
+            )
+            .outerjoin(
+                UserAchievement,
+                (UserAchievement.achievement_id == Achievement.id)
+                & (UserAchievement.completed_at.isnot(None))
+                & (
+                    ((Achievement.scope == "once") & (UserAchievement.season == 0))
+                    | ((Achievement.scope == "per_season") & (UserAchievement.season == seasonNum))
+                ),
+            )
+            .group_by(Achievement.id)
+            .order_by(Achievement.sort_order.asc())
+            .all()
+        )
+
+        achievements = [{
+            "id": r.id,
+            "key": r.key,
+            "name": r.name,
+            "category": r.category,
+            "scope": r.scope,
+            "target": r.target,
+            "unlocks": int(r.unlocks or 0),
+            "totalUsers": int(totalUsers),
+            "unlockPct": round(100.0 * (r.unlocks or 0) / totalUsers, 1) if totalUsers else 0.0,
+            "avgProgress": round(float(r.avgProgress or 0), 1),
+        } for r in rows]
+
+        return build_success_response({
+            "achievements": achievements,
+            "totalUsers": int(totalUsers),
+            "season": seasonNum,
+        })
+    finally:
+        session.close()
+
+
 from api.auth import getOptionalUser as _getOptionalUser
 from database.models import User as _User
 
@@ -3006,6 +3082,18 @@ def contribute_to_team(team_id: int, payload: Dict[str, Any], user: _User = Depe
 
     try:
         result = floosball_app.seasonManager.contributeToTeam(user.id, team_id, amount)
+        # Achievement hook — first team contribution
+        from database.connection import get_session as _getSessionPatron
+        from managers import achievementManager as _am
+        _s = _getSessionPatron()
+        try:
+            _am.onTeamContribution(_s, user.id)
+            _s.commit()
+        except Exception as _e:
+            _s.rollback()
+            logger.warning(f"Achievement hook failed (patron): {_e}")
+        finally:
+            _s.close()
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3270,10 +3358,14 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
 
         if offseason or dbUser.favorite_team_id is None:
             # Offseason or first-time pick: apply immediately
+            wasFirstTime = dbUser.favorite_team_id is None
             dbUser.favorite_team_id = req.teamId
             dbUser.pending_favorite_team_id = None
             if currentSeasonNum is not None and not offseason:
                 dbUser.favorite_team_locked_season = currentSeasonNum
+            if wasFirstTime:
+                from managers import achievementManager as _am
+                _am.onFavoriteTeamChosen(session, user.id)
             session.commit()
             return {"favoriteTeamId": req.teamId, "isPending": False, "favoriteTeamLockedSeason": dbUser.favorite_team_locked_season}
 
@@ -3651,6 +3743,9 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 player_id=rp.playerId,
                 slot=rp.slot,
             ))
+        # Achievement hook — first-time roster set
+        from managers import achievementManager as _am
+        _am.onFantasyRosterSet(session, user.id)
         session.commit()
         return build_success_response({"message": "Roster updated", "rosterId": roster.id})
     except HTTPException:
@@ -4739,6 +4834,11 @@ def setEquippedCards(
                 if eqCard:
                     eqCard.swap_bonus_active = True
 
+        # Achievement hook — first card equipped (only fires if the user actually has cards)
+        if req.cards:
+            from managers import achievementManager as _am
+            _am.onCardEquipped(session, user.id)
+
         session.commit()
 
         return build_success_response({"message": "Cards equipped"})
@@ -4842,6 +4942,13 @@ def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.openPack(session, user.id, req.packTypeId, currentSeason)
+        # Achievement hooks
+        from managers import achievementManager as _am
+        _am.onPackOpened(session, user.id)
+        _am.syncCuratorProgress(session, user.id, currentSeason)
+        # Sparkler: if any diamond-edition card dropped
+        if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
+            _am.onDiamondOpened(session, user.id, currentSeason)
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -6241,6 +6348,21 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
             pointsMultiplier=pointsMultiplier,
             underdogMultiplier=underdogMultiplier,
         )
+
+        # Achievement hooks — manual pick endpoint, so always counts as non-auto.
+        from managers import achievementManager as _am
+        from database.models import PickEmPick as _PickEmPick
+        from sqlalchemy import func, distinct
+        _am.onPickEmSubmitted(session, user.id, isAutoPick=False)
+        # Dedicated tiers: count distinct weeks (this season) with at least one manual pick.
+        manualWeeks = session.query(func.count(distinct(_PickEmPick.week))).filter(
+            _PickEmPick.user_id == user.id,
+            _PickEmPick.season == seasonNum,
+            _PickEmPick.is_auto.is_(False),
+        ).scalar() or 0
+        for _key in ("dedicated_i", "dedicated_ii", "dedicated_iii", "dedicated_iv", "dedicated_v", "dedicated_vi"):
+            _am.recordProgress(session, user.id, _key, absolute=manualWeeks, currentSeason=seasonNum)
+
         session.commit()
 
         # Compute current underdogInfo so frontend can refresh display
@@ -6677,6 +6799,164 @@ def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotA
 
 # ============================================================================
 # HEALTH CHECK
+# ============================================================================
+# ACHIEVEMENT ENDPOINTS
+# ============================================================================
+
+@app.get("/api/achievements")
+def listAchievements(user: _User = Depends(_getCurrentUser)):
+    """Return all achievements with the user's progress and completion state.
+    Lazily backfills onboarding achievements for existing users on first visit."""
+    from database.connection import get_session
+    from managers import achievementManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        try:
+            achievementManager.backfillOnboardingAchievements(session, user.id)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"Onboarding backfill failed for user {user.id}: {e}")
+        achievements = achievementManager.getUserAchievements(session, user.id, currentSeason)
+        unclaimed = achievementManager.getUnclaimedRewardCount(session, user.id, currentSeason)
+        return build_success_response({"achievements": achievements, "unclaimedRewards": unclaimed, "season": currentSeason})
+    finally:
+        session.close()
+
+
+@app.get("/api/achievements/pending-rewards")
+def listPendingRewards(user: _User = Depends(_getCurrentUser)):
+    """List unclaimed pack/powerup rewards the user has earned. Includes canDefer
+    flag for pack rewards when late-season deferral is currently offered."""
+    from database.connection import get_session
+    from managers import achievementManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        rewards = achievementManager.getPendingRewards(session, user.id, currentSeason, currentWeek)
+        return build_success_response({"rewards": rewards, "currentWeek": currentWeek, "season": currentSeason})
+    finally:
+        session.close()
+
+
+@app.post("/api/achievements/reward/{rewardId}/defer")
+def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
+    """Hold a pending pack reward until next season. Only allowed on packs,
+    only once per reward, and only while defer is currently offered (late regular season)."""
+    from database.connection import get_session
+    from database.models import PendingReward
+    from managers import achievementManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not currentSeason:
+        raise HTTPException(status_code=400, detail="No active season")
+    weeksLeft = max(0, achievementManager.REGULAR_SEASON_WEEKS - currentWeek)
+    if weeksLeft > achievementManager.DEFER_OFFER_WEEKS_REMAINING:
+        raise HTTPException(status_code=400, detail="Deferral only available late in the regular season")
+
+    session = get_session()
+    try:
+        reward = session.query(PendingReward).filter(
+            PendingReward.id == rewardId,
+            PendingReward.user_id == user.id,
+        ).first()
+        if not reward:
+            raise HTTPException(status_code=404, detail="Reward not found")
+        if reward.claimed_at is not None:
+            raise HTTPException(status_code=400, detail="Reward already claimed")
+        if reward.kind != "pack":
+            raise HTTPException(status_code=400, detail="Only pack rewards can be deferred")
+        if reward.defer_until_season is not None:
+            raise HTTPException(status_code=400, detail="Reward already deferred")
+        reward.defer_until_season = currentSeason + 1
+        session.commit()
+        return build_success_response({
+            "id": reward.id,
+            "deferUntilSeason": reward.defer_until_season,
+        })
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Defer reward failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to defer reward")
+    finally:
+        session.close()
+
+
+@app.post("/api/achievements/claim-reward/{rewardId}")
+def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
+    """Claim a pending pack or powerup earned via achievement.
+
+    Pack claims open the pack server-side and return the drawn cards.
+    Powerup claims are deferred to v2 (will return 501 for now).
+    """
+    from datetime import datetime
+    from database.connection import get_session
+    from database.models import PendingReward, PackType
+    from managers.cardManager import CardManager
+
+    session = get_session()
+    try:
+        reward = session.query(PendingReward).filter(
+            PendingReward.id == rewardId,
+            PendingReward.user_id == user.id,
+        ).first()
+        if not reward:
+            raise HTTPException(status_code=404, detail="Reward not found")
+        if reward.claimed_at is not None:
+            raise HTTPException(status_code=400, detail="Reward already claimed")
+        if reward.available_at > datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Reward not yet available")
+
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        # Respect user-selected deferral — blocks claim until the target season arrives.
+        if reward.defer_until_season is not None and currentSeason < reward.defer_until_season:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Reward deferred until season {reward.defer_until_season}",
+            )
+
+        if reward.kind == "pack":
+            packType = session.query(PackType).filter(PackType.name == reward.slug).first()
+            if not packType:
+                raise HTTPException(status_code=500, detail=f"Unknown pack type: {reward.slug}")
+            cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+            result = cardManager.openPack(
+                session, user.id, packType.id, currentSeason,
+                skipCurrency=True, source=reward.source,
+            )
+            reward.claimed_at = datetime.utcnow()
+            session.commit()
+            return build_success_response({"kind": "pack", **result})
+
+        if reward.kind == "powerup":
+            # v2: actually grant a ShopPurchase for the selected powerup
+            raise HTTPException(status_code=501, detail="Powerup claims not yet implemented")
+
+        raise HTTPException(status_code=500, detail=f"Unknown reward kind: {reward.kind}")
+    except HTTPException:
+        session.rollback()
+        raise
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Claim reward failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to claim reward")
+    finally:
+        session.close()
+
+
 # ============================================================================
 
 @app.get("/health")

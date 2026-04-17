@@ -253,6 +253,9 @@ class SeasonManager:
         # (users table is preserved but currency/cards are cleared)
         self._reprovisionExistingUsers()
 
+        # Release any deferred achievement rewards (e.g. Veteran → pack + powerup at next season)
+        self._processDeferredAchievements()
+
         # Persist season record early so startDate survives restarts
         self._saveSeasonToDatabase()
 
@@ -936,6 +939,10 @@ class SeasonManager:
         if not in_playoffs:
             self._awardWeeklyFpFloobits(self.currentSeason.seasonNumber, week)
 
+        # Achievement hook — Veteran (rosters set this regular-season week)
+        if not in_playoffs:
+            self._creditVeteranForWeek(self.currentSeason.seasonNumber)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
@@ -1515,6 +1522,12 @@ class SeasonManager:
                             f"Card Floobits for user {userId} week {week}: "
                             f"+{result.floobitsEarned} Floobits"
                         )
+                        # Achievement hook — Windfall tiers (floobits from card effects in a single week)
+                        try:
+                            from managers import achievementManager as _am
+                            _am.onWeeklyCardFloobits(session, userId, result.floobitsEarned, season)
+                        except Exception as _e:
+                            logger.warning(f"Windfall hook failed: {_e}")
 
                     # ─── Streak management ──────────────────────────────────
                     for eq in userEquipped:
@@ -4891,6 +4904,15 @@ class SeasonManager:
                         f'+{reward} Floobits ({int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP)',
                         data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward},
                     )
+                    # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
+                    try:
+                        from managers import achievementManager as _am
+                        _am.onWeeklyFantasyPoints(session, userId, int(weekFp), season)
+                        seasonFp = int(entry.get('seasonTotal', 0) or 0)
+                        if seasonFp > 0:
+                            _am.onSeasonFantasyPointsTotal(session, userId, seasonFp, season)
+                    except Exception as _e:
+                        logger.warning(f"FP achievement hooks failed: {_e}")
                     awarded += 1
                 session.commit()
                 if awarded:
@@ -5695,6 +5717,7 @@ class SeasonManager:
                             homeTeam.id, awayTeam.id, favoriteId,
                             pointsMultiplier=1.0,
                             underdogMultiplier=underdogMult,
+                            isAuto=True,
                         )
                         totalAutoPicks += 1
                 session.commit()
@@ -5732,6 +5755,51 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    def _processDeferredAchievements(self) -> None:
+        """Grant any deferred achievement rewards owed to users (e.g. Veteran at new season)."""
+        try:
+            from database.connection import get_session
+            from managers import achievementManager as _am
+            session = get_session()
+            try:
+                _am.processDeferredRewards(session)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Deferred achievement processing failed: {e}")
+            finally:
+                session.close()
+        except Exception:
+            pass
+
+    def _creditVeteranForWeek(self, season: int) -> None:
+        """Bump Veteran achievement progress for every user who had a fantasy
+        roster with at least one player this season when the week ended."""
+        try:
+            from database.connection import get_session
+            from database.models import FantasyRoster, FantasyRosterPlayer
+            from managers import achievementManager as _am
+            session = get_session()
+            try:
+                userIds = [
+                    r.user_id for r in session.query(FantasyRoster.user_id).filter(
+                        FantasyRoster.season == season,
+                        FantasyRoster.id.in_(
+                            session.query(FantasyRosterPlayer.roster_id).distinct()
+                        ),
+                    ).distinct().all()
+                ]
+                for uid in userIds:
+                    _am.onFantasyRosterWeekCompleted(session, uid, season)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Veteran achievement credit failed: {e}")
+            finally:
+                session.close()
+        except Exception:
+            pass  # never break week-end over an achievement hook
 
     def _resolvePickEmWeek(self, season: int, week: int) -> None:
         """Award Floobits and leaderboard prizes for the completed week.
@@ -5783,6 +5851,25 @@ class SeasonManager:
                             description=f'{weekLabel}: {totalPoints} pts ({correctCount}/{totalPicks} correct)',
                             season=season, week=week,
                         )
+
+                    # Achievement hook — Sharp (Clairvoyant this season)
+                    if isClairvoyant:
+                        from managers import achievementManager as _am
+                        _am.onClairvoyant(session, userId, season)
+
+                    # Achievement hook — Perfect Week (all picks correct)
+                    if correctCount == totalPicks and totalPicks > 0:
+                        from managers import achievementManager as _am2
+                        _am2.onPerfectPickEmWeek(session, userId, season)
+
+                    # Achievement hook — Oracle tiers (cumulative season points)
+                    try:
+                        from managers import achievementManager as _am3
+                        seasonPoints = pickemRepo.getUserSeasonStats(userId, season).get("totalPoints", 0) or 0
+                        if seasonPoints > 0:
+                            _am3.onSeasonPickemPointsTotal(session, userId, int(seasonPoints), season)
+                    except Exception as _e:
+                        logger.warning(f"Oracle hook failed: {_e}")
 
                     # 3. Notify each user
                     title = f'{weekLabel} Prognostications'
