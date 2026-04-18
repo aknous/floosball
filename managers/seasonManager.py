@@ -946,6 +946,10 @@ class SeasonManager:
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
+        # Secret achievements that span both FP + pick-em week totals
+        if not in_playoffs:
+            self._checkWeekEndSecrets(self.currentSeason.seasonNumber, week)
+
         # Unlock equipped cards now that week is over
         try:
             from database.connection import get_session as _getSession
@@ -1068,6 +1072,14 @@ class SeasonManager:
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
                     updated += 1
+                    # Secret — Arsenal (3+ swaps available at once)
+                    totalSwaps = (roster.swaps_available or 0) + (roster.purchased_swaps or 0)
+                    if totalSwaps >= 3:
+                        try:
+                            from managers import achievementManager as _am
+                            _am.unlockSecret(swapSession, roster.user_id, "arsenal")
+                        except Exception:
+                            pass
             swapSession.commit()
             swapSession.close()
             if updated > 0:
@@ -1447,6 +1459,14 @@ class SeasonManager:
                     totalFP = round(totalFP - weekRawFP, 2)
                     if totalFP < 0:
                         totalFP = 0.0
+
+                    # Achievement hook — Compound tiers (single-week total FPx)
+                    if multProduct > 1.0:
+                        try:
+                            from managers import achievementManager as _amCompound
+                            _amCompound.onWeeklyTotalFpMultiplier(session, userId, multProduct, season)
+                        except Exception as _e:
+                            logger.warning(f"Compound hook failed: {_e}")
 
                     # Persist FP bonus
                     if totalFP > 0 or result.floobitsEarned > 0:
@@ -3202,6 +3222,9 @@ class SeasonManager:
             )
             broadcaster.broadcast_sync('season', seasonEndEvent)
 
+        # Secret achievements that fire at season end (Sovereign, Soothsayer, Consecration)
+        self._checkSeasonEndSecrets(seasonNumber)
+
         logger.info(f"Season {seasonNumber} completed. Champion: {self.currentSeason.champion.name if self.currentSeason.champion else 'None'}")
     
     async def handleOffseason(self) -> None:
@@ -4768,6 +4791,34 @@ class SeasonManager:
                         f'You placed #{weekRank} on the Week {week} leaderboard! +{prize} Floobits',
                         data={'season': season, 'week': week, 'rank': weekRank, 'prize': prize},
                     )
+                    # Achievement hook — Podium tiers (top-3 weekly fantasy finishes)
+                    if weekRank <= 3:
+                        try:
+                            from managers import achievementManager as _am
+                            _am.onWeeklyFantasyPodium(session, userId, season)
+                        except Exception as _e:
+                            logger.warning(f"Podium hook failed: {_e}")
+
+                        # Secret hook — Giant Slayer (top-3 with every roster player ≤3★)
+                        try:
+                            from database.models import (
+                                FantasyRoster as _FR, FantasyRosterPlayer as _FRP, Player as _Player,
+                            )
+                            from api_response_builders import PlayerResponseBuilder as _PRB
+                            from managers import achievementManager as _amGS
+                            rosterRows = (
+                                session.query(_Player)
+                                .join(_FRP, _FRP.player_id == _Player.id)
+                                .join(_FR, _FR.id == _FRP.roster_id)
+                                .filter(_FR.user_id == userId, _FR.season == season)
+                                .all()
+                            )
+                            if len(rosterRows) >= 6 and all(
+                                _PRB.calculateStarRating(p.player_rating) <= 3 for p in rosterRows
+                            ):
+                                _amGS.unlockSecret(session, userId, "giant_slayer")
+                        except Exception as _e:
+                            logger.warning(f"Giant Slayer hook failed: {_e}")
                     awarded += 1
                     logger.info(f"Weekly leaderboard prize: user {userId} #{weekRank} = {prize} Floobits")
 
@@ -4911,6 +4962,10 @@ class SeasonManager:
                         seasonFp = int(entry.get('seasonTotal', 0) or 0)
                         if seasonFp > 0:
                             _am.onSeasonFantasyPointsTotal(session, userId, seasonFp, season)
+                        # Secret — Blank (≤20 FP with a full roster of 6)
+                        rosterSize = len(entry.get('players') or [])
+                        if rosterSize >= 6 and weekFp <= 20:
+                            _am.unlockSecret(session, userId, "blank")
                     except Exception as _e:
                         logger.warning(f"FP achievement hooks failed: {_e}")
                     awarded += 1
@@ -5506,6 +5561,13 @@ class SeasonManager:
             rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
             rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
 
+            # Achievement hook — Benefactor tiers (cumulative season contributions)
+            try:
+                from managers import achievementManager as _am
+                _am.onSeasonTeamContributions(session, userId, self.currentSeason.seasonNumber)
+            except Exception as _e:
+                logger.warning(f"Benefactor hook failed: {_e}")
+
             session.commit()
 
             # Re-read balance after spend
@@ -5680,9 +5742,15 @@ class SeasonManager:
         return week if isinstance(week, int) else 0
 
     def _autoPickFavorites(self, games) -> None:
-        """Auto-submit picks for users with auto_pick_favorites enabled.
-        For each unpicked game, picks the higher-ELO team (home breaks ties).
-        Uses 1.0x timing (pre-game) and ELO-based favorite penalty."""
+        """Auto-submit picks for users who opted into auto-pick.
+
+        Mode selection per user (users.auto_pick_mode):
+        - "off":       no auto-picks (user will submit manually or skip)
+        - "favorites": pick higher-ELO team (home breaks ties)
+        - "underdogs": pick lower-ELO team (away breaks ties)
+        - "random":    coin flip per game
+        Uses 1.0x timing (pre-game) and ELO-based underdog multiplier."""
+        import random as _random
         from constants import calculateUnderdogMultiplier
         seasonNum = self.currentSeason.seasonNumber
         week = self._getPickemWeek()
@@ -5692,13 +5760,16 @@ class SeasonManager:
             from database.repositories.pickem_repository import PickEmRepository
             session = get_session()
             try:
-                autoUsers = session.query(User).filter_by(auto_pick_favorites=True).all()
+                autoUsers = session.query(User).filter(
+                    User.auto_pick_mode.in_(("favorites", "underdogs", "random"))
+                ).all()
                 if not autoUsers:
                     return
 
                 pickemRepo = PickEmRepository(session)
                 totalAutoPicks = 0
                 for user in autoUsers:
+                    mode = user.auto_pick_mode or "off"
                     existingPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
                     pickedIndices = {p.game_index for p in existingPicks}
                     for i, game in enumerate(games):
@@ -5708,13 +5779,23 @@ class SeasonManager:
                         awayTeam = game.awayTeam
                         homeElo = getattr(homeTeam, 'elo', 1500)
                         awayElo = getattr(awayTeam, 'elo', 1500)
-                        # Pick the favorite (higher ELO); home breaks ties
-                        favoriteId = homeTeam.id if homeElo >= awayElo else awayTeam.id
-                        pickedIsHome = (favoriteId == homeTeam.id)
+
+                        if mode == "favorites":
+                            # Higher ELO, home breaks ties
+                            pickedId = homeTeam.id if homeElo >= awayElo else awayTeam.id
+                        elif mode == "underdogs":
+                            # Lower ELO, away breaks ties
+                            pickedId = awayTeam.id if awayElo <= homeElo else homeTeam.id
+                        elif mode == "random":
+                            pickedId = _random.choice((homeTeam.id, awayTeam.id))
+                        else:
+                            continue
+
+                        pickedIsHome = (pickedId == homeTeam.id)
                         underdogMult = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
                         pickemRepo.submitPick(
                             user.id, seasonNum, week, i,
-                            homeTeam.id, awayTeam.id, favoriteId,
+                            homeTeam.id, awayTeam.id, pickedId,
                             pointsMultiplier=1.0,
                             underdogMultiplier=underdogMult,
                             isAuto=True,
@@ -5722,10 +5803,10 @@ class SeasonManager:
                         totalAutoPicks += 1
                 session.commit()
                 if totalAutoPicks > 0:
-                    logger.info(f"Auto-picked {totalAutoPicks} favorites for {len(autoUsers)} users (week {week})")
+                    logger.info(f"Auto-picked {totalAutoPicks} games for {len(autoUsers)} users (week {week})")
             except Exception as e:
                 session.rollback()
-                logger.error(f"Error auto-picking favorites for week {week}: {e}")
+                logger.error(f"Error auto-picking for week {week}: {e}")
             finally:
                 session.close()
         except ImportError:
@@ -5801,6 +5882,208 @@ class SeasonManager:
         except Exception:
             pass  # never break week-end over an achievement hook
 
+    def _checkSeasonEndSecrets(self, season: int) -> None:
+        """Evaluate secrets that fire once a season concludes:
+        Sovereign (#1 fantasy), Soothsayer (#1 pick-em), Consecration (fav team wins)."""
+        try:
+            from database.connection import get_session
+            from database.models import User
+            from database.repositories.pickem_repository import PickEmRepository
+            from managers import achievementManager as _am
+
+            champTeamId = getattr(self.currentSeason.champion, 'id', None) if self.currentSeason else None
+
+            # Fantasy #1 — top seasonTotal from snapshot
+            sovereignUserId = None
+            try:
+                fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+                if fantasyTracker:
+                    snapshot = fantasyTracker.getSnapshot(season)
+                    entries = snapshot.get("entries", [])
+                    if entries:
+                        # entries are sorted by seasonTotal desc and ranked
+                        top = entries[0]
+                        if (top.get("seasonTotal") or 0) > 0:
+                            sovereignUserId = top.get("userId")
+            except Exception as e:
+                logger.warning(f"Sovereign lookup failed: {e}")
+
+            session = get_session()
+            try:
+                if sovereignUserId:
+                    _am.unlockSecret(session, sovereignUserId, "sovereign")
+
+                # Pick-em #1 — top total points for the season
+                try:
+                    pickemRepo = PickEmRepository(session)
+                    seasonBoard = pickemRepo.getSeasonLeaderboard(season)
+                    if seasonBoard:
+                        topUid, _corr, _tot, topPts = seasonBoard[0]
+                        if topPts and topPts > 0:
+                            _am.unlockSecret(session, topUid, "soothsayer")
+                except Exception as e:
+                    logger.warning(f"Soothsayer lookup failed: {e}")
+
+                # Consecration — every user whose favorite team is the champion
+                if champTeamId:
+                    for (uid,) in session.query(User.id).filter(
+                        User.favorite_team_id == champTeamId,
+                    ).all():
+                        _am.unlockSecret(session, uid, "consecration")
+
+                # Monk — never opened a pack all season (only for engaged users with a roster)
+                from database.models import (
+                    PackOpening, FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap,
+                    TeamSeasonStats, CurrencyTransaction,
+                )
+                from sqlalchemy import func
+                engagedUserRows = session.query(FantasyRoster.user_id).join(
+                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
+                ).filter(FantasyRoster.season == season).group_by(
+                    FantasyRoster.user_id,
+                ).having(func.count(FantasyRosterPlayer.id) >= 6).all()
+                engagedUserIds = {uid for (uid,) in engagedUserRows}
+
+                for uid in engagedUserIds:
+                    # Monk — zero packs this season
+                    packCount = session.query(func.count(PackOpening.id)).filter(
+                        PackOpening.user_id == uid,
+                    ).scalar() or 0
+                    # Filter by season: PackOpening doesn't store season directly. We join
+                    # via opened_at within this season, but simpler: check no pack_purchase
+                    # transactions this season.
+                    packTxCount = session.query(func.count(CurrencyTransaction.id)).filter(
+                        CurrencyTransaction.user_id == uid,
+                        CurrencyTransaction.season == season,
+                        CurrencyTransaction.transaction_type == "pack_purchase",
+                    ).scalar() or 0
+                    if packTxCount == 0:
+                        _am.unlockSecret(session, uid, "monk")
+
+                    # Stalwart — no roster swaps this season
+                    swapCount = session.query(func.count(FantasyRosterSwap.id)).filter(
+                        FantasyRosterSwap.user_id == uid,
+                        FantasyRosterSwap.season == season,
+                    ).scalar() or 0
+                    if swapCount == 0:
+                        _am.unlockSecret(session, uid, "stalwart")
+
+                # Faithful — favorite team missed playoffs 3 seasons in a row (this + prior 2)
+                if season >= 3:
+                    userFavTeams = session.query(User.id, User.favorite_team_id).filter(
+                        User.favorite_team_id.isnot(None),
+                    ).all()
+                    # Build a lookup of (team_id, season) -> made_playoffs for the relevant window
+                    relevantSeasons = [season, season - 1, season - 2]
+                    playoffRows = session.query(
+                        TeamSeasonStats.team_id,
+                        TeamSeasonStats.season,
+                        TeamSeasonStats.made_playoffs,
+                    ).filter(TeamSeasonStats.season.in_(relevantSeasons)).all()
+                    playoffMap = {
+                        (r.team_id, r.season): bool(r.made_playoffs)
+                        for r in playoffRows
+                    }
+                    for uid, favTid in userFavTeams:
+                        madeAny = any(
+                            playoffMap.get((favTid, s), False) for s in relevantSeasons
+                        )
+                        haveAllSeasons = all(
+                            (favTid, s) in playoffMap for s in relevantSeasons
+                        )
+                        if haveAllSeasons and not madeAny:
+                            _am.unlockSecret(session, uid, "faithful")
+
+                # Devotee — 100% team funding pct AND a season_end_tax contribution this season
+                devoteeUsers = session.query(User.id).filter(
+                    User.team_funding_pct == 100,
+                    User.favorite_team_id.isnot(None),
+                ).all()
+                for (uid,) in devoteeUsers:
+                    hasContribution = session.query(CurrencyTransaction.id).filter(
+                        CurrencyTransaction.user_id == uid,
+                        CurrencyTransaction.season == season,
+                        CurrencyTransaction.transaction_type == "season_end_tax",
+                        CurrencyTransaction.amount < 0,
+                    ).first()
+                    if hasContribution:
+                        _am.unlockSecret(session, uid, "devotee")
+
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Season-end secrets check failed: {e}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Season-end secrets setup failed: {e}")
+
+    def _checkWeekEndSecrets(self, season: int, week: int) -> None:
+        """Evaluate secret achievements that need week-end context (FP snapshot + pickem resolution).
+        Runs after both fantasy and pick-em have been finalized for the week."""
+        try:
+            from database.connection import get_session
+            from database.models import EquippedCard, PickEmPick, FantasyRoster, FantasyRosterPlayer
+            from sqlalchemy import func
+            from managers import achievementManager as _am
+
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            snapshot = fantasyTracker.getSnapshot(season) if fantasyTracker else {"entries": []}
+            entries = snapshot.get("entries", [])
+            # userId → weekTotal FP for this week
+            weekFpByUser = {e["userId"]: e.get("weekTotal", 0) for e in entries}
+
+            session = get_session()
+            try:
+                # Users with a FULL roster (5 players) this season
+                fullRosterRows = session.query(
+                    FantasyRoster.user_id,
+                    func.count(FantasyRosterPlayer.id).label("playerCount"),
+                ).join(
+                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
+                ).filter(
+                    FantasyRoster.season == season,
+                ).group_by(FantasyRoster.user_id).having(
+                    func.count(FantasyRosterPlayer.id) >= 6,
+                ).all()
+                fullRosterUserIds = {uid for uid, _cnt in fullRosterRows}
+
+                # Purist — full roster set this week with zero cards equipped
+                for uid in fullRosterUserIds:
+                    equippedCount = session.query(func.count(EquippedCard.id)).filter(
+                        EquippedCard.user_id == uid,
+                        EquippedCard.season == season,
+                        EquippedCard.week == week,
+                    ).scalar() or 0
+                    if equippedCount == 0:
+                        _am.unlockSecret(session, uid, "purist")
+
+                # Crescendo — Perfect Week AND 300+ FP in the same week
+                # Perfect Week = user had picks this week and all were correct.
+                # Aggregate per user, then compare in Python (portable across DBs).
+                from sqlalchemy import case
+                pickAgg = session.query(
+                    PickEmPick.user_id,
+                    func.count(PickEmPick.id).label("total"),
+                    func.sum(case((PickEmPick.correct == True, 1), else_=0)).label("correct"),
+                ).filter(
+                    PickEmPick.season == season,
+                    PickEmPick.week == week,
+                    PickEmPick.correct.isnot(None),
+                ).group_by(PickEmPick.user_id).all()
+                for uid, total, correct in pickAgg:
+                    if total > 0 and correct == total and weekFpByUser.get(uid, 0) >= 300:
+                        _am.unlockSecret(session, uid, "zenith")
+
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Week-end secrets check failed: {e}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Week-end secrets setup failed: {e}")
+
     def _resolvePickEmWeek(self, season: int, week: int) -> None:
         """Award Floobits and leaderboard prizes for the completed week.
         Individual game picks are already resolved by _resolvePickEmGame."""
@@ -5871,6 +6154,26 @@ class SeasonManager:
                     except Exception as _e:
                         logger.warning(f"Oracle hook failed: {_e}")
 
+                    # Secret hook — Contrarian (every MANUAL pick this week was on an underdog).
+                    # Auto-picks don't count either way: "auto_pick_mode = underdogs" would
+                    # otherwise unlock this trivially every week.
+                    try:
+                        from database.models import PickEmPick as _PEP
+                        from managers import achievementManager as _am4
+                        userPicks = session.query(_PEP).filter(
+                            _PEP.user_id == userId,
+                            _PEP.season == season,
+                            _PEP.week == week,
+                        ).all()
+                        # Require at least 2 picks, all manual, all on underdogs (multiplier > 1.0).
+                        if len(userPicks) >= 2 and all(
+                            not p.is_auto and (p.underdog_multiplier or 1.0) > 1.0
+                            for p in userPicks
+                        ):
+                            _am4.unlockSecret(session, userId, "contrarian")
+                    except Exception as _e:
+                        logger.warning(f"Contrarian hook failed: {_e}")
+
                     # 3. Notify each user
                     title = f'{weekLabel} Prognostications'
                     if isClairvoyant:
@@ -5895,6 +6198,13 @@ class SeasonManager:
                     weekRank = i + 1
                     if totalPoints <= 0:
                         continue
+                    # Achievement hook — Pundit tiers (top-3 weekly pick-em finishes)
+                    if weekRank <= 3:
+                        try:
+                            from managers import achievementManager as _am
+                            _am.onWeeklyPickemPodium(session, userId, season)
+                        except Exception as _e:
+                            logger.warning(f"Pundit hook failed: {_e}")
                     prize = PICKEM_WEEKLY_PRIZES.get(weekRank)
                     if prize is None and weekRank <= topCutoff and totalEntries >= 4:
                         prize = PICKEM_WEEKLY_TOP_PCT_PRIZE

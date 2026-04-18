@@ -248,18 +248,22 @@ def getUserAchievements(session: Session, userId: int, currentSeason: int = 0) -
         progress = ua.progress if ua else 0
         completedAt = ua.completed_at.isoformat() if ua and ua.completed_at else None
         claimedAt = ua.claimed_at.isoformat() if ua and ua.claimed_at else None
+        # Secret achievements: hide name/description/reward until unlocked.
+        # Caller can still see the count so they know secrets exist.
+        isSecret = ach.category == "secret"
+        isLocked = isSecret and completedAt is None
         out.append({
             "id": ach.id,
-            "key": ach.key,
-            "name": ach.name,
-            "description": ach.description,
+            "key": None if isLocked else ach.key,
+            "name": "???" if isLocked else ach.name,
+            "description": None if isLocked else ach.description,
             "category": ach.category,
             "scope": ach.scope,
-            "target": ach.target,
-            "progress": min(progress, ach.target),
+            "target": None if isLocked else ach.target,
+            "progress": 0 if isLocked else min(progress, ach.target),
             "completedAt": completedAt,
             "claimedAt": claimedAt,
-            "rewardConfig": ach.reward_config or {},
+            "rewardConfig": {} if isLocked else (ach.reward_config or {}),
         })
     return out
 
@@ -443,5 +447,59 @@ def onSeasonFloobitsSpent(session: Session, userId: int, currentSeason: int) -> 
     unlocked = []
     for key in ("magnate_i", "magnate_ii", "magnate_iii", "magnate_iv"):
         u = recordProgress(session, userId, key, absolute=int(spent), currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
+
+
+def onWeeklyFantasyPodium(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
+    """Podium tiers (I–IV) — fires when user places top 3 on a weekly fantasy leaderboard."""
+    unlocked = []
+    for key in ("podium_i", "podium_ii", "podium_iii", "podium_iv"):
+        u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
+
+
+def onWeeklyPickemPodium(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
+    """Pundit tiers (I–IV) — fires when user places top 3 on a weekly pick-em leaderboard."""
+    unlocked = []
+    for key in ("pundit_i", "pundit_ii", "pundit_iii", "pundit_iv"):
+        u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
+
+
+def unlockSecret(session: Session, userId: int, key: str) -> Optional[UserAchievement]:
+    """Unlock a one-time secret achievement. No-op if already unlocked."""
+    return recordProgress(session, userId, key, absolute=1)
+
+
+def onWeeklyTotalFpMultiplier(session: Session, userId: int, multProduct: float, currentSeason: int) -> List[UserAchievement]:
+    """Compound tiers (I–IV) — single-week total FP multiplier.
+    Targets are stored as mult × 100 (so target=120 represents a 1.2x gate)."""
+    # Encode the multiplier as int×100 to match the stored targets.
+    encoded = int(round(multProduct * 100))
+    unlocked = []
+    for key in ("compound_i", "compound_ii", "compound_iii", "compound_iv"):
+        u = recordProgress(session, userId, key, absolute=encoded, currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
+
+
+def onSeasonTeamContributions(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
+    """Benefactor tiers (I–IV) — cumulative floobits contributed to the user's team this season.
+    Sums CurrencyTransaction rows with type='team_contribution'."""
+    if not currentSeason:
+        return []
+    from database.models import CurrencyTransaction
+    from sqlalchemy import func
+    contributed = session.query(func.coalesce(func.sum(-CurrencyTransaction.amount), 0)).filter(
+        CurrencyTransaction.user_id == userId,
+        CurrencyTransaction.season == currentSeason,
+        CurrencyTransaction.transaction_type == "team_contribution",
+    ).scalar() or 0
+    unlocked = []
+    for key in ("benefactor_i", "benefactor_ii", "benefactor_iii", "benefactor_iv"):
+        u = recordProgress(session, userId, key, absolute=int(contributed), currentSeason=currentSeason)
         if u: unlocked.append(u)
     return unlocked

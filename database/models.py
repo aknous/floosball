@@ -608,7 +608,9 @@ class User(Base):
     email_season_report: Mapped[bool] = mapped_column(Boolean, default=True)
     discord_id: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
     discord_dm_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
-    auto_pick_favorites: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Auto-pick mode for pick-em: "off" | "favorites" | "underdogs" | "random".
+    # Replaces the old boolean auto_pick_favorites. Default "off" = user opts in manually.
+    auto_pick_mode: Mapped[str] = mapped_column(String(20), default="off", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -641,6 +643,9 @@ class FantasyRoster(Base):
     card_bonus_points: Mapped[float] = mapped_column(Float, default=0.0)
     swaps_available: Mapped[int] = mapped_column(Integer, default=0)
     purchased_swaps: Mapped[int] = mapped_column(Integer, default=0)
+    # Last week the user explicitly set their equipped-card slots via PUT. Used so an
+    # intentional "unequip everything" doesn't get undone by the GET auto-carry-forward.
+    last_equipped_set_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
