@@ -486,6 +486,13 @@ class SeasonManager:
                     'event': {'text': f'{self.currentSeason.currentWeekText} Starting Soon...'}
                 })
 
+            # Fire pre-game reminder 15 min before games start — bot uses this for
+            # DM reminders, since week_start may have fired hours earlier on
+            # cross-day transitions.
+            await self._firePreGameReminder(weekStartTime, self.currentSeason.currentWeek,
+                                            self.currentSeason.currentWeekText,
+                                            len(week.get('games', [])))
+
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
 
@@ -692,10 +699,13 @@ class SeasonManager:
             self.games_simulated_this_season += 1
 
             # Wire fantasy tracker callback for each player so FP generation
-            # flows through FantasyTracker (updates both _weekFP and gameStatsDict)
-            # Also tracks Q4/OT fantasy points for the Overtime card effect
+            # flows through FantasyTracker (updates both _weekFP and gameStatsDict).
+            # Skip for playoff games — fantasy is archived once the regular season ends,
+            # so playoff FP should NOT accumulate (keeps the leaderboard frozen and the
+            # bot's end-of-round reports from resurrecting fantasy data).
+            isPlayoffGame = bool(getattr(gameInstance, 'isPlayoff', False))
             fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
-            if fantasyTracker:
+            if fantasyTracker and not isPlayoffGame:
                 for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
                     for player in team.rosterDict.values():
                         if player:
@@ -1460,11 +1470,20 @@ class SeasonManager:
                     if totalFP < 0:
                         totalFP = 0.0
 
-                    # Achievement hook — Compound tiers (single-week total FPx)
-                    if multProduct > 1.0:
+                    # Achievement hook — Compound tiers (single-week FPx from cards only)
+                    # Exclude the synergy weekly modifier's contribution so the achievement
+                    # reflects card-driven multipliers, not a "free" modifier bonus.
+                    cardMultProduct = multProduct
+                    if userModifier == "synergy":
+                        uniquePositions = len(set(calcCtx.equippedCardPositions))
+                        if uniquePositions > 1:
+                            synergyMult = 1 + uniquePositions * 0.1
+                            if synergyMult > 0:
+                                cardMultProduct = multProduct / synergyMult
+                    if cardMultProduct > 1.0:
                         try:
                             from managers import achievementManager as _amCompound
-                            _amCompound.onWeeklyTotalFpMultiplier(session, userId, multProduct, season)
+                            _amCompound.onWeeklyTotalFpMultiplier(session, userId, cardMultProduct, season)
                         except Exception as _e:
                             logger.warning(f"Compound hook failed: {_e}")
 
@@ -2930,6 +2949,11 @@ class SeasonManager:
                     weekText=self.currentWeekText,
                     nextGameStartTime=nextStartIso,
                 ))
+
+            # Fire pre-game reminder 15 min before playoff games start
+            await self._firePreGameReminder(roundStartTime, 28 + currentRound,
+                                            self.currentWeekText,
+                                            len(playoffGamesList))
 
             # Wait for exact game start time
             await self.timingManager.waitForGamesStart(roundStartTime)
@@ -5853,6 +5877,43 @@ class SeasonManager:
                 session.close()
         except Exception:
             pass
+
+    async def _firePreGameReminder(self, gameStartTime: datetime.datetime, weekNumber: int,
+                                   weekText: str, gamesCount: int) -> None:
+        """Sleep until 15 min before game start, then broadcast games_starting_soon.
+
+        Decouples the reminder from week_start, which can fire up to 8 hours early on
+        cross-day transitions. Skips the event if we're already within the 15-min
+        window (e.g. catch-up mode, non-scheduled timing modes, tests)."""
+        if not (BROADCASTING_AVAILABLE and broadcaster.is_enabled()):
+            return
+        # Only meaningful in scheduled-mode (real-time) runs — other timing modes
+        # either compress or fast-forward and don't need a 15-min heads-up.
+        if not getattr(self.timingManager, '_isScheduledMode', False):
+            return
+        if getattr(self.timingManager, 'catchingUp', False):
+            return
+
+        reminderTime = gameStartTime - datetime.timedelta(minutes=15)
+        now = datetime.datetime.utcnow()
+        if now >= reminderTime:
+            # Past the window already — fire immediately so the bot still gets a signal.
+            pass
+        else:
+            while datetime.datetime.utcnow() < reminderTime:
+                await asyncio.sleep(self.timingManager.delays.get('daily_check', 30))
+
+        try:
+            event = SeasonEvent.gamesStartingSoon(
+                seasonNumber=self.currentSeason.seasonNumber,
+                weekNumber=weekNumber,
+                weekText=weekText,
+                gamesCount=gamesCount,
+                gameStartTime=gameStartTime.isoformat() + 'Z',
+            )
+            broadcaster.broadcast_sync('season', event)
+        except Exception as e:
+            logger.warning(f"Pre-game reminder broadcast failed: {e}")
 
     def _creditVeteranForWeek(self, season: int) -> None:
         """Bump Veteran achievement progress for every user who had a fantasy

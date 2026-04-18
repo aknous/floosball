@@ -4111,6 +4111,11 @@ def get_fantasy_snapshot(response: Response, season: Optional[int] = Query(defau
             {"season": None, "week": 0, "gamesActive": False, "entries": []}
         )
     snapshot = floosball_app.fantasyTracker.getSnapshot(season)
+    # Flag: once a season hits playoffs, fantasy is archived — the bot/UI can
+    # use this to skip rendering weekly leaderboard blocks during playoff rounds.
+    sm = floosball_app.seasonManager if floosball_app else None
+    inPlayoffs = bool(sm and sm.currentSeason and getattr(sm.currentSeason, 'currentPlayoffRound', None))
+    snapshot["fantasyActive"] = not inPlayoffs
     # If authenticated user has a modifier override, return their effective modifier
     if user and snapshot.get("modifier"):
         try:
@@ -6145,9 +6150,10 @@ def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
 @app.get("/api/gm/results")
 def get_gm_results(user: _User = Depends(_getCurrentUser)):
     """Get GM vote resolution results for user's favorite team."""
+    import json as _json
     from database.connection import get_session
     from database.repositories.gm_repository import GmVoteRepository
-    from database.models import User
+    from database.models import User, Player, Coach
 
     session = get_session()
     try:
@@ -6160,23 +6166,73 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
         voteRepo = GmVoteRepository(session)
         results = voteRepo.getResults(dbUser.favorite_team_id, currentSeason)
 
+        # Collect referenced player / coach IDs so we can resolve display names in two batched queries.
+        # target_player_id stores a Player.id for cut_player/resign_player and a Coach.id for hire_coach.
+        # sign_fa rows have no target_player_id but stash a list of player IDs in details.directives.
+        playerIds: set[int] = set()
+        coachIds: set[int] = set()
+        for r in results:
+            if r.vote_type == "hire_coach" and r.target_player_id:
+                coachIds.add(r.target_player_id)
+            elif r.target_player_id:
+                playerIds.add(r.target_player_id)
+            if r.vote_type == "sign_fa" and r.details:
+                try:
+                    d = _json.loads(r.details)
+                    for pid in d.get("directives") or []:
+                        if isinstance(pid, int):
+                            playerIds.add(pid)
+                except Exception:
+                    pass
+
+        playerNames: Dict[int, str] = {}
+        if playerIds:
+            for p in session.query(Player.id, Player.name).filter(Player.id.in_(playerIds)).all():
+                playerNames[p.id] = p.name
+        coachNames: Dict[int, str] = {}
+        if coachIds:
+            for c in session.query(Coach.id, Coach.name).filter(Coach.id.in_(coachIds)).all():
+                coachNames[c.id] = c.name
+
+        payload = []
+        for r in results:
+            # Resolve the primary target name based on vote type.
+            targetName: Optional[str] = None
+            if r.vote_type == "hire_coach" and r.target_player_id:
+                targetName = coachNames.get(r.target_player_id)
+            elif r.target_player_id:
+                targetName = playerNames.get(r.target_player_id)
+
+            # sign_fa: expand directives (ordered list of player IDs) into ordered names.
+            directiveNames: List[str] = []
+            if r.vote_type == "sign_fa" and r.details:
+                try:
+                    d = _json.loads(r.details)
+                    for pid in d.get("directives") or []:
+                        nm = playerNames.get(pid)
+                        if nm:
+                            directiveNames.append(nm)
+                except Exception:
+                    pass
+
+            payload.append({
+                "id": r.id,
+                "voteType": r.vote_type,
+                "targetPlayerId": r.target_player_id,
+                "targetName": targetName,
+                "directiveNames": directiveNames,
+                "totalVotes": r.total_votes,
+                "threshold": r.threshold,
+                "probability": r.success_probability,
+                "outcome": r.outcome,
+                "details": r.details,
+                "resolvedAt": r.resolved_at.isoformat() if r.resolved_at else None,
+            })
+
         return build_success_response({
             "teamId": dbUser.favorite_team_id,
             "season": currentSeason,
-            "results": [
-                {
-                    "id": r.id,
-                    "voteType": r.vote_type,
-                    "targetPlayerId": r.target_player_id,
-                    "totalVotes": r.total_votes,
-                    "threshold": r.threshold,
-                    "probability": r.success_probability,
-                    "outcome": r.outcome,
-                    "details": r.details,
-                    "resolvedAt": r.resolved_at.isoformat() if r.resolved_at else None,
-                }
-                for r in results
-            ],
+            "results": payload,
         })
     finally:
         session.close()

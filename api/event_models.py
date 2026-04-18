@@ -66,6 +66,11 @@ class EventType(Enum):
     # Pick-Em events
     PICKEM_RESULTS = "pickem_results"
 
+    # Pre-game reminder — fires exactly 15 min before games start each week/round.
+    # Use this (not week_start) for DM reminders; week_start can fire up to 8 hours
+    # early on cross-day transitions.
+    GAMES_STARTING_SOON = "games_starting_soon"
+
     # Achievements
     ACHIEVEMENT_UNLOCKED = "achievement_unlocked"
 
@@ -273,6 +278,25 @@ class SeasonEvent:
             'message': f"Season {seasonNumber} complete - Champion: {champion.get('name', 'TBD')}"
         }
     
+    @staticmethod
+    def gamesStartingSoon(seasonNumber: int, weekNumber: int, weekText: str = None,
+                          gamesCount: int = 0, gameStartTime: str = None) -> Dict[str, Any]:
+        """Fired 15 minutes before games actually start. Bot uses this for DM reminders
+        (week_start isn't reliable because it can fire up to 8 hours early on
+        cross-day transitions)."""
+        text = weekText or f'Week {weekNumber}'
+        event = {
+            'event': EventType.GAMES_STARTING_SOON.value,
+            'seasonNumber': seasonNumber,
+            'weekNumber': weekNumber,
+            'weekText': text,
+            'gamesCount': gamesCount,
+            'message': f"{text} games start in 15 minutes",
+        }
+        if gameStartTime:
+            event['gameStartTime'] = gameStartTime
+        return event
+
     @staticmethod
     def weekStart(seasonNumber: int, weekNumber: int, games: List[Dict] = None, weekText: str = None, modifier: str = None,
                   modifierInfo: dict = None, nextGameStartTime: str = None, gamesCount: int = None) -> Dict[str, Any]:
