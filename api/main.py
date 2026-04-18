@@ -119,7 +119,13 @@ def _areGamesScheduled() -> bool:
 async def startup_event():
     """Initialize the application on startup"""
     logger.info("Starting Floosball API server")
-    
+
+    # Register the running event loop so sync code (REST threadpool) can dispatch
+    # WebSocket broadcasts via run_coroutine_threadsafe.
+    import asyncio as _asyncio
+    from api.game_broadcaster import broadcaster as _broadcaster
+    _broadcaster.set_main_loop(_asyncio.get_running_loop())
+
     # The FloosballApplication will be injected by the main entry point
     # For now, log that we're ready
     logger.info("API server ready - waiting for FloosballApplication initialization")
@@ -2033,10 +2039,9 @@ def admin_search_players(q: str = Query(..., min_length=1),
 
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    pm = floosball_app.playerManager
     query = q.lower()
     results = []
-    for team in pm.allTeams:
+    for team in floosball_app.teamManager.teams:
         for p in team.roster:
             if query in p.name.lower():
                 results.append({
@@ -2879,6 +2884,76 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
         session.close()
 
 
+@app.get("/api/admin/achievements")
+async def admin_achievements(_auth: None = Depends(_checkAdminAuth)):
+    """Admin: per-achievement unlock counts and completion rates.
+
+    For `per_season` achievements, counts are scoped to the current season.
+    For `once` achievements, counts are all-time.
+    """
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    from database.connection import get_session
+    from database.models import Achievement, UserAchievement, User
+    from sqlalchemy import func
+
+    sm = floosball_app.seasonManager
+    seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        totalUsers = session.query(func.count(User.id)).scalar() or 0
+
+        # Count distinct users who completed each achievement, season-scoped for per_season
+        rows = (
+            session.query(
+                Achievement.id,
+                Achievement.key,
+                Achievement.name,
+                Achievement.category,
+                Achievement.scope,
+                Achievement.target,
+                Achievement.sort_order,
+                func.count(func.distinct(UserAchievement.user_id)).label("unlocks"),
+                func.coalesce(func.avg(UserAchievement.progress), 0).label("avgProgress"),
+            )
+            .outerjoin(
+                UserAchievement,
+                (UserAchievement.achievement_id == Achievement.id)
+                & (UserAchievement.completed_at.isnot(None))
+                & (
+                    ((Achievement.scope == "once") & (UserAchievement.season == 0))
+                    | ((Achievement.scope == "per_season") & (UserAchievement.season == seasonNum))
+                ),
+            )
+            .group_by(Achievement.id)
+            .order_by(Achievement.sort_order.asc())
+            .all()
+        )
+
+        achievements = [{
+            "id": r.id,
+            "key": r.key,
+            "name": r.name,
+            "category": r.category,
+            "scope": r.scope,
+            "target": r.target,
+            "unlocks": int(r.unlocks or 0),
+            "totalUsers": int(totalUsers),
+            "unlockPct": round(100.0 * (r.unlocks or 0) / totalUsers, 1) if totalUsers else 0.0,
+            "avgProgress": round(float(r.avgProgress or 0), 1),
+        } for r in rows]
+
+        return build_success_response({
+            "achievements": achievements,
+            "totalUsers": int(totalUsers),
+            "season": seasonNum,
+        })
+    finally:
+        session.close()
+
+
 from api.auth import getOptionalUser as _getOptionalUser
 from database.models import User as _User
 
@@ -3006,6 +3081,18 @@ def contribute_to_team(team_id: int, payload: Dict[str, Any], user: _User = Depe
 
     try:
         result = floosball_app.seasonManager.contributeToTeam(user.id, team_id, amount)
+        # Achievement hook — first team contribution
+        from database.connection import get_session as _getSessionPatron
+        from managers import achievementManager as _am
+        _s = _getSessionPatron()
+        try:
+            _am.onTeamContribution(_s, user.id)
+            _s.commit()
+        except Exception as _e:
+            _s.rollback()
+            logger.warning(f"Achievement hook failed (patron): {_e}")
+        finally:
+            _s.close()
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3102,7 +3189,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailDayReport": user.email_day_report,
             "emailSeasonReport": user.email_season_report,
             "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
-            "autoPickFavorites": getattr(user, 'auto_pick_favorites', False),
+            "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
             "isAdmin": getattr(user, 'is_admin', False),
         }
     finally:
@@ -3186,8 +3273,11 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
         if "teamFundingPct" in payload:
             pct = int(payload["teamFundingPct"])
             dbUser.team_funding_pct = max(0, min(100, pct))
-        if "autoPickFavorites" in payload:
-            dbUser.auto_pick_favorites = bool(payload["autoPickFavorites"])
+        if "autoPickMode" in payload:
+            mode = str(payload["autoPickMode"] or "off").lower()
+            if mode not in ("off", "favorites", "underdogs", "random"):
+                raise HTTPException(status_code=400, detail=f"Invalid autoPickMode: {mode}")
+            dbUser.auto_pick_mode = mode
         session.commit()
         return {
             "ok": True,
@@ -3195,7 +3285,7 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             "emailDayReport": dbUser.email_day_report,
             "emailSeasonReport": dbUser.email_season_report,
             "teamFundingPct": dbUser.team_funding_pct,
-            "autoPickFavorites": dbUser.auto_pick_favorites,
+            "autoPickMode": dbUser.auto_pick_mode,
         }
     except Exception as e:
         session.rollback()
@@ -3270,10 +3360,14 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
 
         if offseason or dbUser.favorite_team_id is None:
             # Offseason or first-time pick: apply immediately
+            wasFirstTime = dbUser.favorite_team_id is None
             dbUser.favorite_team_id = req.teamId
             dbUser.pending_favorite_team_id = None
             if currentSeasonNum is not None and not offseason:
                 dbUser.favorite_team_locked_season = currentSeasonNum
+            if wasFirstTime:
+                from managers import achievementManager as _am
+                _am.onFavoriteTeamChosen(session, user.id)
             session.commit()
             return {"favoriteTeamId": req.teamId, "isPending": False, "favoriteTeamLockedSeason": dbUser.favorite_team_locked_season}
 
@@ -3651,6 +3745,30 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 player_id=rp.playerId,
                 slot=rp.slot,
             ))
+        # Achievement hooks — first-time roster set + secrets (Shoestring, Homer)
+        from managers import achievementManager as _am
+        _am.onFantasyRosterSet(session, user.id)
+
+        # Inspect the submitted roster for secret conditions.
+        # Rosters have 6 default slots (QB/RB/WR1/WR2/TE/K); temp_flex powerup adds a 7th FLEX.
+        if req.players and len(req.players) >= 6:
+            from database.models import Player
+            from api_response_builders import PlayerResponseBuilder
+            playerIds = [rp.playerId for rp in req.players]
+            players = session.query(Player).filter(Player.id.in_(playerIds)).all()
+            if len(players) == len(req.players):
+                # Shoestring — every roster player rated 3 stars or lower
+                allLowStar = all(
+                    PlayerResponseBuilder.calculateStarRating(p.player_rating) <= 3
+                    for p in players
+                )
+                if allLowStar:
+                    _am.unlockSecret(session, user.id, "shoestring")
+                # Homer — every roster player on your favorite team
+                favTeamId = getattr(user, "favorite_team_id", None)
+                if favTeamId and all(p.team_id == favTeamId for p in players):
+                    _am.unlockSecret(session, user.id, "homer")
+
         session.commit()
         return build_success_response({"message": "Roster updated", "rosterId": roster.id})
     except HTTPException:
@@ -4477,8 +4595,17 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         equippedRepo = EquippedCardRepository(session)
         equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
+        # Has the user explicitly set (possibly empty) equipped cards for this week?
+        # If so, skip the auto-carry-forward so unequipping everything actually sticks.
+        _rosterForMarker = session.query(FantasyRoster).filter_by(
+            user_id=user.id, season=currentSeason,
+        ).first()
+        _explicitlySetThisWeek = bool(
+            _rosterForMarker and _rosterForMarker.last_equipped_set_week == currentWeek
+        )
+
         # Auto-carry forward: if no cards equipped this week, find the most recent week that has them
-        if not equipped and currentWeek > 1:
+        if not equipped and currentWeek > 1 and not _explicitlySetThisWeek:
             # If games are active, lockWeek() already ran — auto-carried cards must also be locked
             gamesActive = _areGamesStarted()
             prevEquipped = []
@@ -4678,7 +4805,10 @@ def setEquippedCards(
             for prev in previousEquipped
         }
 
-        # Clear existing and set new
+        # Clear existing and set new. Mark the roster so the GET auto-carry-forward
+        # doesn't un-do an intentional empty equip set.
+        if roster:
+            roster.last_equipped_set_week = currentWeek
         equippedRepo.deleteByUserWeek(user.id, currentSeason, currentWeek)
         for c in req.cards:
             equippedRepo.save(EquippedCard(
@@ -4722,6 +4852,13 @@ def setEquippedCards(
                 if uc and uc.last_swap_grant_cycle < swapCycle:
                     roster.swaps_available += 1
                     uc.last_swap_grant_cycle = swapCycle
+                    # Secret — Arsenal (3+ swaps available at once)
+                    if (roster.swaps_available or 0) + (roster.purchased_swaps or 0) >= 3:
+                        try:
+                            from managers import achievementManager as _amArs
+                            _amArs.unlockSecret(session, user.id, "arsenal")
+                        except Exception:
+                            pass
                     eqCard = session.query(EquippedCard).filter_by(
                         user_id=user.id, season=currentSeason, week=currentWeek,
                         user_card_id=ucId,
@@ -4738,6 +4875,20 @@ def setEquippedCards(
                 ).first()
                 if eqCard:
                     eqCard.swap_bonus_active = True
+
+        # Achievement hooks — first card equipped + Gilded (all Prismatic/Diamond full set)
+        if req.cards:
+            from managers import achievementManager as _am
+            _am.onCardEquipped(session, user.id)
+            # Gilded — full equipped set (5 or 6 slots, no empties) of Prismatic/Diamond cards
+            GILDED_EDITIONS = {"prismatic", "diamond"}
+            if len(req.cards) >= 5:
+                allGilded = all(
+                    (cardTemplates.get(c.userCardId) and cardTemplates[c.userCardId].edition in GILDED_EDITIONS)
+                    for c in req.cards
+                )
+                if allGilded:
+                    _am.unlockSecret(session, user.id, "gilded")
 
         session.commit()
 
@@ -4842,6 +4993,33 @@ def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.openPack(session, user.id, req.packTypeId, currentSeason)
+        # Achievement hooks
+        from managers import achievementManager as _am
+        _am.onPackOpened(session, user.id)
+        _am.syncCuratorProgress(session, user.id, currentSeason)
+        # Sparkler: if any diamond-edition card dropped
+        if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
+            _am.onDiamondOpened(session, user.id, currentSeason)
+
+        # Secret — Completist (all 4 editions of the same player this season)
+        try:
+            from database.models import UserCard as _UC, CardTemplate as _CT
+            from sqlalchemy import func
+            # For each player the user owns a card of this season, count distinct editions.
+            # Unlocks when any player has all 4 (base, holographic, prismatic, diamond).
+            editionRows = (
+                session.query(_CT.player_id, func.count(func.distinct(_CT.edition)).label("editionCount"))
+                .join(_UC, _UC.card_template_id == _CT.id)
+                .filter(_UC.user_id == user.id, _CT.season_created == currentSeason)
+                .group_by(_CT.player_id)
+                .having(func.count(func.distinct(_CT.edition)) >= 4)
+                .first()
+            )
+            if editionRows:
+                _am.unlockSecret(session, user.id, "completist")
+        except Exception as _e:
+            logger.warning(f"Completist hook failed: {_e}")
+
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -4903,6 +5081,34 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
     session = get_session()
     try:
         card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason)
+
+        # Secret — Sweep (bought every card in the current day's featured shop).
+        # Shop refreshes daily; the current batch shares the most recent generated_at.
+        try:
+            from database.models import FeaturedShopCard
+            from sqlalchemy import func
+            latestBatch = session.query(func.max(FeaturedShopCard.generated_at)).filter(
+                FeaturedShopCard.user_id == user.id,
+                FeaturedShopCard.season == currentSeason,
+            ).scalar()
+            if latestBatch:
+                total = session.query(func.count(FeaturedShopCard.id)).filter(
+                    FeaturedShopCard.user_id == user.id,
+                    FeaturedShopCard.season == currentSeason,
+                    FeaturedShopCard.generated_at == latestBatch,
+                ).scalar() or 0
+                purchased = session.query(func.count(FeaturedShopCard.id)).filter(
+                    FeaturedShopCard.user_id == user.id,
+                    FeaturedShopCard.season == currentSeason,
+                    FeaturedShopCard.generated_at == latestBatch,
+                    FeaturedShopCard.purchased == True,  # noqa: E712
+                ).scalar() or 0
+                if total >= 5 and purchased >= total:
+                    from managers import achievementManager as _am
+                    _am.unlockSecret(session, user.id, "sweep")
+        except Exception as _e:
+            logger.warning(f"Sweep hook failed: {_e}")
+
         session.commit()
         return build_success_response(card)
     except ValueError as e:
@@ -5001,6 +5207,27 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
             userId=user.id, itemSlug="shop_reroll", season=currentSeasonNum,
             week=currentWeek, pricePaid=cost,
         )
+
+        # Secret — Finicky (5 consecutive rerolls with no featured-card buys in between).
+        # We approximate "in a row" as 5 rerolls since the last card purchase.
+        try:
+            from database.models import ShopPurchase, CurrencyTransaction
+            lastCardBuy = session.query(CurrencyTransaction.created_at).filter(
+                CurrencyTransaction.user_id == user.id,
+                CurrencyTransaction.transaction_type == "card_purchase",
+            ).order_by(CurrencyTransaction.created_at.desc()).first()
+            rerollsQuery = session.query(ShopPurchase).filter(
+                ShopPurchase.user_id == user.id,
+                ShopPurchase.item_slug == "shop_reroll",
+            )
+            if lastCardBuy:
+                rerollsQuery = rerollsQuery.filter(ShopPurchase.created_at > lastCardBuy[0])
+            consecutive = rerollsQuery.count()
+            if consecutive >= 5:
+                from managers import achievementManager as _am
+                _am.unlockSecret(session, user.id, "finicky")
+        except Exception as _e:
+            logger.warning(f"Finicky hook failed: {_e}")
 
         # Regenerate featured cards
         cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
@@ -5326,6 +5553,13 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             roster.purchased_swaps += 1
             responseData["purchasedSwaps"] = roster.purchased_swaps
             responseData["totalSwapsAvailable"] = roster.swaps_available + roster.purchased_swaps
+            # Secret — Arsenal (3+ swaps available at once)
+            if (roster.swaps_available or 0) + (roster.purchased_swaps or 0) >= 3:
+                try:
+                    from managers import achievementManager as _amArs
+                    _amArs.unlockSecret(session, user.id, "arsenal")
+                except Exception:
+                    pass
 
         elif slug == "modifier_nullifier":
             modRepo.createOverride(
@@ -5349,6 +5583,21 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
         elif slug == "income_boost":
             responseData["expiresAtWeek"] = expiresAtWeek
             responseData["durationWeeks"] = itemInfo.get("durationWeeks", 4)
+
+        # Secret — Dabbler (purchased every type of power-up at least once, lifetime)
+        try:
+            from database.models import ShopPurchase
+            from sqlalchemy import func, distinct
+            powerupSlugs = set(POWERUP_CATALOG.keys())
+            distinctBought = session.query(func.count(distinct(ShopPurchase.item_slug))).filter(
+                ShopPurchase.user_id == user.id,
+                ShopPurchase.item_slug.in_(list(powerupSlugs)),
+            ).scalar() or 0
+            if distinctBought >= len(powerupSlugs):
+                from managers import achievementManager as _am
+                _am.unlockSecret(session, user.id, "dabbler")
+        except Exception as _e:
+            logger.warning(f"Dabbler hook failed: {_e}")
 
         session.commit()
         return build_success_response(responseData)
@@ -5536,6 +5785,21 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             voteType=req.voteType, costPaid=cost,
             targetPlayerId=req.targetPlayerId,
         )
+
+        # Secret hooks — Mutineer (max fire_coach votes, capped at GM_VOTES_PER_TYPE)
+        # and Tribune (spend the entire season vote budget, any mix of types).
+        try:
+            updatedCounts = voteRepo.getUserVoteCounts(user.id, currentSeason)
+            totalVotes = updatedCounts.get("total", 0)
+            fireVotes = (updatedCounts.get("perType") or {}).get("fire_coach", 0)
+            from managers import achievementManager as _am
+            if fireVotes >= GM_VOTES_PER_TYPE:
+                _am.unlockSecret(session, user.id, "mutineer")
+            if totalVotes >= GM_VOTES_PER_SEASON:
+                _am.unlockSecret(session, user.id, "tribune")
+        except Exception as _e:
+            logger.warning(f"Mutineer/Tribune hook failed: {_e}")
+
         session.commit()
 
         # Get current tally for response (use per-team engaged fan count)
@@ -6241,6 +6505,34 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
             pointsMultiplier=pointsMultiplier,
             underdogMultiplier=underdogMultiplier,
         )
+
+        # Achievement hooks — manual pick endpoint, so always counts as non-auto.
+        from managers import achievementManager as _am
+        from database.models import PickEmPick as _PickEmPick
+        from sqlalchemy import func, distinct
+        _am.onPickEmSubmitted(session, user.id, isAutoPick=False)
+        # Dedicated tiers: count distinct weeks (this season) with at least one manual pick.
+        manualWeeks = session.query(func.count(distinct(_PickEmPick.week))).filter(
+            _PickEmPick.user_id == user.id,
+            _PickEmPick.season == seasonNum,
+            _PickEmPick.is_auto.is_(False),
+        ).scalar() or 0
+        for _key in ("dedicated_i", "dedicated_ii", "dedicated_iii", "dedicated_iv", "dedicated_v", "dedicated_vi"):
+            _am.recordProgress(session, user.id, _key, absolute=manualWeeks, currentSeason=seasonNum)
+
+        # Cold-Blooded — picked against favorite team 5+ times this season
+        favTeamId = getattr(user, "favorite_team_id", None)
+        if favTeamId:
+            againstFav = session.query(func.count(_PickEmPick.id)).filter(
+                _PickEmPick.user_id == user.id,
+                _PickEmPick.season == seasonNum,
+                _PickEmPick.is_auto.is_(False),
+                ((_PickEmPick.home_team_id == favTeamId) | (_PickEmPick.away_team_id == favTeamId)),
+                _PickEmPick.picked_team_id != favTeamId,
+            ).scalar() or 0
+            if againstFav >= 5:
+                _am.unlockSecret(session, user.id, "cold_blooded")
+
         session.commit()
 
         # Compute current underdogInfo so frontend can refresh display
@@ -6677,6 +6969,164 @@ def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotA
 
 # ============================================================================
 # HEALTH CHECK
+# ============================================================================
+# ACHIEVEMENT ENDPOINTS
+# ============================================================================
+
+@app.get("/api/achievements")
+def listAchievements(user: _User = Depends(_getCurrentUser)):
+    """Return all achievements with the user's progress and completion state.
+    Lazily backfills onboarding achievements for existing users on first visit."""
+    from database.connection import get_session
+    from managers import achievementManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        try:
+            achievementManager.backfillOnboardingAchievements(session, user.id)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"Onboarding backfill failed for user {user.id}: {e}")
+        achievements = achievementManager.getUserAchievements(session, user.id, currentSeason)
+        unclaimed = achievementManager.getUnclaimedRewardCount(session, user.id, currentSeason)
+        return build_success_response({"achievements": achievements, "unclaimedRewards": unclaimed, "season": currentSeason})
+    finally:
+        session.close()
+
+
+@app.get("/api/achievements/pending-rewards")
+def listPendingRewards(user: _User = Depends(_getCurrentUser)):
+    """List unclaimed pack/powerup rewards the user has earned. Includes canDefer
+    flag for pack rewards when late-season deferral is currently offered."""
+    from database.connection import get_session
+    from managers import achievementManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        rewards = achievementManager.getPendingRewards(session, user.id, currentSeason, currentWeek)
+        return build_success_response({"rewards": rewards, "currentWeek": currentWeek, "season": currentSeason})
+    finally:
+        session.close()
+
+
+@app.post("/api/achievements/reward/{rewardId}/defer")
+def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
+    """Hold a pending pack reward until next season. Only allowed on packs,
+    only once per reward, and only while defer is currently offered (late regular season)."""
+    from database.connection import get_session
+    from database.models import PendingReward
+    from managers import achievementManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not currentSeason:
+        raise HTTPException(status_code=400, detail="No active season")
+    weeksLeft = max(0, achievementManager.REGULAR_SEASON_WEEKS - currentWeek)
+    if weeksLeft > achievementManager.DEFER_OFFER_WEEKS_REMAINING:
+        raise HTTPException(status_code=400, detail="Deferral only available late in the regular season")
+
+    session = get_session()
+    try:
+        reward = session.query(PendingReward).filter(
+            PendingReward.id == rewardId,
+            PendingReward.user_id == user.id,
+        ).first()
+        if not reward:
+            raise HTTPException(status_code=404, detail="Reward not found")
+        if reward.claimed_at is not None:
+            raise HTTPException(status_code=400, detail="Reward already claimed")
+        if reward.kind != "pack":
+            raise HTTPException(status_code=400, detail="Only pack rewards can be deferred")
+        if reward.defer_until_season is not None:
+            raise HTTPException(status_code=400, detail="Reward already deferred")
+        reward.defer_until_season = currentSeason + 1
+        session.commit()
+        return build_success_response({
+            "id": reward.id,
+            "deferUntilSeason": reward.defer_until_season,
+        })
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Defer reward failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to defer reward")
+    finally:
+        session.close()
+
+
+@app.post("/api/achievements/claim-reward/{rewardId}")
+def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
+    """Claim a pending pack or powerup earned via achievement.
+
+    Pack claims open the pack server-side and return the drawn cards.
+    Powerup claims are deferred to v2 (will return 501 for now).
+    """
+    from datetime import datetime
+    from database.connection import get_session
+    from database.models import PendingReward, PackType
+    from managers.cardManager import CardManager
+
+    session = get_session()
+    try:
+        reward = session.query(PendingReward).filter(
+            PendingReward.id == rewardId,
+            PendingReward.user_id == user.id,
+        ).first()
+        if not reward:
+            raise HTTPException(status_code=404, detail="Reward not found")
+        if reward.claimed_at is not None:
+            raise HTTPException(status_code=400, detail="Reward already claimed")
+        if reward.available_at > datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Reward not yet available")
+
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        # Respect user-selected deferral — blocks claim until the target season arrives.
+        if reward.defer_until_season is not None and currentSeason < reward.defer_until_season:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Reward deferred until season {reward.defer_until_season}",
+            )
+
+        if reward.kind == "pack":
+            packType = session.query(PackType).filter(PackType.name == reward.slug).first()
+            if not packType:
+                raise HTTPException(status_code=500, detail=f"Unknown pack type: {reward.slug}")
+            cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+            result = cardManager.openPack(
+                session, user.id, packType.id, currentSeason,
+                skipCurrency=True, source=reward.source,
+            )
+            reward.claimed_at = datetime.utcnow()
+            session.commit()
+            return build_success_response({"kind": "pack", **result})
+
+        if reward.kind == "powerup":
+            # v2: actually grant a ShopPurchase for the selected powerup
+            raise HTTPException(status_code=501, detail="Powerup claims not yet implemented")
+
+        raise HTTPException(status_code=500, detail=f"Unknown reward kind: {reward.kind}")
+    except HTTPException:
+        session.rollback()
+        raise
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Claim reward failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to claim reward")
+    finally:
+        session.close()
+
+
 # ============================================================================
 
 @app.get("/health")

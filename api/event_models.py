@@ -66,6 +66,9 @@ class EventType(Enum):
     # Pick-Em events
     PICKEM_RESULTS = "pickem_results"
 
+    # Achievements
+    ACHIEVEMENT_UNLOCKED = "achievement_unlocked"
+
     # System events
     ERROR = "error"
     INFO = "info"
@@ -354,6 +357,24 @@ class LeagueNewsEvent:
             'event': EventType.LEAGUE_NEWS.value,
             'text': text,
             'timestamp': datetime.now().isoformat()
+        }
+
+
+class AchievementEvent:
+    """Factory for per-user achievement events"""
+
+    @staticmethod
+    def unlocked(key: str, name: str, description: str, rewardConfig: Dict[str, Any],
+                 season: int) -> Dict[str, Any]:
+        """Sent to a specific user when they unlock an achievement."""
+        return {
+            'event': EventType.ACHIEVEMENT_UNLOCKED.value,
+            'timestamp': datetime.now().isoformat(),
+            'key': key,
+            'name': name,
+            'description': description,
+            'rewardConfig': rewardConfig or {},
+            'season': season,
         }
 
 

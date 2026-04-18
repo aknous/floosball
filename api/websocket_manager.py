@@ -143,6 +143,39 @@ class ConnectionManager:
         """Associate a user ID with a WebSocket connection."""
         self.connection_user_ids[websocket] = userId
 
+    async def send_to_user(self, userId: int, message: Dict[str, Any]) -> int:
+        """Send a message to every connection that has identified as this user.
+        Returns the number of sockets the message was sent to."""
+        targets = [ws for ws, uid in self.connection_user_ids.items() if uid == userId]
+        if not targets:
+            logger.info(f"send_to_user({userId}): no identified connections (event={message.get('event')})")
+            return 0
+        message.setdefault('timestamp', datetime.now().isoformat())
+        disconnected = []
+        sent = 0
+        for connection in targets:
+            try:
+                if connection.client_state.name != 'CONNECTED':
+                    disconnected.append(connection)
+                    continue
+                await connection.send_json(message)
+                sent += 1
+            except WebSocketDisconnect:
+                disconnected.append(connection)
+            except Exception as e:
+                logger.debug(f"send_to_user failed on one socket: {e}")
+                disconnected.append(connection)
+        # Best-effort cleanup — find the channel for each dead socket
+        for connection in disconnected:
+            meta = self.connection_metadata.get(connection, {})
+            ch = meta.get('channel') or next(
+                (c for c, conns in self.active_connections.items() if connection in conns),
+                None,
+            )
+            if ch:
+                self.disconnect(connection, ch)
+        return sent
+
     def get_channel_count(self, channel: str) -> int:
         """Get the number of active connections for a channel"""
         return len(self.active_connections.get(channel, set()))
