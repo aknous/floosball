@@ -283,6 +283,11 @@ GM_ACTIVE_WEEK = 22
 GM_FA_BALLOT_COST = 15
 GM_FA_BALLOT_MAX_RANKINGS = 18  # 6 roster slots × 3 ranked candidates each
 
+# Rookie draft ballot — single flat cost (GM_VOTE_COST is a per-type dict and
+# doesn't fit here). Slightly cheaper than FA ballot since it's a lower-stakes
+# preference than a full FA requisition.
+GM_ROOKIE_BALLOT_COST = 10
+
 # FA voting window duration (seconds)
 GM_FA_WINDOW_FAST = 30
 GM_FA_WINDOW_SEQUENTIAL = 180  # 3 minutes (for testing)

@@ -6630,14 +6630,14 @@ def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCur
     """Submit or update a ranked rookie-draft ballot.
 
     Window: opens when the Front Office opens (week >= GM_ACTIVE_WEEK) and
-    closes when the regular season ends (start of offseason). Reuses the
-    GM_VOTE_COST economy — first submission charges once; updates are free.
+    closes when the regular season ends (start of offseason). Flat
+    GM_ROOKIE_BALLOT_COST — first submission charges once; updates are free.
     """
     import json as _json
     from database.connection import get_session
     from database.models import User, GmVote
     from database.repositories.card_repositories import CurrencyRepository
-    from constants import GM_VOTE_COST, GM_ROOKIE_DRAFT_MAX_RANKINGS, GM_ACTIVE_WEEK
+    from constants import GM_ROOKIE_BALLOT_COST, GM_ROOKIE_DRAFT_MAX_RANKINGS, GM_ACTIVE_WEEK
 
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
@@ -6682,12 +6682,12 @@ def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCur
         if existing is None:
             currencyRepo = CurrencyRepository(session)
             result = currencyRepo.spendFunds(
-                user.id, GM_VOTE_COST, "gm_rookie_ballot",
+                user.id, GM_ROOKIE_BALLOT_COST, "gm_rookie_ballot",
                 "Rookie draft ballot", currentSeason,
             )
             if result is None:
                 raise HTTPException(400, "Insufficient Floobits")
-            costPaid = GM_VOTE_COST
+            costPaid = GM_ROOKIE_BALLOT_COST
             vote = GmVote(
                 user_id=user.id, team_id=teamId, season=currentSeason,
                 vote_type='draft_rookie', cost_paid=costPaid,
