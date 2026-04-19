@@ -125,6 +125,24 @@ FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMAL
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
 
+# ---- Prospect Pipeline ----
+# Prospects are drafted rookies stashed on the team's pipeline (not roster-eligible).
+# They develop each offseason via offseasonTraining(), same as active players, and
+# are eligible for promotion when a starter slot opens up.
+PROSPECT_SLOT_CAP_PER_POSITION = 2  # Each team may hold at most N prospects per position
+PROSPECT_DEVELOPMENT_WINDOW = 3     # Max offseasons a prospect can remain in the pipeline before forced release
+PROSPECT_PROMOTION_RATING_THRESHOLD = 70  # Fallback auto-promote if best prospect meets this rating
+ROOKIE_DRAFT_CLASS_SIZE = 24        # Rookies generated per offseason (one per team max)
+
+# ---- Retirement Risk Telegraphing ----
+# Surfaces during the season so fans can pre-vote replacements. Mirrors the actual
+# retirement chances used in seasonManager._processRosteredPlayerContracts.
+# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'forced'
+RETIREMENT_FORCED_SEASONS = 20      # Hard cap — no player plays past this
+RETIREMENT_HIGH_AGE_SEASONS = 15    # 70%+ chance band
+RETIREMENT_MID_AGE_SEASONS = 10     # 25-65% chance band
+RETIREMENT_EARLY_AGE_SEASONS = 7    # 5-10% chance band
+
 # ---- Player Fatigue ----
 BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
 FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate

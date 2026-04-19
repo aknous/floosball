@@ -3168,6 +3168,51 @@ def get_projected_funding(team_id: int):
         session.close()
 
 
+@app.get("/api/teams/{team_id}/retirement-watch")
+def get_team_retirement_watch(team_id: int):
+    """Players on this team's roster flagged by retirement risk.
+
+    Surfaces the same tiers used at offseason time so fans can see farewell-tour
+    candidates all season and pre-vote replacements. Returns only players with
+    non-'safe' risk (plus 'safe' vets close to the bubble are filtered out).
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    tm = floosball_app.teamManager
+    pm = floosball_app.playerManager
+    team = tm.getTeamById(team_id) if tm else None
+    if not team:
+        raise HTTPException(404, "Team not found")
+
+    watch = []
+    for position, player in team.rosterDict.items():
+        if player is None:
+            continue
+        risk = pm.computeRetirementRisk(player)
+        if risk == 'safe':
+            continue
+        watch.append({
+            "playerId": player.id,
+            "name": player.name,
+            "position": player.position.name if hasattr(player.position, 'name') else str(player.position),
+            "rosterSlot": position,
+            "rating": round(getattr(player, 'playerRating', 0), 1),
+            "seasonsPlayed": getattr(player, 'seasonsPlayed', 0),
+            "longevity": getattr(getattr(player, 'attributes', None), 'longevity', 0),
+            "termRemaining": getattr(player, 'termRemaining', 0),
+            "risk": risk,
+        })
+
+    # Sort by risk severity (most at-risk first), then by rating (higher = more impactful loss)
+    riskOrder = {'forced': 0, 'very_likely': 1, 'likely': 2, 'possible': 3}
+    watch.sort(key=lambda w: (riskOrder.get(w['risk'], 9), -w['rating']))
+
+    return build_success_response({
+        "teamId": team_id,
+        "watch": watch,
+    })
+
+
 @app.get("/api/users/me")
 def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
     """Get current user profile. Requires Bearer token."""

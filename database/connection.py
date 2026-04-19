@@ -282,6 +282,20 @@ def _runPendingMigrations():
                     logger.info(f"  Migration: added {tbl}.{col}")
                 except Exception:
                     conn.rollback()
+
+        # Prospect pipeline columns on players (feature/prospects-pipeline)
+        for col, colDef in [
+            ('is_prospect', 'BOOLEAN DEFAULT 0'),
+            ('is_undrafted', 'BOOLEAN DEFAULT 0'),
+            ('prospect_seasons', 'INTEGER DEFAULT 0'),
+            ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added players.{col}")
+            except Exception:
+                conn.rollback()
     finally:
         conn.close()
 

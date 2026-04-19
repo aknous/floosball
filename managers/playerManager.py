@@ -942,7 +942,44 @@ class PlayerManager:
         # Add to retirement lists
         self.retiredPlayers.append(player)
         self.newlyRetiredPlayers.append(player)
-    
+
+    def computeRetirementRisk(self, player) -> str:
+        """Classify a player's end-of-season retirement risk.
+
+        Mirrors the probability bands in seasonManager._processRosteredPlayerContracts
+        so the fan-facing 'retirement watch' matches what will actually happen. Returns:
+          - 'forced'      — hard cap, always retires regardless of contract
+          - 'very_likely' — age 15+ past longevity, expiring contract (90%)
+          - 'likely'      — age 10+ past longevity (65% contract-end / 25% mid-contract),
+                            OR age 15+ mid-contract (70%)
+          - 'possible'    — age 7+ past longevity (5-10% bands)
+          - 'safe'        — not yet eligible to retire
+        """
+        from constants import (
+            RETIREMENT_FORCED_SEASONS, RETIREMENT_HIGH_AGE_SEASONS,
+            RETIREMENT_MID_AGE_SEASONS, RETIREMENT_EARLY_AGE_SEASONS,
+        )
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        attrs = getattr(player, 'attributes', None)
+        longevity = getattr(attrs, 'longevity', 99) if attrs else 99
+        termRemaining = getattr(player, 'termRemaining', 1) or 0
+
+        # Hard cap: no one plays past this regardless of contract
+        if seasons >= RETIREMENT_FORCED_SEASONS:
+            return 'forced'
+        # Must be past longevity before any retirement check fires
+        if seasons <= longevity:
+            return 'safe'
+
+        expiring = termRemaining <= 1  # walk year or already expired
+        if seasons > RETIREMENT_HIGH_AGE_SEASONS:
+            return 'very_likely' if expiring else 'likely'  # 90% / 70%
+        if seasons > RETIREMENT_MID_AGE_SEASONS:
+            return 'likely' if expiring else 'possible'     # 65% / 25%
+        if seasons >= RETIREMENT_EARLY_AGE_SEASONS:
+            return 'possible'                                # 5% / 10%
+        return 'safe'
+
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
         """Promote retired player to Hall of Fame"""
         if player not in self.retiredPlayers:

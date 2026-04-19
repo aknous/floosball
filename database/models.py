@@ -139,6 +139,11 @@ class Player(Base):
     defensive_position: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     free_agent_years: Mapped[Optional[int]] = mapped_column(Integer)
     service_time: Mapped[Optional[str]] = mapped_column(String(20))
+    # Prospect pipeline (see constants.PROSPECT_*)
+    is_prospect: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
+    prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
+    drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
