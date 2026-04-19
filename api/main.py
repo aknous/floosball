@@ -6422,6 +6422,57 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 favTeam = t
                 break
 
+        # Build GM vote tallies so we can factor cut/resign sentiment into the
+        # "projected open slots" and "projected FA pool" calculations. A player
+        # with enough cut_player votes to meet quorum is likely leaving even
+        # if not in their walk year. A walk-year player with enough
+        # resign_player votes to meet quorum is likely staying.
+        from database.models import GmVote
+        from sqlalchemy import func as _func
+        from managers.gmManager import GmManager as _GmManager
+        _gm = _GmManager()
+
+        seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+
+        # Vote tallies per (team_id, vote_type, target_player_id)
+        voteRows = session.query(
+            GmVote.team_id, GmVote.vote_type, GmVote.target_player_id,
+            _func.count(GmVote.id).label('n'),
+        ).filter(
+            GmVote.season == seasonNum,
+            GmVote.vote_type.in_(['cut_player', 'resign_player']),
+        ).group_by(GmVote.team_id, GmVote.vote_type, GmVote.target_player_id).all()
+
+        # {(teamId, voteType, targetPlayerId): voteCount}
+        voteTally: Dict[tuple, int] = {
+            (r.team_id, r.vote_type, r.target_player_id): r.n
+            for r in voteRows
+        }
+
+        # Engaged-fan count per team for threshold calc
+        engagedPerTeam: Dict[int, int] = {}
+        engagedRows = session.query(
+            User.favorite_team_id,
+            _func.count(_func.distinct(GmVote.user_id)).label('n'),
+        ).join(GmVote, GmVote.user_id == User.id).filter(
+            GmVote.season == seasonNum,
+            User.favorite_team_id.isnot(None),
+        ).group_by(User.favorite_team_id).all()
+        for r in engagedRows:
+            engagedPerTeam[r.favorite_team_id] = r.n
+
+        def likelyCut(teamId: int, playerId: int) -> bool:
+            votes = voteTally.get((teamId, 'cut_player', playerId), 0)
+            if votes == 0: return False
+            threshold = _gm.calculateThreshold(engagedPerTeam.get(teamId, 0), 'cut_player')
+            return votes >= threshold
+
+        def likelyResigned(teamId: int, playerId: int) -> bool:
+            votes = voteTally.get((teamId, 'resign_player', playerId), 0)
+            if votes == 0: return False
+            threshold = _gm.calculateThreshold(engagedPerTeam.get(teamId, 0), 'resign_player')
+            return votes >= threshold
+
         openSlots = []
         slotPosMap = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
         if favTeam:
@@ -6429,22 +6480,41 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 rosterPlayer = favTeam.rosterDict.get(slot)
                 if rosterPlayer is None:
                     # Slot is actually open right now
-                    openSlots.append({"slot": slot, "position": posName, "projected": False})
-                elif getattr(rosterPlayer, 'termRemaining', 99) <= 1:
-                    # Current starter is in their walk year — slot will likely open
-                    # at offseason. Flag as projected so the UI can say "opening
-                    # next season" while the fan votes.
+                    openSlots.append({"slot": slot, "position": posName, "projected": False, "reason": "vacant"})
+                    continue
+
+                termRem = getattr(rosterPlayer, 'termRemaining', 99)
+                cutLikely = likelyCut(favTeam.id, rosterPlayer.id)
+                resignLikely = likelyResigned(favTeam.id, rosterPlayer.id)
+
+                # Slot opens if: player in walk year AND not likely re-signed,
+                # OR player has enough cut votes to be ratified (regardless of contract)
+                if cutLikely:
                     openSlots.append({
                         "slot": slot, "position": posName, "projected": True,
+                        "reason": "cut_vote_likely",
                         "incumbent": {
                             "id": rosterPlayer.id, "name": rosterPlayer.name,
                             "rating": round(rosterPlayer.playerRating, 1),
-                            "termRemaining": getattr(rosterPlayer, 'termRemaining', 0),
+                            "termRemaining": termRem,
                         },
                     })
+                elif termRem <= 1 and not resignLikely:
+                    # Walk-year player with no significant resign support —
+                    # slot will likely open at offseason
+                    openSlots.append({
+                        "slot": slot, "position": posName, "projected": True,
+                        "reason": "walk_year",
+                        "incumbent": {
+                            "id": rosterPlayer.id, "name": rosterPlayer.name,
+                            "rating": round(rosterPlayer.playerRating, 1),
+                            "termRemaining": termRem,
+                        },
+                    })
+                # else: slot stays filled — either multi-year contract, or walk-year
+                # but board has pushed for re-signing
 
-        # Get season number for stats lookup
-        seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+        # seasonNum was computed above alongside the vote tallies
 
         # Build stats lookup for all FA player IDs
         faPlayerIds = [p.id for p in pm.freeAgents]
@@ -6500,53 +6570,64 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "isProjected": False,
             })
 
-        # Projected FAs: rostered players on OTHER teams (not the fan's team)
-        # whose contracts are in their walk year. These players will likely be
-        # FA at season end and fans can queue up votes on them now.
+        # Projected FAs: rostered players on OTHER teams whose contracts are
+        # ending OR who have enough cut votes to likely be cut. Walk-year
+        # players whose board is likely to re-sign them are excluded — they
+        # probably won't hit FA.
+        def isProjectedFa(teamId: int, rp) -> tuple:
+            """Returns (include, reason) — include=True means put them in the pool.
+            reason is 'walk_year' or 'cut_vote' for UI context.
+            """
+            termRem = getattr(rp, 'termRemaining', 99)
+            pid = rp.id
+            if likelyCut(teamId, pid):
+                return (True, 'cut_vote')
+            if termRem <= 1 and not likelyResigned(teamId, pid):
+                return (True, 'walk_year')
+            return (False, None)
+
         if teamManager:
-            # Need stats for projected players too for the UI to show over/underperformance
-            projectedIds = []
+            # Pre-collect eligible projected IDs so we can batch-fetch stats
+            projectedEntries = []  # (team, rp, reason)
             for team in teamManager.teams:
                 if favTeam and team.id == favTeam.id:
                     continue  # Fans can't draft their own roster
                 for pos, rp in team.rosterDict.items():
                     if rp is None:
                         continue
-                    if getattr(rp, 'termRemaining', 99) <= 1:
-                        projectedIds.append(rp.id)
+                    include, reason = isProjectedFa(team.id, rp)
+                    if include:
+                        projectedEntries.append((team, rp, reason))
+
             projStatsRows = {}
-            if projectedIds:
+            if projectedEntries:
+                projIds = [rp.id for _t, rp, _r in projectedEntries]
                 rows = session.query(PlayerSeasonStats).filter(
-                    PlayerSeasonStats.player_id.in_(projectedIds),
+                    PlayerSeasonStats.player_id.in_(projIds),
                     PlayerSeasonStats.season == seasonNum,
                 ).all()
                 for r in rows:
                     projStatsRows[r.player_id] = r
-            for team in teamManager.teams:
-                if favTeam and team.id == favTeam.id:
-                    continue
-                for pos, rp in team.rosterDict.items():
-                    if rp is None:
-                        continue
-                    if getattr(rp, 'termRemaining', 99) > 1:
-                        continue
-                    posName = rp.position.name
-                    perfRating = getattr(rp, 'seasonPerformanceRating', 0) or 0
-                    overallRating = round(rp.playerRating)
-                    players.append({
-                        "id": rp.id,
-                        "name": rp.name,
-                        "position": posName,
-                        "rating": round(rp.playerRating, 1),
-                        "tier": rp.playerTier.name,
-                        "performanceRating": perfRating,
-                        "ratingDelta": perfRating - overallRating,
-                        "stats": formatStats(projStatsRows.get(rp.id), posName),
-                        "isRookie": False,
-                        "isProspect": False,
-                        "isProjected": True,
-                        "currentTeam": team.abbr,
-                    })
+
+            for team, rp, reason in projectedEntries:
+                posName = rp.position.name
+                perfRating = getattr(rp, 'seasonPerformanceRating', 0) or 0
+                overallRating = round(rp.playerRating)
+                players.append({
+                    "id": rp.id,
+                    "name": rp.name,
+                    "position": posName,
+                    "rating": round(rp.playerRating, 1),
+                    "tier": rp.playerTier.name,
+                    "performanceRating": perfRating,
+                    "ratingDelta": perfRating - overallRating,
+                    "stats": formatStats(projStatsRows.get(rp.id), posName),
+                    "isRookie": False,
+                    "isProspect": False,
+                    "isProjected": True,
+                    "projectedReason": reason,  # 'walk_year' or 'cut_vote'
+                    "currentTeam": team.abbr,
+                })
 
         # Include the favorite team's prospects as ballot candidates too, so fans
         # can rank "promote this prospect" alongside "sign this FA" in a single
