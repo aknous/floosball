@@ -1212,6 +1212,7 @@ class TeamManager:
             dbCoach.aggressiveness = team.coach.aggressiveness
             dbCoach.clock_management = team.coach.clockManagement
             dbCoach.player_development = team.coach.playerDevelopment
+            dbCoach.scouting = getattr(team.coach, 'scouting', 80)
             dbCoach.overall_rating = team.coach.overallRating
             self.db_session.flush()
             team.coach.id = dbCoach.id
@@ -1252,6 +1253,7 @@ class TeamManager:
             coach.aggressiveness = dbCoach.aggressiveness
             coach.clockManagement = dbCoach.clock_management
             coach.playerDevelopment = dbCoach.player_development
+            coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
             team.coach = coach
             # Remove coach name from unused pool so no future player gets it
             if coach.name in self._coachNamePool:
@@ -1312,6 +1314,7 @@ class TeamManager:
                     aggressiveness=coach.aggressiveness,
                     clock_management=coach.clockManagement,
                     player_development=coach.playerDevelopment,
+                    scouting=getattr(coach, 'scouting', 80),
                     overall_rating=coach.overallRating,
                 )
                 self.db_session.add(dbCoach)
@@ -1346,6 +1349,7 @@ class TeamManager:
         coach.aggressiveness = dbCoach.aggressiveness
         coach.clockManagement = dbCoach.clock_management
         coach.playerDevelopment = dbCoach.player_development
+        coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
         team.coach = coach
         dbCoach.team_id = team.id
         self.db_session.flush()

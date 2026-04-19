@@ -134,7 +134,22 @@ FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MAR
 PROSPECT_SLOT_CAP_PER_POSITION = 2  # Each team may hold at most N prospects per position
 PROSPECT_DEVELOPMENT_WINDOW = 3     # Max offseasons a prospect can remain in the pipeline before forced release
 PROSPECT_PROMOTION_RATING_THRESHOLD = 70  # Fallback auto-promote if best prospect meets this rating
-ROOKIE_DRAFT_CLASS_SIZE = 24        # Rookies generated per offseason (one per team max)
+ROOKIE_DRAFT_CLASS_SIZE = 24        # Rookies generated per season (one per team max)
+
+# ---- Rookie Scouting ----
+# Rookie class is generated at season start; fans can scout + vote on prospects
+# all season. Scouting accuracy = coach.scouting + funding tier bonus, and
+# determines how wide the potential-attribute range is in the scouted view.
+# Scouting band → potential attribute ± range (wider = less certain):
+SCOUTING_BANDS = [
+    (95, 0),    # ≥95: exact value
+    (80, 5),    # 80-94: ±5
+    (65, 10),   # 65-79: ±10
+    (0, 15),    # <65: ±15
+]
+FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 10, 'LARGE_MARKET': 5, 'MID_MARKET': 0, 'SMALL_MARKET': -5}
+# Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
+GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
 # ---- Retirement Risk Telegraphing ----
 # Surfaces during the season so fans can pre-vote replacements. Mirrors the actual

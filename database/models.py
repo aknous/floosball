@@ -116,6 +116,9 @@ class Coach(Base):
     aggressiveness: Mapped[int] = mapped_column(Integer, default=80)
     clock_management: Mapped[int] = mapped_column(Integer, default=80)
     player_development: Mapped[int] = mapped_column(Integer, default=80)
+    # Scouting — accuracy with which fans can see upcoming rookies' potential.
+    # Stacks with funding tier to determine the attribute-range blur on /api/rookies/upcoming.
+    scouting: Mapped[int] = mapped_column(Integer, default=80)
     overall_rating: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -149,6 +152,10 @@ class Player(Base):
     is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
     prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
     drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    # True after _generateRookieClass, before the offseason rookie draft.
+    # Upcoming rookies are visible to fans all season for scouting/voting but
+    # aren't on any roster or pipeline yet. Cleared at draft time.
+    is_upcoming_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

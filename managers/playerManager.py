@@ -370,6 +370,7 @@ class PlayerManager:
             player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
+            player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             
             # Load tier if present
             if db_player.tier:
@@ -518,10 +519,23 @@ class PlayerManager:
         if prospectCount > 0:
             logger.info(f"Restored {prospectCount} prospects to team pipelines")
 
+        # Upcoming rookies are visible for scouting but not on any team — skip
+        # all rostering/FA logic for them. Their player.team stays 'Upcoming Rookie'.
+        upcomingCount = 0
+        for player in self.activePlayers:
+            if getattr(player, 'is_upcoming_rookie', False):
+                player.team = 'Upcoming Rookie'
+                upcomingCount += 1
+        if upcomingCount > 0:
+            logger.info(f"Skipped {upcomingCount} upcoming rookies from roster/FA assignment")
+
         faCount = 0
         for player in self.activePlayers:
             # Prospects are handled above; don't try to roster them
             if getattr(player, 'is_prospect', False):
+                continue
+            # Upcoming rookies are pre-draft — not rostered, not in FA pool
+            if getattr(player, 'is_upcoming_rookie', False):
                 continue
             if not hasattr(player, 'team') or player.team is None:
                 # Player has no team — mark as free agent
@@ -1188,7 +1202,7 @@ class PlayerManager:
             from database.models import Player as DBPlayer, PlayerAttributes as DBPlayerAttributes, PlayerCareerStats, PlayerSeasonStats
             
             # Track statistics for debugging
-            team_id_stats = {'with_team': 0, 'free_agent': 0, 'retired': 0, 'prospect': 0, 'null': 0, 'errors': 0}
+            team_id_stats = {'with_team': 0, 'free_agent': 0, 'retired': 0, 'prospect': 0, 'upcoming_rookie': 0, 'null': 0, 'errors': 0}
             
             # Save all active players (includes free agents)
             all_players_to_save = list(self.activePlayers)
@@ -1216,6 +1230,8 @@ class PlayerManager:
                             team_id_stats['retired'] += 1
                         elif player.team == 'Prospect':
                             team_id_stats['prospect'] += 1
+                        elif player.team == 'Upcoming Rookie':
+                            team_id_stats['upcoming_rookie'] += 1
                         else:
                             team_id_stats['free_agent'] += 1
                     elif hasattr(player.team, 'id'):
@@ -1258,6 +1274,7 @@ class PlayerManager:
                         is_undrafted=bool(getattr(player, 'is_undrafted', False)),
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
+                        is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1282,6 +1299,7 @@ class PlayerManager:
                     db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
+                    db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                 
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
@@ -2929,15 +2947,26 @@ class PlayerManager:
         from constants import PROSPECT_SLOT_CAP_PER_POSITION
         return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
 
-    def _conductRookieDraft(self, rookies: List, draftOrder: List, leagueHighlights: list = None) -> dict:
+    def _conductRookieDraft(self, rookies: List, draftOrder: List,
+                            leagueHighlights: list = None,
+                            fanPreferences: Optional[Dict[int, List[int]]] = None) -> dict:
         """Worst-first rookie draft. Each team picks one rookie at a position where
         they have an open prospect slot. Teams with no open slots skip entirely.
         Undrafted rookies fall through to the FA pool with is_undrafted=True.
+
+        fanPreferences (new) — {team_id: [rookie_id, ...]} ordered preference
+        list from the season's draft-rookie ballots. If a team has preferences,
+        the draft walks them in order and picks the first rookie that's still
+        available AND matches an open position. Falls through to "best rated"
+        if the ballot is empty/exhausted — preserves behavior for teams whose
+        fans didn't vote.
 
         Returns {"picks": [{teamId, playerId, ...}], "undrafted": [playerId, ...]}.
         """
         picks = []
         available = list(rookies)  # pool of rookies waiting to be drafted
+        rookiesById = {r.id: r for r in rookies}
+        fanPreferences = fanPreferences or {}
 
         for team in draftOrder:
             if not available:
@@ -2953,21 +2982,34 @@ class PlayerManager:
                 # Team has zero open slots across all positions — forfeit pick
                 logger.info(f"Rookie draft: {team.name} skipped (all prospect slots full)")
                 continue
-            eligible = [r for r in available if r.position in openPositions]
-            if not eligible:
+            eligibleSet = {r.id for r in available if r.position in openPositions}
+            if not eligibleSet:
                 # No available rookies at any open-slot position — team passes this round
                 logger.info(f"Rookie draft: {team.name} passed (no rookies at open positions)")
                 continue
-            # Highest-rated eligible rookie wins. Ties broken by position scarcity
-            # (fewer prospects at that position = higher priority).
-            def pickScore(rookie):
-                prospectsHere = self.countTeamProspectsAtPosition(team, rookie.position)
-                return (rookie.playerRating, -prospectsHere)
-            pick = max(eligible, key=pickScore)
+
+            pick = None
+            pickSource = 'ai_best'
+            # Fan preference path — walk the ranked ballot in order
+            for rookieId in fanPreferences.get(team.id, []):
+                if rookieId in eligibleSet:
+                    pick = rookiesById.get(rookieId)
+                    if pick is not None:
+                        pickSource = 'fan_vote'
+                        break
+            # Fallback: highest-rated eligible rookie; ties broken by position
+            # scarcity (fewer prospects at that position = higher priority)
+            if pick is None:
+                eligible = [r for r in available if r.id in eligibleSet]
+                def pickScore(rookie):
+                    prospectsHere = self.countTeamProspectsAtPosition(team, rookie.position)
+                    return (rookie.playerRating, -prospectsHere)
+                pick = max(eligible, key=pickScore)
             available.remove(pick)
             # Assign as prospect — team reference is via drafting_team_id, NOT
             # player.team (which would make persistence save them as rostered).
             pick.is_prospect = True
+            pick.is_upcoming_rookie = False
             pick.drafting_team_id = team.id
             pick.prospect_seasons = 0
             pick.team = 'Prospect'
@@ -2981,15 +3023,18 @@ class PlayerManager:
                 "position": pick.position.name,
                 "rating": round(pick.playerRating, 1),
                 "tier": pick.playerTier.name,
+                "source": pickSource,
             })
             if leagueHighlights is not None:
+                voteNote = ' by fan vote' if pickSource == 'fan_vote' else ''
                 leagueHighlights.insert(0, {
-                    'event': {'text': f"{team.name} drafted {pick.name} ({pick.position.name}, {pick.playerTier.name})"}
+                    'event': {'text': f"{team.name} drafted {pick.name} ({pick.position.name}, {pick.playerTier.name}){voteNote}"}
                 })
 
         # Anything left → FA pool as undrafted rookies
         undrafted = []
         for rookie in available:
+            rookie.is_upcoming_rookie = False
             rookie.is_undrafted = True
             rookie.team = 'Free Agent'
             rookie.freeAgentYears = 0
@@ -3002,8 +3047,60 @@ class PlayerManager:
 
         # Assign tiers now that ratings are settled
         self.sortPlayersByPosition()
-        logger.info(f"Rookie draft complete: {len(picks)} drafted, {len(undrafted)} undrafted to FA")
+        voteDrafted = sum(1 for p in picks if p.get('source') == 'fan_vote')
+        logger.info(
+            f"Rookie draft complete: {len(picks)} drafted ({voteDrafted} via fan vote), "
+            f"{len(undrafted)} undrafted to FA"
+        )
         return {"picks": picks, "undrafted": undrafted}
+
+    def scoutRookie(self, rookie, effectiveScouting: int) -> dict:
+        """Build the fan-facing scouting payload for a single upcoming rookie.
+
+        Current rating is always exact — it's what they are right now. Potential
+        attributes are blurred into ±range based on effective scouting (coach
+        scouting + funding tier bonus). Higher scouting = tighter range.
+        """
+        from constants import SCOUTING_BANDS
+        # Pick the range size from the band table
+        rangeSize = 15
+        for threshold, size in SCOUTING_BANDS:
+            if effectiveScouting >= threshold:
+                rangeSize = size
+                break
+
+        def blur(exact: int) -> dict:
+            if exact is None:
+                return {"low": None, "high": None, "exact": None}
+            if rangeSize == 0:
+                return {"low": exact, "high": exact, "exact": exact}
+            # Center the range on exact, clip 60-100
+            low = max(60, exact - rangeSize)
+            high = min(100, exact + rangeSize)
+            return {"low": low, "high": high, "exact": None}
+
+        attrs = getattr(rookie, 'attributes', None)
+        potentials = {}
+        if attrs:
+            for name in ('potentialSpeed', 'potentialHands', 'potentialReach',
+                        'potentialAgility', 'potentialPower', 'potentialArmStrength',
+                        'potentialAccuracy', 'potentialLegStrength',
+                        'potentialSkillRating'):
+                val = getattr(attrs, name, None)
+                if val:
+                    potentials[name] = blur(val)
+
+        return {
+            "playerId": rookie.id,
+            "name": rookie.name,
+            "position": rookie.position.name,
+            "rating": round(rookie.playerRating, 1),
+            "tier": rookie.playerTier.name if hasattr(rookie, 'playerTier') else None,
+            "longevity": getattr(attrs, 'longevity', None) if attrs else None,
+            "potentials": potentials,
+            "scoutingAccuracy": effectiveScouting,
+            "scoutingRange": rangeSize,
+        }
 
     def _tryPromoteProspect(self, team, freeAgencyDict: dict, leagueHighlights: list) -> Optional[dict]:
         """Promote the best-qualifying prospect into an open roster slot.

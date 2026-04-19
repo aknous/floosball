@@ -289,6 +289,7 @@ def _runPendingMigrations():
             ('is_undrafted', 'BOOLEAN DEFAULT 0'),
             ('prospect_seasons', 'INTEGER DEFAULT 0'),
             ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
+            ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {colDef}"))
@@ -296,6 +297,14 @@ def _runPendingMigrations():
                 logger.info(f"  Migration: added players.{col}")
             except Exception:
                 conn.rollback()
+
+        # Coach scouting attribute (feature/prospects-pipeline Phase 7)
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN scouting INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added coaches.scouting")
+        except Exception:
+            conn.rollback()
 
         # Vacancy fallback preference on users (feature/prospects-pipeline)
         try:

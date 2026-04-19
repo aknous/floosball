@@ -256,6 +256,24 @@ class SeasonManager:
         # Release any deferred achievement rewards (e.g. Veteran → pack + powerup at next season)
         self._processDeferredAchievements()
 
+        # Generate the season's rookie class UP FRONT so fans can scout and vote
+        # on picks all season long. Rookies sit as is_upcoming_rookie=True until
+        # the offseason draft consumes them. Only generates if none already exist
+        # for this season (idempotent across restarts).
+        existingUpcoming = [p for p in self.playerManager.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
+        if not existingUpcoming:
+            rookies = self.playerManager._generateRookieClass(seasonNumber)
+            for r in rookies:
+                r.is_upcoming_rookie = True
+                r.team = 'Upcoming Rookie'
+                if r not in self.playerManager.activePlayers:
+                    self.playerManager.activePlayers.append(r)
+                self.playerManager.addToPositionList(r)
+            self.playerManager.sortPlayersByPosition()
+            logger.info(f"Generated {len(rookies)} upcoming rookies for season {seasonNumber}")
+        else:
+            logger.info(f"Upcoming rookie class already exists ({len(existingUpcoming)} players) — reusing")
+
         # Persist season record early so startDate survives restarts
         self._saveSeasonToDatabase()
 
@@ -3311,8 +3329,11 @@ class SeasonManager:
         logger.info("Step 3.5: Resolve GM cut player votes")
         await self._resolveGmCutVotes(gmResults)
 
-        # STEP 4: FA retirements + rookie generation + rookie draft
-        logger.info("Step 4: Free agent retirements, rookie class, and rookie draft")
+        # STEP 4: FA retirements + rookie draft
+        # (Rookie class was generated at season start — fans have been scouting/
+        # voting all season. This step consumes the class via the worst-first
+        # draft, optionally guided by fan ballots.)
+        logger.info("Step 4: Free agent retirements and rookie draft")
         seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
         self.playerManager._processFreeAgentRetirements(seasonNum, [])
 
@@ -3320,14 +3341,25 @@ class SeasonManager:
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
 
-        # Generate a 24-player rookie class, then run a worst-first draft that
-        # assigns each rookie to a team's prospect pipeline. Teams with no open
-        # prospect slots skip; unpicked rookies drop into the FA pool as
-        # undrafted free agents.
-        rookies = self.playerManager._generateRookieClass(seasonNum)
+        # Harvest this season's rookies that haven't been drafted yet
+        rookies = [p for p in self.playerManager.activePlayers
+                   if getattr(p, 'is_upcoming_rookie', False)]
+        # Safety: if no rookies exist (upgrade path from pre-Phase-7 DB), fall
+        # back to generating them on the fly
+        if not rookies:
+            logger.warning(f"No upcoming rookies found for season {seasonNum} — generating now as fallback")
+            rookies = self.playerManager._generateRookieClass(seasonNum)
+            for r in rookies:
+                if r not in self.playerManager.activePlayers:
+                    self.playerManager.activePlayers.append(r)
+                self.playerManager.addToPositionList(r)
+
+        # Pull fan-vote preference lists per team from the gm_votes table
+        fanPreferences = self._collectRookieDraftBallots(seasonNum)
         freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
         draftResults = self.playerManager._conductRookieDraft(
-            rookies, freeAgencyOrder, leagueHighlights
+            rookies, freeAgencyOrder, leagueHighlights,
+            fanPreferences=fanPreferences,
         )
 
         # Broadcast rookie draft summary for the frontend offseason panel
@@ -5913,6 +5945,66 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    def _collectRookieDraftBallots(self, season: int) -> Dict[int, List[int]]:
+        """Tally per-team fan ballots on the upcoming rookie class via RCV.
+
+        Each fan with a favorite team submits a ranked list of rookie IDs they
+        want their team to draft. Ballots are stored as GmVote rows with
+        vote_type='draft_rookie' and a JSON-encoded rankings list in details.
+        Returns {team_id: [rookieId, ...]} ordered preference lists — consumed
+        by _conductRookieDraft.
+        """
+        try:
+            import json as _json
+            from database.connection import get_session
+            from database.models import GmVote, User
+        except Exception:
+            return {}
+        preferences: Dict[int, List[int]] = {}
+        session = get_session()
+        try:
+            # Fetch all draft_rookie votes for this season with their voter's favorite team
+            rows = session.query(GmVote, User).join(
+                User, User.id == GmVote.user_id
+            ).filter(
+                GmVote.season == season,
+                GmVote.vote_type == 'draft_rookie',
+                User.favorite_team_id.isnot(None),
+            ).all()
+
+            # Collect per-team ballots: {team_id: [[rookieIds...], [rookieIds...], ...]}
+            ballotsByTeam: Dict[int, List[List[int]]] = {}
+            for vote, user in rows:
+                teamId = user.favorite_team_id
+                try:
+                    rankings = _json.loads(vote.details) if vote.details else []
+                    if isinstance(rankings, list):
+                        rankings = [int(x) for x in rankings if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
+                        if rankings:
+                            ballotsByTeam.setdefault(teamId, []).append(rankings)
+                except Exception:
+                    continue
+
+            # Run simple borda-count (close enough to RCV for our purposes —
+            # candidates are scored by aggregated inverse rank across ballots).
+            for teamId, ballots in ballotsByTeam.items():
+                scores: Dict[int, int] = {}
+                for ranking in ballots:
+                    for idx, rookieId in enumerate(ranking):
+                        # Higher score for higher ranking; top pick gets len*10
+                        scores[rookieId] = scores.get(rookieId, 0) + (len(ranking) - idx) * 10
+                preferences[teamId] = [
+                    rookieId for rookieId, _score in
+                    sorted(scores.items(), key=lambda x: -x[1])
+                ]
+            if preferences:
+                logger.info(f"Rookie draft: collected fan ballots for {len(preferences)} teams")
+        except Exception as e:
+            logger.warning(f"Could not collect rookie draft ballots: {e}")
+        finally:
+            session.close()
+        return preferences
 
     def _processDeferredAchievements(self) -> None:
         """Grant any deferred achievement rewards owed to users (e.g. Veteran at new season)."""
