@@ -20,6 +20,7 @@ Timing Modes:
     --offseason-test                Fast regular season (no broadcast), interactive offseason (3 min FA window, live draft)
     --catchup, --timing=catchup     Backdate season to last Monday, catch up missed games, then switch to scheduled
     --turbo-silent                   Turbo delays between weeks, no in-game delays, no broadcasting
+    --fast-weekly                    FAST games (no delays, no broadcast), 30s pause between weeks
 
 Options:
     --fresh                         Clear database and start fresh
@@ -81,6 +82,8 @@ def _resolveTimingMode(modeStr: str) -> TimingMode:
         'fast_catchup': TimingMode.FAST_CATCHUP,
         'turbo-silent': TimingMode.TURBO_SILENT,
         'turbo_silent': TimingMode.TURBO_SILENT,
+        'fast-weekly': TimingMode.FAST_WEEKLY,
+        'fast_weekly': TimingMode.FAST_WEEKLY,
     }
     return modeMap.get(modeStr, TimingMode.FAST)
 
@@ -142,6 +145,8 @@ def parse_args():
             args['timing_mode'] = TimingMode.FAST_CATCHUP
         elif arg == '--turbo-silent':
             args['timing_mode'] = TimingMode.TURBO_SILENT
+        elif arg == '--fast-weekly':
+            args['timing_mode'] = TimingMode.FAST_WEEKLY
         elif arg == '--fresh':
             args['fresh_start'] = True
         elif arg == '--card-reset':
@@ -188,8 +193,8 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
     # Set reference in API
     set_floosball_app(floosball_app)
 
-    # Enable broadcasting (skip in test-scheduled mode)
-    if timing_mode not in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST, TimingMode.TURBO_SILENT):
+    # Enable broadcasting (skip in silent test modes)
+    if timing_mode not in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST, TimingMode.TURBO_SILENT, TimingMode.FAST_WEEKLY):
         broadcaster.enable(ws_manager)
         logger.info("Game broadcasting enabled")
     else:

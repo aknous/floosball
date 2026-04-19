@@ -70,6 +70,7 @@ avatar_generator.py               # SVG team avatar generation + disk caching
 | `demo` | Fast but with visible offseason pick delays |
 | `test-scheduled` | Compressed scheduled (minutes apart, fast polling) |
 | `turbo-silent` | Sequential delays between games/weeks, no broadcasting |
+| `fast-weekly` | FAST games (no delays, no broadcast), 30s pause between weeks |
 | `playoff-test` | Fast regular season + compressed scheduled playoffs |
 | `offseason-test` | Fast regular season (no broadcast), interactive offseason |
 
