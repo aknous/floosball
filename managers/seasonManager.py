@@ -3350,6 +3350,48 @@ class SeasonManager:
         logger.info("Step 3.5: Resolve GM cut player votes")
         await self._resolveGmCutVotes(gmResults)
 
+        # Enable broadcasting BEFORE rookie draft for silent-during-season
+        # modes (OFFSEASON_TEST, FAST_WEEKLY) so fans see the rookie picks
+        # land live. Also fire offseason_start so the frontend transitions
+        # into OffseasonPanel before rookie events start streaming.
+        offseasonTestBroadcastEnabled = False
+        if self.timingManager.mode in (TimingMode.OFFSEASON_TEST, TimingMode.FAST_WEEKLY) and BROADCASTING_AVAILABLE:
+            from api.game_broadcaster import broadcaster as bc
+            from api.websocket_manager import manager as wsMgr
+            bc.enable(wsMgr)
+            offseasonTestBroadcastEnabled = True
+            logger.info(f"{self.timingManager.mode.value}: broadcasting enabled for offseason")
+            # Broadcast offseason_start with draft order + roster snapshots
+            try:
+                faOrderEarly = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+                draftOrderList = [
+                    {'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None), 'color': getattr(t, 'color', None)}
+                    for t in faOrderEarly
+                ]
+                rosterSnapshots = {}
+                for t in faOrderEarly:
+                    abbr = getattr(t, 'abbr', t.name[:3].upper())
+                    roster = {}
+                    for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
+                        p = t.rosterDict.get(slot)
+                        if p:
+                            roster[slot] = {
+                                'id': p.id, 'name': p.name,
+                                'position': p.position.name,
+                                'rating': round(p.playerRating, 1),
+                                'tier': p.playerTier.name,
+                                'termRemaining': getattr(p, 'termRemaining', 0),
+                            }
+                        else:
+                            roster[slot] = None
+                    rosterSnapshots[abbr] = roster
+                startEvent = OffseasonEvent.start(draftOrderList)
+                startEvent['rosterSnapshots'] = rosterSnapshots
+                await broadcaster.broadcast_season_event(startEvent)
+                await asyncio.sleep(2)  # brief so frontend mounts panel
+            except Exception as e:
+                logger.warning(f"Could not broadcast offseason start: {e}")
+
         # STEP 4: FA retirements + rookie draft
         # (Rookie class was generated at season start — fans have been scouting/
         # voting all season. This step consumes the class via the worst-first
@@ -3440,47 +3482,6 @@ class SeasonManager:
             for _ in pickGen:
                 pass
 
-        # Enable broadcasting for OFFSEASON_TEST mode before FA window + draft
-        offseasonTestBroadcastEnabled = False
-        if self.timingManager.mode == TimingMode.OFFSEASON_TEST and BROADCASTING_AVAILABLE:
-            from api.game_broadcaster import broadcaster as bc
-            from api.websocket_manager import manager as wsMgr
-            bc.enable(wsMgr)
-            offseasonTestBroadcastEnabled = True
-            logger.info("OFFSEASON_TEST: broadcasting enabled for FA window + draft")
-            # Broadcast offseason_start so the frontend transitions to OffseasonPanel
-            try:
-                freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
-                draftOrderList = [
-                    {'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None), 'color': getattr(t, 'color', None)}
-                    for t in freeAgencyOrder
-                ]
-                # Snapshot pre-FA rosters
-                rosterSnapshots = {}
-                for t in freeAgencyOrder:
-                    abbr = getattr(t, 'abbr', t.name[:3].upper())
-                    roster = {}
-                    for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
-                        p = t.rosterDict.get(slot)
-                        if p:
-                            roster[slot] = {
-                                'id': p.id, 'name': p.name,
-                                'position': p.position.name,
-                                'rating': round(p.playerRating, 1),
-                                'tier': p.playerTier.name,
-                                'termRemaining': getattr(p, 'termRemaining', 0),
-                            }
-                        else:
-                            roster[slot] = None
-                    rosterSnapshots[abbr] = roster
-                startEvent = OffseasonEvent.start(draftOrderList)
-                startEvent['rosterSnapshots'] = rosterSnapshots
-                await broadcaster.broadcast_season_event(startEvent)
-                # Brief delay so the frontend can mount OffseasonPanel before FA window event
-                await asyncio.sleep(3)
-            except Exception as e:
-                logger.warning(f"Could not broadcast offseason start for OFFSEASON_TEST: {e}")
-
         # STEP 5: FA Voting Window (GM Mode sign_fa)
         logger.info("Step 5: FA voting window")
         await self._runFaVotingWindow()
@@ -3492,11 +3493,11 @@ class SeasonManager:
         # STEP 6.5: Validate roster/FA integrity after draft
         self._validateRosterIntegrity()
 
-        # Disable broadcasting after draft for OFFSEASON_TEST mode
+        # Disable broadcasting after draft for the silent-during-season modes
         if offseasonTestBroadcastEnabled:
             from api.game_broadcaster import broadcaster as bc
             bc.disable()
-            logger.info("OFFSEASON_TEST: broadcasting disabled after draft")
+            logger.info(f"{self.timingManager.mode.value}: broadcasting disabled after draft")
 
         # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
         # Prospects train through their drafting team's coach/funding too, so coaches
