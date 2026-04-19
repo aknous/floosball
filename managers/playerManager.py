@@ -3156,6 +3156,55 @@ class PlayerManager:
             'tier': best.playerTier.name,
         }
 
+    def snapshotRatingsForSeason(self, season: int) -> int:
+        """Record every player's current rating into player_rating_history.
+
+        Called at season start (after the prior offseason's training has
+        applied) so each row captures the rating the player carries into
+        that season. Idempotent via UNIQUE(player_id, season) — reruns
+        update the existing row rather than creating duplicates.
+        """
+        try:
+            from database.models import PlayerRatingHistory as DBHistory
+        except ImportError:
+            return 0
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return 0
+
+        # Everyone with a rating — rostered, FA, prospects, upcoming rookies, retired
+        allPlayers = list(self.activePlayers) + [
+            p for p in self.retiredPlayers if p not in self.activePlayers
+        ]
+        snapshots = 0
+        for player in allPlayers:
+            rating = getattr(player, 'playerRating', None)
+            if rating is None:
+                continue
+            existing = self.db_session.query(DBHistory).filter_by(
+                player_id=player.id, season=season
+            ).first()
+            if existing is None:
+                self.db_session.add(DBHistory(
+                    player_id=player.id,
+                    season=season,
+                    rating=int(round(rating)),
+                    offensive_rating=getattr(player, 'offensiveRating', None),
+                    defensive_rating=getattr(player, 'defensiveRating', None),
+                ))
+                snapshots += 1
+            else:
+                existing.rating = int(round(rating))
+                existing.offensive_rating = getattr(player, 'offensiveRating', None)
+                existing.defensive_rating = getattr(player, 'defensiveRating', None)
+        try:
+            self.db_session.commit()
+        except Exception as e:
+            self.db_session.rollback()
+            logger.warning(f"Rating history snapshot failed for season {season}: {e}")
+            return 0
+        logger.info(f"Rating history: snapshotted {snapshots} new entries for season {season}")
+        return snapshots
+
     def seedInitialProspects(self, prospectsPerTeam: int = 3) -> int:
         """One-time: populate every team's prospect pipeline with a starter class.
 

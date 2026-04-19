@@ -258,6 +258,14 @@ class SeasonManager:
         # Release any deferred achievement rewards (e.g. Veteran → pack + powerup at next season)
         self._processDeferredAchievements()
 
+        # Snapshot every player's rating at season start — feeds the
+        # progression sparkline on rosters and prospect pipelines. Idempotent
+        # per (player, season) so reruns don't duplicate rows.
+        try:
+            self.playerManager.snapshotRatingsForSeason(seasonNumber)
+        except Exception as e:
+            logger.warning(f"Rating snapshot at season {seasonNumber} start failed: {e}")
+
         # Generate the season's rookie class UP FRONT so fans can scout and vote
         # on picks all season long. Rookies sit as is_upcoming_rookie=True until
         # the offseason draft consumes them. Only generates if none already exist

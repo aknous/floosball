@@ -3415,35 +3415,39 @@ def get_team_prospects(team_id: int):
         raise HTTPException(404, "Team not found")
 
     from constants import PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD
+    from database.connection import get_session
+    from database.models import PlayerRatingHistory
 
-    # Readiness is comparative now, not threshold-based: READY = the prospect's
-    # rating meets or beats the current starter(s) at their position. A flat
-    # threshold read as "is this a real player" rather than "is this actually
-    # ready" since most prospects clear 70 on generation.
-    positionRosterSlots = {
-        'QB': ['qb'], 'RB': ['rb'], 'WR': ['wr1', 'wr2'], 'TE': ['te'], 'K': ['k'],
-    }
-    # Worst current starter rating per position (prospect must upgrade the
-    # weakest to be worth calling up — for WR, that's whoever is rated lower
-    # between wr1 and wr2)
-    starterFloor: Dict[str, float] = {}
-    for posName, slots in positionRosterSlots.items():
-        ratings = [
-            round(getattr(team.rosterDict[s], 'playerRating', 0), 1)
-            for s in slots
-            if team.rosterDict.get(s) is not None
-        ]
-        if ratings:
-            starterFloor[posName] = min(ratings)
+    # Pull every prospect's rating history in one batched query so the UI can
+    # render a sparkline without N extra fetches.
+    prospectList = list(getattr(team, 'prospects', []))
+    historyByPlayer: Dict[int, List[Dict[str, int]]] = {}
+    if prospectList:
+        session = get_session()
+        try:
+            rows = session.query(PlayerRatingHistory).filter(
+                PlayerRatingHistory.player_id.in_([p.id for p in prospectList])
+            ).order_by(PlayerRatingHistory.player_id, PlayerRatingHistory.season).all()
+            for r in rows:
+                historyByPlayer.setdefault(r.player_id, []).append({
+                    "season": r.season,
+                    "rating": r.rating,
+                })
+        finally:
+            session.close()
 
     prospects = []
-    for p in getattr(team, 'prospects', []):
+    for p in prospectList:
         rating = round(getattr(p, 'playerRating', 0), 1)
         posName = p.position.name if hasattr(p.position, 'name') else str(p.position)
-        floor = starterFloor.get(posName)
-        # Ready means: rating meets or beats the weakest incumbent at that position.
-        # If there's no starter there (open slot) any prospect counts as ready.
-        promotionReady = True if floor is None else rating >= floor
+        # Build a series including the current (live) rating as the latest
+        # point, tagged with the current season. For rookies with no prior
+        # history, this produces a single-point series.
+        history = list(historyByPlayer.get(p.id, []))
+        sm = floosball_app.seasonManager
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        if currentSeasonNum and (not history or history[-1]["season"] != currentSeasonNum):
+            history.append({"season": currentSeasonNum, "rating": int(round(rating))})
         prospects.append({
             "playerId": p.id,
             "name": p.name,
@@ -3453,8 +3457,7 @@ def get_team_prospects(team_id: int):
             "prospectSeasons": getattr(p, 'prospect_seasons', 0) or 0,
             "seasonsRemaining": max(0, PROSPECT_DEVELOPMENT_WINDOW - (getattr(p, 'prospect_seasons', 0) or 0)),
             "isUndrafted": bool(getattr(p, 'is_undrafted', False)),
-            "promotionReady": promotionReady,
-            "starterFloor": floor,  # exposed so the UI can tooltip "beats X.X"
+            "ratingHistory": history,
         })
     prospects.sort(key=lambda x: -x['rating'])
     return build_success_response({
@@ -3463,6 +3466,56 @@ def get_team_prospects(team_id: int):
         "slotCapPerPosition": 2,  # mirrors constants.PROSPECT_SLOT_CAP_PER_POSITION
         "developmentWindow": PROSPECT_DEVELOPMENT_WINDOW,
         "promotionThreshold": PROSPECT_PROMOTION_RATING_THRESHOLD,
+    })
+
+
+@app.get("/api/players/{player_id}/rating-history")
+def get_player_rating_history(player_id: int):
+    """Rating trajectory for a single player across every season played.
+
+    Returns an ordered list of {season, rating} points — one per season where
+    a snapshot exists. The current season's live rating is appended as the
+    latest point if not yet snapshotted.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import PlayerRatingHistory
+
+    session = get_session()
+    try:
+        rows = session.query(PlayerRatingHistory).filter_by(
+            player_id=player_id
+        ).order_by(PlayerRatingHistory.season).all()
+        history = [
+            {"season": r.season, "rating": r.rating,
+             "offensiveRating": r.offensive_rating, "defensiveRating": r.defensive_rating}
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+    # Append the current live rating as the latest point so the sparkline
+    # reflects in-season state even before the next snapshot fires
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    player = pm.getPlayerById(player_id) if hasattr(pm, 'getPlayerById') else None
+    if player is None:
+        # fallback — scan activePlayers
+        player = next((p for p in pm.activePlayers if p.id == player_id), None)
+    if player is not None and currentSeasonNum:
+        currentRating = int(round(getattr(player, 'playerRating', 0) or 0))
+        if not history or history[-1]["season"] != currentSeasonNum:
+            history.append({
+                "season": currentSeasonNum, "rating": currentRating,
+                "offensiveRating": getattr(player, 'offensiveRating', None),
+                "defensiveRating": getattr(player, 'defensiveRating', None),
+            })
+
+    return build_success_response({
+        "playerId": player_id,
+        "history": history,
     })
 
 

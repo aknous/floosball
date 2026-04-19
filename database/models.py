@@ -335,6 +335,35 @@ class PlayerSeasonStats(Base):
         return f"<PlayerSeasonStats(player_id={self.player_id}, season={self.season})>"
 
 
+class PlayerRatingHistory(Base):
+    """Rating snapshot per player per season — powers the progression sparkline.
+
+    Snapshotted at season start, AFTER offseason training has applied for the
+    season (so the value is the rating the player carried through that season).
+    Captures all players league-wide: rostered, prospects, free agents, even
+    upcoming rookies, so every player has a developable trajectory.
+    """
+    __tablename__ = "player_rating_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", name="uq_player_rating_history"),
+        Index("idx_rating_history_player", "player_id"),
+        Index("idx_rating_history_season", "season"),
+    )
+
+    def __repr__(self):
+        return f"<PlayerRatingHistory(player={self.player_id}, season={self.season}, rating={self.rating})>"
+
+
+
 class TeamSeasonStats(Base):
     """Team season stats table - stores team stats by season."""
     __tablename__ = "team_season_stats"
