@@ -5722,28 +5722,48 @@ class SeasonManager:
           Next 25% → MID_MARKET (tier 3)
           Bottom 25% → SMALL_MARKET (tier 4)
 
-        Relative ranking keeps the tier system balanced regardless of league-wide
-        economy inflation/deflation. Fans are competing for scarce top slots, not
-        chasing a fixed Floobit threshold.
+        Teams with identical funding always share a tier — ties are resolved
+        by assigning every team in a funding-equivalent group the same tier
+        based on the group's median position in the sorted ranking. This
+        matters on fresh leagues or single-contributor scenarios where most
+        teams have baseline-only funding: 23 tied teams shouldn't get
+        arbitrarily split into different tiers based on record id.
+
+        Edge case: if all teams share the same funding (zero differentiation),
+        everyone is MID_MARKET — there's no meaningful rank.
         """
         from database.models import TeamFunding
         from constants import FUNDING_TIER_NAMES
+        from itertools import groupby
 
         records = session.query(TeamFunding).filter_by(season=season).all()
         if not records:
             return
 
-        # Sort descending by effective_funding; ties broken arbitrarily (by record id)
+        # Sort by funding descending; id only used for stable ordering within
+        # tied groups (doesn't affect tier assignment — ties share a tier)
         ranked = sorted(records, key=lambda r: (-(r.effective_funding or 0), r.id))
         total = len(ranked)
-        # Quartile boundaries — use ceil so leagues with sizes not divisible by 4
-        # still distribute cleanly (top tiers get the extra slot if any)
         import math
         quartileSize = max(1, math.ceil(total / 4))
-        for idx, rec in enumerate(ranked):
-            quartile = min(idx // quartileSize, len(FUNDING_TIER_NAMES) - 1)
-            rec.funding_tier = FUNDING_TIER_NAMES[quartile]
-            rec.tier_rank = quartile + 1
+
+        # Group consecutive records with equal funding — each group gets the
+        # same tier, computed from the group's median index in the full ranking
+        idx = 0
+        allSameFunding = len({(r.effective_funding or 0) for r in records}) == 1
+        for fundingValue, group in groupby(ranked, key=lambda r: r.effective_funding or 0):
+            groupList = list(group)
+            if allSameFunding:
+                # No differentiation → everyone gets MID. Tier 3.
+                tierIdx = 2
+            else:
+                # Median index within the group's slice of the overall ranking
+                medianIdx = idx + (len(groupList) - 1) / 2.0
+                tierIdx = min(int(medianIdx // quartileSize), len(FUNDING_TIER_NAMES) - 1)
+            for rec in groupList:
+                rec.funding_tier = FUNDING_TIER_NAMES[tierIdx]
+                rec.tier_rank = tierIdx + 1
+            idx += len(groupList)
 
         session.flush()
 
