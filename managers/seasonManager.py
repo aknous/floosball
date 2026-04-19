@@ -3367,24 +3367,67 @@ class SeasonManager:
         # Pull fan-vote preference lists per team from the gm_votes table
         fanPreferences = self._collectRookieDraftBallots(seasonNum)
         freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
-        draftResults = self.playerManager._conductRookieDraft(
-            rookies, freeAgencyOrder, leagueHighlights,
-            fanPreferences=fanPreferences,
+
+        # Live pick-by-pick rookie draft — drives the same WS events the FA
+        # draft uses, so the OffseasonPanel can render the rookie phase too.
+        # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
+        # rookie draft from FA draft.
+        pickGen = self.playerManager.rookieDraftPickGenerator(
+            rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
         )
 
-        # Broadcast rookie draft summary for the frontend offseason panel
+        # Broadcast a phase-start marker so the frontend knows to show the
+        # "Rookie Draft" header before picks start streaming
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
-                from api.event_models import EventType
                 await broadcaster.broadcast_season_event({
-                    'event': EventType.OFFSEASON_PICK.value,
-                    'phase': 'rookie_draft',
+                    'event': 'rookie_draft_start',
                     'season': seasonNum,
-                    'picks': draftResults['picks'],
-                    'undraftedCount': len(draftResults['undrafted']),
+                    'totalRookies': len(rookies),
                 })
             except Exception as e:
-                logger.warning(f"Could not broadcast rookie draft: {e}")
+                logger.warning(f"Could not broadcast rookie_draft_start: {e}")
+
+        draftSummary = None
+        try:
+            for entry in pickGen:
+                kind = entry.get('type')
+                if kind == 'on_clock':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_on_clock',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        })
+                        await self.timingManager.waitBetweenOffseasonPicks()
+                elif kind == 'pick':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_pick',
+                            'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                            'player': entry['playerName'], 'position': entry['position'],
+                            'rating': entry['rating'], 'tier': entry['tier'],
+                            'source': entry.get('source', 'ai_best'),
+                        })
+                elif kind == 'skip':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_skip',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            'reason': entry.get('reason'),
+                        })
+                elif kind == 'complete':
+                    draftSummary = entry
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_complete',
+                            'totalPicks': len(entry.get('picks', [])),
+                            'undraftedCount': len(entry.get('undrafted', [])),
+                        })
+        except Exception as e:
+            logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
+            # Drain the rest so mutations still complete
+            for _ in pickGen:
+                pass
 
         # Enable broadcasting for OFFSEASON_TEST mode before FA window + draft
         offseasonTestBroadcastEnabled = False
@@ -3731,12 +3774,24 @@ class SeasonManager:
         # path). FA draft, however, gives MEGA-market teams priority so funding
         # tier actually determines signing power. Bad teams get their ceiling
         # raised through the rookie-draft + prospect pipeline instead.
+        #
+        # Sort: primary by fundingTierRank ascending (MEGA=1 first, SMALL=4 last).
+        # Secondary by winPerc ascending — worst teams WITHIN a tier pick first,
+        # matching the classic draft mental model. So order is:
+        #   MEGA worst → MEGA best → LARGE worst → ... → SMALL best.
         rookieDraftOrder = self.currentSeason.freeAgencyOrder
         freeAgencyOrder = sorted(
             rookieDraftOrder,
             key=lambda t: (getattr(t, 'fundingTierRank', 3),
-                           -(t.seasonTeamStats.get('winPerc', 0) if hasattr(t, 'seasonTeamStats') else 0)),
+                           t.seasonTeamStats.get('winPerc', 0) if hasattr(t, 'seasonTeamStats') else 0),
         )
+        # Log the resulting order so the FA draft pattern is verifiable from
+        # server logs (helps catch any case where tier ranks aren't populated).
+        orderSummary = [
+            f"{getattr(t, 'abbr', t.name[:3])}(T{getattr(t, 'fundingTierRank', '?')}/{int((t.seasonTeamStats.get('winPerc', 0) if hasattr(t, 'seasonTeamStats') else 0) * 1000) / 10:.1f}%)"
+            for t in freeAgencyOrder
+        ]
+        logger.info(f"FA draft order (tier-first, worst-within-tier): {' → '.join(orderSummary)}")
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights

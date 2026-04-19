@@ -2947,31 +2947,27 @@ class PlayerManager:
         from constants import PROSPECT_SLOT_CAP_PER_POSITION
         return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
 
-    def _conductRookieDraft(self, rookies: List, draftOrder: List,
-                            leagueHighlights: list = None,
-                            fanPreferences: Optional[Dict[int, List[int]]] = None) -> dict:
-        """Worst-first rookie draft. Each team picks one rookie at a position where
-        they have an open prospect slot. Teams with no open slots skip entirely.
-        Undrafted rookies fall through to the FA pool with is_undrafted=True.
+    def rookieDraftPickGenerator(self, rookies: List, draftOrder: List,
+                                 leagueHighlights: list = None,
+                                 fanPreferences: Optional[Dict[int, List[int]]] = None):
+        """Generator-based rookie draft — yields one event at a time for live
+        broadcasting, mirroring freeAgencyPickGenerator.
 
-        fanPreferences (new) — {team_id: [rookie_id, ...]} ordered preference
-        list from the season's draft-rookie ballots. If a team has preferences,
-        the draft walks them in order and picks the first rookie that's still
-        available AND matches an open position. Falls through to "best rated"
-        if the ballot is empty/exhausted — preserves behavior for teams whose
-        fans didn't vote.
-
-        Returns {"picks": [{teamId, playerId, ...}], "undrafted": [playerId, ...]}.
+        Yields dicts with 'type' key: 'on_clock', 'pick', 'skip', 'complete'.
+        Roster mutations happen in-place as each pick is yielded, so backend
+        state is always current. Seasonmanager drives this with per-pick
+        broadcasts + timing delays.
         """
         picks = []
-        available = list(rookies)  # pool of rookies waiting to be drafted
+        available = list(rookies)
         rookiesById = {r.id: r for r in rookies}
         fanPreferences = fanPreferences or {}
 
         for team in draftOrder:
+            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
             if not available:
                 break
-            # Find eligible rookies: positions where this team has an open slot
+
             openPositions = [
                 pos for pos in (FloosPlayer.Position.QB, FloosPlayer.Position.RB,
                                 FloosPlayer.Position.WR, FloosPlayer.Position.TE,
@@ -2979,26 +2975,27 @@ class PlayerManager:
                 if self.hasOpenProspectSlot(team, pos)
             ]
             if not openPositions:
-                # Team has zero open slots across all positions — forfeit pick
                 logger.info(f"Rookie draft: {team.name} skipped (all prospect slots full)")
+                yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
+                       'reason': 'pipeline_full'}
                 continue
             eligibleSet = {r.id for r in available if r.position in openPositions}
             if not eligibleSet:
-                # No available rookies at any open-slot position — team passes this round
                 logger.info(f"Rookie draft: {team.name} passed (no rookies at open positions)")
+                yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
+                       'reason': 'no_eligible_rookies'}
                 continue
+
+            yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
             pick = None
             pickSource = 'ai_best'
-            # Fan preference path — walk the ranked ballot in order
             for rookieId in fanPreferences.get(team.id, []):
                 if rookieId in eligibleSet:
                     pick = rookiesById.get(rookieId)
                     if pick is not None:
                         pickSource = 'fan_vote'
                         break
-            # Fallback: highest-rated eligible rookie; ties broken by position
-            # scarcity (fewer prospects at that position = higher priority)
             if pick is None:
                 eligible = [r for r in available if r.id in eligibleSet]
                 def pickScore(rookie):
@@ -3006,8 +3003,7 @@ class PlayerManager:
                     return (rookie.playerRating, -prospectsHere)
                 pick = max(eligible, key=pickScore)
             available.remove(pick)
-            # Assign as prospect — team reference is via drafting_team_id, NOT
-            # player.team (which would make persistence save them as rostered).
+
             pick.is_prospect = True
             pick.is_upcoming_rookie = False
             pick.drafting_team_id = team.id
@@ -3017,19 +3013,24 @@ class PlayerManager:
             if pick not in self.activePlayers:
                 self.activePlayers.append(pick)
             self.addToPositionList(pick)
-            picks.append({
-                "teamId": team.id, "teamName": team.name,
+
+            pickRecord = {
+                "teamId": team.id, "teamName": team.name, "teamAbbr": teamAbbr,
                 "playerId": pick.id, "playerName": pick.name,
                 "position": pick.position.name,
                 "rating": round(pick.playerRating, 1),
                 "tier": pick.playerTier.name,
                 "source": pickSource,
-            })
+            }
+            picks.append(pickRecord)
+
             if leagueHighlights is not None:
                 voteNote = ' by fan vote' if pickSource == 'fan_vote' else ''
                 leagueHighlights.insert(0, {
                     'event': {'text': f"{team.name} drafted {pick.name} ({pick.position.name}, {pick.playerTier.name}){voteNote}"}
                 })
+
+            yield {'type': 'pick', **pickRecord}
 
         # Anything left → FA pool as undrafted rookies
         undrafted = []
@@ -3045,13 +3046,13 @@ class PlayerManager:
             self.addToPositionList(rookie)
             undrafted.append(rookie.id)
 
-        # Assign tiers now that ratings are settled
         self.sortPlayersByPosition()
         voteDrafted = sum(1 for p in picks if p.get('source') == 'fan_vote')
         logger.info(
             f"Rookie draft complete: {len(picks)} drafted ({voteDrafted} via fan vote), "
             f"{len(undrafted)} undrafted to FA"
         )
+        yield {'type': 'complete', 'picks': picks, 'undrafted': undrafted}
         return {"picks": picks, "undrafted": undrafted}
 
     def scoutRookie(self, rookie, effectiveScouting: int) -> dict:
