@@ -365,6 +365,11 @@ class PlayerManager:
             player.capHit = db_player.cap_hit
             player.playerRating = db_player.player_rating
             player.freeAgentYears = db_player.free_agent_years
+            # Prospect pipeline state
+            player.is_prospect = bool(getattr(db_player, 'is_prospect', False))
+            player.is_undrafted = bool(getattr(db_player, 'is_undrafted', False))
+            player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
+            player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             
             # Load tier if present
             if db_player.tier:
@@ -496,8 +501,28 @@ class PlayerManager:
         if contract_fixes > 0:
             logger.info(f"Fixed contract state for {contract_fixes} players during team assignment")
         
+        # Pass 1 — prospects: route to their drafting team's pipeline, not the roster.
+        # Prospects have is_prospect=True + drafting_team_id set (team_id is NULL in DB).
+        prospectCount = 0
+        for player in self.activePlayers:
+            if getattr(player, 'is_prospect', False) and getattr(player, 'drafting_team_id', None):
+                team = team_lookup.get(player.drafting_team_id)
+                if team is not None:
+                    if not hasattr(team, 'prospects'):
+                        team.prospects = []
+                    if player not in team.prospects:
+                        team.prospects.append(player)
+                    player.team = 'Prospect'  # canonical runtime marker
+                    prospectCount += 1
+
+        if prospectCount > 0:
+            logger.info(f"Restored {prospectCount} prospects to team pipelines")
+
         faCount = 0
         for player in self.activePlayers:
+            # Prospects are handled above; don't try to roster them
+            if getattr(player, 'is_prospect', False):
+                continue
             if not hasattr(player, 'team') or player.team is None:
                 # Player has no team — mark as free agent
                 player.team = 'Free Agent'
@@ -1163,7 +1188,7 @@ class PlayerManager:
             from database.models import Player as DBPlayer, PlayerAttributes as DBPlayerAttributes, PlayerCareerStats, PlayerSeasonStats
             
             # Track statistics for debugging
-            team_id_stats = {'with_team': 0, 'free_agent': 0, 'retired': 0, 'null': 0, 'errors': 0}
+            team_id_stats = {'with_team': 0, 'free_agent': 0, 'retired': 0, 'prospect': 0, 'null': 0, 'errors': 0}
             
             # Save all active players (includes free agents)
             all_players_to_save = list(self.activePlayers)
@@ -1184,10 +1209,13 @@ class PlayerManager:
                         team_id = player.team
                         team_id_stats['with_team'] += 1
                     elif isinstance(player.team, str):
-                        # player.team is 'Free Agent' or 'Retired' - save as None
+                        # player.team is 'Free Agent' / 'Retired' / 'Prospect' — save as None.
+                        # Prospect pipeline ownership is tracked via drafting_team_id.
                         team_id = None
                         if player.team == 'Retired':
                             team_id_stats['retired'] += 1
+                        elif player.team == 'Prospect':
+                            team_id_stats['prospect'] += 1
                         else:
                             team_id_stats['free_agent'] += 1
                     elif hasattr(player.team, 'id'):
@@ -1226,6 +1254,10 @@ class PlayerManager:
                         defensive_position=defPosValue,
                         free_agent_years=player.freeAgentYears,
                         service_time=player.serviceTime.name if hasattr(player, 'serviceTime') else None,
+                        is_prospect=bool(getattr(player, 'is_prospect', False)),
+                        is_undrafted=bool(getattr(player, 'is_undrafted', False)),
+                        prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
+                        drafting_team_id=getattr(player, 'drafting_team_id', None),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1246,6 +1278,10 @@ class PlayerManager:
                     db_player.defensive_position = defPosValue
                     db_player.free_agent_years = player.freeAgentYears
                     db_player.service_time = player.serviceTime.name if hasattr(player, 'serviceTime') else None
+                    db_player.is_prospect = bool(getattr(player, 'is_prospect', False))
+                    db_player.is_undrafted = bool(getattr(player, 'is_undrafted', False))
+                    db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
+                    db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                 
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
@@ -2882,11 +2918,12 @@ class PlayerManager:
                 return (rookie.playerRating, -prospectsHere)
             pick = max(eligible, key=pickScore)
             available.remove(pick)
-            # Assign as prospect
+            # Assign as prospect — team reference is via drafting_team_id, NOT
+            # player.team (which would make persistence save them as rostered).
             pick.is_prospect = True
             pick.drafting_team_id = team.id
             pick.prospect_seasons = 0
-            pick.team = team  # reference for display / team-scoped queries
+            pick.team = 'Prospect'
             team.prospects.append(pick)
             if pick not in self.activePlayers:
                 self.activePlayers.append(pick)
@@ -2951,6 +2988,7 @@ class PlayerManager:
         best.prospect_seasons = 0
         best.drafting_team_id = None
         best.previousTeam = getattr(best, 'previousTeam', None)
+        best.team = team  # Update runtime team ref so persistence saves team_id correctly
         team.rosterDict[slot] = best
         if best in team.prospects:
             team.prospects.remove(best)
