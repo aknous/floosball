@@ -184,6 +184,8 @@ class SeasonManager:
             self.setTimingMode(TimingMode.PLAYOFF_TEST)
         elif mode_str == 'turbo-silent':
             self.setTimingMode(TimingMode.TURBO_SILENT)
+        elif mode_str in ('fast-weekly', 'fast_weekly'):
+            self.setTimingMode(TimingMode.FAST_WEEKLY)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
