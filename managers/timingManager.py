@@ -178,9 +178,10 @@ class TimingManager:
 
     def _getFastWeeklyDelays(self) -> Dict[str, float]:
         """Fast-weekly overrides: no in-game or between-games delays (games blast
-        through instantly), but a 30-second pause between weeks so a human can
-        track the season at a glance. Broadcasting is disabled in run_api.py for
-        this mode — no WebSocket traffic, pure sim output."""
+        through instantly), 30-second pause between weeks, and a roomier offseason
+        (~1–2 min) since that's the phase most worth examining in this mode.
+        Broadcasting is disabled in run_api.py for this mode — no WebSocket
+        traffic, pure sim output."""
         return {
             # In-game: zero everything so games resolve instantly
             'between_plays': 0.0,
@@ -192,13 +193,14 @@ class TimingManager:
             'week_setup': 30.0,
             'week_start_wait': 0.0,
             'week_end_wait': 30.0,
-            # Seasons/offseason: keep snappy too
-            'offseason': 10.0,
-            'offseason_pick': 0.05,
-            'season_transition': 30.0,
+            # Offseason: breathing room for inspecting offseason features
+            # (rookie class, retirement watch, prospect pipeline, FA draft)
+            'post_championship': 60.0,     # 1 min after Floos Bowl
+            'offseason': 90.0,             # 1.5 min pre-draft pause
+            'offseason_pick': 1.5,         # visible FA + rookie draft picks
+            'season_transition': 60.0,     # 1 min between seasons
             'playoff_round': 30.0,
             'championship': 30.0,
-            'post_championship': 30.0,
         }
 
     def setMode(self, mode: TimingMode) -> None:
