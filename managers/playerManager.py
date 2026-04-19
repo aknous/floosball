@@ -2763,7 +2763,143 @@ class PlayerManager:
         # Count high-tier players for logging (after tiers are assigned)
         highTierCount = sum(1 for p in self.freeAgents[-numOfPlayers:] if p.playerTier.name in ['TierA', 'TierS'])
         logger.info(f"Generated {numOfPlayers} replacement players ({numRetired} retired, {max(0, minNewPlayers - numRetired)} additional, {highTierCount} tier A/S)")
-    
+
+    # ── Prospect Pipeline: rookie class generation + draft ──────────────
+
+    def _generateRookieClass(self, currentSeason: int) -> List:
+        """Generate a fresh rookie class of ROOKIE_DRAFT_CLASS_SIZE players.
+
+        Returns the list of new rookies (not yet added to freeAgents or
+        activePlayers). Position distribution matches roster shape:
+        QB/RB/TE/K weighted 1x, WR weighted 2x (teams start 2 WRs).
+        Replaces the old _generateReplacementPlayers flow for the normal
+        rookie class — retirement-driven replacements are no longer needed
+        because 24 rookies > typical league-wide retirements.
+        """
+        import numpy as np
+        from random import randint
+        from constants import ROOKIE_DRAFT_CLASS_SIZE
+
+        numRookies = ROOKIE_DRAFT_CLASS_SIZE
+        meanSkill = 78
+        stdDev = 10
+        physicalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
+        mentalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
+
+        # Position weights match roster shape (WR x2 because teams start 2)
+        positionWeights = {
+            FloosPlayer.Position.QB: 1,
+            FloosPlayer.Position.RB: 1,
+            FloosPlayer.Position.WR: 2,
+            FloosPlayer.Position.TE: 1,
+            FloosPlayer.Position.K: 1,
+        }
+        weightedPosList = []
+        for pos, weight in positionWeights.items():
+            weightedPosList.extend([pos] * weight)
+
+        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
+        rookies = []
+        for i in range(numRookies):
+            physicalSeed = int(physicalSeeds[i])
+            mentalSeed = int(mentalSeeds[i])
+            pos = weightedPosList[randint(0, len(weightedPosList) - 1)]
+            player = self.createPlayer(pos, physicalSeed, mentalSeed)
+            if not player:
+                continue
+            player.id = nextPlayerId
+            nextPlayerId += 1
+            # Rookie flags — not in FA pool yet; drafted into prospects or placed into FA below
+            player.seasonsPlayed = 0
+            player.team = 'Unsigned'
+            rookies.append(player)
+        logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
+        return rookies
+
+    def countTeamProspectsAtPosition(self, team, position) -> int:
+        """How many prospects this team already holds at a given Position enum."""
+        return sum(1 for p in getattr(team, 'prospects', []) if p.position == position)
+
+    def hasOpenProspectSlot(self, team, position) -> bool:
+        """True if the team can hold another prospect at this position."""
+        from constants import PROSPECT_SLOT_CAP_PER_POSITION
+        return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
+
+    def _conductRookieDraft(self, rookies: List, draftOrder: List, leagueHighlights: list = None) -> dict:
+        """Worst-first rookie draft. Each team picks one rookie at a position where
+        they have an open prospect slot. Teams with no open slots skip entirely.
+        Undrafted rookies fall through to the FA pool with is_undrafted=True.
+
+        Returns {"picks": [{teamId, playerId, ...}], "undrafted": [playerId, ...]}.
+        """
+        picks = []
+        available = list(rookies)  # pool of rookies waiting to be drafted
+
+        for team in draftOrder:
+            if not available:
+                break
+            # Find eligible rookies: positions where this team has an open slot
+            openPositions = [
+                pos for pos in (FloosPlayer.Position.QB, FloosPlayer.Position.RB,
+                                FloosPlayer.Position.WR, FloosPlayer.Position.TE,
+                                FloosPlayer.Position.K)
+                if self.hasOpenProspectSlot(team, pos)
+            ]
+            if not openPositions:
+                # Team has zero open slots across all positions — forfeit pick
+                logger.info(f"Rookie draft: {team.name} skipped (all prospect slots full)")
+                continue
+            eligible = [r for r in available if r.position in openPositions]
+            if not eligible:
+                # No available rookies at any open-slot position — team passes this round
+                logger.info(f"Rookie draft: {team.name} passed (no rookies at open positions)")
+                continue
+            # Highest-rated eligible rookie wins. Ties broken by position scarcity
+            # (fewer prospects at that position = higher priority).
+            def pickScore(rookie):
+                prospectsHere = self.countTeamProspectsAtPosition(team, rookie.position)
+                return (rookie.playerRating, -prospectsHere)
+            pick = max(eligible, key=pickScore)
+            available.remove(pick)
+            # Assign as prospect
+            pick.is_prospect = True
+            pick.drafting_team_id = team.id
+            pick.prospect_seasons = 0
+            pick.team = team  # reference for display / team-scoped queries
+            team.prospects.append(pick)
+            if pick not in self.activePlayers:
+                self.activePlayers.append(pick)
+            self.addToPositionList(pick)
+            picks.append({
+                "teamId": team.id, "teamName": team.name,
+                "playerId": pick.id, "playerName": pick.name,
+                "position": pick.position.name,
+                "rating": round(pick.playerRating, 1),
+                "tier": pick.playerTier.name,
+            })
+            if leagueHighlights is not None:
+                leagueHighlights.insert(0, {
+                    'event': {'text': f"{team.name} drafted {pick.name} ({pick.position.name}, {pick.playerTier.name})"}
+                })
+
+        # Anything left → FA pool as undrafted rookies
+        undrafted = []
+        for rookie in available:
+            rookie.is_undrafted = True
+            rookie.team = 'Free Agent'
+            rookie.freeAgentYears = 0
+            if rookie not in self.freeAgents:
+                self.freeAgents.append(rookie)
+            if rookie not in self.activePlayers:
+                self.activePlayers.append(rookie)
+            self.addToPositionList(rookie)
+            undrafted.append(rookie.id)
+
+        # Assign tiers now that ratings are settled
+        self.sortPlayersByPosition()
+        logger.info(f"Rookie draft complete: {len(picks)} drafted, {len(undrafted)} undrafted to FA")
+        return {"picks": picks, "undrafted": undrafted}
+
     def _attemptPlayerCutAndUpgrade(self, team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                                    freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                                    eventLog=None) -> bool:

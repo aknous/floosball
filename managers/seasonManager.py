@@ -3311,12 +3311,38 @@ class SeasonManager:
         logger.info("Step 3.5: Resolve GM cut player votes")
         await self._resolveGmCutVotes(gmResults)
 
-        # STEP 4: FA retirements + rookie generation
-        logger.info("Step 4: Free agent retirements and rookie generation")
-        self.playerManager._processFreeAgentRetirements(
-            self.currentSeason.seasonNumber if self.currentSeason else 1, [])
-        self.playerManager._generateReplacementPlayers(
-            self.currentSeason.seasonNumber if self.currentSeason else 1)
+        # STEP 4: FA retirements + rookie generation + rookie draft
+        logger.info("Step 4: Free agent retirements, rookie class, and rookie draft")
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
+        self.playerManager._processFreeAgentRetirements(seasonNum, [])
+
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+
+        # Generate a 24-player rookie class, then run a worst-first draft that
+        # assigns each rookie to a team's prospect pipeline. Teams with no open
+        # prospect slots skip; unpicked rookies drop into the FA pool as
+        # undrafted free agents.
+        rookies = self.playerManager._generateRookieClass(seasonNum)
+        freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+        draftResults = self.playerManager._conductRookieDraft(
+            rookies, freeAgencyOrder, leagueHighlights
+        )
+
+        # Broadcast rookie draft summary for the frontend offseason panel
+        if BROADCASTING_AVAILABLE and broadcaster:
+            try:
+                from api.event_models import EventType
+                await broadcaster.broadcast_season_event({
+                    'event': EventType.OFFSEASON_PICK.value,
+                    'phase': 'rookie_draft',
+                    'season': seasonNum,
+                    'picks': draftResults['picks'],
+                    'undraftedCount': len(draftResults['undrafted']),
+                })
+            except Exception as e:
+                logger.warning(f"Could not broadcast rookie draft: {e}")
 
         # Enable broadcasting for OFFSEASON_TEST mode before FA window + draft
         offseasonTestBroadcastEnabled = False

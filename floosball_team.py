@@ -120,6 +120,10 @@ class Team:
         self.seasonTeamStats = copy.deepcopy(teamStatsDict)
         self.allTimeTeamStats = copy.deepcopy(teamStatsDict)
         self.rosterDict : dict[str, FloosPlayer.Player] = {'qb': None, 'rb': None, 'wr1': None, 'wr2': None, 'te': None, 'k': None}
+        # Prospects: drafted rookies + undrafted signings, capped per-position by
+        # constants.PROSPECT_SLOT_CAP_PER_POSITION, auto-released after
+        # constants.PROSPECT_DEVELOPMENT_WINDOW offseasons. Not roster-eligible.
+        self.prospects: list = []
 
     def setupTeam(self):
         if self.overallRating == 0:
