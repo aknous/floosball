@@ -286,6 +286,7 @@ def _buildCoachDict(team) -> Optional[dict]:
         'aggressiveness': coach.aggressiveness,
         'clockManagement': coach.clockManagement,
         'playerDevelopment': coach.playerDevelopment,
+        'scouting': getattr(coach, 'scouting', 80),
         'seasonsCoached': coach.seasonsCoached,
     }
 
@@ -6229,6 +6230,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "aggressiveness": c.aggressiveness,
                 "clockManagement": c.clockManagement,
                 "playerDevelopment": c.playerDevelopment,
+                "scouting": getattr(c, 'scouting', 80),
             }
 
         # Available coaches in pool
@@ -6245,6 +6247,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "aggressiveness": c.aggressiveness,
                 "clockManagement": c.clock_management,
                 "playerDevelopment": c.player_development,
+                "scouting": getattr(c, 'scouting', 80),
             })
 
         # Rostered players (for cut votes — all players eligible)
