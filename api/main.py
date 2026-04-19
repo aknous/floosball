@@ -404,9 +404,41 @@ async def get_team(team_id: int, response: Response):
         team_dict['coach'] = _buildCoachDict(team)
 
         # Roster
+        # Pre-fetch rating history for all roster players in one query so the
+        # response can inline sparkline data without N round-trips.
+        rosterPlayerIds = [p.id for p in team.rosterDict.values() if p is not None]
+        rosterHistoryByPlayer: Dict[int, List[Dict[str, int]]] = {}
+        if rosterPlayerIds:
+            try:
+                from database.connection import get_session as _rs_gs
+                from database.models import PlayerRatingHistory as _RH
+                _rs = _rs_gs()
+                try:
+                    _rows = _rs.query(_RH).filter(
+                        _RH.player_id.in_(rosterPlayerIds)
+                    ).order_by(_RH.player_id, _RH.season).all()
+                    for r in _rows:
+                        rosterHistoryByPlayer.setdefault(r.player_id, []).append({
+                            "season": r.season, "rating": r.rating,
+                        })
+                finally:
+                    _rs.close()
+            except Exception:
+                pass  # history is optional — skip on error
+
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
         roster = {}
         for pos, player in team.rosterDict.items():
             if player is not None:
+                # Append current live rating as the latest point so sparklines
+                # reflect in-season state even before the next snapshot fires
+                history = list(rosterHistoryByPlayer.get(player.id, []))
+                liveRating = int(round(player.playerRating or 0))
+                if currentSeasonNum and (not history or history[-1]["season"] != currentSeasonNum):
+                    history.append({"season": currentSeasonNum, "rating": liveRating})
+
                 roster[pos] = {
                     'id': player.id,
                     'name': player.name,
@@ -422,6 +454,7 @@ async def get_team(team_id: int, response: Response):
                     'tier': player.playerTier.name if hasattr(player.playerTier, 'name') else str(player.playerTier),
                     'fatigue': round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1),
                     'resilience': getattr(player.attributes, 'resilience', 80),
+                    'ratingHistory': history,
                 }
             else:
                 roster[pos] = None
