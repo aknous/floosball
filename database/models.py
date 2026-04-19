@@ -1155,6 +1155,9 @@ class GmVote(Base):
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Optional JSON payload for vote types that need structured data beyond a
+    # single target_player_id — e.g. draft_rookie carries the ranked ballot here.
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships

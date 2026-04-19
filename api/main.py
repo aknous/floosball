@@ -6277,6 +6277,183 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         session.close()
 
 
+@app.get("/api/rookies/upcoming")
+def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
+    """The season's rookie class, with scouting-blurred potentials.
+
+    Generated at season start, visible all season. Potentials are revealed
+    according to the viewer's favorite team's effective scouting (coach
+    scouting + funding tier bonus). Unauthenticated visitors get the widest
+    blur band.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from constants import FUNDING_SCOUTING_BONUS, GM_ACTIVE_WEEK
+    pm = floosball_app.playerManager
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+
+    upcoming = [p for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
+
+    # Determine viewer's effective scouting
+    effectiveScouting = 60  # default: worst-band blur
+    scoutTeam = None
+    if user and getattr(user, 'favorite_team_id', None):
+        scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
+        if scoutTeam:
+            coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
+            tierBonus = FUNDING_SCOUTING_BONUS.get(getattr(scoutTeam, 'fundingTier', 'MID_MARKET'), 0)
+            effectiveScouting = max(0, min(100, coachScouting + tierBonus))
+
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    rookies = [pm.scoutRookie(r, effectiveScouting) for r in upcoming]
+    rookies.sort(key=lambda r: (-r['rating'], r['position'], r['name']))
+
+    return build_success_response({
+        "season": seasonNumber,
+        "currentWeek": currentWeek,
+        "votingOpensWeek": GM_ACTIVE_WEEK,
+        "votingOpen": isinstance(currentWeek, int) and currentWeek >= GM_ACTIVE_WEEK,
+        "effectiveScouting": effectiveScouting,
+        "scoutingTeamId": scoutTeam.id if scoutTeam else None,
+        "rookies": rookies,
+    })
+
+
+class RookieBallotRequest(BaseModel):
+    rankings: List[int]
+
+
+@app.post("/api/gm/rookie-ballot")
+def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCurrentUser)):
+    """Submit or update a ranked rookie-draft ballot.
+
+    Window: opens when the Front Office opens (week >= GM_ACTIVE_WEEK) and
+    closes when the regular season ends (start of offseason). Reuses the
+    GM_VOTE_COST economy — first submission charges once; updates are free.
+    """
+    import json as _json
+    from database.connection import get_session
+    from database.models import User, GmVote
+    from database.repositories.card_repositories import CurrencyRepository
+    from constants import GM_VOTE_COST, GM_ROOKIE_DRAFT_MAX_RANKINGS, GM_ACTIVE_WEEK
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    sm = floosball_app.seasonManager
+
+    if not req.rankings:
+        raise HTTPException(400, "Provide at least one ranked rookie ID")
+    if len(req.rankings) > GM_ROOKIE_DRAFT_MAX_RANKINGS:
+        raise HTTPException(400, f"Max {GM_ROOKIE_DRAFT_MAX_RANKINGS} rookies per ballot")
+
+    # Gate on week: Front Office opens at GM_ACTIVE_WEEK. Voting also blocked
+    # once playoffs start or offseason is running (rookies are mid-draft).
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not isinstance(currentWeek, int) or currentWeek < GM_ACTIVE_WEEK:
+        raise HTTPException(400, f"Rookie draft voting opens in Week {GM_ACTIVE_WEEK}")
+    if getattr(sm.currentSeason, 'currentPlayoffRound', None):
+        raise HTTPException(400, "Rookie draft voting is closed — offseason has begun")
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            raise HTTPException(400, "You must have a favorite team to vote")
+
+        teamId = dbUser.favorite_team_id
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        # Validate that every ID in rankings is an actual upcoming rookie
+        pm = floosball_app.playerManager
+        upcomingIds = {p.id for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)}
+        rankings = [int(r) for r in req.rankings if int(r) in upcomingIds]
+        if not rankings:
+            raise HTTPException(400, "None of the submitted IDs are upcoming rookies")
+
+        # Upsert: one draft_rookie vote per user per season
+        existing = session.query(GmVote).filter_by(
+            user_id=user.id, team_id=teamId, season=currentSeason,
+            vote_type='draft_rookie',
+        ).first()
+
+        costPaid = 0
+        if existing is None:
+            currencyRepo = CurrencyRepository(session)
+            result = currencyRepo.spendFunds(
+                user.id, GM_VOTE_COST, "gm_rookie_ballot",
+                "Rookie draft ballot", currentSeason,
+            )
+            if result is None:
+                raise HTTPException(400, "Insufficient Floobits")
+            costPaid = GM_VOTE_COST
+            vote = GmVote(
+                user_id=user.id, team_id=teamId, season=currentSeason,
+                vote_type='draft_rookie', cost_paid=costPaid,
+                details=_json.dumps(rankings),
+            )
+            session.add(vote)
+        else:
+            existing.details = _json.dumps(rankings)
+        session.commit()
+
+        return build_success_response({
+            "rankings": rankings,
+            "costPaid": costPaid,
+            "isUpdate": existing is not None,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Rookie ballot error: {e}")
+        raise HTTPException(500, "Failed to submit rookie ballot")
+    finally:
+        session.close()
+
+
+@app.get("/api/gm/rookie-ballot")
+def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
+    """Return the user's current rookie-draft ballot for this season."""
+    import json as _json
+    from database.connection import get_session
+    from database.models import User, GmVote
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    sm = floosball_app.seasonManager
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        teamId = dbUser.favorite_team_id if dbUser else None
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        if not teamId:
+            return build_success_response({"rankings": [], "hasBallot": False})
+
+        existing = session.query(GmVote).filter_by(
+            user_id=user.id, team_id=teamId, season=currentSeason,
+            vote_type='draft_rookie',
+        ).first()
+
+        rankings: List[int] = []
+        if existing and existing.details:
+            try:
+                parsed = _json.loads(existing.details)
+                if isinstance(parsed, list):
+                    rankings = [int(x) for x in parsed if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
+            except Exception:
+                pass
+        return build_success_response({
+            "rankings": rankings,
+            "hasBallot": existing is not None,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/gm/votes")
 def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
     """Get current user's GM votes this season."""

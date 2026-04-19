@@ -306,6 +306,14 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # GmVote.details for structured payloads like ranked ballots (Phase 7)
+        try:
+            conn.execute(text("ALTER TABLE gm_votes ADD COLUMN details TEXT"))
+            conn.commit()
+            logger.info("  Migration: added gm_votes.details")
+        except Exception:
+            conn.rollback()
+
         # Vacancy fallback preference on users (feature/prospects-pipeline)
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN vacancy_auto_pick VARCHAR(20) DEFAULT 'best_available' NOT NULL"))
