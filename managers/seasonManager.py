@@ -3685,7 +3685,16 @@ class SeasonManager:
             logger.error("No free agency order available (playoffs must be completed first)")
             return
 
-        freeAgencyOrder = self.currentSeason.freeAgencyOrder
+        # Rookie draft uses the worst-first freeAgencyOrder from playoffs (rebuild
+        # path). FA draft, however, gives MEGA-market teams priority so funding
+        # tier actually determines signing power. Bad teams get their ceiling
+        # raised through the rookie-draft + prospect pipeline instead.
+        rookieDraftOrder = self.currentSeason.freeAgencyOrder
+        freeAgencyOrder = sorted(
+            rookieDraftOrder,
+            key=lambda t: (getattr(t, 'fundingTierRank', 3),
+                           -(t.seasonTeamStats.get('winPerc', 0) if hasattr(t, 'seasonTeamStats') else 0)),
+        )
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
@@ -5663,30 +5672,36 @@ class SeasonManager:
             session.close()
 
     def _assignFundingTiers(self, session, season: int) -> None:
-        """Assign funding tiers based on fixed absolute thresholds.
+        """Assign funding tiers by relative rank across the league.
 
-        Thresholds are fixed Floobits amounts (e.g., >= 2000 = MEGA, >= 1000 = LARGE,
-        >= 500 = MID, else SMALL). Stable and predictable — other teams' funding
-        never affects your tier.
+        Teams are ranked by effective_funding and split into quartiles:
+          Top 25% → MEGA_MARKET (tier 1)
+          Next 25% → LARGE_MARKET (tier 2)
+          Next 25% → MID_MARKET (tier 3)
+          Bottom 25% → SMALL_MARKET (tier 4)
+
+        Relative ranking keeps the tier system balanced regardless of league-wide
+        economy inflation/deflation. Fans are competing for scarce top slots, not
+        chasing a fixed Floobit threshold.
         """
         from database.models import TeamFunding
-        from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
+        from constants import FUNDING_TIER_NAMES
 
         records = session.query(TeamFunding).filter_by(season=season).all()
         if not records:
             return
 
-        for rec in records:
-            tierAssigned = False
-            for i, threshold in enumerate(FUNDING_TIER_THRESHOLDS):
-                if rec.effective_funding >= threshold:
-                    rec.funding_tier = FUNDING_TIER_NAMES[i]
-                    rec.tier_rank = i + 1
-                    tierAssigned = True
-                    break
-            if not tierAssigned:
-                rec.funding_tier = FUNDING_TIER_NAMES[-1]  # SMALL_MARKET
-                rec.tier_rank = len(FUNDING_TIER_NAMES)
+        # Sort descending by effective_funding; ties broken arbitrarily (by record id)
+        ranked = sorted(records, key=lambda r: (-(r.effective_funding or 0), r.id))
+        total = len(ranked)
+        # Quartile boundaries — use ceil so leagues with sizes not divisible by 4
+        # still distribute cleanly (top tiers get the extra slot if any)
+        import math
+        quartileSize = max(1, math.ceil(total / 4))
+        for idx, rec in enumerate(ranked):
+            quartile = min(idx // quartileSize, len(FUNDING_TIER_NAMES) - 1)
+            rec.funding_tier = FUNDING_TIER_NAMES[quartile]
+            rec.tier_rank = quartile + 1
 
         session.flush()
 

@@ -119,7 +119,9 @@ DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
 FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
-FUNDING_TIER_THRESHOLDS = [2000, 1000, 500]  # Fixed absolute thresholds: >= 2000 = MEGA, >= 1000 = LARGE, >= 500 = MID, else SMALL
+# Tiers are assigned by relative rank across the league: effective_funding is
+# sorted descending and split into quartiles. Top 25% = MEGA, etc. Replaces the
+# old absolute-threshold system so funding stays balanced as the economy shifts.
 FUNDING_TIER_NAMES = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
 FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}

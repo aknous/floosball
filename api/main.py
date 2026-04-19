@@ -459,11 +459,13 @@ async def get_team(team_id: int, response: Response):
                 continue
         team_dict['schedule'] = teamSchedule
 
-        # Funding details (current season)
+        # Funding details (current season) — tiers are relative quartiles across
+        # the league, so "next-tier threshold" is computed from live standings
+        # rather than a fixed Floobit amount.
         try:
             from database.connection import get_session as _gs
             from database.models import TeamFunding
-            from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
+            from constants import FUNDING_TIER_NAMES
             fundSession = _gs()
             try:
                 # Get the latest funding record for this team
@@ -475,20 +477,36 @@ async def get_team(team_id: int, response: Response):
                     currentTier = latestFunding.funding_tier or 'SMALL_MARKET'
                     currentRank = latestFunding.tier_rank or 4
 
-                    # Compute progress to next tier
+                    # Rank the whole league's effective_funding for this season to
+                    # derive the "what I need to climb" threshold.
+                    seasonRecs = fundSession.query(TeamFunding).filter_by(
+                        season=latestFunding.season
+                    ).all()
+                    ranked = sorted(seasonRecs, key=lambda r: -(r.effective_funding or 0))
                     nextTierThreshold = None
                     nextTierName = None
                     progressToNextTier = None
-                    if currentRank > 1:
-                        # There's a higher tier to reach
-                        nextIdx = currentRank - 2  # index into FUNDING_TIER_THRESHOLDS
-                        nextTierThreshold = FUNDING_TIER_THRESHOLDS[nextIdx]
-                        nextTierName = FUNDING_TIER_NAMES[nextIdx]
-                        # Progress from current tier threshold to next tier threshold
-                        currentTierThreshold = FUNDING_TIER_THRESHOLDS[currentRank - 1] if currentRank - 1 < len(FUNDING_TIER_THRESHOLDS) else 0
-                        tierRange = nextTierThreshold - currentTierThreshold
-                        if tierRange > 0:
-                            progressToNextTier = round(min(1.0, max(0.0, (effectiveFunding - currentTierThreshold) / tierRange)), 2)
+                    if currentRank > 1 and ranked:
+                        # The effective_funding of the lowest-ranked team in the
+                        # tier ABOVE us is what we need to beat.
+                        import math as _m
+                        quartileSize = max(1, _m.ceil(len(ranked) / 4))
+                        targetIdx = (currentRank - 2) * quartileSize + (quartileSize - 1)  # last slot in target tier
+                        targetIdx = min(targetIdx, len(ranked) - 1)
+                        nextTierThreshold = ranked[targetIdx].effective_funding or 0
+                        nextTierName = FUNDING_TIER_NAMES[currentRank - 2]
+                        # Progress: fraction between our current funding and what's needed
+                        if nextTierThreshold > effectiveFunding:
+                            gap = nextTierThreshold - effectiveFunding
+                            # A reasonable denominator: the gap between tiers in the league
+                            if currentRank - 1 < len(ranked) // 4 * 4 and len(ranked) >= 4:
+                                sameTierLow = ranked[min(currentRank * quartileSize - 1, len(ranked) - 1)].effective_funding or 0
+                                tierRange = max(1, nextTierThreshold - sameTierLow)
+                            else:
+                                tierRange = max(1, gap)
+                            progressToNextTier = round(min(1.0, max(0.0, 1.0 - gap / tierRange)), 2)
+                        else:
+                            progressToNextTier = 1.0
 
                     team_dict['funding'] = {
                         'season': latestFunding.season,
@@ -502,10 +520,6 @@ async def get_team(team_id: int, response: Response):
                         'nextTierThreshold': nextTierThreshold,
                         'nextTierName': nextTierName,
                         'progressToNextTier': progressToNextTier,
-                        'allTierThresholds': {
-                            FUNDING_TIER_NAMES[i]: t
-                            for i, t in enumerate(FUNDING_TIER_THRESHOLDS)
-                        },
                     }
             finally:
                 fundSession.close()
@@ -3108,7 +3122,7 @@ def get_projected_funding(team_id: int):
     based on their current balance and funding percentage.
     Also projects next season's tier after carry-forward decay."""
     import math
-    from constants import DEFAULT_FUNDING_PCT, FUNDING_DECAY_RATE, FUNDING_BASELINE_PER_TEAM, FUNDING_TIER_THRESHOLDS
+    from constants import DEFAULT_FUNDING_PCT, FUNDING_DECAY_RATE, FUNDING_BASELINE_PER_TEAM, FUNDING_TIER_NAMES
     from database.connection import get_session
     from database.models import User, UserCurrency, TeamFunding
     session = get_session()
@@ -3143,13 +3157,48 @@ def get_projected_funding(team_id: int):
         nextSeasonCarried = math.floor(endOfSeasonEffective * FUNDING_DECAY_RATE)
         nextSeasonEffective = FUNDING_BASELINE_PER_TEAM + nextSeasonCarried
 
-        # Determine next-season tier
-        thresholds = FUNDING_TIER_THRESHOLDS  # [2000, 1000, 500]
-        tierNames = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
-        nextSeasonTier = tierNames[-1]
-        for i, threshold in enumerate(thresholds):
-            if nextSeasonEffective >= threshold:
-                nextSeasonTier = tierNames[i]
+        # Project next-season tier via relative rank: estimate every team's
+        # next-season effective funding (current funding + their own projected
+        # contributions), sort descending, quartile split. Teams without a
+        # funding record default to baseline only.
+        import math as _math
+        allTeamIds = [t.id for t in floosball_app.teamManager.teams] if (floosball_app and floosball_app.teamManager) else []
+        # Pre-compute each team's current funding record (for carryover base)
+        currentFundingByTeam = {
+            r.team_id: r for r in
+            session.query(TeamFunding).filter_by(season=currentSeasonNum).all()
+        }
+        # Pre-compute each fan's projected auto-contribution, grouped by team
+        projectedByTeam: dict = {}
+        allFans = session.query(User).filter(User.favorite_team_id.isnot(None)).all()
+        balancesByUser = {
+            uc.user_id: uc.balance for uc in
+            session.query(UserCurrency).filter(UserCurrency.user_id.in_([f.id for f in allFans])).all()
+        }
+        for fan in allFans:
+            tid = fan.favorite_team_id
+            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT) or DEFAULT_FUNDING_PCT
+            pct = max(0, min(100, pct))
+            bal = balancesByUser.get(fan.id, 0) or 0
+            if pct > 0 and bal > 0:
+                projectedByTeam[tid] = projectedByTeam.get(tid, 0) + _math.floor(bal * pct / 100.0)
+
+        # Project each team's next-season effective funding
+        teamProjections = []
+        for tid in allTeamIds:
+            rec = currentFundingByTeam.get(tid)
+            endOfSeason = (rec.current_funding or 0) if rec else 0
+            endOfSeason += projectedByTeam.get(tid, 0)
+            carried = _math.floor(endOfSeason * FUNDING_DECAY_RATE)
+            teamProjections.append((tid, FUNDING_BASELINE_PER_TEAM + carried))
+
+        teamProjections.sort(key=lambda x: -x[1])
+        quartileSize = max(1, _math.ceil(len(teamProjections) / 4))
+        nextSeasonTier = FUNDING_TIER_NAMES[-1]
+        for idx, (tid, _projected) in enumerate(teamProjections):
+            if tid == team_id:
+                quartile = min(idx // quartileSize, len(FUNDING_TIER_NAMES) - 1)
+                nextSeasonTier = FUNDING_TIER_NAMES[quartile]
                 break
 
         return build_success_response({
