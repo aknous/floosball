@@ -82,7 +82,12 @@ class Team(Base):
 
     # Relationships
     league: Mapped[Optional["League"]] = relationship("League", back_populates="teams")
-    players: Mapped[list["Player"]] = relationship("Player", back_populates="team")
+    # Players disambiguates by team_id because Player also has a drafting_team_id
+    # FK (prospect pipeline ownership). Only the active-roster FK participates in
+    # Team.players — prospects are accessed via a separate runtime list.
+    players: Mapped[list["Player"]] = relationship(
+        "Player", back_populates="team", foreign_keys="[Player.team_id]"
+    )
     season_stats: Mapped[list["TeamSeasonStats"]] = relationship("TeamSeasonStats", back_populates="team")
     home_games: Mapped[list["Game"]] = relationship("Game", foreign_keys="Game.home_team_id", back_populates="home_team")
     away_games: Mapped[list["Game"]] = relationship("Game", foreign_keys="Game.away_team_id", back_populates="away_team")
@@ -148,7 +153,9 @@ class Player(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    team: Mapped[Optional["Team"]] = relationship("Team", back_populates="players")
+    team: Mapped[Optional["Team"]] = relationship(
+        "Team", back_populates="players", foreign_keys=[team_id]
+    )
     attributes: Mapped[Optional["PlayerAttributes"]] = relationship("PlayerAttributes", back_populates="player", uselist=False)
     career_stats: Mapped[list["PlayerCareerStats"]] = relationship("PlayerCareerStats", back_populates="player")
     season_stats: Mapped[list["PlayerSeasonStats"]] = relationship("PlayerSeasonStats", back_populates="player")
