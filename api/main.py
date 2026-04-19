@@ -3217,6 +3217,61 @@ def get_projected_funding(team_id: int):
         session.close()
 
 
+@app.get("/api/league/markets/history")
+def get_league_markets_history():
+    """Per-season tier/funding history for every team, all seasons.
+
+    Powers the tier-trajectory chart on the Markets section — shows which
+    teams have been climbing and which have been sliding. Returns sparse data
+    (teams only appear in seasons where they have a TeamFunding record).
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFunding
+
+    tm = floosball_app.teamManager
+    if not tm:
+        return build_success_response({"seasons": [], "teams": []})
+
+    session = get_session()
+    try:
+        # Pull every funding record across all seasons, group by team
+        rows = session.query(TeamFunding).order_by(
+            TeamFunding.team_id, TeamFunding.season
+        ).all()
+
+        historyByTeam: Dict[int, List[Dict[str, Any]]] = {}
+        seasonSet = set()
+        for r in rows:
+            seasonSet.add(r.season)
+            historyByTeam.setdefault(r.team_id, []).append({
+                "season": r.season,
+                "tier": r.funding_tier or 'MID_MARKET',
+                "tierRank": r.tier_rank or 3,
+                "effectiveFunding": r.effective_funding or 0,
+            })
+
+        teamsPayload = []
+        for team in tm.teams:
+            hist = historyByTeam.get(team.id, [])
+            teamsPayload.append({
+                "id": team.id,
+                "name": team.name,
+                "city": getattr(team, 'city', ''),
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', '#64748b'),
+                "history": hist,
+            })
+
+        return build_success_response({
+            "seasons": sorted(seasonSet),
+            "teams": teamsPayload,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/league/markets")
 def get_league_markets():
     """League-wide market & funding view.
