@@ -274,6 +274,11 @@ GM_VOTES_PER_SEASON = 20
 GM_VOTES_PER_TYPE = 8
 GM_VOTES_PER_TARGET = 5
 
+# Front Office voting window opens at this week. Before this, GM vote UIs show
+# a "convening..." state. Mirrors the frontend const GM_ACTIVE_WEEK in
+# FrontOfficePanel.tsx — keep them in sync.
+GM_ACTIVE_WEEK = 22
+
 # FA ballot
 GM_FA_BALLOT_COST = 15
 GM_FA_BALLOT_MAX_RANKINGS = 18  # 6 roster slots × 3 ranked candidates each
