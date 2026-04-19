@@ -787,6 +787,12 @@ class SimulationState(Base):
     current_week: Mapped[int] = mapped_column(Integer, default=0)
     in_playoffs: Mapped[bool] = mapped_column(Boolean, default=False)
     playoff_round: Mapped[Optional[str]] = mapped_column(String(50))
+    # True while handleOffseason() is executing. Set before offseason starts,
+    # cleared after seasonsPlayed is advanced. If a crash lands mid-offseason,
+    # the resume logic treats the offseason as completed (any partial work was
+    # already persisted) rather than replaying the season from its final week
+    # and blowing away the already-advanced roster/player state.
+    in_offseason: Mapped[bool] = mapped_column(Boolean, default=False)
     total_seasons: Mapped[int] = mapped_column(Integer, default=20)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

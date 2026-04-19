@@ -304,6 +304,17 @@ def _runPendingMigrations():
             logger.info("  Migration: added users.vacancy_auto_pick")
         except Exception:
             conn.rollback()
+
+        # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
+        # Protects against the "deploy during offseason → season replays on
+        # restart" bug. Set True just before handleOffseason() runs, cleared
+        # once seasonsPlayed has been advanced and saved.
+        try:
+            conn.execute(text("ALTER TABLE simulation_state ADD COLUMN in_offseason BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added simulation_state.in_offseason")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
