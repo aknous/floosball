@@ -2900,6 +2900,47 @@ class PlayerManager:
         logger.info(f"Rookie draft complete: {len(picks)} drafted, {len(undrafted)} undrafted to FA")
         return {"picks": picks, "undrafted": undrafted}
 
+    def _advanceProspectWindow(self) -> dict:
+        """Increment prospect_seasons on every prospect; release washouts to the FA pool.
+
+        Called once per offseason after training. Prospects past
+        PROSPECT_DEVELOPMENT_WINDOW are released as free agents (with is_undrafted
+        unchanged — 'washout' is implied by the prospect_seasons counter, not a
+        separate flag). Returns a summary dict for logging/broadcasting.
+        """
+        from constants import PROSPECT_DEVELOPMENT_WINDOW
+        teamManager = self.serviceContainer.getService('team_manager')
+        released = []
+        retained = 0
+        if not teamManager:
+            return {"released": [], "retained": 0}
+        for team in teamManager.teams:
+            keep = []
+            for prospect in list(getattr(team, 'prospects', [])):
+                prospect.prospect_seasons = (getattr(prospect, 'prospect_seasons', 0) or 0) + 1
+                if prospect.prospect_seasons >= PROSPECT_DEVELOPMENT_WINDOW:
+                    # Release: flip flags, move to FA pool
+                    prospect.is_prospect = False
+                    prospect.drafting_team_id = None
+                    prospect.team = 'Free Agent'
+                    prospect.freeAgentYears = 0
+                    if prospect not in self.freeAgents:
+                        self.freeAgents.append(prospect)
+                    released.append({
+                        "playerId": prospect.id,
+                        "name": prospect.name,
+                        "position": prospect.position.name,
+                        "rating": round(getattr(prospect, 'playerRating', 0), 1),
+                        "fromTeam": team.name,
+                    })
+                else:
+                    keep.append(prospect)
+                    retained += 1
+            team.prospects = keep
+        if released:
+            logger.info(f"Prospect window: released {len(released)} washouts, {retained} prospects retained")
+        return {"released": released, "retained": retained}
+
     def _attemptPlayerCutAndUpgrade(self, team, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                                    freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                                    eventLog=None) -> bool:

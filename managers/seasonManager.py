@@ -3403,23 +3403,35 @@ class SeasonManager:
             logger.info("OFFSEASON_TEST: broadcasting disabled after draft")
 
         # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
+        # Prospects train through their drafting team's coach/funding too, so coaches
+        # with strong playerDevelopment and MEGA-market teams grow pipelines faster.
         logger.info("Step 7: Player offseason training")
         from constants import FUNDING_DEV_BONUS
-        rosteredDevRating: dict = {}
-        rosteredFundingBonus: dict = {}
+        teamDevRating: dict = {}       # player.id → coach dev rating
+        teamFundingBonus: dict = {}    # player.id → funding dev bonus
         teamManager = self.serviceContainer.getService('team_manager')
         for team in teamManager.teams:
             coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
             fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
-            for posGroup in team.rosterDict.values():
-                if posGroup is not None and hasattr(posGroup, 'id'):
-                    rosteredDevRating[posGroup.id] = coachDevRating
-                    rosteredFundingBonus[posGroup.id] = fundingBonus
+            # Rostered players train with this team's coach/funding
+            for rosterPlayer in team.rosterDict.values():
+                if rosterPlayer is not None and hasattr(rosterPlayer, 'id'):
+                    teamDevRating[rosterPlayer.id] = coachDevRating
+                    teamFundingBonus[rosterPlayer.id] = fundingBonus
+            # Prospects get the same treatment — they're part of this team's pipeline
+            for prospect in getattr(team, 'prospects', []):
+                if hasattr(prospect, 'id'):
+                    teamDevRating[prospect.id] = coachDevRating
+                    teamFundingBonus[prospect.id] = fundingBonus
         for player in self.playerManager.activePlayers:
             if hasattr(player, 'offseasonTraining'):
-                devRating = rosteredDevRating.get(getattr(player, 'id', None), 50)
-                fundingBonus = rosteredFundingBonus.get(getattr(player, 'id', None), 0)
+                devRating = teamDevRating.get(getattr(player, 'id', None), 50)
+                fundingBonus = teamFundingBonus.get(getattr(player, 'id', None), 0)
                 player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
+
+        # STEP 7.5: Advance prospect development window — auto-release washouts
+        logger.info("Step 7.5: Prospect development window advancement")
+        self.playerManager._advanceProspectWindow()
 
         # STEP 8: Handle retired players on fantasy rosters
         # Must run before HoF which clears newlyRetiredPlayers
