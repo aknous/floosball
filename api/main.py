@@ -6426,8 +6426,22 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
         slotPosMap = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
         if favTeam:
             for slot, posName in slotPosMap.items():
-                if favTeam.rosterDict.get(slot) is None:
-                    openSlots.append({"slot": slot, "position": posName})
+                rosterPlayer = favTeam.rosterDict.get(slot)
+                if rosterPlayer is None:
+                    # Slot is actually open right now
+                    openSlots.append({"slot": slot, "position": posName, "projected": False})
+                elif getattr(rosterPlayer, 'termRemaining', 99) <= 1:
+                    # Current starter is in their walk year — slot will likely open
+                    # at offseason. Flag as projected so the UI can say "opening
+                    # next season" while the fan votes.
+                    openSlots.append({
+                        "slot": slot, "position": posName, "projected": True,
+                        "incumbent": {
+                            "id": rosterPlayer.id, "name": rosterPlayer.name,
+                            "rating": round(rosterPlayer.playerRating, 1),
+                            "termRemaining": getattr(rosterPlayer, 'termRemaining', 0),
+                        },
+                    })
 
         # Get season number for stats lookup
         seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
@@ -6483,7 +6497,56 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "stats": formatStats(row, posName),
                 "isRookie": p.id in rookieIds,
                 "isProspect": False,
+                "isProjected": False,
             })
+
+        # Projected FAs: rostered players on OTHER teams (not the fan's team)
+        # whose contracts are in their walk year. These players will likely be
+        # FA at season end and fans can queue up votes on them now.
+        if teamManager:
+            # Need stats for projected players too for the UI to show over/underperformance
+            projectedIds = []
+            for team in teamManager.teams:
+                if favTeam and team.id == favTeam.id:
+                    continue  # Fans can't draft their own roster
+                for pos, rp in team.rosterDict.items():
+                    if rp is None:
+                        continue
+                    if getattr(rp, 'termRemaining', 99) <= 1:
+                        projectedIds.append(rp.id)
+            projStatsRows = {}
+            if projectedIds:
+                rows = session.query(PlayerSeasonStats).filter(
+                    PlayerSeasonStats.player_id.in_(projectedIds),
+                    PlayerSeasonStats.season == seasonNum,
+                ).all()
+                for r in rows:
+                    projStatsRows[r.player_id] = r
+            for team in teamManager.teams:
+                if favTeam and team.id == favTeam.id:
+                    continue
+                for pos, rp in team.rosterDict.items():
+                    if rp is None:
+                        continue
+                    if getattr(rp, 'termRemaining', 99) > 1:
+                        continue
+                    posName = rp.position.name
+                    perfRating = getattr(rp, 'seasonPerformanceRating', 0) or 0
+                    overallRating = round(rp.playerRating)
+                    players.append({
+                        "id": rp.id,
+                        "name": rp.name,
+                        "position": posName,
+                        "rating": round(rp.playerRating, 1),
+                        "tier": rp.playerTier.name,
+                        "performanceRating": perfRating,
+                        "ratingDelta": perfRating - overallRating,
+                        "stats": formatStats(projStatsRows.get(rp.id), posName),
+                        "isRookie": False,
+                        "isProspect": False,
+                        "isProjected": True,
+                        "currentTeam": team.abbr,
+                    })
 
         # Include the favorite team's prospects as ballot candidates too, so fans
         # can rank "promote this prospect" alongside "sign this FA" in a single

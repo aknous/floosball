@@ -501,6 +501,17 @@ class SeasonManager:
                 )
                 broadcaster.broadcast_sync('season', week_event)
 
+            # Open the FA voting window mid-season once Week 22 arrives (the
+            # Front Office's activation threshold). Fans can rank projected
+            # FAs — walk-year rostered players + existing FAs — from here
+            # through end of regular season. Idempotent.
+            try:
+                from constants import GM_ACTIVE_WEEK
+                if self.currentSeason.currentWeek >= GM_ACTIVE_WEEK and not getattr(self, '_faWindowOpen', False):
+                    await self._openFaVotingWindowMidSeason()
+            except Exception as _e:
+                logger.warning(f"Could not open FA window mid-season: {_e}")
+
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
                 # Refresh ELO from current team values (stale since schedule creation)
@@ -4129,46 +4140,70 @@ class SeasonManager:
         finally:
             session.close()
 
-    async def _runFaVotingWindow(self) -> None:
-        """Open FA voting window, wait for duration, then resolve sign_fa votes."""
-        from constants import GM_FA_WINDOW_FAST, GM_FA_WINDOW_SEQUENTIAL, GM_FA_WINDOW_SCHEDULED
-        import asyncio
+    async def _openFaVotingWindowMidSeason(self) -> None:
+        """Open the FA voting window mid-season when the Front Office activates.
 
-        # Determine window duration based on timing mode
-        mode = self.timingManager.mode
-        if mode == TimingMode.FAST:
-            duration = GM_FA_WINDOW_FAST
-        elif mode in (TimingMode.SCHEDULED, TimingMode.TEST_SCHEDULED):
-            duration = GM_FA_WINDOW_SCHEDULED
-        else:
-            # SEQUENTIAL, TURBO, DEMO, OFFSEASON_TEST all use the middle duration
-            duration = GM_FA_WINDOW_SEQUENTIAL
-
-        # Set flag so API endpoints know the window is open
-        import time
+        Idempotent: skips if already open. Called by the regular-season loop
+        when currentWeek hits GM_ACTIVE_WEEK so fans can start ranking
+        projected FAs (walk-year rostered players + existing FAs) well before
+        the offseason cliff.
+        """
+        if getattr(self, '_faWindowOpen', False):
+            return
         self._faWindowOpen = True
-        self._faWindowEnd = time.time() + duration
+        self._faWindowEnd = None  # no fixed end — closes at offseason step 5
 
-        # Broadcast FA window open
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
+                # Projected pool = current FAs (they're already candidates) +
+                # rostered players in their walk year (termRemaining <= 1) who
+                # are likely to be FA at season end
+                from api.event_models import GmEvent
                 faPool = [
                     {"id": p.id, "name": p.name, "position": p.position.name,
-                     "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
+                     "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
+                     "projected": False}
                     for p in self.playerManager.freeAgents
                 ]
-                from api.event_models import GmEvent
+                # Rostered walk-year projection
+                teamManager = self.serviceContainer.getService('team_manager')
+                if teamManager:
+                    for team in teamManager.teams:
+                        for pos, player in team.rosterDict.items():
+                            if player is None:
+                                continue
+                            if getattr(player, 'termRemaining', 99) <= 1:
+                                faPool.append({
+                                    "id": player.id, "name": player.name,
+                                    "position": player.position.name,
+                                    "rating": round(player.playerRating, 1),
+                                    "tier": player.playerTier.name,
+                                    "projected": True,
+                                })
                 await broadcaster.broadcast_season_event(
                     GmEvent.faWindowOpen(
                         self.currentSeason.seasonNumber if self.currentSeason else 0,
-                        faPool, duration
+                        faPool, 0  # duration 0 = no countdown timer; closes at offseason
                     )
                 )
             except Exception as e:
-                logger.warning(f"Could not broadcast FA window open: {e}")
+                logger.warning(f"Could not broadcast FA window open (mid-season): {e}")
+        logger.info("FA voting window opened mid-season — stays open through end of regular season")
 
-        logger.info(f"FA voting window open for {duration}s")
-        await asyncio.sleep(duration)
+    async def _runFaVotingWindow(self) -> None:
+        """Close the FA voting window (if still open from mid-season) and
+        resolve sign_fa votes via RCV.
+
+        Historically this method also OPENED the window with a countdown, but
+        the window now opens earlier — at Front Office activation mid-season —
+        so fans have the full Week 22 → end-of-season to cast ballots. This
+        method just finalizes: closes the window, resolves ballots.
+        """
+        # Ensure window is open — edge case: if currentWeek never passed
+        # GM_ACTIVE_WEEK (short test mode), open it briefly so any late ballots
+        # can still be resolved
+        if not getattr(self, '_faWindowOpen', False):
+            self._faWindowOpen = True
         self._faWindowOpen = False
         self._faWindowEnd = None
 
