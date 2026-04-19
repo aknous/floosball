@@ -3217,6 +3217,133 @@ def get_projected_funding(team_id: int):
         session.close()
 
 
+@app.get("/api/league/markets")
+def get_league_markets():
+    """League-wide market & funding view.
+
+    Returns every team with current tier, effective funding, contributing fan
+    count, and top patrons (highest-contributing users this season). Used by
+    the Markets page to surface tier rankings and social/economic pressure.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import User, TeamFunding, CurrencyTransaction
+    from sqlalchemy import func
+
+    tm = floosball_app.teamManager
+    sm = floosball_app.seasonManager
+    if not tm or not sm or not sm.currentSeason:
+        return build_success_response({"season": 0, "teams": []})
+    currentSeason = sm.currentSeason.seasonNumber
+
+    session = get_session()
+    try:
+        # Map: team_id → TeamFunding row
+        fundingByTeam = {
+            r.team_id: r for r in
+            session.query(TeamFunding).filter_by(season=currentSeason).all()
+        }
+
+        # Fan counts per team (users whose favorite_team_id = team AND have
+        # contributed at least once this season)
+        contributorRows = (
+            session.query(
+                User.favorite_team_id.label('team_id'),
+                func.count(func.distinct(User.id)).label('fan_count'),
+            )
+            .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
+            .filter(
+                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.season == currentSeason,
+                User.favorite_team_id.isnot(None),
+            )
+            .group_by(User.favorite_team_id)
+            .all()
+        )
+        fanCountByTeam = {r.team_id: r.fan_count for r in contributorRows}
+
+        # Top patrons per team — up to 3, by total contributed this season
+        patronRows = (
+            session.query(
+                User.id.label('user_id'),
+                User.username.label('username'),
+                User.favorite_team_id.label('team_id'),
+                func.coalesce(func.sum(-CurrencyTransaction.amount), 0).label('total'),
+            )
+            .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
+            .filter(
+                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.season == currentSeason,
+                User.favorite_team_id.isnot(None),
+            )
+            .group_by(User.id, User.username, User.favorite_team_id)
+            .order_by(func.sum(-CurrencyTransaction.amount).desc())
+            .all()
+        )
+        patronsByTeam: Dict[int, List[Dict[str, Any]]] = {}
+        for row in patronRows:
+            existing = patronsByTeam.setdefault(row.team_id, [])
+            if len(existing) < 3 and row.total and row.total > 0:
+                existing.append({
+                    "userId": row.user_id,
+                    "username": row.username or f"User #{row.user_id}",
+                    "totalContributed": int(row.total),
+                })
+
+        # Previous season tier for movement indicator
+        prevTiers: Dict[int, str] = {}
+        if currentSeason > 1:
+            prevRows = session.query(TeamFunding).filter_by(season=currentSeason - 1).all()
+            for r in prevRows:
+                if r.funding_tier:
+                    prevTiers[r.team_id] = r.funding_tier
+
+        # Build per-team payload
+        tierOrderMap = {'MEGA_MARKET': 1, 'LARGE_MARKET': 2, 'MID_MARKET': 3, 'SMALL_MARKET': 4}
+        teamsPayload = []
+        for team in tm.teams:
+            fundingRec = fundingByTeam.get(team.id)
+            tier = fundingRec.funding_tier if fundingRec else 'MID_MARKET'
+            prevTier = prevTiers.get(team.id)
+            movement = 0
+            if prevTier and prevTier in tierOrderMap and tier in tierOrderMap:
+                # Lower rank = higher tier, so movement = prev_rank - current_rank
+                # Positive = climbed, negative = dropped
+                movement = tierOrderMap[prevTier] - tierOrderMap[tier]
+
+            teamsPayload.append({
+                "id": team.id,
+                "name": team.name,
+                "city": getattr(team, 'city', ''),
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', '#64748b'),
+                "tier": tier,
+                "tierRank": fundingRec.tier_rank if fundingRec else 3,
+                "effectiveFunding": fundingRec.effective_funding if fundingRec else 0,
+                "baselineFunding": fundingRec.baseline_funding if fundingRec else 0,
+                "fanContributions": fundingRec.fan_contributions if fundingRec else 0,
+                "carriedFunding": fundingRec.carried_funding if fundingRec else 0,
+                "fanCount": fanCountByTeam.get(team.id, 0),
+                "topPatrons": patronsByTeam.get(team.id, []),
+                "tierMovement": movement,  # +1 = climbed one tier, -1 = dropped, 0 = held
+                "record": {
+                    "wins": team.seasonTeamStats.get('wins', 0) if hasattr(team, 'seasonTeamStats') else 0,
+                    "losses": team.seasonTeamStats.get('losses', 0) if hasattr(team, 'seasonTeamStats') else 0,
+                },
+            })
+
+        # Sort by tier rank then effective funding desc
+        teamsPayload.sort(key=lambda t: (t['tierRank'], -t['effectiveFunding']))
+
+        return build_success_response({
+            "season": currentSeason,
+            "teams": teamsPayload,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/teams/{team_id}/prospects")
 def get_team_prospects(team_id: int):
     """Prospects stashed in this team's pipeline.
