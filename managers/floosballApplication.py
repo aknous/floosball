@@ -126,6 +126,12 @@ class FloosballApplication:
         if self._needsInitialDraft():
             logger.info("Conducting initial draft...")
             self.playerManager.conductInitialDraft()
+            # Seed each team with a starter prospect class so the rebuild/
+            # development path is immediately usable from Week 1 instead of
+            # empty for the first few seasons. Idempotent: skipped on resumes
+            # when teams already have prospects.
+            logger.info("Seeding initial prospect pipelines...")
+            self.playerManager.seedInitialProspects(prospectsPerTeam=3)
         
         # Now initialize teams after players are assigned
         logger.info("Initializing teams with rosters...")
