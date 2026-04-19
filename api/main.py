@@ -6183,7 +6183,30 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "ratingDelta": perfRating - overallRating,
                 "stats": formatStats(row, posName),
                 "isRookie": p.id in rookieIds,
+                "isProspect": False,
             })
+
+        # Include the favorite team's prospects as ballot candidates too, so fans
+        # can rank "promote this prospect" alongside "sign this FA" in a single
+        # ranked vote. Resolution treats prospect IDs as promote directives, FA
+        # IDs as sign directives. Both share the same ranked-choice space.
+        if favTeam:
+            for p in getattr(favTeam, 'prospects', []):
+                posName = p.position.name
+                perfRating = getattr(p, 'seasonPerformanceRating', 0) or 0
+                overallRating = round(p.playerRating)
+                players.append({
+                    "id": p.id,
+                    "name": p.name,
+                    "position": posName,
+                    "rating": round(p.playerRating, 1),
+                    "tier": p.playerTier.name,
+                    "performanceRating": perfRating,
+                    "ratingDelta": perfRating - overallRating,
+                    "stats": None,  # prospects haven't played — no season stats
+                    "isRookie": False,
+                    "isProspect": True,
+                })
 
         return build_success_response({"openSlots": openSlots, "players": players})
     finally:

@@ -2564,11 +2564,58 @@ class PlayerManager:
                         yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
                     continue  # One action per turn — prospect promotion counts
 
-                # Try directive target first
+                # Try directive target first. Directive IDs may reference either
+                # a team prospect (→ promote) or an FA (→ sign). Prospects win
+                # the ballot by being ranked above FAs at the same slot.
                 directivePick = False
+                prospectsById = {p.id: p for p in getattr(team, 'prospects', [])}
                 queue = teamDirectiveQueues.get(team.id, [])
                 while queue:
                     targetId = queue.pop(0)
+
+                    # Case A — ranked target is a prospect: promote them directly
+                    prospectTarget = prospectsById.get(targetId)
+                    if prospectTarget is not None:
+                        openSlot = self._findOpenSlotForPosition(team, prospectTarget.position.value)
+                        if not openSlot:
+                            continue
+                        # Manual targeted promote (bypass the auto-threshold check —
+                        # fans voted for this prospect specifically)
+                        prospectTarget.is_prospect = False
+                        prospectTarget.prospect_seasons = 0
+                        prospectTarget.drafting_team_id = None
+                        prospectTarget.team = team
+                        team.rosterDict[openSlot] = prospectTarget
+                        if prospectTarget in team.prospects:
+                            team.prospects.remove(prospectTarget)
+                        try:
+                            prospectTarget.term = self._getPlayerTerm(prospectTarget.playerTier)
+                            prospectTarget.termRemaining = prospectTarget.term
+                        except Exception:
+                            prospectTarget.termRemaining = 1
+                        freeAgencyDict.setdefault(team.name, []).append({
+                            'action': 'promote', 'player': prospectTarget.name,
+                            'position': prospectTarget.position.name, 'slot': openSlot,
+                        })
+                        leagueHighlights.insert(0, {
+                            'event': {'text': f"{team.name} promoted prospect {prospectTarget.name} ({prospectTarget.position.name}) by fan vote"}
+                        })
+                        logFa(f"  FAN VOTE PROMOTE: {team.name} promotes {prospectTarget.name} at {openSlot}")
+                        yield {
+                            'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                            'player': prospectTarget.name, 'position': prospectTarget.position.name,
+                            'rating': round(prospectTarget.playerRating, 1), 'tier': prospectTarget.playerTier.name,
+                        }
+                        directivePick = True
+                        openPositions = [k for k, v in team.rosterDict.items() if v is None
+                                         and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
+                        if not openPositions:
+                            teamsComplete += 1
+                            team.freeAgencyComplete = True
+                            yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
+                        break  # One action per turn
+
+                    # Case B — ranked target is an FA: sign them (existing path)
                     targetPlayer = None
                     targetListKey = None
                     for lKey, faList in freeAgentLists.items():
