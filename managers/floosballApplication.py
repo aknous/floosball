@@ -126,12 +126,16 @@ class FloosballApplication:
         if self._needsInitialDraft():
             logger.info("Conducting initial draft...")
             self.playerManager.conductInitialDraft()
-            # Seed each team with a starter prospect class so the rebuild/
-            # development path is immediately usable from Week 1 instead of
-            # empty for the first few seasons. Idempotent: skipped on resumes
-            # when teams already have prospects.
-            logger.info("Seeding initial prospect pipelines...")
-            self.playerManager.seedInitialProspects(prospectsPerTeam=3)
+
+        # Seed each team with a starter prospect class. Runs on every boot,
+        # but seedInitialProspects is idempotent: skips any team that already
+        # has prospects. So this fires on:
+        #   - Fresh starts (all 24 teams seeded)
+        #   - First deploy of this feature to existing prod (teams have full
+        #     rosters but empty pipelines → all seeded)
+        #   - Subsequent boots (prospects exist → no-op per team)
+        logger.info("Seeding initial prospect pipelines (idempotent)...")
+        self.playerManager.seedInitialProspects(prospectsPerTeam=3)
         
         # Now initialize teams after players are assigned
         logger.info("Initializing teams with rosters...")
