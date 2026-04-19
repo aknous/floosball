@@ -3415,18 +3415,46 @@ def get_team_prospects(team_id: int):
         raise HTTPException(404, "Team not found")
 
     from constants import PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD
+
+    # Readiness is comparative now, not threshold-based: READY = the prospect's
+    # rating meets or beats the current starter(s) at their position. A flat
+    # threshold read as "is this a real player" rather than "is this actually
+    # ready" since most prospects clear 70 on generation.
+    positionRosterSlots = {
+        'QB': ['qb'], 'RB': ['rb'], 'WR': ['wr1', 'wr2'], 'TE': ['te'], 'K': ['k'],
+    }
+    # Worst current starter rating per position (prospect must upgrade the
+    # weakest to be worth calling up — for WR, that's whoever is rated lower
+    # between wr1 and wr2)
+    starterFloor: Dict[str, float] = {}
+    for posName, slots in positionRosterSlots.items():
+        ratings = [
+            round(getattr(team.rosterDict[s], 'playerRating', 0), 1)
+            for s in slots
+            if team.rosterDict.get(s) is not None
+        ]
+        if ratings:
+            starterFloor[posName] = min(ratings)
+
     prospects = []
     for p in getattr(team, 'prospects', []):
+        rating = round(getattr(p, 'playerRating', 0), 1)
+        posName = p.position.name if hasattr(p.position, 'name') else str(p.position)
+        floor = starterFloor.get(posName)
+        # Ready means: rating meets or beats the weakest incumbent at that position.
+        # If there's no starter there (open slot) any prospect counts as ready.
+        promotionReady = True if floor is None else rating >= floor
         prospects.append({
             "playerId": p.id,
             "name": p.name,
-            "position": p.position.name if hasattr(p.position, 'name') else str(p.position),
-            "rating": round(getattr(p, 'playerRating', 0), 1),
+            "position": posName,
+            "rating": rating,
             "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
             "prospectSeasons": getattr(p, 'prospect_seasons', 0) or 0,
             "seasonsRemaining": max(0, PROSPECT_DEVELOPMENT_WINDOW - (getattr(p, 'prospect_seasons', 0) or 0)),
             "isUndrafted": bool(getattr(p, 'is_undrafted', False)),
-            "promotionReady": round(getattr(p, 'playerRating', 0), 1) >= PROSPECT_PROMOTION_RATING_THRESHOLD,
+            "promotionReady": promotionReady,
+            "starterFloor": floor,  # exposed so the UI can tooltip "beats X.X"
         })
     prospects.sort(key=lambda x: -x['rating'])
     return build_success_response({
