@@ -2507,6 +2507,27 @@ class PlayerManager:
                 # Yield on-the-clock before attempting pick
                 yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
+                # ── Prospect promotion fallback ──────────────────────────
+                # If this team has a prospect ≥ PROSPECT_PROMOTION_RATING_THRESHOLD
+                # at an open slot, promote the best one first. Fans' vote
+                # preferences (coming in frontend phase) can override this; for
+                # now it's the deterministic "best available prospect" path.
+                promoted = self._tryPromoteProspect(team, freeAgencyDict, leagueHighlights)
+                if promoted is not None:
+                    logFa(f"  PROSPECT PROMOTED: {team.name} promotes {promoted['name']} at {promoted['slot']}")
+                    yield {
+                        'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                        'player': promoted['name'], 'position': promoted['position'],
+                        'rating': promoted['rating'], 'tier': promoted['tier'],
+                    }
+                    openPositions = [k for k, v in team.rosterDict.items() if v is None
+                                     and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
+                    if not openPositions:
+                        teamsComplete += 1
+                        team.freeAgencyComplete = True
+                        yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
+                    continue  # One action per turn — prospect promotion counts
+
                 # Try directive target first
                 directivePick = False
                 queue = teamDirectiveQueues.get(team.id, [])
@@ -2899,6 +2920,59 @@ class PlayerManager:
         self.sortPlayersByPosition()
         logger.info(f"Rookie draft complete: {len(picks)} drafted, {len(undrafted)} undrafted to FA")
         return {"picks": picks, "undrafted": undrafted}
+
+    def _tryPromoteProspect(self, team, freeAgencyDict: dict, leagueHighlights: list) -> Optional[dict]:
+        """Promote the best-qualifying prospect into an open roster slot.
+
+        Returns a dict describing the promotion on success, else None. A prospect
+        qualifies when their playerRating meets PROSPECT_PROMOTION_RATING_THRESHOLD
+        and the team has an open roster slot at that prospect's position. Picks
+        the highest-rated eligible prospect if multiple qualify.
+        """
+        from constants import PROSPECT_PROMOTION_RATING_THRESHOLD
+        prospects = getattr(team, 'prospects', [])
+        if not prospects:
+            return None
+
+        # Candidates must meet the rating floor AND have an open slot at their position
+        candidates = []
+        for p in prospects:
+            if getattr(p, 'playerRating', 0) < PROSPECT_PROMOTION_RATING_THRESHOLD:
+                continue
+            openSlot = self._findOpenSlotForPosition(team, p.position.value)
+            if openSlot:
+                candidates.append((p, openSlot))
+        if not candidates:
+            return None
+
+        best, slot = max(candidates, key=lambda c: c[0].playerRating)
+        # Flip flags + move onto roster
+        best.is_prospect = False
+        best.prospect_seasons = 0
+        best.drafting_team_id = None
+        best.previousTeam = getattr(best, 'previousTeam', None)
+        team.rosterDict[slot] = best
+        if best in team.prospects:
+            team.prospects.remove(best)
+        # Contract term for promoted prospect matches tier-based terms
+        try:
+            best.term = self._getPlayerTerm(best.playerTier)
+            best.termRemaining = best.term
+        except Exception:
+            best.termRemaining = 1
+        freeAgencyDict.setdefault(team.name, []).append({
+            'action': 'promote', 'player': best.name,
+            'position': best.position.name, 'slot': slot,
+        })
+        leagueHighlights.insert(0, {
+            'event': {'text': f"{team.name} promoted prospect {best.name} ({best.position.name}) to starter"}
+        })
+        return {
+            'name': best.name, 'slot': slot,
+            'position': best.position.name,
+            'rating': round(best.playerRating, 1),
+            'tier': best.playerTier.name,
+        }
 
     def _advanceProspectWindow(self) -> dict:
         """Increment prospect_seasons on every prospect; release washouts to the FA pool.

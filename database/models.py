@@ -616,6 +616,8 @@ class User(Base):
     # Auto-pick mode for pick-em: "off" | "favorites" | "underdogs" | "random".
     # Replaces the old boolean auto_pick_favorites. Default "off" = user opts in manually.
     auto_pick_mode: Mapped[str] = mapped_column(String(20), default="off", nullable=False)
+    # Vacancy fallback preference: prospect | fa | best_available (default)
+    vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

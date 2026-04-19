@@ -296,6 +296,14 @@ def _runPendingMigrations():
                 logger.info(f"  Migration: added players.{col}")
             except Exception:
                 conn.rollback()
+
+        # Vacancy fallback preference on users (feature/prospects-pipeline)
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN vacancy_auto_pick VARCHAR(20) DEFAULT 'best_available' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added users.vacancy_auto_pick")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 

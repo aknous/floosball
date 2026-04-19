@@ -3168,6 +3168,44 @@ def get_projected_funding(team_id: int):
         session.close()
 
 
+@app.get("/api/teams/{team_id}/prospects")
+def get_team_prospects(team_id: int):
+    """Prospects stashed in this team's pipeline.
+
+    Surfaces the full list with development context so the UI can show progress,
+    window remaining, and promotion readiness. Ordered by rating desc.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    tm = floosball_app.teamManager
+    team = tm.getTeamById(team_id) if tm else None
+    if not team:
+        raise HTTPException(404, "Team not found")
+
+    from constants import PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD
+    prospects = []
+    for p in getattr(team, 'prospects', []):
+        prospects.append({
+            "playerId": p.id,
+            "name": p.name,
+            "position": p.position.name if hasattr(p.position, 'name') else str(p.position),
+            "rating": round(getattr(p, 'playerRating', 0), 1),
+            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+            "prospectSeasons": getattr(p, 'prospect_seasons', 0) or 0,
+            "seasonsRemaining": max(0, PROSPECT_DEVELOPMENT_WINDOW - (getattr(p, 'prospect_seasons', 0) or 0)),
+            "isUndrafted": bool(getattr(p, 'is_undrafted', False)),
+            "promotionReady": round(getattr(p, 'playerRating', 0), 1) >= PROSPECT_PROMOTION_RATING_THRESHOLD,
+        })
+    prospects.sort(key=lambda x: -x['rating'])
+    return build_success_response({
+        "teamId": team_id,
+        "prospects": prospects,
+        "slotCapPerPosition": 2,  # mirrors constants.PROSPECT_SLOT_CAP_PER_POSITION
+        "developmentWindow": PROSPECT_DEVELOPMENT_WINDOW,
+        "promotionThreshold": PROSPECT_PROMOTION_RATING_THRESHOLD,
+    })
+
+
 @app.get("/api/teams/{team_id}/retirement-watch")
 def get_team_retirement_watch(team_id: int):
     """Players on this team's roster flagged by retirement risk.
@@ -3235,6 +3273,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailSeasonReport": user.email_season_report,
             "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
+            "vacancyAutoPick": getattr(user, 'vacancy_auto_pick', 'best_available') or 'best_available',
             "isAdmin": getattr(user, 'is_admin', False),
         }
     finally:
@@ -3323,6 +3362,11 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             if mode not in ("off", "favorites", "underdogs", "random"):
                 raise HTTPException(status_code=400, detail=f"Invalid autoPickMode: {mode}")
             dbUser.auto_pick_mode = mode
+        if "vacancyAutoPick" in payload:
+            pref = str(payload["vacancyAutoPick"] or "best_available").lower()
+            if pref not in ("prospect", "fa", "best_available"):
+                raise HTTPException(status_code=400, detail=f"Invalid vacancyAutoPick: {pref}")
+            dbUser.vacancy_auto_pick = pref
         session.commit()
         return {
             "ok": True,
@@ -3331,6 +3375,7 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             "emailSeasonReport": dbUser.email_season_report,
             "teamFundingPct": dbUser.team_funding_pct,
             "autoPickMode": dbUser.auto_pick_mode,
+            "vacancyAutoPick": getattr(dbUser, 'vacancy_auto_pick', 'best_available'),
         }
     except Exception as e:
         session.rollback()
