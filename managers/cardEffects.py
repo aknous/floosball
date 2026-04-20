@@ -574,7 +574,7 @@ EFFECT_TOOLTIPS = {
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
     "surplus": "Raise the ceiling. Increases the maximum Floobits you can earn per week while equipped.",
-    "bonsai": "Patience rewards the diligent. Base FP that can permanently grow each week. Game events boost the growth chance. Resets if unequipped.",
+    "bonsai": "Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -704,7 +704,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
     "surplus": "Weekly Floobits cap raised by +{ceilingBonus} while equipped",
-    "bonsai": "+{baseFP} FP base. {baseChance}% chance to permanently grow by {growthFP} FP each week. {triggerLabel} boost the growth chance",
+    "bonsai": "+{baseFP} FP base. Each week {triggerLabel} earn a chance to permanently grow by {growthFP} FP. Higher levels need bigger weeks to keep growing.",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -805,14 +805,14 @@ STREAK_CONFIGS = {
 # doubles trigger frequency.
 CULTIVATION_TRIGGER_POOL = [
     # statPaths: list of (category, key) tuples — all are summed across roster players.
-    # chanceRate: per-trigger growth chance bonus (low-volume=5, high-volume=2)
+    # stepSize: triggers required at level 0 for a guaranteed grow; scales with level.
     # pass_td counts for both QBs (passer) and WR/TEs (receiver) for double events.
-    {"event": "pass_td",      "label": "passing/receiving TDs",   "chanceRate": 5, "statPaths": [("passing_stats", "tds"), ("receiving_stats", "rcvTds")]},
-    {"event": "rush_td",      "label": "rushing TDs",             "chanceRate": 5, "statPaths": [("rushing_stats", "runTds")]},
-    {"event": "reception",    "label": "receptions",              "chanceRate": 2, "statPaths": [("receiving_stats", "receptions")]},
-    {"event": "fg_made",      "label": "field goals made",        "chanceRate": 5, "statPaths": [("kicking_stats", "fgs")]},
-    {"event": "carry",        "label": "rushing attempts",        "chanceRate": 2, "statPaths": [("rushing_stats", "carries")]},
-    {"event": "yac",          "label": "yards after catch",       "chanceRate": 1, "statPaths": [("receiving_stats", "yac")]},
+    {"event": "pass_td",      "label": "passing/receiving TDs",   "stepSize": 3,  "statPaths": [("passing_stats", "tds"), ("receiving_stats", "rcvTds")]},
+    {"event": "rush_td",      "label": "rushing TDs",             "stepSize": 3,  "statPaths": [("rushing_stats", "runTds")]},
+    {"event": "reception",    "label": "receptions",              "stepSize": 12, "statPaths": [("receiving_stats", "receptions")]},
+    {"event": "fg_made",      "label": "field goals made",        "stepSize": 3,  "statPaths": [("kicking_stats", "fgs")]},
+    {"event": "carry",        "label": "rushing attempts",        "stepSize": 15, "statPaths": [("rushing_stats", "carries")]},
+    {"event": "yac",          "label": "yards after catch",       "stepSize": 60, "statPaths": [("receiving_stats", "yac")]},
 ]
 
 
@@ -1031,7 +1031,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
                 "perUpsetFP": round((3 + rn * 0.12) * editionScale, 1)}
     if effectName == "rising_tide":
         return {"perPlayerMult": round((0.04 + rn * 0.002) * editionScale, 2),
-                "maxMult": round(1 + (0.20 + rn * 0.008) * editionScale, 2)}
+                "maxMult": round(1 + (0.40 + rn * 0.010) * editionScale, 2)}
     if effectName == "trebuchet":
         return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
     if effectName == "double_trouble":
@@ -1054,7 +1054,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "eminence":
         return {"rewardType": "mult",
                 "bonusPerFP": round((0.015 + rn * 0.0008) * editionScale, 2),
-                "maxMult": min(1.50, round(1 + (0.12 + rn * 0.004) * editionScale, 2))}
+                "maxMult": min(1.60, round(1 + (0.40 + rn * 0.010) * editionScale, 2))}
     # ── Strategy-Warping: Austerity (FPx per empty roster slot)
     if effectName == "home_alone":
         return {"perSlotMult": round((0.12 + rn * 0.004) * editionScale, 2)}
@@ -1221,13 +1221,12 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
-    # ── Strategy-Warping: Cultivation (growing chance — streak + chance hybrid)
+    # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
         return {"rewardType": "fp",
                 "baseFP": round((4.0 + rn * 0.15) * editionScale, 1),
                 "growthFP": round((2.0 + rn * 0.08) * editionScale, 1),
-                "baseChance": 20, "chancePerTrigger": 5,
                 "triggerEvent": trigger["event"],
                 "triggerLabel": trigger["label"],
                 "isChanceEffect": True}
@@ -3373,34 +3372,45 @@ def _computeProsperity(primary, ctx, cardPlayerId, eqId):
     return EffectResult(floobits=0, equation=f"+{ceilingBonus} cap raise (effective cap: {newCap}F)")
 
 
-def _getCultivationChanceRate(triggerEvent, defaultRate):
-    """Look up the per-trigger chance rate from the trigger pool.
-    High-volume stats (carries, receptions, YAC) use lower rates."""
+def _getCultivationStepSize(triggerEvent):
+    """Look up the per-level trigger step size from the trigger pool.
+    High-volume stats (carries, receptions, YAC) use bigger step sizes so
+    grows still require a real outlier week."""
     for t in CULTIVATION_TRIGGER_POOL:
         if t["event"] == triggerEvent:
-            return t.get("chanceRate", defaultRate)
-    return defaultRate
+            return t.get("stepSize", 3)
+    return 3
 
 
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
-    """Growing chance — base FP that can permanently increase each week.
-    streak_count tracks how many times the base has grown."""
+    """Performance-driven growth — growth chance is earned by hitting trigger
+    events, and the threshold scales with current growth level. Higher levels
+    require bigger roster weeks to keep pushing the base upward."""
     baseFP = primary.get("baseFP", 4.0)
     growthFP = primary.get("growthFP", 2.0)
     # streak_count tracks number of successful growths (starts at 1 = no growth)
     growthLevel = max(0, ctx.streakCounts.get(eqId, 1) - 1)
     currentFP = round(baseFP + growthFP * growthLevel, 1)
-    # Count trigger events across all rostered players
     triggerEvent = primary.get("triggerEvent", "pass_td")
     triggerLabel = primary.get("triggerLabel", "events")
     triggerCount = _countCultivationTriggers(triggerEvent, ctx)
-    # Calculate growth chance — use trigger-specific rate (high-volume stats get lower rate)
-    baseChance = primary.get("baseChance", 20)
-    chancePerTrigger = _getCultivationChanceRate(triggerEvent, primary.get("chancePerTrigger", 5))
-    growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
+    # Step size: triggers required to fully earn a grow at level 0.
+    # Low-volume events (TDs, FGs) use small steps; high-volume (carries,
+    # receptions) scale up so grows still feel earned from big weeks.
+    stepSize = _getCultivationStepSize(triggerEvent)
+    # Threshold scales with level — level 10 needs ~11x the triggers of level 0
+    required = stepSize * (growthLevel + 1)
+    if triggerCount >= required:
+        excess = triggerCount - required
+        # Exceed the threshold for bonus chance (caps at 100%)
+        growthChance = min(100, 90 + int((excess / stepSize) * 10))
+    else:
+        # Ramp linearly up to 90% as roster approaches threshold. Floor at 2%
+        # so a bye-week roster isn't completely dead.
+        growthChance = max(2, int((triggerCount / required) * 90)) if required > 0 else 2
     nextFP = round(currentFP + growthFP, 1)
-    triggerNote = f" ({triggerCount} {triggerLabel})" if triggerCount > 0 else ""
-    eq = f"+{currentFP} FP. {growthChance}% chance{triggerNote} to increase to +{nextFP} FP"
+    triggerNote = f" ({triggerCount}/{required} {triggerLabel})"
+    eq = f"+{currentFP} FP. {growthChance}% chance{triggerNote} to grow to +{nextFP} FP"
     return EffectResult(fpBonus=currentFP, equation=eq)
 
 
