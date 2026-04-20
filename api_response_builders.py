@@ -96,6 +96,27 @@ class PlayerResponseBuilder(ResponseBuilder):
         """Build basic player information dictionary"""
         team = player.team
         hasTeamObj = team and not isinstance(team, str)
+        # Prospects are held in their drafting team's pipeline (not on the roster
+        # and not in the FA pool). Surface the drafting team so the UI can show
+        # "Prospect · {team}" rather than falling back to Free Agent.
+        isProspect = bool(getattr(player, 'is_prospect', False))
+        draftingTeamId = getattr(player, 'drafting_team_id', None) if isProspect else None
+        draftingTeamName = None
+        draftingTeamCity = None
+        draftingTeamAbbr = None
+        draftingTeamColor = None
+        if isProspect and draftingTeamId is not None:
+            try:
+                from api import main as _apiMain
+                teamMgr = getattr(_apiMain.floosball_app, 'teamManager', None) if getattr(_apiMain, 'floosball_app', None) else None
+                dt = next((t for t in (teamMgr.teams if teamMgr else []) if getattr(t, 'id', None) == draftingTeamId), None)
+                if dt is not None:
+                    draftingTeamName = dt.name
+                    draftingTeamCity = getattr(dt, 'city', None)
+                    draftingTeamAbbr = getattr(dt, 'abbr', None)
+                    draftingTeamColor = getattr(dt, 'color', None)
+            except Exception:
+                pass
         return {
             'name': player.name,
             'id': player.id,
@@ -106,6 +127,12 @@ class PlayerResponseBuilder(ResponseBuilder):
             'teamSecondaryColor': team.secondaryColor if hasTeamObj else None,
             'teamId': team.id if hasTeamObj else None,
             'teamAbbr': team.abbr if hasTeamObj else None,
+            'isProspect': isProspect,
+            'draftingTeamId': draftingTeamId,
+            'draftingTeamName': draftingTeamName,
+            'draftingTeamCity': draftingTeamCity,
+            'draftingTeamAbbr': draftingTeamAbbr,
+            'draftingTeamColor': draftingTeamColor,
             'seasonsPlayed': player.seasonsPlayed,
             'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
             'playerRating': player.playerRating,

@@ -544,7 +544,7 @@ class TimingManager:
         """Wait between offseason free agency pick broadcasts"""
         if self._isFastCatchingUp:
             return
-        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.DEMO, TimingMode.OFFSEASON_TEST, TimingMode.CATCHUP):
+        if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.DEMO, TimingMode.OFFSEASON_TEST, TimingMode.CATCHUP, TimingMode.FAST_WEEKLY):
             await asyncio.sleep(self.delays['offseason_pick'])
 
     async def waitBeforeOnsideResult(self) -> None:

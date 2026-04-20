@@ -119,10 +119,20 @@ DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
 FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
-# Tiers are assigned by relative rank across the league: effective_funding is
-# sorted descending and split into quartiles. Top 25% = MEGA, etc. Replaces the
-# old absolute-threshold system so funding stays balanced as the economy shifts.
+# Tiers are assigned by a team's share of total league funding. A team's
+# ratio = effective_funding / (total_league_funding / num_teams). That is,
+# "how many fair-shares of the league's floobits does this team hold?"
+# Self-scaling: as the economy inflates, fair-share inflates with it, so
+# MEGA/LARGE always mean "meaningfully ahead of the rest of the league today"
+# rather than a fixed floobit target that decays in value.
 FUNDING_TIER_NAMES = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
+# Multipliers of league fair-share (total funding / team count).
+FUNDING_TIER_THRESHOLDS = {
+    'MEGA_MARKET':  2.0,   # ≥ 2× the average team's funding
+    'LARGE_MARKET': 1.15,  # ≥ 15% above average
+    'MID_MARKET':   0.85,  # within ±15% of average
+    'SMALL_MARKET': 0.0,   # below 85% of average — genuinely fallen behind the pack
+}
 FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}

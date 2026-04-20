@@ -193,12 +193,22 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
     # Set reference in API
     set_floosball_app(floosball_app)
 
-    # Enable broadcasting (skip in silent test modes)
-    if timing_mode not in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST, TimingMode.TURBO_SILENT, TimingMode.FAST_WEEKLY):
+    # Enable broadcasting (skip in silent test modes).
+    #
+    # FAST_WEEKLY is a special case: we want season-structure events
+    # (week transitions, standings, leaderboards, offseason flow) but not
+    # the thousands of per-play game events that would flood the UI when
+    # games are resolving instantly. So we enable the broadcaster and set
+    # game-event suppression on.
+    if timing_mode == TimingMode.FAST_WEEKLY:
+        broadcaster.enable(ws_manager)
+        broadcaster.set_suppress_game_events(True)
+        logger.info("fast-weekly: broadcasting enabled, game-event broadcasts suppressed")
+    elif timing_mode in (TimingMode.TEST_SCHEDULED, TimingMode.OFFSEASON_TEST, TimingMode.TURBO_SILENT):
+        logger.info(f"{timing_mode.value} mode: broadcasting disabled at startup")
+    else:
         broadcaster.enable(ws_manager)
         logger.info("Game broadcasting enabled")
-    else:
-        logger.info(f"{timing_mode.value} mode: broadcasting disabled at startup")
     
     # Start the application in background
     asyncio.create_task(floosball_app.runSimulation())

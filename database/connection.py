@@ -332,6 +332,29 @@ def _runPendingMigrations():
             logger.info("  Migration: added simulation_state.in_offseason")
         except Exception:
             conn.rollback()
+
+        # Retire the 'random' powerup slug on stashed achievement rewards.
+        # Tycoon now grants income_boost; Veteran grants extra_swap. Map
+        # existing 'random' rows by their achievement source so the user
+        # gets the same powerup a freshly-earned reward would give.
+        try:
+            conn.execute(text(
+                "UPDATE pending_rewards SET slug = 'income_boost' "
+                "WHERE kind = 'powerup' AND slug = 'random' AND source = 'achievement:tycoon'"
+            ))
+            conn.execute(text(
+                "UPDATE pending_rewards SET slug = 'extra_swap' "
+                "WHERE kind = 'powerup' AND slug = 'random' AND source = 'achievement:veteran'"
+            ))
+            # Any remaining 'random' (unknown source) default to income_boost.
+            conn.execute(text(
+                "UPDATE pending_rewards SET slug = 'income_boost' "
+                "WHERE kind = 'powerup' AND slug = 'random'"
+            ))
+            conn.commit()
+            logger.info("  Migration: replaced 'random' powerup slugs in pending_rewards")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -809,10 +832,10 @@ def _seedAchievements():
              "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "tycoon", "name": "Tycoon", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 1000,
              "description": "Earn 1,000 floobits in a single season.",
-             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": ["random"], "deferred": False}},
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": ["income_boost"], "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
-             "reward_config": {"floobits": 500, "packs": [], "powerups": ["random"], "deferred": False}},
+             "reward_config": {"floobits": 500, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week
             {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 150,
              "description": "Earn 150+ fantasy points in a single week.",
