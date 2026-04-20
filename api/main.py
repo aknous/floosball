@@ -3071,9 +3071,12 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         if isinstance(getattr(p, 'team', None), str)
     ] if isOffseason else []
 
-    # Include user's existing ballot if logged in
+    # Include user's existing ballot if logged in. FA ballots can be submitted
+    # year-round from the Front Office tab (not just during the offseason
+    # window), so return the latest saved ballot whenever a user is
+    # authenticated and has a favorite team set.
     existingBallot = None
-    if user and isOffseason:
+    if user:
         try:
             from database.connection import get_session
             from database.repositories.gm_repository import GmFaBallotRepository
@@ -6913,13 +6916,15 @@ def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCur
     if len(req.rankings) > GM_ROOKIE_DRAFT_MAX_RANKINGS:
         raise HTTPException(400, f"Max {GM_ROOKIE_DRAFT_MAX_RANKINGS} rookies per ballot")
 
-    # Gate on week: Front Office opens at GM_ACTIVE_WEEK. Voting also blocked
-    # once playoffs start or offseason is running (rookies are mid-draft).
+    # Gate on week: Front Office opens at GM_ACTIVE_WEEK. Voting stays open
+    # through playoffs and closes once the offseason actually starts (the
+    # rookie draft consumes the class then, so mid-draft changes don't
+    # apply). currentWeekText == 'Offseason' is the offseason signal.
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     if not isinstance(currentWeek, int) or currentWeek < GM_ACTIVE_WEEK:
         raise HTTPException(400, f"Rookie draft voting opens in Week {GM_ACTIVE_WEEK}")
-    if getattr(sm.currentSeason, 'currentPlayoffRound', None):
-        raise HTTPException(400, "Rookie draft voting is closed — offseason has begun")
+    if getattr(sm.currentSeason, 'currentWeekText', '') == 'Offseason':
+        raise HTTPException(400, "Rookie draft voting is closed; the draft is underway")
 
     session = get_session()
     try:
