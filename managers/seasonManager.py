@@ -1148,7 +1148,7 @@ class SeasonManager:
             from database.connection import get_session as _getSession
             from database.models import (
                 FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
-                Player, User, WeeklyCardBonus, WeeklyPlayerFP
+                Player, User, UserCurrency, WeeklyCardBonus, WeeklyPlayerFP
             )
             from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
             from managers.cardEffectCalculator import calculateWeekCardBonuses, CardCalcContext
@@ -1451,6 +1451,18 @@ class SeasonManager:
                     except Exception:
                         pass
 
+                    # Fat Cat / Opulence reads the user's Floobits balance. Mirrors
+                    # fantasyTracker._buildCardCalcContext so the week-end persisted
+                    # bonus matches what the live snapshot showed.
+                    userFloobitsBalance = 0
+                    try:
+                        uc = session.query(UserCurrency).filter_by(user_id=userId).first()
+                        if uc:
+                            session.refresh(uc)
+                            userFloobitsBalance = uc.balance or 0
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
+
                     # Build context
                     calcCtx = CardCalcContext(
                         userId=userId,
@@ -1485,6 +1497,7 @@ class SeasonManager:
                         activeModifier=userModifier,
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
                         seasonSwapsUsed=seasonSwapsUsed,
+                        userFloobitsBalance=userFloobitsBalance,
                         positionAvgFPs=positionAvgFPs,
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
                     )
