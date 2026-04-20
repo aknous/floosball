@@ -82,7 +82,12 @@ class Team(Base):
 
     # Relationships
     league: Mapped[Optional["League"]] = relationship("League", back_populates="teams")
-    players: Mapped[list["Player"]] = relationship("Player", back_populates="team")
+    # Players disambiguates by team_id because Player also has a drafting_team_id
+    # FK (prospect pipeline ownership). Only the active-roster FK participates in
+    # Team.players — prospects are accessed via a separate runtime list.
+    players: Mapped[list["Player"]] = relationship(
+        "Player", back_populates="team", foreign_keys="[Player.team_id]"
+    )
     season_stats: Mapped[list["TeamSeasonStats"]] = relationship("TeamSeasonStats", back_populates="team")
     home_games: Mapped[list["Game"]] = relationship("Game", foreign_keys="Game.home_team_id", back_populates="home_team")
     away_games: Mapped[list["Game"]] = relationship("Game", foreign_keys="Game.away_team_id", back_populates="away_team")
@@ -111,6 +116,9 @@ class Coach(Base):
     aggressiveness: Mapped[int] = mapped_column(Integer, default=80)
     clock_management: Mapped[int] = mapped_column(Integer, default=80)
     player_development: Mapped[int] = mapped_column(Integer, default=80)
+    # Scouting — accuracy with which fans can see upcoming rookies' potential.
+    # Stacks with funding tier to determine the attribute-range blur on /api/rookies/upcoming.
+    scouting: Mapped[int] = mapped_column(Integer, default=80)
     overall_rating: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -134,13 +142,27 @@ class Player(Base):
     term_remaining: Mapped[Optional[int]] = mapped_column(Integer)
     cap_hit: Mapped[Optional[int]] = mapped_column(Integer)
     player_rating: Mapped[Optional[int]] = mapped_column(Integer)
+    offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_position: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     free_agent_years: Mapped[Optional[int]] = mapped_column(Integer)
     service_time: Mapped[Optional[str]] = mapped_column(String(20))
+    # Prospect pipeline (see constants.PROSPECT_*)
+    is_prospect: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_undrafted: Mapped[bool] = mapped_column(Boolean, default=False)
+    prospect_seasons: Mapped[int] = mapped_column(Integer, default=0)
+    drafting_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
+    # True after _generateRookieClass, before the offseason rookie draft.
+    # Upcoming rookies are visible to fans all season for scouting/voting but
+    # aren't on any roster or pipeline yet. Cleared at draft time.
+    is_upcoming_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    team: Mapped[Optional["Team"]] = relationship("Team", back_populates="players")
+    team: Mapped[Optional["Team"]] = relationship(
+        "Team", back_populates="players", foreign_keys=[team_id]
+    )
     attributes: Mapped[Optional["PlayerAttributes"]] = relationship("PlayerAttributes", back_populates="player", uselist=False)
     career_stats: Mapped[list["PlayerCareerStats"]] = relationship("PlayerCareerStats", back_populates="player")
     season_stats: Mapped[list["PlayerSeasonStats"]] = relationship("PlayerSeasonStats", back_populates="player")
@@ -205,6 +227,7 @@ class PlayerAttributes(Base):
     confidence_modifier: Mapped[int] = mapped_column(Integer)
     determination_modifier: Mapped[int] = mapped_column(Integer)
     luck_modifier: Mapped[int] = mapped_column(Integer)
+    defensive_talent: Mapped[int] = mapped_column(Integer, default=0)
 
     # Fatigue (0.0 = fresh, 1.0 = fully fatigued)
     fatigue: Mapped[float] = mapped_column(Float, default=0.0)
@@ -310,6 +333,35 @@ class PlayerSeasonStats(Base):
 
     def __repr__(self):
         return f"<PlayerSeasonStats(player_id={self.player_id}, season={self.season})>"
+
+
+class PlayerRatingHistory(Base):
+    """Rating snapshot per player per season — powers the progression sparkline.
+
+    Snapshotted at season start, AFTER offseason training has applied for the
+    season (so the value is the rating the player carried through that season).
+    Captures all players league-wide: rostered, prospects, free agents, even
+    upcoming rookies, so every player has a developable trajectory.
+    """
+    __tablename__ = "player_rating_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "season", name="uq_player_rating_history"),
+        Index("idx_rating_history_player", "player_id"),
+        Index("idx_rating_history_season", "season"),
+    )
+
+    def __repr__(self):
+        return f"<PlayerRatingHistory(player={self.player_id}, season={self.season}, rating={self.rating})>"
+
 
 
 class TeamSeasonStats(Base):
@@ -604,6 +656,11 @@ class User(Base):
     email_season_report: Mapped[bool] = mapped_column(Boolean, default=True)
     discord_id: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
     discord_dm_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Auto-pick mode for pick-em: "off" | "favorites" | "underdogs" | "random".
+    # Replaces the old boolean auto_pick_favorites. Default "off" = user opts in manually.
+    auto_pick_mode: Mapped[str] = mapped_column(String(20), default="off", nullable=False)
+    # Vacancy fallback preference: prospect | fa | best_available (default)
+    vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -636,6 +693,9 @@ class FantasyRoster(Base):
     card_bonus_points: Mapped[float] = mapped_column(Float, default=0.0)
     swaps_available: Mapped[int] = mapped_column(Integer, default=0)
     purchased_swaps: Mapped[int] = mapped_column(Integer, default=0)
+    # Last week the user explicitly set their equipped-card slots via PUT. Used so an
+    # intentional "unequip everything" doesn't get undone by the GET auto-carry-forward.
+    last_equipped_set_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -770,6 +830,12 @@ class SimulationState(Base):
     current_week: Mapped[int] = mapped_column(Integer, default=0)
     in_playoffs: Mapped[bool] = mapped_column(Boolean, default=False)
     playoff_round: Mapped[Optional[str]] = mapped_column(String(50))
+    # True while handleOffseason() is executing. Set before offseason starts,
+    # cleared after seasonsPlayed is advanced. If a crash lands mid-offseason,
+    # the resume logic treats the offseason as completed (any partial work was
+    # already persisted) rather than replaying the season from its final week
+    # and blowing away the already-advanced roster/player state.
+    in_offseason: Mapped[bool] = mapped_column(Boolean, default=False)
     total_seasons: Mapped[int] = mapped_column(Integer, default=20)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1118,6 +1184,9 @@ class GmVote(Base):
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Optional JSON payload for vote types that need structured data beyond a
+    # single target_player_id — e.g. draft_rookie carries the ranked ballot here.
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -1205,7 +1274,9 @@ class PickEmPick(Base):
     picked_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
     correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     points_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    underdog_multiplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     points_earned: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -1219,3 +1290,80 @@ class PickEmPick(Base):
 
     def __repr__(self):
         return f"<PickEmPick(user={self.user_id}, S{self.season}W{self.week}, game={self.game_index}, picked={self.picked_team_id})>"
+
+
+class Achievement(Base):
+    """Achievement template — static definition of an unlockable goal."""
+    __tablename__ = "achievements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)  # programmatic lookup (e.g. "rookie", "prognosticator")
+    name: Mapped[str] = mapped_column(String(100), nullable=False)  # display name
+    description: Mapped[str] = mapped_column(String(300), nullable=False)
+    category: Mapped[str] = mapped_column(String(20), nullable=False)  # onboarding, guidance
+    scope: Mapped[str] = mapped_column(String(20), default="once", nullable=False)  # "once" | "per_season"
+    target: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # progress needed to complete
+    reward_config: Mapped[dict] = mapped_column(JSON, nullable=False)  # {floobits, packs:[slug], powerups:[slug], deferred}
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Achievement(key='{self.key}', name='{self.name}', scope='{self.scope}')>"
+
+
+class UserAchievement(Base):
+    """Per-user progress and completion state for an achievement.
+    season=0 for one-time ('once' scope) achievements; per_season achievements store
+    the season they were earned for, so users can re-earn them each year."""
+    __tablename__ = "user_achievements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    achievement_id: Mapped[int] = mapped_column(Integer, ForeignKey("achievements.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # when reward actually granted
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    achievement: Mapped["Achievement"] = relationship("Achievement")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "achievement_id", "season", name="uq_user_achievement_season"),
+        Index("idx_user_achievements_user", "user_id"),
+        Index("idx_user_achievements_achievement", "achievement_id"),
+    )
+
+    def __repr__(self):
+        return f"<UserAchievement(user={self.user_id}, achievement={self.achievement_id}, season={self.season}, progress={self.progress}, completed={self.completed_at is not None})>"
+
+
+class PendingReward(Base):
+    """A pack or powerup owed to a user. Created on achievement completion (or other grants).
+    Claimed via a dedicated endpoint — packs open like a regular pack, powerups activate as ShopPurchases.
+    available_at lets us defer rewards by timestamp (legacy). defer_until_season lets the
+    user choose to hold a pack reward until a future season — the claim endpoint blocks
+    until current season >= defer_until_season."""
+    __tablename__ = "pending_rewards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # "pack" | "powerup"
+    slug: Mapped[str] = mapped_column(String(30), nullable=False)  # pack name or powerup slug ("random" allowed)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g. "achievement:prognosticator"
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    defer_until_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_pending_rewards_user_claimed", "user_id", "claimed_at"),
+    )
+
+    def __repr__(self):
+        return f"<PendingReward(user={self.user_id}, {self.kind}={self.slug}, claimed={self.claimed_at is not None})>"

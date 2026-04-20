@@ -58,7 +58,8 @@ except ImportError:
 
 try:
     from gameplan import (generateOffensiveGameplan, generateDefensiveGameplan, getDefensiveScheme,
-                          adjustOffensiveGameplan, adjustDefensiveGameplan)
+                          adjustOffensiveGameplan, adjustDefensiveGameplan,
+                          CoverageType, BlitzPackage)
     GAMEPLAN_AVAILABLE = True
 except ImportError:
     GAMEPLAN_AVAILABLE = False
@@ -193,6 +194,7 @@ longRunOutsideList = [
                     'bolts to the sideline for',
                 ]
 
+# Loss run (no defender) — args: none, used as verb phrase
 lossRunList =   [
                     'is stuffed',
                     'is stopped',
@@ -205,6 +207,19 @@ lossRunList =   [
                     'is smothered',
                     'is stonewalled',
                     'is met at the line',
+                ]
+
+# Loss run with defender — args: (runner.name, defender.name, yardage)
+lossRunDefenderList = [
+                    '{} is stuffed by {} for {} yards',
+                    '{} is stopped by {} for {} yards',
+                    '{} is dropped by {} for {} yards',
+                    '{} is tackled in the backfield by {} for {} yards',
+                    '{} is brought down by {} for {} yards',
+                    '{} is wrapped up by {} for {} yards',
+                    '{} is stopped cold by {} for {} yards',
+                    '{} is stonewalled by {} for {} yards',
+                    '{} is met at the line by {} for {} yards',
                 ]
 
 shortPassList = [
@@ -305,15 +320,16 @@ sidelineLongPassList = [
 
 # Clutch/choke play text suffixes — appended to standard play text
 # Sack text — args: (passer.name, yardage)
+# Sack — args: (passer.name, defender.name, yardage)
 sackList = [
-                    '{} sacked for {} yards',
-                    '{} is brought down for {} yards',
-                    '{} goes down, sacked for {} yards',
-                    '{} is taken down behind the line for {} yards',
-                    '{} has nowhere to throw, sacked for {} yards',
-                    '{} is wrapped up and sacked for {} yards',
-                    '{} is crushed for {} yards',
-                    '{} is buried for {} yards',
+                    '{} sacked by {} for {} yards',
+                    '{} is brought down by {} for {} yards',
+                    '{} goes down, sacked by {} for {} yards',
+                    '{} is taken down by {} behind the line for {} yards',
+                    '{} has nowhere to throw, {} brings him down for {} yards',
+                    '{} is wrapped up by {} and sacked for {} yards',
+                    '{} is crushed by {} for {} yards',
+                    '{} is buried by {} for {} yards',
                 ]
 
 # Short incomplete — args: (passer.name, receiver.name)
@@ -376,7 +392,7 @@ deepDropList = [
                     '{} puts it perfectly for {}, drops it, incomplete',
                 ]
 
-# Interception — args: (passer.name, defense.abbr)
+# Interception — args: (passer.name, defender.name)
 interceptionList = [
                     '{} pass intercepted by {}',
                     '{} picked off by {}',
@@ -653,10 +669,14 @@ class Game:
         self.homeHalfRunYards = 0
         self.homeHalfPassAttempts = 0
         self.homeHalfPassYards = 0
+        self.homeHalfWr1Yards = 0
+        self.homeHalfWr2Yards = 0
         self.awayHalfRunPlays = 0
         self.awayHalfRunYards = 0
         self.awayHalfPassAttempts = 0
         self.awayHalfPassYards = 0
+        self.awayHalfWr1Yards = 0
+        self.awayHalfWr2Yards = 0
 
         self.isHalftime = False
         self.isOvertime = False
@@ -1643,14 +1663,16 @@ class Game:
                 return
             elif self.currentQuarter >= 3:
                 x = batched_randint(1, 10)
-                if x <= 9:
+                fgThresh = max(5, min(10, round(9 - aggrNorm * 2)))
+                if x <= fgThresh:
                     self.play.playType = PlayType.FieldGoal
                     return
                 self.play.passPlay(self._selectPassPlay('medium'))
                 return
             else:
                 x = batched_randint(1, 10)
-                if x <= 7:
+                fgThresh = max(4, min(9, round(7 - aggrNorm * 2)))
+                if x <= fgThresh:
                     self.play.playType = PlayType.FieldGoal
                     return
                 self.play.passPlay(self._selectPassPlay('medium'))
@@ -1661,6 +1683,7 @@ class Game:
             secs = self.gameClockSeconds
             if self.currentQuarter == 4:
                 gameIQ = self._coachClockIQ(coach)
+                aggrMod = aggrNorm * 0.15  # risk tolerance: aggressive +0.15, conservative -0.15
 
                 # Under 2.5 min: must go for it — punting is conceding
                 if secs < 150:
@@ -1684,8 +1707,8 @@ class Game:
                             self.play.passPlay(self._selectPassPlay('medium'))
                             return
                         else:
-                            # Long yardage: good coaches go for it, bad coaches punt
-                            if _random.random() < 0.3 + 0.5 * gameIQ:
+                            # Long yardage: good/aggressive coaches go for it, bad/conservative punt
+                            if _random.random() < 0.3 + 0.5 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
                     elif deficit <= 16:
@@ -1693,11 +1716,11 @@ class Game:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
                         elif self.yardsToFirstDown <= 5:
-                            if _random.random() < 0.5 + 0.3 * gameIQ:
+                            if _random.random() < 0.7 + 0.2 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('medium'))
                                 return
                         else:
-                            if _random.random() < 0.3 + 0.3 * gameIQ:
+                            if _random.random() < 0.55 + 0.3 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
                     else:
@@ -1709,6 +1732,11 @@ class Game:
                 if deficit <= 8 and self.yardsToFirstDown <= 2:
                     self.play.passPlay(self._selectPassPlay('short'))
                     return
+                elif deficit <= 8 and self.yardsToFirstDown <= 5:
+                    # Aggressive coaches willing to attempt short yardage with time
+                    if _random.random() < max(0, 0.1 + aggrMod):
+                        self.play.passPlay(self._selectPassPlay('short'))
+                        return
 
             # Q2 two-minute drill: go for it past midfield with under 60 sec
             elif self.currentQuarter == 2 and secs < 60 and self.yardsToSafety > 50:
@@ -1790,26 +1818,27 @@ class Game:
                 return
 
         else:
+            # Tied or trailing (outside Q4 urgency), out of FG range
             if self.yardsToFirstDown == 1:
-                if self.yardsToSafety > 50 or (scoreDiff < -14 and self.currentQuarter >= 3):
+                if self.yardsToSafety >= 50 or (scoreDiff < -14 and self.currentQuarter >= 3):
                     x = batched_randint(1, 10)
-                    if x <= 3:
+                    if x <= max(1, min(7, goForItThreshold - 1)):
                         self.play.runPlay()
                         return
                 self.play.playType = PlayType.Punt
                 return
             elif self.yardsToFirstDown == 2:
-                if scoreDiff < -21 and self.currentQuarter == 4 and self.gameClockSeconds < 600:
+                if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -21 and self.currentQuarter == 4 and self.gameClockSeconds < 600):
                     x = batched_randint(1, 10)
-                    if x <= 2:
+                    if x <= max(1, min(5, goForItThreshold - 3)):
                         self.play.passPlay(self._selectPassPlay('short'))
                         return
                 self.play.playType = PlayType.Punt
                 return
             else:
-                if scoreDiff < -17 and self.currentQuarter == 4 and self.gameClockSeconds < 300:
-                    x = batched_randint(1, 100)
-                    if x <= 10:
+                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < -17 and self.currentQuarter == 4 and self.gameClockSeconds < 300):
+                    x = batched_randint(1, 10)
+                    if x <= max(1, min(4, goForItThreshold - 4)):
                         self.play.passPlay(self._selectPassPlay('medium'))
                         return
                 self.play.playType = PlayType.Punt
@@ -2408,13 +2437,23 @@ class Game:
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
+                yds = self.play.yardage
+                gainText = 'no gain' if yds == 0 else 'a loss of {} yards'.format(abs(yds)) if yds < 0 else '{} yards'.format(yds)
                 if self.play.isFumbleLost:
-                    text = '{} runs for {} yards and fumbles, {} recover'.format(self.play.runner.name, self.play.yardage, self.play.defense.abbr)
+                    forcedBy = self.play.forcedFumbleBy
+                    if forcedBy:
+                        text = '{} runs for {}, {} forces the fumble, {} recover'.format(self.play.runner.name, gainText, forcedBy.name, self.play.defense.abbr)
+                    else:
+                        text = '{} runs for {} and fumbles, {} recover'.format(self.play.runner.name, gainText, self.play.defense.abbr)
                 else:
-                    text = '{} runs for {} yards and fumbles, {} recovers'.format(self.play.runner.name, self.play.yardage, self.play.runner.name)
+                    text = '{} runs for {} and fumbles, {} recovers'.format(self.play.runner.name, gainText, self.play.runner.name)
             else:
                 if self.play.yardage <= 0:
-                    text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
+                    tackler = self.play.tackledBy
+                    if tackler:
+                        text = choice(lossRunDefenderList).format(self.play.runner.name, tackler.name, self.play.yardage)
+                    else:
+                        text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
                 elif self.play.yardage > 0 and self.play.yardage <= 3:
                     runList = shortRunOutsideList if isOutside else shortRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
@@ -2426,13 +2465,19 @@ class Game:
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
         elif self.play.playType is PlayType.Pass:
             if self.play.isSack:
+                sacker = self.play.sackedBy
+                sackerName = sacker.name if sacker else self.play.defense.abbr
                 if self.play.isFumble:
+                    forcedBy = self.play.forcedFumbleBy
                     if self.play.isFumbleLost:
-                        text = '{} sacked and fumbles, {} recovers'.format(self.play.passer.name, self.play.defense.name)
+                        if forcedBy:
+                            text = '{} sacked by {}, fumbles, {} recovers'.format(self.play.passer.name, sackerName, self.play.defense.name)
+                        else:
+                            text = '{} sacked and fumbles, {} recovers'.format(self.play.passer.name, self.play.defense.name)
                     else:
-                        text = '{} sacked and fumbles, {} recovers'.format(self.play.passer.name, self.play.passer.name)
+                        text = '{} sacked by {} and fumbles, {} recovers'.format(self.play.passer.name, sackerName, self.play.passer.name)
                 else:
-                    text = choice(sackList).format(self.play.passer.name, self.play.yardage)
+                    text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
                 if self.play.targetSideline:
                     if self.play.passType is PassType.short:
@@ -2451,8 +2496,20 @@ class Game:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(extraLongPassList), self.play.receiver.name, self.play.yardage)
                 else:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, self.play.yardage)
+                # Fumble after catch
+                if self.play.isFumble:
+                    forcedBy = self.play.forcedFumbleBy
+                    if self.play.isFumbleLost:
+                        if forcedBy:
+                            text += ', {} forces the fumble, {} recover'.format(forcedBy.name, self.play.defense.abbr)
+                        else:
+                            text += ', fumbles, {} recover'.format(self.play.defense.abbr)
+                    else:
+                        text += ', fumbles, {} recovers'.format(self.play.receiver.name)
             elif self.play.playResult is PlayResult.Interception:
-                text = choice(interceptionList).format(self.play.passer.name, self.play.defense.abbr)
+                interceptor = self.play.interceptedBy
+                interceptorName = interceptor.name if interceptor else self.play.defense.abbr
+                text = choice(interceptionList).format(self.play.passer.name, interceptorName)
             else:
                 if self.play.passType is PassType.short:
                     if self.play.passIsDropped:
@@ -2971,10 +3028,12 @@ class Game:
                         homeOffStats = {
                             'runPlays': self.homeHalfRunPlays, 'runYards': self.homeHalfRunYards,
                             'passAttempts': self.homeHalfPassAttempts, 'passYards': self.homeHalfPassYards,
+                            'wr1Yards': self.homeHalfWr1Yards, 'wr2Yards': self.homeHalfWr2Yards,
                         }
                         awayOffStats = {
                             'runPlays': self.awayHalfRunPlays, 'runYards': self.awayHalfRunYards,
                             'passAttempts': self.awayHalfPassAttempts, 'passYards': self.awayHalfPassYards,
+                            'wr1Yards': self.awayHalfWr1Yards, 'wr2Yards': self.awayHalfWr2Yards,
                         }
                         homeCoach = getattr(self.homeTeam, 'coach', None)
                         awayCoach = getattr(self.awayTeam, 'coach', None)
@@ -4136,10 +4195,11 @@ class Game:
                     + p.gameStatsDict.get('rushing', {}).get('tds', 0)
                     + p.gameStatsDict.get('receiving', {}).get('tds', 0)
                 )
-                return {
+                result = {
                     'id': p.id,
                     'name': p.name,
                     'position': p.position.name if hasattr(p, 'position') and p.position else None,
+                    'defensivePosition': p.defensivePosition.value if hasattr(p, 'defensivePosition') and p.defensivePosition else None,
                     'teamId': p.team.id if hasattr(p, 'team') and hasattr(p.team, 'id') else None,
                     'playerRating': rating,
                     'ratingStars': max(1, min(5, stars)),
@@ -4148,6 +4208,11 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
+                # Include defense stats if any are non-zero
+                defStats = p.gameStatsDict.get('defense', {})
+                if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
+                    result['defense'] = dict(defStats)
+                return result
 
             return {
                 'team': {
@@ -5041,6 +5106,10 @@ class Play():
         self.isClutchPlay = False        # High pressure + positive mod + good outcome
         self.isChokePlay = False         # High pressure + negative mod + bad outcome
         self.clutchPlayerName = ''       # Name of the player who clutched/choked
+        self.sackedBy = None             # Defender who made the sack
+        self.interceptedBy = None        # Defender who intercepted
+        self.tackledBy = None            # Primary tackler on run plays
+        self.forcedFumbleBy = None       # Defender who forced the fumble
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
@@ -5531,6 +5600,32 @@ class Play():
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
         
+        # Identify primary tackler from defensive gameplan
+        defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
+        coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+        passRusherRun = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
+        lbPlayer = coverageAssignments.get('te')  # LB = defense team's RB, assigned to cover TE
+        if gapType in ('A-gap', 'B-gap'):
+            self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
+        else:
+            self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
+        if self.isFumble and self.isFumbleLost:
+            self.forcedFumbleBy = self.tackledBy
+
+        # Per-player defensive stats for run plays
+        isReg = self.game.isRegularSeasonGame
+        if self.tackledBy and hasattr(self.tackledBy, 'stat_tracker'):
+            self.tackledBy.stat_tracker.add_tackle(isReg)
+            if self.yardage <= 0:
+                self.tackledBy.stat_tracker.add_tfl(isReg)
+        # Safety (QB on defense) gets tackle on runs that break into secondary (10+ yards)
+        # or assist tackle on moderate gains (5+ yards)
+        safetyPlayer = coverageAssignments.get('rb')  # Safety = defense team's QB
+        if safetyPlayer and hasattr(safetyPlayer, 'stat_tracker') and self.yardage >= 5:
+            safetyPlayer.stat_tracker.add_tackle(isReg)
+        if self.forcedFumbleBy and hasattr(self.forcedFumbleBy, 'stat_tracker'):
+            self.forcedFumbleBy.stat_tracker.add_forced_fumble(isReg)
+
         # ── Record run execution insights ──
         self.insights['run'] = {
             'designedGap': designedGapType,
@@ -5549,11 +5644,15 @@ class Play():
             'baseYards': baseYards,
             'fumbleRisk': round(100 - fumbleThreshold),
             'isFumble': self.isFumble,
+            'tackledBy': self.tackledBy.name if self.tackledBy else None,
+            'forcedFumbleBy': self.forcedFumbleBy.name if self.forcedFumbleBy else None,
         }
         self.insights['defense'] = {
             'runDefMult': round(scheme['runDefMult'], 2),
             'passDefMult': round(scheme['passDefMult'], 2),
             'passRushMult': round(scheme['passRushMult'], 2),
+            'coverageType': scheme.get('coverageType', {}).value if hasattr(scheme.get('coverageType', {}), 'value') else None,
+            'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
         }
 
         # Clamp yardage to endzone
@@ -5719,7 +5818,9 @@ class Play():
                 'receiver': target['receiver'],
                 'openness': perceivedOpenness,  # What QB thinks
                 'actualOpenness': actualOpenness,  # What it really is
-                'route': target['route']
+                'route': target['route'],
+                'coveringDefender': target.get('coveringDefender'),
+                'routeQuality': target.get('routeQuality'),
             })
         
         # Sort by perceived openness (what QB thinks they see)
@@ -5927,7 +6028,16 @@ class Play():
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
-        effectivePassRush = self.defense.defensePassRushRating * scheme['passRushMult']
+        # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
+        defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
+        passRusher = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
+        if passRusher:
+            deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
+            basePassRush = deAttrs.get('passRush', self.defense.defensePassRushRating)
+        else:
+            basePassRush = self.defense.defensePassRushRating
+        effectivePassRush = basePassRush * scheme['passRushMult']
+        # Team-level pass coverage as fallback (individual matchups applied per-receiver below)
         effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
 
         # Track first-half pass attempts for halftime adjustment
@@ -5966,12 +6076,64 @@ class Play():
             'runDefMult': round(scheme['runDefMult'], 2),
             'passDefMult': round(scheme['passDefMult'], 2),
             'passRushMult': round(scheme['passRushMult'], 2),
+            'coverageType': scheme.get('coverageType', {}).value if hasattr(scheme.get('coverageType', {}), 'value') else None,
+            'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
         }
 
         if sackRoll <= sackProbability:
             self.insights['pass']['wasSacked'] = True
+            # Name the sacker based on blitz package
+            coverageAssignmentsForSack = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+            lbForSack = coverageAssignmentsForSack.get('te')   # LB = defense team's RB
+            safetyForSack = coverageAssignmentsForSack.get('rb') # S = defense team's QB
+            activeBlitz = scheme.get('blitzPackage') if GAMEPLAN_AVAILABLE else None
+            sackWhoRoll = batched_randint(1, 100)
+            if activeBlitz == BlitzPackage.LB_BLITZ:
+                # LB blitz: LB gets most sacks, DE secondary
+                if sackWhoRoll <= 55 and lbForSack:
+                    self.sackedBy = lbForSack
+                else:
+                    self.sackedBy = passRusher
+            elif activeBlitz == BlitzPackage.SAFETY_BLITZ:
+                # Safety blitz: safety gets some, DE still primary
+                if sackWhoRoll <= 40 and safetyForSack:
+                    self.sackedBy = safetyForSack
+                elif sackWhoRoll <= 70:
+                    self.sackedBy = passRusher
+                elif lbForSack:
+                    self.sackedBy = lbForSack
+                else:
+                    self.sackedBy = passRusher
+            elif activeBlitz == BlitzPackage.ALL_OUT:
+                # All-out: everyone rushing, split evenly
+                if sackWhoRoll <= 35:
+                    self.sackedBy = passRusher
+                elif sackWhoRoll <= 60 and lbForSack:
+                    self.sackedBy = lbForSack
+                elif safetyForSack:
+                    self.sackedBy = safetyForSack
+                else:
+                    self.sackedBy = passRusher
+            else:
+                # Base rush: DE dominates, small chance for others
+                if sackWhoRoll <= 80:
+                    self.sackedBy = passRusher
+                elif sackWhoRoll <= 93 and lbForSack:
+                    self.sackedBy = lbForSack
+                elif safetyForSack:
+                    self.sackedBy = safetyForSack
+                else:
+                    self.sackedBy = passRusher
+            if self.sackedBy:
+                self.insights['pass']['sackedBy'] = self.sackedBy.name
+                # Per-player defensive stats: sack + tackle + TFL
+                if hasattr(self.sackedBy, 'stat_tracker'):
+                    isReg = self.game.isRegularSeasonGame
+                    self.sackedBy.stat_tracker.add_defensive_sack(isReg)
+                    self.sackedBy.stat_tracker.add_tackle(isReg)
+                    self.sackedBy.stat_tracker.add_tfl(isReg)
             # Sack yardage using exponential distribution (most 3-7 yards, occasional 10+)
-            rushAdvantage = max(0, self.defense.defensePassRushRating - qbMobility) / 20
+            rushAdvantage = max(0, basePassRush - qbMobility) / 20
             sackYardages = np.arange(0, 16)
             sackDecayRate = max(0.3, 0.5 - rushAdvantage)  # Better rush = deeper sacks
             sackCurve = np.exp(-sackDecayRate * sackYardages)
@@ -5994,11 +6156,16 @@ class Play():
             if (fumbleRoll+fumbleResistModifyer) > 96:
                 #fumble
                 self.isFumble = True
-                if (self.defense.defensePassRushRating + batched_randint(-5,5)) >= (self.passer.gameAttributes.power + self.passer.gameAttributes.luckModifier + batched_randint(-5,5)):
+                if (basePassRush + batched_randint(-5,5)) >= (self.passer.gameAttributes.power + self.passer.gameAttributes.luckModifier + batched_randint(-5,5)):
                     self.passer.updateInGameConfidence(-.02)
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['fumRec'] += 1
                     self.isFumbleLost = True
+                    self.forcedFumbleBy = self.sackedBy
+                    if self.forcedFumbleBy:
+                        self.insights['pass']['forcedFumbleBy'] = self.forcedFumbleBy.name
+                        if hasattr(self.forcedFumbleBy, 'stat_tracker'):
+                            self.forcedFumbleBy.stat_tracker.add_forced_fumble(self.game.isRegularSeasonGame)
                     self.playResult = PlayResult.Fumble
         else:
             self.passer.addPassAttempt(self.game.isRegularSeasonGame)
@@ -6006,15 +6173,66 @@ class Play():
             targetList = []
             
             # STAGE 1: Calculate receiver openness (0-100 scale)
+            # Use individual defender coverage ratings from gameplan assignments
+            coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+            coverageType = scheme.get('coverageType')
+            blitzPackage = scheme.get('blitzPackage')
             for key in targets.keys():
                 if targets[key] is not None:
                     receiver = self.offense.rosterDict[key]
-                    openness, routeQuality = self.calculateReceiverOpenness(receiver, effectivePassDef)
+                    # Look up the assigned defender for this receiver slot
+                    assignedDefender = coverageAssignments.get(key)
+                    if assignedDefender:
+                        defAttrs = assignedDefender.attributes.getDefensiveAttributes(assignedDefender.position)
+                        individualCoverage = defAttrs.get('coverage', effectivePassDef)
+
+                        # Coverage type modifies how individual coverage applies
+                        if GAMEPLAN_AVAILABLE and coverageType is not None:
+                            if coverageType == CoverageType.MAN:
+                                # Man: pure individual matchup, strong vs short/quick
+                                rcvDefRating = individualCoverage * scheme['passDefMult']
+                            elif coverageType == CoverageType.ZONE:
+                                # Zone: pooled coverage average — individual skill matters less
+                                teamAvgCoverage = effectivePassDef
+                                rcvDefRating = (individualCoverage * 0.4 + teamAvgCoverage * 0.6) * scheme['passDefMult']
+                            elif coverageType == CoverageType.MATCH:
+                                # Match: blend of man and zone
+                                safetyPlayer = coverageAssignments.get('rb')
+                                safetyPlayReading = 70
+                                if safetyPlayer:
+                                    sAttrs = safetyPlayer.attributes.getDefensiveAttributes(safetyPlayer.position)
+                                    safetyPlayReading = sAttrs.get('playReading', 70)
+                                # Better safety play-reading → more man-like (stronger)
+                                manWeight = 0.4 + (safetyPlayReading - 60) / 100
+                                manWeight = max(0.3, min(0.7, manWeight))
+                                rcvDefRating = (individualCoverage * manWeight + effectivePassDef * (1 - manWeight)) * scheme['passDefMult']
+                            else:
+                                rcvDefRating = individualCoverage * scheme['passDefMult']
+                        else:
+                            rcvDefRating = individualCoverage * scheme['passDefMult']
+
+                        # Blitz exposure: if a defender is blitzing, their coverage assignment is weakened
+                        if GAMEPLAN_AVAILABLE and blitzPackage is not None:
+                            if blitzPackage == BlitzPackage.LB_BLITZ and key == 'te':
+                                # LB is blitzing — TE has no dedicated coverage
+                                rcvDefRating *= 0.5
+                            elif blitzPackage == BlitzPackage.SAFETY_BLITZ and targets[key] in (PassType.long, PassType.hailMary):
+                                # Safety blitz — deep routes lose safety help
+                                rcvDefRating *= 0.85
+                            elif blitzPackage == BlitzPackage.ALL_OUT:
+                                # Everyone rushing — all coverage suffers
+                                rcvDefRating *= 0.65
+                                if key == 'te':
+                                    rcvDefRating *= 0.6  # TE completely uncovered
+                    else:
+                        rcvDefRating = effectivePassDef
+                    openness, routeQuality = self.calculateReceiverOpenness(receiver, rcvDefRating)
                     receiverStatusDict = {
                         'receiver': receiver,
                         'openness': openness,
                         'routeQuality': routeQuality,
-                        'route': targets[key]
+                        'route': targets[key],
+                        'coveringDefender': assignedDefender,
                     }
                     targetList.append(receiverStatusDict)
             
@@ -6113,6 +6331,7 @@ class Play():
                         'reach': getattr(t['receiver'].gameAttributes, 'reach', 0),
                         'route': t['route'].name if hasattr(t['route'], 'name') else str(t['route']),
                         'isSelected': (selectedTarget is not None and t['receiver'] is selectedTarget['receiver']),
+                        'coveredBy': t.get('coveringDefender').name if t.get('coveringDefender') else None,
                     }
                     for t in targetList
                 ]
@@ -6124,12 +6343,19 @@ class Play():
                 self.insights['pass']['rcvRouteRunning'] = self.selectedTarget.get('routeQuality', self.receiver.gameAttributes.routeRunning)
 
                 # STAGE 4: Calculate catch probability and outcome
+                # Use individual defender coverage if available
+                coveringDefender = self.selectedTarget.get('coveringDefender')
+                if coveringDefender:
+                    defAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
+                    catchDefCoverage = defAttrs.get('coverage', self.defense.defensePassCoverageRating)
+                else:
+                    catchDefCoverage = self.defense.defensePassCoverageRating
                 catchProbs = self.calculateCatchProbability(
                     throwQuality,
                     self.receiver.gameAttributes.hands,
                     getattr(self.receiver.gameAttributes, 'reach', 70),
                     self.selectedTarget['openness'],
-                    self.defense.defensePassCoverageRating,
+                    catchDefCoverage,
                     receiverPressureMod
                 )
 
@@ -6165,6 +6391,19 @@ class Play():
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['ints'] += 1
                     self.isInterception = True
+                    # Determine who intercepts: covering CB, or Safety on deep overthrows
+                    safetyPlayer = coverageAssignments.get('rb')
+                    if (safetyPlayer and coveringDefender is not safetyPlayer
+                            and self.passType in (PassType.long, PassType.hailMary)
+                            and batched_randint(1, 100) <= 35):
+                        # Safety reads the deep throw and jumps the route
+                        self.interceptedBy = safetyPlayer
+                    else:
+                        self.interceptedBy = coveringDefender
+                    if self.interceptedBy:
+                        self.insights['pass']['interceptedBy'] = self.interceptedBy.name
+                        if hasattr(self.interceptedBy, 'stat_tracker'):
+                            self.interceptedBy.stat_tracker.add_defensive_int(self.game.isRegularSeasonGame)
                     self.playResult = PlayResult.Interception
                 # Check for catch
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
@@ -6220,7 +6459,7 @@ class Play():
 
                             # YAC decay rate based on receiver vs defense
                             yacOffense = receiverYACRating + receiverPressureMod
-                            yacDefense = self.defense.defensePassCoverageRating
+                            yacDefense = catchDefCoverage
                             yacDecayRate = max(0.10, 0.18 + 0.005 * (yacDefense - yacOffense))
                             yacDecayRate *= decayMult
 
@@ -6299,8 +6538,17 @@ class Play():
                     if self.game.currentQuarter <= 2:
                         if isHomePossession:
                             self.game.homeHalfPassYards += self.yardage
+                            # Track per-WR yards for halftime CB swap
+                            if self.receiver == self.offense.rosterDict.get('wr1'):
+                                self.game.homeHalfWr1Yards += self.yardage
+                            elif self.receiver == self.offense.rosterDict.get('wr2'):
+                                self.game.homeHalfWr2Yards += self.yardage
                         else:
                             self.game.awayHalfPassYards += self.yardage
+                            if self.receiver == self.offense.rosterDict.get('wr1'):
+                                self.game.awayHalfWr1Yards += self.yardage
+                            elif self.receiver == self.offense.rosterDict.get('wr2'):
+                                self.game.awayHalfWr2Yards += self.yardage
 
                     # Confidence boosts based on play quality
                     confBoost = 0.005 if throwQuality >= 70 else 0.003
@@ -6309,6 +6557,37 @@ class Play():
                     self.defense.updateInGameConfidence(-confBoost)
                     self.isPassCompletion = True
                     
+                    # Per-player defensive stat: covering defender gets tackle on completion
+                    isReg = self.game.isRegularSeasonGame
+                    if coveringDefender and hasattr(coveringDefender, 'stat_tracker'):
+                        coveringDefender.stat_tracker.add_tackle(isReg)
+                    # Safety gets tackle on longer completions (deep help / last line)
+                    safetyPlayer = coverageAssignments.get('rb')
+                    if safetyPlayer and hasattr(safetyPlayer, 'stat_tracker') and self.yardage >= 15:
+                        safetyPlayer.stat_tracker.add_tackle(isReg)
+
+                    # Fumble on catch — defender strips the ball on the tackle
+                    primaryTackler = coveringDefender
+                    if safetyPlayer and self.yardage >= 15:
+                        primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
+                    if primaryTackler and batched_randint(1, 100) > 97:
+                        # ~3% chance of fumble on catch
+                        rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
+                        defStripAbility = 70
+                        if hasattr(primaryTackler, 'attributes'):
+                            defAttrs = primaryTackler.attributes.getDefensiveAttributes(primaryTackler.position)
+                            defStripAbility = defAttrs.get('tackling', 70)
+                        if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
+                            self.isFumble = True
+                            self.receiver.updateInGameConfidence(-.02)
+                            self.defense.updateInGameConfidence(.02)
+                            self.defense.gameDefenseStats['fumRec'] += 1
+                            self.isFumbleLost = True
+                            self.forcedFumbleBy = primaryTackler
+                            if hasattr(primaryTackler, 'stat_tracker'):
+                                primaryTackler.stat_tracker.add_forced_fumble(isReg)
+                            self.playResult = PlayResult.Fumble
+
                     # Track long completions
                     if self.yardage >= 20:
                         self.passer.gameStatsDict['passing']['20+'] += 1
@@ -6329,9 +6608,17 @@ class Play():
                     self.yardage = 0
                 
                 else:
-                    # INCOMPLETE (missed throw)
+                    # INCOMPLETE (missed throw / coverage disruption)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
                     self.defense.updateInGameConfidence(.003)
                     self.passer.updateInGameConfidence(-.003)
                     self.yardage = 0
+                    # Credit covering defender with pass breakup
+                    if coveringDefender and hasattr(coveringDefender, 'stat_tracker'):
+                        coveringDefender.stat_tracker.add_pass_breakup(self.game.isRegularSeasonGame)
+                    # Safety gets pass breakup on deep incomplete passes (deep help)
+                    if self.passType in (PassType.long, PassType.hailMary):
+                        safetyPlayer = coverageAssignments.get('rb')
+                        if safetyPlayer and hasattr(safetyPlayer, 'stat_tracker'):
+                            safetyPlayer.stat_tracker.add_pass_breakup(self.game.isRegularSeasonGame)
 

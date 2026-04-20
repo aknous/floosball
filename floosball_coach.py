@@ -37,6 +37,11 @@ class Coach:
         self.aggressiveness = 80
         self.clockManagement = 80
         self.playerDevelopment = 80
+        # Scouting drives how accurately fans can see upcoming rookies' potential.
+        # Coach scouting + funding tier bonus = effective scouting accuracy. A
+        # scouting specialist on a MEGA-market team nails every ceiling call;
+        # a castoff on a SMALL-market team sees wide potential ranges.
+        self.scouting = 80
 
     @property
     def overallRating(self):
@@ -49,7 +54,8 @@ class Coach:
         """Generate attributes centered around seed quality (60–100 range)."""
         center = seed if seed is not None else randint(70, 90)
         for attr in ['offensiveMind', 'defensiveMind', 'adaptability',
-                     'aggressiveness', 'clockManagement', 'playerDevelopment']:
+                     'aggressiveness', 'clockManagement', 'playerDevelopment',
+                     'scouting']:
             val = int(np.clip(np.random.normal(center, 10), 60, 100))
             setattr(self, attr, val)
         return self

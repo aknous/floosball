@@ -56,6 +56,7 @@ class EventType(Enum):
     OFFSEASON_ON_CLOCK      = "offseason_on_clock"
     OFFSEASON_TEAM_COMPLETE = "offseason_team_complete"
     OFFSEASON_COMPLETE      = "offseason_complete"
+    FA_DRAFT_ORDER_UPDATE   = "fa_draft_order_update"
 
     # GM Mode events
     GM_VOTE_RESOLVED = "gm_vote_resolved"
@@ -65,6 +66,14 @@ class EventType(Enum):
 
     # Pick-Em events
     PICKEM_RESULTS = "pickem_results"
+
+    # Pre-game reminder — fires exactly 15 min before games start each week/round.
+    # Use this (not week_start) for DM reminders; week_start can fire up to 8 hours
+    # early on cross-day transitions.
+    GAMES_STARTING_SOON = "games_starting_soon"
+
+    # Achievements
+    ACHIEVEMENT_UNLOCKED = "achievement_unlocked"
 
     # System events
     ERROR = "error"
@@ -271,6 +280,25 @@ class SeasonEvent:
         }
     
     @staticmethod
+    def gamesStartingSoon(seasonNumber: int, weekNumber: int, weekText: str = None,
+                          gamesCount: int = 0, gameStartTime: str = None) -> Dict[str, Any]:
+        """Fired 15 minutes before games actually start. Bot uses this for DM reminders
+        (week_start isn't reliable because it can fire up to 8 hours early on
+        cross-day transitions)."""
+        text = weekText or f'Week {weekNumber}'
+        event = {
+            'event': EventType.GAMES_STARTING_SOON.value,
+            'seasonNumber': seasonNumber,
+            'weekNumber': weekNumber,
+            'weekText': text,
+            'gamesCount': gamesCount,
+            'message': f"{text} games start in 15 minutes",
+        }
+        if gameStartTime:
+            event['gameStartTime'] = gameStartTime
+        return event
+
+    @staticmethod
     def weekStart(seasonNumber: int, weekNumber: int, games: List[Dict] = None, weekText: str = None, modifier: str = None,
                   modifierInfo: dict = None, nextGameStartTime: str = None, gamesCount: int = None) -> Dict[str, Any]:
         """Create a week start event"""
@@ -357,6 +385,24 @@ class LeagueNewsEvent:
         }
 
 
+class AchievementEvent:
+    """Factory for per-user achievement events"""
+
+    @staticmethod
+    def unlocked(key: str, name: str, description: str, rewardConfig: Dict[str, Any],
+                 season: int) -> Dict[str, Any]:
+        """Sent to a specific user when they unlock an achievement."""
+        return {
+            'event': EventType.ACHIEVEMENT_UNLOCKED.value,
+            'timestamp': datetime.now().isoformat(),
+            'key': key,
+            'name': name,
+            'description': description,
+            'rewardConfig': rewardConfig or {},
+            'season': season,
+        }
+
+
 class OffseasonEvent:
     """Factory for offseason free agency events"""
 
@@ -420,6 +466,14 @@ class OffseasonEvent:
             'event': EventType.OFFSEASON_COMPLETE.value,
             'timestamp': datetime.now().isoformat(),
             'remainingFreeAgents': remainingFreeAgents,
+        }
+
+    @staticmethod
+    def fa_draft_order_update(draftOrder: list) -> Dict[str, Any]:
+        return {
+            'event': EventType.FA_DRAFT_ORDER_UPDATE.value,
+            'timestamp': datetime.now().isoformat(),
+            'draftOrder': draftOrder,
         }
 
 

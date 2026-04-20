@@ -184,6 +184,8 @@ class SeasonManager:
             self.setTimingMode(TimingMode.PLAYOFF_TEST)
         elif mode_str == 'turbo-silent':
             self.setTimingMode(TimingMode.TURBO_SILENT)
+        elif mode_str in ('fast-weekly', 'fast_weekly'):
+            self.setTimingMode(TimingMode.FAST_WEEKLY)
         else:
             logger.warning(f"Unknown timing mode '{mode_str}', using FAST")
             self.setTimingMode(TimingMode.FAST)
@@ -249,9 +251,44 @@ class SeasonManager:
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
+        # Sweep any pending achievement rewards the user didn't claim or stash
+        # last season. Must run BEFORE starter-pack reprovision and deferred
+        # achievement processing so the rewards those create aren't caught by
+        # the sweep.
+        self._sweepExpiredAchievementRewards()
+
         # Re-provision starter packs for users who lost them in a fresh start
         # (users table is preserved but currency/cards are cleared)
         self._reprovisionExistingUsers()
+
+        # Release any deferred achievement rewards (e.g. Veteran → pack + powerup at next season)
+        self._processDeferredAchievements()
+
+        # Snapshot every player's rating at season start — feeds the
+        # progression sparkline on rosters and prospect pipelines. Idempotent
+        # per (player, season) so reruns don't duplicate rows.
+        try:
+            self.playerManager.snapshotRatingsForSeason(seasonNumber)
+        except Exception as e:
+            logger.warning(f"Rating snapshot at season {seasonNumber} start failed: {e}")
+
+        # Generate the season's rookie class UP FRONT so fans can scout and vote
+        # on picks all season long. Rookies sit as is_upcoming_rookie=True until
+        # the offseason draft consumes them. Only generates if none already exist
+        # for this season (idempotent across restarts).
+        existingUpcoming = [p for p in self.playerManager.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
+        if not existingUpcoming:
+            rookies = self.playerManager._generateRookieClass(seasonNumber)
+            for r in rookies:
+                r.is_upcoming_rookie = True
+                r.team = 'Upcoming Rookie'
+                if r not in self.playerManager.activePlayers:
+                    self.playerManager.activePlayers.append(r)
+                self.playerManager.addToPositionList(r)
+            self.playerManager.sortPlayersByPosition()
+            logger.info(f"Generated {len(rookies)} upcoming rookies for season {seasonNumber}")
+        else:
+            logger.info(f"Upcoming rookie class already exists ({len(existingUpcoming)} players) — reusing")
 
         # Persist season record early so startDate survives restarts
         self._saveSeasonToDatabase()
@@ -470,6 +507,17 @@ class SeasonManager:
                 )
                 broadcaster.broadcast_sync('season', week_event)
 
+            # Open the FA voting window mid-season once Week 22 arrives (the
+            # Front Office's activation threshold). Fans can rank projected
+            # FAs — walk-year rostered players + existing FAs — from here
+            # through end of regular season. Idempotent.
+            try:
+                from constants import GM_ACTIVE_WEEK
+                if self.currentSeason.currentWeek >= GM_ACTIVE_WEEK and not getattr(self, '_faWindowOpen', False):
+                    await self._openFaVotingWindowMidSeason()
+            except Exception as _e:
+                logger.warning(f"Could not open FA window mid-season: {_e}")
+
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
                 # Refresh ELO from current team values (stale since schedule creation)
@@ -482,6 +530,13 @@ class SeasonManager:
                 self.currentSeason.leagueHighlights.insert(0, {
                     'event': {'text': f'{self.currentSeason.currentWeekText} Starting Soon...'}
                 })
+
+            # Fire pre-game reminder 15 min before games start — bot uses this for
+            # DM reminders, since week_start may have fired hours earlier on
+            # cross-day transitions.
+            await self._firePreGameReminder(weekStartTime, self.currentSeason.currentWeek,
+                                            self.currentSeason.currentWeekText,
+                                            len(week.get('games', [])))
 
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
@@ -530,6 +585,12 @@ class SeasonManager:
                 lockSession.close()
             except Exception as e:
                 logger.error(f"Failed to auto-lock cards/rosters for week {self.currentSeason.currentWeek}: {e}")
+
+            # Auto-pick favorites for users who opted in
+            try:
+                self._autoPickFavorites(week['games'])
+            except Exception as e:
+                logger.error(f"Auto-pick favorites failed for week {self.currentSeason.currentWeek}: {e}")
 
             # Add game start highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
@@ -683,10 +744,13 @@ class SeasonManager:
             self.games_simulated_this_season += 1
 
             # Wire fantasy tracker callback for each player so FP generation
-            # flows through FantasyTracker (updates both _weekFP and gameStatsDict)
-            # Also tracks Q4/OT fantasy points for the Overtime card effect
+            # flows through FantasyTracker (updates both _weekFP and gameStatsDict).
+            # Skip for playoff games — fantasy is archived once the regular season ends,
+            # so playoff FP should NOT accumulate (keeps the leaderboard frozen and the
+            # bot's end-of-round reports from resurrecting fantasy data).
+            isPlayoffGame = bool(getattr(gameInstance, 'isPlayoff', False))
             fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
-            if fantasyTracker:
+            if fantasyTracker and not isPlayoffGame:
                 for team in [gameInstance.homeTeam, gameInstance.awayTeam]:
                     for player in team.rosterDict.values():
                         if player:
@@ -930,8 +994,16 @@ class SeasonManager:
         if not in_playoffs:
             self._awardWeeklyFpFloobits(self.currentSeason.seasonNumber, week)
 
+        # Achievement hook — Veteran (rosters set this regular-season week)
+        if not in_playoffs:
+            self._creditVeteranForWeek(self.currentSeason.seasonNumber)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
+
+        # Secret achievements that span both FP + pick-em week totals
+        if not in_playoffs:
+            self._checkWeekEndSecrets(self.currentSeason.seasonNumber, week)
 
         # Unlock equipped cards now that week is over
         try:
@@ -1055,6 +1127,14 @@ class SeasonManager:
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
                     updated += 1
+                    # Secret — Arsenal (3+ swaps available at once)
+                    totalSwaps = (roster.swaps_available or 0) + (roster.purchased_swaps or 0)
+                    if totalSwaps >= 3:
+                        try:
+                            from managers import achievementManager as _am
+                            _am.unlockSecret(swapSession, roster.user_id, "arsenal")
+                        except Exception:
+                            pass
             swapSession.commit()
             swapSession.close()
             if updated > 0:
@@ -1435,6 +1515,23 @@ class SeasonManager:
                     if totalFP < 0:
                         totalFP = 0.0
 
+                    # Achievement hook — Compound tiers (single-week FPx from cards only)
+                    # Exclude the synergy weekly modifier's contribution so the achievement
+                    # reflects card-driven multipliers, not a "free" modifier bonus.
+                    cardMultProduct = multProduct
+                    if userModifier == "synergy":
+                        uniquePositions = len(set(calcCtx.equippedCardPositions))
+                        if uniquePositions > 1:
+                            synergyMult = 1 + uniquePositions * 0.1
+                            if synergyMult > 0:
+                                cardMultProduct = multProduct / synergyMult
+                    if cardMultProduct > 1.0:
+                        try:
+                            from managers import achievementManager as _amCompound
+                            _amCompound.onWeeklyTotalFpMultiplier(session, userId, cardMultProduct, season)
+                        except Exception as _e:
+                            logger.warning(f"Compound hook failed: {_e}")
+
                     # Persist FP bonus
                     if totalFP > 0 or result.floobitsEarned > 0:
                         if totalFP > 0:
@@ -1509,6 +1606,12 @@ class SeasonManager:
                             f"Card Floobits for user {userId} week {week}: "
                             f"+{result.floobitsEarned} Floobits"
                         )
+                        # Achievement hook — Windfall tiers (floobits from card effects in a single week)
+                        try:
+                            from managers import achievementManager as _am
+                            _am.onWeeklyCardFloobits(session, userId, result.floobitsEarned, season)
+                        except Exception as _e:
+                            logger.warning(f"Windfall hook failed: {_e}")
 
                     # ─── Streak management ──────────────────────────────────
                     for eq in userEquipped:
@@ -1959,6 +2062,15 @@ class SeasonManager:
                     continue
                 gd = player.gameStatsDict
                 # Only include players who actually participated
+                defStats = gd.get('defense', {})
+                hasDefenseStats = (
+                    defStats.get('sacks', 0) > 0
+                    or defStats.get('ints', 0) > 0
+                    or defStats.get('tackles', 0) > 0
+                    or defStats.get('tfl', 0) > 0
+                    or defStats.get('forcedFumbles', 0) > 0
+                    or defStats.get('passBreakups', 0) > 0
+                )
                 hasStats = (
                     gd.get('passing', {}).get('att', 0) > 0
                     or gd.get('rushing', {}).get('carries', 0) > 0
@@ -1966,6 +2078,7 @@ class SeasonManager:
                     or gd.get('kicking', {}).get('fgAtt', 0) > 0
                     or gd.get('kicking', {}).get('xpAtt', 0) > 0
                     or gd.get('fantasyPoints', 0) != 0
+                    or hasDefenseStats
                 )
                 if hasStats:
                     # _accumulatePostgameStats zeroes gd['fantasyPoints'] inside
@@ -1985,6 +2098,7 @@ class SeasonManager:
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
                         'kicking': gd.get('kicking'),
+                        'defense': gd.get('defense'),
                     }
         return playerStats
 
@@ -2881,6 +2995,11 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 ))
 
+            # Fire pre-game reminder 15 min before playoff games start
+            await self._firePreGameReminder(roundStartTime, 28 + currentRound,
+                                            self.currentWeekText,
+                                            len(playoffGamesList))
+
             # Wait for exact game start time
             await self.timingManager.waitForGamesStart(roundStartTime)
 
@@ -2906,6 +3025,12 @@ class SeasonManager:
                 logger.error(f"Failed to lock equipped cards for playoff round {currentRound}: {e}")
 
             self.currentSeason.leagueHighlights.insert(0, {'event': {'text': '{} Starting Soon...'.format(self.currentWeekText)}})
+
+            # Auto-pick favorites for users who opted in
+            try:
+                self._autoPickFavorites(playoffGamesList)
+            except Exception as e:
+                logger.error(f"Auto-pick favorites failed for playoff round {currentRound}: {e}")
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
@@ -3166,6 +3291,9 @@ class SeasonManager:
             )
             broadcaster.broadcast_sync('season', seasonEndEvent)
 
+        # Secret achievements that fire at season end (Sovereign, Soothsayer, Consecration)
+        self._checkSeasonEndSecrets(seasonNumber)
+
         logger.info(f"Season {seasonNumber} completed. Champion: {self.currentSeason.champion.name if self.currentSeason.champion else 'None'}")
     
     async def handleOffseason(self) -> None:
@@ -3228,31 +3356,42 @@ class SeasonManager:
         logger.info("Step 3.5: Resolve GM cut player votes")
         await self._resolveGmCutVotes(gmResults)
 
-        # STEP 4: FA retirements + rookie generation
-        logger.info("Step 4: Free agent retirements and rookie generation")
-        self.playerManager._processFreeAgentRetirements(
-            self.currentSeason.seasonNumber if self.currentSeason else 1, [])
-        self.playerManager._generateReplacementPlayers(
-            self.currentSeason.seasonNumber if self.currentSeason else 1)
-
-        # Enable broadcasting for OFFSEASON_TEST mode before FA window + draft
+        # Fire offseason_start before the rookie draft so the frontend
+        # transitions into OffseasonPanel before rookie events start streaming.
+        # OFFSEASON_TEST needs the broadcaster temporarily enabled for the
+        # offseason window (it runs silent during the season). FAST_WEEKLY
+        # keeps broadcasting on the whole time with game-event suppression,
+        # so no enable/disable is needed.
         offseasonTestBroadcastEnabled = False
+        needOffseasonStart = self.timingManager.mode in (TimingMode.OFFSEASON_TEST, TimingMode.FAST_WEEKLY) and BROADCASTING_AVAILABLE
         if self.timingManager.mode == TimingMode.OFFSEASON_TEST and BROADCASTING_AVAILABLE:
             from api.game_broadcaster import broadcaster as bc
             from api.websocket_manager import manager as wsMgr
             bc.enable(wsMgr)
             offseasonTestBroadcastEnabled = True
-            logger.info("OFFSEASON_TEST: broadcasting enabled for FA window + draft")
-            # Broadcast offseason_start so the frontend transitions to OffseasonPanel
+            logger.info(f"{self.timingManager.mode.value}: broadcasting enabled for offseason")
+        if needOffseasonStart:
+            # Broadcast offseason_start with draft order + roster snapshots.
+            # Rookie draft uses the worst-first order from playoffs. The FA
+            # draft later updates the draft order to the tier-sorted sequence
+            # via a lighter fa_draft_order_update event that doesn't reset
+            # accumulated transactions.
             try:
-                freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+                faOrderEarly = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
                 draftOrderList = [
-                    {'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None), 'color': getattr(t, 'color', None)}
-                    for t in freeAgencyOrder
+                    {
+                        'name': t.name,
+                        'city': getattr(t, 'city', ''),
+                        'abbr': getattr(t, 'abbr', t.name[:3].upper()),
+                        'id': getattr(t, 'id', None),
+                        'color': getattr(t, 'color', None),
+                        'fundingTier': getattr(t, 'fundingTier', 'MID_MARKET'),
+                        'fundingTierRank': getattr(t, 'fundingTierRank', 3),
+                    }
+                    for t in faOrderEarly
                 ]
-                # Snapshot pre-FA rosters
                 rosterSnapshots = {}
-                for t in freeAgencyOrder:
+                for t in faOrderEarly:
                     abbr = getattr(t, 'abbr', t.name[:3].upper())
                     roster = {}
                     for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
@@ -3271,46 +3410,178 @@ class SeasonManager:
                 startEvent = OffseasonEvent.start(draftOrderList)
                 startEvent['rosterSnapshots'] = rosterSnapshots
                 await broadcaster.broadcast_season_event(startEvent)
-                # Brief delay so the frontend can mount OffseasonPanel before FA window event
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)  # brief so frontend mounts panel
             except Exception as e:
-                logger.warning(f"Could not broadcast offseason start for OFFSEASON_TEST: {e}")
+                logger.warning(f"Could not broadcast offseason start: {e}")
+
+        # STEP 4: FA retirements + rookie draft
+        # (Rookie class was generated at season start — fans have been scouting/
+        # voting all season. This step consumes the class via the worst-first
+        # draft, optionally guided by fan ballots.)
+        logger.info("Step 4: Free agent retirements and rookie draft")
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
+        self.playerManager._processFreeAgentRetirements(seasonNum, [])
+
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+
+        # Harvest this season's rookies that haven't been drafted yet
+        rookies = [p for p in self.playerManager.activePlayers
+                   if getattr(p, 'is_upcoming_rookie', False)]
+        # Safety: if no rookies exist (upgrade path from pre-Phase-7 DB), fall
+        # back to generating them on the fly
+        if not rookies:
+            logger.warning(f"No upcoming rookies found for season {seasonNum} — generating now as fallback")
+            rookies = self.playerManager._generateRookieClass(seasonNum)
+            for r in rookies:
+                if r not in self.playerManager.activePlayers:
+                    self.playerManager.activePlayers.append(r)
+                self.playerManager.addToPositionList(r)
+
+        # Pull fan-vote preference lists per team from the gm_votes table
+        fanPreferences = self._collectRookieDraftBallots(seasonNum)
+        freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+
+        # Live pick-by-pick rookie draft — drives the same WS events the FA
+        # draft uses, so the OffseasonPanel can render the rookie phase too.
+        # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
+        # rookie draft from FA draft.
+        pickGen = self.playerManager.rookieDraftPickGenerator(
+            rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
+        )
+
+        # Broadcast a phase-start marker so the frontend knows to show the
+        # "Rookie Draft" header before picks start streaming
+        if BROADCASTING_AVAILABLE and broadcaster:
+            try:
+                await broadcaster.broadcast_season_event({
+                    'event': 'rookie_draft_start',
+                    'season': seasonNum,
+                    'totalRookies': len(rookies),
+                })
+            except Exception as e:
+                logger.warning(f"Could not broadcast rookie_draft_start: {e}")
+
+        draftSummary = None
+        try:
+            for entry in pickGen:
+                kind = entry.get('type')
+                if kind == 'on_clock':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_on_clock',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        })
+                        await self.timingManager.waitBetweenOffseasonPicks()
+                elif kind == 'pick':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_pick',
+                            'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                            'player': entry['playerName'], 'position': entry['position'],
+                            'rating': entry['rating'], 'tier': entry['tier'],
+                            'source': entry.get('source', 'ai_best'),
+                        })
+                    # Persist so /api/offseason can replay the pick on refresh.
+                    self._offseasonTransactions.append({
+                        'type': 'rookie_pick',
+                        'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                        'player': entry['playerName'], 'position': entry['position'],
+                        'rating': entry['rating'], 'tier': entry['tier'],
+                    })
+                elif kind == 'skip':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_skip',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            'reason': entry.get('reason'),
+                        })
+                    # Persist so refresh shows skipped teams too.
+                    reason = entry.get('reason')
+                    skipLabel = '(pipeline full — forfeited pick)' if reason == 'pipeline_full' else '(no eligible rookies)'
+                    self._offseasonTransactions.append({
+                        'type': 'rookie_skip',
+                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        'player': skipLabel, 'position': '—',
+                        'rating': 0,
+                    })
+                elif kind == 'complete':
+                    draftSummary = entry
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_complete',
+                            'totalPicks': len(entry.get('picks', [])),
+                            'undraftedCount': len(entry.get('undrafted', [])),
+                        })
+        except Exception as e:
+            logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
+            # Drain the rest so mutations still complete
+            for _ in pickGen:
+                pass
+
+        # Brief pause so the frontend can show the rookie draft's final state
+        # before the FA phase takes over and shifts the panel's content. Skip
+        # when broadcasting is off (no human watching) or during fast-catchup.
+        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
+                and not getattr(self.timingManager, '_isFastCatchingUp', False):
+            await asyncio.sleep(3)
 
         # STEP 5: FA Voting Window (GM Mode sign_fa)
         logger.info("Step 5: FA voting window")
         await self._runFaVotingWindow()
 
+        # Pre-FA integrity sweep — the draft pool must not include players
+        # who are already on a roster (rookie draft just promoted some
+        # prospects, contract-expiration paths may have left stale refs, etc.).
+        # Without this, the FA draft round-robin wastes rounds skipping
+        # "already rostered" picks until every offender is weeded out.
+        self._validateRosterIntegrity()
+
         # STEP 6: FA Draft
         logger.info("Step 6: Free agency draft")
         await self._processFreeAgency()
 
-        # STEP 6.5: Validate roster/FA integrity after draft
+        # STEP 6.5: Validate roster/FA integrity after draft too — defensive,
+        # in case new mismatches were introduced during picks.
         self._validateRosterIntegrity()
 
-        # Disable broadcasting after draft for OFFSEASON_TEST mode
+        # Disable broadcasting after draft for the silent-during-season modes
         if offseasonTestBroadcastEnabled:
             from api.game_broadcaster import broadcaster as bc
             bc.disable()
-            logger.info("OFFSEASON_TEST: broadcasting disabled after draft")
+            logger.info(f"{self.timingManager.mode.value}: broadcasting disabled after draft")
 
         # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
+        # Prospects train through their drafting team's coach/funding too, so coaches
+        # with strong playerDevelopment and MEGA-market teams grow pipelines faster.
         logger.info("Step 7: Player offseason training")
         from constants import FUNDING_DEV_BONUS
-        rosteredDevRating: dict = {}
-        rosteredFundingBonus: dict = {}
+        teamDevRating: dict = {}       # player.id → coach dev rating
+        teamFundingBonus: dict = {}    # player.id → funding dev bonus
         teamManager = self.serviceContainer.getService('team_manager')
         for team in teamManager.teams:
             coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
             fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
-            for posGroup in team.rosterDict.values():
-                if posGroup is not None and hasattr(posGroup, 'id'):
-                    rosteredDevRating[posGroup.id] = coachDevRating
-                    rosteredFundingBonus[posGroup.id] = fundingBonus
+            # Rostered players train with this team's coach/funding
+            for rosterPlayer in team.rosterDict.values():
+                if rosterPlayer is not None and hasattr(rosterPlayer, 'id'):
+                    teamDevRating[rosterPlayer.id] = coachDevRating
+                    teamFundingBonus[rosterPlayer.id] = fundingBonus
+            # Prospects get the same treatment — they're part of this team's pipeline
+            for prospect in getattr(team, 'prospects', []):
+                if hasattr(prospect, 'id'):
+                    teamDevRating[prospect.id] = coachDevRating
+                    teamFundingBonus[prospect.id] = fundingBonus
         for player in self.playerManager.activePlayers:
             if hasattr(player, 'offseasonTraining'):
-                devRating = rosteredDevRating.get(getattr(player, 'id', None), 50)
-                fundingBonus = rosteredFundingBonus.get(getattr(player, 'id', None), 0)
+                devRating = teamDevRating.get(getattr(player, 'id', None), 50)
+                fundingBonus = teamFundingBonus.get(getattr(player, 'id', None), 0)
                 player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
+
+        # STEP 7.5: Advance prospect development window — auto-release washouts
+        logger.info("Step 7.5: Prospect development window advancement")
+        self.playerManager._advanceProspectWindow()
 
         # STEP 8: Handle retired players on fantasy rosters
         # Must run before HoF which clears newlyRetiredPlayers
@@ -3564,45 +3835,96 @@ class SeasonManager:
             logger.error("No free agency order available (playoffs must be completed first)")
             return
 
-        freeAgencyOrder = self.currentSeason.freeAgencyOrder
+        # Rookie draft uses the worst-first freeAgencyOrder from playoffs (rebuild
+        # path). FA draft, however, gives MEGA-market teams priority so funding
+        # tier actually determines signing power. Bad teams get their ceiling
+        # raised through the rookie-draft + prospect pipeline instead.
+        #
+        # Sort: primary by fundingTierRank ascending (MEGA=1 first, SMALL=4 last).
+        # Secondary by effective_funding DESCENDING — within a tier, the team
+        # with the biggest fan-backed pool picks first. With share-of-league
+        # tiers, most teams can cluster in MID; sorting the bucket by raw
+        # funding (not by record) means fans see their contributions actually
+        # moving them up the draft queue rather than just win-loss.
+        # Pull tier_rank and effective_funding fresh from the DB. Reading
+        # directly sidesteps a bug where runtime team.fundingTierRank would
+        # reset to the default (3) after a server restart mid-season, even
+        # though the locked tier in the DB was still correct. This ensures
+        # the FA draft always respects the tier each team earned at season
+        # start, regardless of runtime state.
+        tierRankByTeam: dict = {}
+        effectiveByTeam: dict = {}
+        try:
+            from database.connection import get_session as _gs
+            from database.models import TeamFunding
+            _s = _gs()
+            try:
+                seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+                rows = _s.query(TeamFunding).filter_by(season=seasonNum).all()
+                for r in rows:
+                    tierRankByTeam[r.team_id] = r.tier_rank or 3
+                    effectiveByTeam[r.team_id] = r.effective_funding or 0
+            finally:
+                _s.close()
+        except Exception as _e:
+            logger.warning(f"Could not load funding for FA draft sort: {_e}")
+
+        def _rank(t) -> int:
+            return tierRankByTeam.get(getattr(t, 'id', -1),
+                                      getattr(t, 'fundingTierRank', 3) or 3)
+
+        def _effective(t) -> int:
+            return effectiveByTeam.get(getattr(t, 'id', -1),
+                                       getattr(t, 'effectiveFunding', 0) or 0)
+
+        rookieDraftOrder = self.currentSeason.freeAgencyOrder
+        freeAgencyOrder = sorted(
+            rookieDraftOrder,
+            key=lambda t: (_rank(t), -_effective(t)),
+        )
+        # Log the resulting order so the FA draft pattern is verifiable from
+        # server logs (helps catch any case where tier ranks aren't populated).
+        orderSummary = [
+            f"{getattr(t, 'abbr', t.name[:3])}(T{_rank(t)}/${_effective(t)})"
+            for t in freeAgencyOrder
+        ]
+        logger.info(f"FA draft order (locked-tier-first, best-funded-within-tier): {' → '.join(orderSummary)}")
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
 
-        # Broadcast offseason_start with draft order + current roster snapshots.
-        # Rosters haven't been modified yet, so snapshots reflect pre-FA state.
+        # Broadcast the tier-sorted FA draft order via a lighter update event.
+        # We do NOT re-fire offseason_start here — that event already fired
+        # before the rookie draft, and re-firing would reset transactions the
+        # panel accumulated during the rookie phase. Including tier info so
+        # the frontend can render tier badges and make the MEGA-first sort
+        # order visually obvious.
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
                 draftOrderList = [
-                    {'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': getattr(t, 'abbr', t.name[:3].upper()), 'id': getattr(t, 'id', None), 'color': getattr(t, 'color', None)}
+                    {
+                        'name': t.name,
+                        'city': getattr(t, 'city', ''),
+                        'abbr': getattr(t, 'abbr', t.name[:3].upper()),
+                        'id': getattr(t, 'id', None),
+                        'color': getattr(t, 'color', None),
+                        'fundingTier': getattr(t, 'fundingTier', 'MID_MARKET'),
+                        'fundingTierRank': getattr(t, 'fundingTierRank', 3),
+                    }
                     for t in freeAgencyOrder
                 ]
-                rosterSnapshots = {}
-                for t in freeAgencyOrder:
-                    abbr = getattr(t, 'abbr', t.name[:3].upper())
-                    roster = {}
-                    for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
-                        p = t.rosterDict.get(slot)
-                        if p:
-                            roster[slot] = {
-                                'id': p.id, 'name': p.name,
-                                'position': p.position.name,
-                                'rating': round(p.playerRating, 1),
-                                'tier': p.playerTier.name,
-                                'termRemaining': getattr(p, 'termRemaining', 0),
-                            }
-                        else:
-                            roster[slot] = None
-                    rosterSnapshots[abbr] = roster
-                startEvent = OffseasonEvent.start(draftOrderList)
-                startEvent['rosterSnapshots'] = rosterSnapshots
-                await broadcaster.broadcast_season_event(startEvent)
+                await broadcaster.broadcast_season_event(
+                    OffseasonEvent.fa_draft_order_update(draftOrderList)
+                )
             except Exception as e:
-                logger.warning(f"Could not broadcast offseason start: {e}")
+                logger.warning(f"Could not broadcast FA draft order update: {e}")
 
-        # Live pick-by-pick iteration
+        # Live pick-by-pick iteration. Do NOT clear _offseasonTransactions
+        # here — the rookie draft already appended its picks/skips to the
+        # list and we want them to survive into the FA phase so a mid-FA
+        # refresh still shows the full offseason history. The single wipe
+        # at the start of _handleOffseason covers the between-season reset.
         currentSeasonNum = self.currentSeason.seasonNumber if hasattr(self, 'currentSeasonNumber') else 1
-        self._offseasonTransactions = []
 
         pickGen = self.playerManager.freeAgencyPickGenerator(
             freeAgencyOrder=freeAgencyOrder,
@@ -3697,7 +4019,7 @@ class SeasonManager:
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
                 elif getattr(player, '_gmResigned', False):
                     # GM Mode: re-signed via vote — renew contract
-                    player.term = self.playerManager._getPlayerTerm(player.playerTier)
+                    player.term = self.playerManager._getPlayerTerm(player)
                     player.termRemaining = player.term
                     player._gmResigned = False
                     leagueHighlights.insert(0, {
@@ -3902,46 +4224,70 @@ class SeasonManager:
         finally:
             session.close()
 
-    async def _runFaVotingWindow(self) -> None:
-        """Open FA voting window, wait for duration, then resolve sign_fa votes."""
-        from constants import GM_FA_WINDOW_FAST, GM_FA_WINDOW_SEQUENTIAL, GM_FA_WINDOW_SCHEDULED
-        import asyncio
+    async def _openFaVotingWindowMidSeason(self) -> None:
+        """Open the FA voting window mid-season when the Front Office activates.
 
-        # Determine window duration based on timing mode
-        mode = self.timingManager.mode
-        if mode == TimingMode.FAST:
-            duration = GM_FA_WINDOW_FAST
-        elif mode in (TimingMode.SCHEDULED, TimingMode.TEST_SCHEDULED):
-            duration = GM_FA_WINDOW_SCHEDULED
-        else:
-            # SEQUENTIAL, TURBO, DEMO, OFFSEASON_TEST all use the middle duration
-            duration = GM_FA_WINDOW_SEQUENTIAL
-
-        # Set flag so API endpoints know the window is open
-        import time
+        Idempotent: skips if already open. Called by the regular-season loop
+        when currentWeek hits GM_ACTIVE_WEEK so fans can start ranking
+        projected FAs (walk-year rostered players + existing FAs) well before
+        the offseason cliff.
+        """
+        if getattr(self, '_faWindowOpen', False):
+            return
         self._faWindowOpen = True
-        self._faWindowEnd = time.time() + duration
+        self._faWindowEnd = None  # no fixed end — closes at offseason step 5
 
-        # Broadcast FA window open
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
+                # Projected pool = current FAs (they're already candidates) +
+                # rostered players in their walk year (termRemaining <= 1) who
+                # are likely to be FA at season end
+                from api.event_models import GmEvent
                 faPool = [
                     {"id": p.id, "name": p.name, "position": p.position.name,
-                     "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
+                     "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
+                     "projected": False}
                     for p in self.playerManager.freeAgents
                 ]
-                from api.event_models import GmEvent
+                # Rostered walk-year projection
+                teamManager = self.serviceContainer.getService('team_manager')
+                if teamManager:
+                    for team in teamManager.teams:
+                        for pos, player in team.rosterDict.items():
+                            if player is None:
+                                continue
+                            if getattr(player, 'termRemaining', 99) <= 1:
+                                faPool.append({
+                                    "id": player.id, "name": player.name,
+                                    "position": player.position.name,
+                                    "rating": round(player.playerRating, 1),
+                                    "tier": player.playerTier.name,
+                                    "projected": True,
+                                })
                 await broadcaster.broadcast_season_event(
                     GmEvent.faWindowOpen(
                         self.currentSeason.seasonNumber if self.currentSeason else 0,
-                        faPool, duration
+                        faPool, 0  # duration 0 = no countdown timer; closes at offseason
                     )
                 )
             except Exception as e:
-                logger.warning(f"Could not broadcast FA window open: {e}")
+                logger.warning(f"Could not broadcast FA window open (mid-season): {e}")
+        logger.info("FA voting window opened mid-season — stays open through end of regular season")
 
-        logger.info(f"FA voting window open for {duration}s")
-        await asyncio.sleep(duration)
+    async def _runFaVotingWindow(self) -> None:
+        """Close the FA voting window (if still open from mid-season) and
+        resolve sign_fa votes via RCV.
+
+        Historically this method also OPENED the window with a countdown, but
+        the window now opens earlier — at Front Office activation mid-season —
+        so fans have the full Week 22 → end-of-season to cast ballots. This
+        method just finalizes: closes the window, resolves ballots.
+        """
+        # Ensure window is open — edge case: if currentWeek never passed
+        # GM_ACTIVE_WEEK (short test mode), open it briefly so any late ballots
+        # can still be resolved
+        if not getattr(self, '_faWindowOpen', False):
+            self._faWindowOpen = True
         self._faWindowOpen = False
         self._faWindowEnd = None
 
@@ -4184,6 +4530,12 @@ class SeasonManager:
     async def _handlePlayerSeasonProgression(self) -> None:
         """Handle player progression at season end"""
         for player in self.playerManager.activePlayers:
+            # Prospects and upcoming rookies haven't played a pro season — don't
+            # accumulate seasonsPlayed/serviceTime or archive empty stat rows.
+            # Their dev window is tracked separately via prospect_seasons, and
+            # service time resets to Rookie on promotion or FA release.
+            if getattr(player, 'is_prospect', False) or getattr(player, 'is_upcoming_rookie', False):
+                continue
             # Increment seasons played
             if hasattr(player, 'seasonsPlayed'):
                 player.seasonsPlayed += 1
@@ -4732,6 +5084,34 @@ class SeasonManager:
                         f'You placed #{weekRank} on the Week {week} leaderboard! +{prize} Floobits',
                         data={'season': season, 'week': week, 'rank': weekRank, 'prize': prize},
                     )
+                    # Achievement hook — Podium tiers (top-3 weekly fantasy finishes)
+                    if weekRank <= 3:
+                        try:
+                            from managers import achievementManager as _am
+                            _am.onWeeklyFantasyPodium(session, userId, season)
+                        except Exception as _e:
+                            logger.warning(f"Podium hook failed: {_e}")
+
+                        # Secret hook — Giant Slayer (top-3 with every roster player ≤3★)
+                        try:
+                            from database.models import (
+                                FantasyRoster as _FR, FantasyRosterPlayer as _FRP, Player as _Player,
+                            )
+                            from api_response_builders import PlayerResponseBuilder as _PRB
+                            from managers import achievementManager as _amGS
+                            rosterRows = (
+                                session.query(_Player)
+                                .join(_FRP, _FRP.player_id == _Player.id)
+                                .join(_FR, _FR.id == _FRP.roster_id)
+                                .filter(_FR.user_id == userId, _FR.season == season)
+                                .all()
+                            )
+                            if len(rosterRows) >= 6 and all(
+                                _PRB.calculateStarRating(p.player_rating) <= 3 for p in rosterRows
+                            ):
+                                _amGS.unlockSecret(session, userId, "giant_slayer")
+                        except Exception as _e:
+                            logger.warning(f"Giant Slayer hook failed: {_e}")
                     awarded += 1
                     logger.info(f"Weekly leaderboard prize: user {userId} #{weekRank} = {prize} Floobits")
 
@@ -4868,6 +5248,19 @@ class SeasonManager:
                         f'+{reward} Floobits ({int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP)',
                         data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward},
                     )
+                    # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
+                    try:
+                        from managers import achievementManager as _am
+                        _am.onWeeklyFantasyPoints(session, userId, int(weekFp), season)
+                        seasonFp = int(entry.get('seasonTotal', 0) or 0)
+                        if seasonFp > 0:
+                            _am.onSeasonFantasyPointsTotal(session, userId, seasonFp, season)
+                        # Secret — Blank (≤20 FP with a full roster of 6)
+                        rosterSize = len(entry.get('players') or [])
+                        if rosterSize >= 6 and weekFp <= 20:
+                            _am.unlockSecret(session, userId, "blank")
+                    except Exception as _e:
+                        logger.warning(f"FP achievement hooks failed: {_e}")
                     awarded += 1
                 session.commit()
                 if awarded:
@@ -5461,6 +5854,13 @@ class SeasonManager:
             rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
             rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
 
+            # Achievement hook — Benefactor tiers (cumulative season contributions)
+            try:
+                from managers import achievementManager as _am
+                _am.onSeasonTeamContributions(session, userId, self.currentSeason.seasonNumber)
+            except Exception as _e:
+                logger.warning(f"Benefactor hook failed: {_e}")
+
             session.commit()
 
             # Re-read balance after spend
@@ -5494,40 +5894,65 @@ class SeasonManager:
             session.close()
 
     def _assignFundingTiers(self, session, season: int) -> None:
-        """Assign funding tiers based on fixed absolute thresholds.
+        """Assign funding tiers by each team's share of league funding.
 
-        Thresholds are fixed Floobits amounts (e.g., >= 2000 = MEGA, >= 1000 = LARGE,
-        >= 500 = MID, else SMALL). Stable and predictable — other teams' funding
-        never affects your tier.
+        A team's ratio = effective_funding / fair_share, where fair_share is
+        total_league_funding / team_count. Self-scaling: as the economy grows
+        fair-share grows with it, so MEGA/LARGE always mean "meaningfully
+        ahead of the pack today" rather than a fixed floobit target that
+        decays in value as fans get richer.
+
+        Thresholds from constants.FUNDING_TIER_THRESHOLDS (multiples of fair-share):
+          ≥ 2.0× → MEGA_MARKET   (owns ≥2× the average slice)
+          ≥ 1.15× → LARGE_MARKET (15%+ above average)
+          ≥ 0.85× → MID_MARKET   (within ±15% of average)
+          < 0.85× → SMALL_MARKET (15%+ below average)
         """
         from database.models import TeamFunding
-        from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
+        from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
 
         records = session.query(TeamFunding).filter_by(season=season).all()
         if not records:
             return
 
+        totalFunding = sum((r.effective_funding or 0) for r in records)
+        teamCount = len(records)
+        # If the whole league has zero funding, there's nothing to rank —
+        # everyone sits at MID. Should never happen in practice (baseline
+        # ensures each team has some effective funding) but guard anyway.
+        if totalFunding <= 0 or teamCount == 0:
+            fairShare = 1
+        else:
+            fairShare = max(1, totalFunding / teamCount)
+
+        def tierFor(effective: int) -> tuple:
+            ratio = (effective or 0) / fairShare
+            for idx, name in enumerate(FUNDING_TIER_NAMES):
+                if ratio >= FUNDING_TIER_THRESHOLDS[name]:
+                    return name, idx + 1
+            last = len(FUNDING_TIER_NAMES) - 1
+            return FUNDING_TIER_NAMES[last], last + 1
+
         for rec in records:
-            tierAssigned = False
-            for i, threshold in enumerate(FUNDING_TIER_THRESHOLDS):
-                if rec.effective_funding >= threshold:
-                    rec.funding_tier = FUNDING_TIER_NAMES[i]
-                    rec.tier_rank = i + 1
-                    tierAssigned = True
-                    break
-            if not tierAssigned:
-                rec.funding_tier = FUNDING_TIER_NAMES[-1]  # SMALL_MARKET
-                rec.tier_rank = len(FUNDING_TIER_NAMES)
+            tierName, tierRank = tierFor(rec.effective_funding or 0)
+            rec.funding_tier = tierName
+            rec.tier_rank = tierRank
 
         session.flush()
 
-        # Also update runtime team objects so game effects apply immediately
+        # Also update runtime team objects so game effects apply immediately.
+        # Cache effective_funding too so downstream code (FA draft order,
+        # market displays) can read it without a DB hit.
         teamManager = self.serviceContainer.getService('team_manager')
-        tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
+        tierMap = {
+            r.team_id: (r.funding_tier, r.tier_rank, r.effective_funding or 0)
+            for r in records
+        }
         for team in teamManager.teams:
-            tier, rank = tierMap.get(team.id, ('MID_MARKET', 3))
+            tier, rank, eff = tierMap.get(team.id, ('MID_MARKET', 3, 0))
             team.fundingTier = tier
             team.fundingTierRank = rank
+            team.effectiveFunding = eff
 
         tierCounts = {}
         for rec in records:
@@ -5577,12 +6002,16 @@ class SeasonManager:
                 if existing:
                     # Records already created — just load tiers onto runtime teams
                     records = session.query(TeamFunding).filter_by(season=currentSeason).all()
-                    tierMap = {r.team_id: (r.funding_tier, r.tier_rank) for r in records}
+                    tierMap = {
+                        r.team_id: (r.funding_tier, r.tier_rank, r.effective_funding or 0)
+                        for r in records
+                    }
                     teamManager = self.serviceContainer.getService('team_manager')
                     for team in teamManager.teams:
-                        tier, rank = tierMap.get(team.id, ('MID_MARKET', 3))
+                        tier, rank, eff = tierMap.get(team.id, ('MID_MARKET', 3, 0))
                         team.fundingTier = tier
                         team.fundingTierRank = rank
+                        team.effectiveFunding = eff
                     tierCounts = {}
                     for r in records:
                         tierCounts[r.funding_tier] = tierCounts.get(r.funding_tier, 0) + 1
@@ -5634,6 +6063,77 @@ class SeasonManager:
         week = self.currentSeason.currentWeek
         return week if isinstance(week, int) else 0
 
+    def _autoPickFavorites(self, games) -> None:
+        """Auto-submit picks for users who opted into auto-pick.
+
+        Mode selection per user (users.auto_pick_mode):
+        - "off":       no auto-picks (user will submit manually or skip)
+        - "favorites": pick higher-ELO team (home breaks ties)
+        - "underdogs": pick lower-ELO team (away breaks ties)
+        - "random":    coin flip per game
+        Uses 1.0x timing (pre-game) and ELO-based underdog multiplier."""
+        import random as _random
+        from constants import calculateUnderdogMultiplier
+        seasonNum = self.currentSeason.seasonNumber
+        week = self._getPickemWeek()
+        try:
+            from database.connection import get_session
+            from database.models import User
+            from database.repositories.pickem_repository import PickEmRepository
+            session = get_session()
+            try:
+                autoUsers = session.query(User).filter(
+                    User.auto_pick_mode.in_(("favorites", "underdogs", "random"))
+                ).all()
+                if not autoUsers:
+                    return
+
+                pickemRepo = PickEmRepository(session)
+                totalAutoPicks = 0
+                for user in autoUsers:
+                    mode = user.auto_pick_mode or "off"
+                    existingPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
+                    pickedIndices = {p.game_index for p in existingPicks}
+                    for i, game in enumerate(games):
+                        if i in pickedIndices:
+                            continue
+                        homeTeam = game.homeTeam
+                        awayTeam = game.awayTeam
+                        homeElo = getattr(homeTeam, 'elo', 1500)
+                        awayElo = getattr(awayTeam, 'elo', 1500)
+
+                        if mode == "favorites":
+                            # Higher ELO, home breaks ties
+                            pickedId = homeTeam.id if homeElo >= awayElo else awayTeam.id
+                        elif mode == "underdogs":
+                            # Lower ELO, away breaks ties
+                            pickedId = awayTeam.id if awayElo <= homeElo else homeTeam.id
+                        elif mode == "random":
+                            pickedId = _random.choice((homeTeam.id, awayTeam.id))
+                        else:
+                            continue
+
+                        pickedIsHome = (pickedId == homeTeam.id)
+                        underdogMult = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
+                        pickemRepo.submitPick(
+                            user.id, seasonNum, week, i,
+                            homeTeam.id, awayTeam.id, pickedId,
+                            pointsMultiplier=1.0,
+                            underdogMultiplier=underdogMult,
+                            isAuto=True,
+                        )
+                        totalAutoPicks += 1
+                session.commit()
+                if totalAutoPicks > 0:
+                    logger.info(f"Auto-picked {totalAutoPicks} games for {len(autoUsers)} users (week {week})")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error auto-picking for week {week}: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _resolvePickEmGame(self, gameIndex: int, game) -> None:
         """Resolve pick-em picks for a single game immediately when it ends."""
         season = self.currentSeason.seasonNumber
@@ -5658,6 +6158,373 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    def _collectRookieDraftBallots(self, season: int) -> Dict[int, List[int]]:
+        """Tally per-team fan ballots on the upcoming rookie class via RCV.
+
+        Each fan with a favorite team submits a ranked list of rookie IDs they
+        want their team to draft. Ballots are stored as GmVote rows with
+        vote_type='draft_rookie' and a JSON-encoded rankings list in details.
+        Returns {team_id: [rookieId, ...]} ordered preference lists — consumed
+        by _conductRookieDraft.
+        """
+        try:
+            import json as _json
+            from database.connection import get_session
+            from database.models import GmVote, User
+        except Exception:
+            return {}
+        preferences: Dict[int, List[int]] = {}
+        session = get_session()
+        try:
+            # Fetch all draft_rookie votes for this season with their voter's favorite team
+            rows = session.query(GmVote, User).join(
+                User, User.id == GmVote.user_id
+            ).filter(
+                GmVote.season == season,
+                GmVote.vote_type == 'draft_rookie',
+                User.favorite_team_id.isnot(None),
+            ).all()
+
+            # Collect per-team ballots: {team_id: [[rookieIds...], [rookieIds...], ...]}
+            ballotsByTeam: Dict[int, List[List[int]]] = {}
+            for vote, user in rows:
+                teamId = user.favorite_team_id
+                try:
+                    rankings = _json.loads(vote.details) if vote.details else []
+                    if isinstance(rankings, list):
+                        rankings = [int(x) for x in rankings if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
+                        if rankings:
+                            ballotsByTeam.setdefault(teamId, []).append(rankings)
+                except Exception:
+                    continue
+
+            # Run simple borda-count (close enough to RCV for our purposes —
+            # candidates are scored by aggregated inverse rank across ballots).
+            for teamId, ballots in ballotsByTeam.items():
+                scores: Dict[int, int] = {}
+                for ranking in ballots:
+                    for idx, rookieId in enumerate(ranking):
+                        # Higher score for higher ranking; top pick gets len*10
+                        scores[rookieId] = scores.get(rookieId, 0) + (len(ranking) - idx) * 10
+                preferences[teamId] = [
+                    rookieId for rookieId, _score in
+                    sorted(scores.items(), key=lambda x: -x[1])
+                ]
+            if preferences:
+                logger.info(f"Rookie draft: collected fan ballots for {len(preferences)} teams")
+        except Exception as e:
+            logger.warning(f"Could not collect rookie draft ballots: {e}")
+        finally:
+            session.close()
+        return preferences
+
+    def _processDeferredAchievements(self) -> None:
+        """Grant any deferred achievement rewards owed to users (e.g. Veteran at new season)."""
+        try:
+            from database.connection import get_session
+            from managers import achievementManager as _am
+            session = get_session()
+            try:
+                _am.processDeferredRewards(session)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Deferred achievement processing failed: {e}")
+            finally:
+                session.close()
+        except Exception:
+            pass
+
+    def _sweepExpiredAchievementRewards(self) -> None:
+        """Drop pending rewards the user didn't claim or stash-in-time.
+
+        Passes the new season number so the sweep can also clear stashed
+        rewards whose deferral target season has already come and gone
+        without the reward being claimed.
+        """
+        try:
+            from database.connection import get_session
+            from managers import achievementManager as _am
+            newSeason = self.currentSeason.seasonNumber if self.currentSeason else 0
+            session = get_session()
+            try:
+                _am.sweepExpiredRewards(session, currentSeason=newSeason)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Expired reward sweep failed: {e}")
+            finally:
+                session.close()
+        except Exception:
+            pass
+
+    async def _firePreGameReminder(self, gameStartTime: datetime.datetime, weekNumber: int,
+                                   weekText: str, gamesCount: int) -> None:
+        """Sleep until 15 min before game start, then broadcast games_starting_soon.
+
+        Decouples the reminder from week_start, which can fire up to 8 hours early on
+        cross-day transitions. Skips the event if we're already within the 15-min
+        window (e.g. catch-up mode, non-scheduled timing modes, tests)."""
+        if not (BROADCASTING_AVAILABLE and broadcaster.is_enabled()):
+            return
+        # Only meaningful in scheduled-mode (real-time) runs — other timing modes
+        # either compress or fast-forward and don't need a 15-min heads-up.
+        if not getattr(self.timingManager, '_isScheduledMode', False):
+            return
+        if getattr(self.timingManager, 'catchingUp', False):
+            return
+
+        reminderTime = gameStartTime - datetime.timedelta(minutes=15)
+        now = datetime.datetime.utcnow()
+        if now >= reminderTime:
+            # Past the window already — fire immediately so the bot still gets a signal.
+            pass
+        else:
+            while datetime.datetime.utcnow() < reminderTime:
+                await asyncio.sleep(self.timingManager.delays.get('daily_check', 30))
+
+        try:
+            event = SeasonEvent.gamesStartingSoon(
+                seasonNumber=self.currentSeason.seasonNumber,
+                weekNumber=weekNumber,
+                weekText=weekText,
+                gamesCount=gamesCount,
+                gameStartTime=gameStartTime.isoformat() + 'Z',
+            )
+            broadcaster.broadcast_sync('season', event)
+        except Exception as e:
+            logger.warning(f"Pre-game reminder broadcast failed: {e}")
+
+    def _creditVeteranForWeek(self, season: int) -> None:
+        """Bump Veteran achievement progress for every user who had a fantasy
+        roster with at least one player this season when the week ended."""
+        try:
+            from database.connection import get_session
+            from database.models import FantasyRoster, FantasyRosterPlayer
+            from managers import achievementManager as _am
+            session = get_session()
+            try:
+                userIds = [
+                    r.user_id for r in session.query(FantasyRoster.user_id).filter(
+                        FantasyRoster.season == season,
+                        FantasyRoster.id.in_(
+                            session.query(FantasyRosterPlayer.roster_id).distinct()
+                        ),
+                    ).distinct().all()
+                ]
+                for uid in userIds:
+                    _am.onFantasyRosterWeekCompleted(session, uid, season)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Veteran achievement credit failed: {e}")
+            finally:
+                session.close()
+        except Exception:
+            pass  # never break week-end over an achievement hook
+
+    def _checkSeasonEndSecrets(self, season: int) -> None:
+        """Evaluate secrets that fire once a season concludes:
+        Sovereign (#1 fantasy), Soothsayer (#1 pick-em), Consecration (fav team wins)."""
+        try:
+            from database.connection import get_session
+            from database.models import User
+            from database.repositories.pickem_repository import PickEmRepository
+            from managers import achievementManager as _am
+
+            champTeamId = getattr(self.currentSeason.champion, 'id', None) if self.currentSeason else None
+
+            # Fantasy #1 — top seasonTotal from snapshot
+            sovereignUserId = None
+            try:
+                fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+                if fantasyTracker:
+                    snapshot = fantasyTracker.getSnapshot(season)
+                    entries = snapshot.get("entries", [])
+                    if entries:
+                        # entries are sorted by seasonTotal desc and ranked
+                        top = entries[0]
+                        if (top.get("seasonTotal") or 0) > 0:
+                            sovereignUserId = top.get("userId")
+            except Exception as e:
+                logger.warning(f"Sovereign lookup failed: {e}")
+
+            session = get_session()
+            try:
+                if sovereignUserId:
+                    _am.unlockSecret(session, sovereignUserId, "sovereign")
+
+                # Pick-em #1 — top total points for the season
+                try:
+                    pickemRepo = PickEmRepository(session)
+                    seasonBoard = pickemRepo.getSeasonLeaderboard(season)
+                    if seasonBoard:
+                        topUid, _corr, _tot, topPts = seasonBoard[0]
+                        if topPts and topPts > 0:
+                            _am.unlockSecret(session, topUid, "soothsayer")
+                except Exception as e:
+                    logger.warning(f"Soothsayer lookup failed: {e}")
+
+                # Consecration — every user whose favorite team is the champion
+                if champTeamId:
+                    for (uid,) in session.query(User.id).filter(
+                        User.favorite_team_id == champTeamId,
+                    ).all():
+                        _am.unlockSecret(session, uid, "consecration")
+
+                # Monk — never opened a pack all season (only for engaged users with a roster)
+                from database.models import (
+                    PackOpening, FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap,
+                    TeamSeasonStats, CurrencyTransaction,
+                )
+                from sqlalchemy import func
+                engagedUserRows = session.query(FantasyRoster.user_id).join(
+                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
+                ).filter(FantasyRoster.season == season).group_by(
+                    FantasyRoster.user_id,
+                ).having(func.count(FantasyRosterPlayer.id) >= 6).all()
+                engagedUserIds = {uid for (uid,) in engagedUserRows}
+
+                for uid in engagedUserIds:
+                    # Monk — zero packs this season
+                    packCount = session.query(func.count(PackOpening.id)).filter(
+                        PackOpening.user_id == uid,
+                    ).scalar() or 0
+                    # Filter by season: PackOpening doesn't store season directly. We join
+                    # via opened_at within this season, but simpler: check no pack_purchase
+                    # transactions this season.
+                    packTxCount = session.query(func.count(CurrencyTransaction.id)).filter(
+                        CurrencyTransaction.user_id == uid,
+                        CurrencyTransaction.season == season,
+                        CurrencyTransaction.transaction_type == "pack_purchase",
+                    ).scalar() or 0
+                    if packTxCount == 0:
+                        _am.unlockSecret(session, uid, "monk")
+
+                    # Stalwart — no roster swaps this season
+                    swapCount = session.query(func.count(FantasyRosterSwap.id)).filter(
+                        FantasyRosterSwap.user_id == uid,
+                        FantasyRosterSwap.season == season,
+                    ).scalar() or 0
+                    if swapCount == 0:
+                        _am.unlockSecret(session, uid, "stalwart")
+
+                # Faithful — favorite team missed playoffs 3 seasons in a row (this + prior 2)
+                if season >= 3:
+                    userFavTeams = session.query(User.id, User.favorite_team_id).filter(
+                        User.favorite_team_id.isnot(None),
+                    ).all()
+                    # Build a lookup of (team_id, season) -> made_playoffs for the relevant window
+                    relevantSeasons = [season, season - 1, season - 2]
+                    playoffRows = session.query(
+                        TeamSeasonStats.team_id,
+                        TeamSeasonStats.season,
+                        TeamSeasonStats.made_playoffs,
+                    ).filter(TeamSeasonStats.season.in_(relevantSeasons)).all()
+                    playoffMap = {
+                        (r.team_id, r.season): bool(r.made_playoffs)
+                        for r in playoffRows
+                    }
+                    for uid, favTid in userFavTeams:
+                        madeAny = any(
+                            playoffMap.get((favTid, s), False) for s in relevantSeasons
+                        )
+                        haveAllSeasons = all(
+                            (favTid, s) in playoffMap for s in relevantSeasons
+                        )
+                        if haveAllSeasons and not madeAny:
+                            _am.unlockSecret(session, uid, "faithful")
+
+                # Devotee — 100% team funding pct AND a season_end_tax contribution this season
+                devoteeUsers = session.query(User.id).filter(
+                    User.team_funding_pct == 100,
+                    User.favorite_team_id.isnot(None),
+                ).all()
+                for (uid,) in devoteeUsers:
+                    hasContribution = session.query(CurrencyTransaction.id).filter(
+                        CurrencyTransaction.user_id == uid,
+                        CurrencyTransaction.season == season,
+                        CurrencyTransaction.transaction_type == "season_end_tax",
+                        CurrencyTransaction.amount < 0,
+                    ).first()
+                    if hasContribution:
+                        _am.unlockSecret(session, uid, "devotee")
+
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Season-end secrets check failed: {e}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Season-end secrets setup failed: {e}")
+
+    def _checkWeekEndSecrets(self, season: int, week: int) -> None:
+        """Evaluate secret achievements that need week-end context (FP snapshot + pickem resolution).
+        Runs after both fantasy and pick-em have been finalized for the week."""
+        try:
+            from database.connection import get_session
+            from database.models import EquippedCard, PickEmPick, FantasyRoster, FantasyRosterPlayer
+            from sqlalchemy import func
+            from managers import achievementManager as _am
+
+            fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
+            snapshot = fantasyTracker.getSnapshot(season) if fantasyTracker else {"entries": []}
+            entries = snapshot.get("entries", [])
+            # userId → weekTotal FP for this week
+            weekFpByUser = {e["userId"]: e.get("weekTotal", 0) for e in entries}
+
+            session = get_session()
+            try:
+                # Users with a FULL roster (5 players) this season
+                fullRosterRows = session.query(
+                    FantasyRoster.user_id,
+                    func.count(FantasyRosterPlayer.id).label("playerCount"),
+                ).join(
+                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
+                ).filter(
+                    FantasyRoster.season == season,
+                ).group_by(FantasyRoster.user_id).having(
+                    func.count(FantasyRosterPlayer.id) >= 6,
+                ).all()
+                fullRosterUserIds = {uid for uid, _cnt in fullRosterRows}
+
+                # Purist — full roster set this week with zero cards equipped
+                for uid in fullRosterUserIds:
+                    equippedCount = session.query(func.count(EquippedCard.id)).filter(
+                        EquippedCard.user_id == uid,
+                        EquippedCard.season == season,
+                        EquippedCard.week == week,
+                    ).scalar() or 0
+                    if equippedCount == 0:
+                        _am.unlockSecret(session, uid, "purist")
+
+                # Crescendo — Perfect Week AND 300+ FP in the same week
+                # Perfect Week = user had picks this week and all were correct.
+                # Aggregate per user, then compare in Python (portable across DBs).
+                from sqlalchemy import case
+                pickAgg = session.query(
+                    PickEmPick.user_id,
+                    func.count(PickEmPick.id).label("total"),
+                    func.sum(case((PickEmPick.correct == True, 1), else_=0)).label("correct"),
+                ).filter(
+                    PickEmPick.season == season,
+                    PickEmPick.week == week,
+                    PickEmPick.correct.isnot(None),
+                ).group_by(PickEmPick.user_id).all()
+                for uid, total, correct in pickAgg:
+                    if total > 0 and correct == total and weekFpByUser.get(uid, 0) >= 300:
+                        _am.unlockSecret(session, uid, "zenith")
+
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(f"Week-end secrets check failed: {e}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Week-end secrets setup failed: {e}")
 
     def _resolvePickEmWeek(self, season: int, week: int) -> None:
         """Award Floobits and leaderboard prizes for the completed week.
@@ -5710,6 +6577,45 @@ class SeasonManager:
                             season=season, week=week,
                         )
 
+                    # Achievement hook — Sharp (Clairvoyant this season)
+                    if isClairvoyant:
+                        from managers import achievementManager as _am
+                        _am.onClairvoyant(session, userId, season)
+
+                    # Achievement hook — Perfect Week (all picks correct)
+                    if correctCount == totalPicks and totalPicks > 0:
+                        from managers import achievementManager as _am2
+                        _am2.onPerfectPickEmWeek(session, userId, season)
+
+                    # Achievement hook — Oracle tiers (cumulative season points)
+                    try:
+                        from managers import achievementManager as _am3
+                        seasonPoints = pickemRepo.getUserSeasonStats(userId, season).get("totalPoints", 0) or 0
+                        if seasonPoints > 0:
+                            _am3.onSeasonPickemPointsTotal(session, userId, int(seasonPoints), season)
+                    except Exception as _e:
+                        logger.warning(f"Oracle hook failed: {_e}")
+
+                    # Secret hook — Contrarian (every MANUAL pick this week was on an underdog).
+                    # Auto-picks don't count either way: "auto_pick_mode = underdogs" would
+                    # otherwise unlock this trivially every week.
+                    try:
+                        from database.models import PickEmPick as _PEP
+                        from managers import achievementManager as _am4
+                        userPicks = session.query(_PEP).filter(
+                            _PEP.user_id == userId,
+                            _PEP.season == season,
+                            _PEP.week == week,
+                        ).all()
+                        # Require at least 2 picks, all manual, all on underdogs (multiplier > 1.0).
+                        if len(userPicks) >= 2 and all(
+                            not p.is_auto and (p.underdog_multiplier or 1.0) > 1.0
+                            for p in userPicks
+                        ):
+                            _am4.unlockSecret(session, userId, "contrarian")
+                    except Exception as _e:
+                        logger.warning(f"Contrarian hook failed: {_e}")
+
                     # 3. Notify each user
                     title = f'{weekLabel} Prognostications'
                     if isClairvoyant:
@@ -5734,6 +6640,13 @@ class SeasonManager:
                     weekRank = i + 1
                     if totalPoints <= 0:
                         continue
+                    # Achievement hook — Pundit tiers (top-3 weekly pick-em finishes)
+                    if weekRank <= 3:
+                        try:
+                            from managers import achievementManager as _am
+                            _am.onWeeklyPickemPodium(session, userId, season)
+                        except Exception as _e:
+                            logger.warning(f"Pundit hook failed: {_e}")
                     prize = PICKEM_WEEKLY_PRIZES.get(weekRank)
                     if prize is None and weekRank <= topCutoff and totalEntries >= 4:
                         prize = PICKEM_WEEKLY_TOP_PCT_PRIZE

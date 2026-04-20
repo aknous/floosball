@@ -350,9 +350,45 @@ class FantasyTracker:
             if isCurrentSeason:
                 equippedRepo = EquippedCardRepository(session)
                 allEquipped = equippedRepo.getAllForWeek(seasonNum, currentWeek)
+                # Pre-check which users have slot 6 cards so we can validate eligibility
+                slot6UserIds = {eq.user_id for eq in allEquipped if eq.slot_number == 6}
+                extraSlotUserIds = set()
+                if slot6UserIds:
+                    from database.models import ShopPurchase, CardTemplate as CT2
+                    # MVP cards among slot-6 users
+                    mvpRows = (
+                        session.query(EquippedCard.user_id)
+                        .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                        .join(CT2, UserCard.card_template_id == CT2.id)
+                        .filter(
+                            EquippedCard.season == seasonNum,
+                            EquippedCard.week == currentWeek,
+                            EquippedCard.user_id.in_(slot6UserIds),
+                            CT2.classification.isnot(None),
+                            CT2.classification.contains("mvp"),
+                        ).distinct().all()
+                    )
+                    extraSlotUserIds.update(r[0] for r in mvpRows)
+                    # Active temp_card_slot powerup
+                    remaining = slot6UserIds - extraSlotUserIds
+                    if remaining:
+                        slotRows = (
+                            session.query(ShopPurchase.user_id)
+                            .filter(
+                                ShopPurchase.user_id.in_(remaining),
+                                ShopPurchase.season == seasonNum,
+                                ShopPurchase.item_slug == "temp_card_slot",
+                                ShopPurchase.expires_at_week >= currentWeek,
+                            ).distinct().all()
+                        )
+                        extraSlotUserIds.update(r[0] for r in slotRows)
+
                 for eq in allEquipped:
                     # During active games, only locked cards produce output
                     if gamesActive and not eq.locked:
+                        continue
+                    # Skip stale slot 6 cards from expired powerups
+                    if eq.slot_number == 6 and eq.user_id not in extraSlotUserIds:
                         continue
                     equippedByUser.setdefault(eq.user_id, []).append(eq)
 

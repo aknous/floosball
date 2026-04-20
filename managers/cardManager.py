@@ -632,10 +632,13 @@ class CardManager:
 
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 
-    def openPack(self, session, userId: int, packTypeId: int, currentSeason: int) -> dict:
+    def openPack(self, session, userId: int, packTypeId: int, currentSeason: int,
+                 skipCurrency: bool = False, source: str = "purchase") -> dict:
         """Buy and open a card pack. Returns the list of new cards.
 
         Raises ValueError if insufficient Floobits or invalid pack type.
+        When skipCurrency=True the pack is free (used for achievement rewards,
+        starter grants, etc.). The PackOpening is still recorded for history.
         """
         from database.models import CardTemplate, UserCard, PackOpening
         from database.repositories.card_repositories import (
@@ -653,29 +656,31 @@ class CardManager:
         if not packType:
             raise ValueError("Invalid pack type")
 
-        # Enforce daily purchase limit
-        dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
-        if dailyLimit is not None:
-            from datetime import datetime, timedelta
-            from database.models import PackOpening
-            now = datetime.utcnow()
-            dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            todayCount = session.query(PackOpening).filter(
-                PackOpening.user_id == userId,
-                PackOpening.pack_type_id == packType.id,
-                PackOpening.opened_at >= dayStart,
-            ).count()
-            if todayCount >= dailyLimit:
-                raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
+        # Enforce daily purchase limit (skipped for free grants)
+        if not skipCurrency:
+            dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
+            if dailyLimit is not None:
+                from datetime import datetime, timedelta
+                from database.models import PackOpening
+                now = datetime.utcnow()
+                dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                todayCount = session.query(PackOpening).filter(
+                    PackOpening.user_id == userId,
+                    PackOpening.pack_type_id == packType.id,
+                    PackOpening.opened_at >= dayStart,
+                ).count()
+                if todayCount >= dailyLimit:
+                    raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
 
-        # Spend Floobits
-        result = currencyRepo.spendFunds(
-            userId, packType.cost,
-            transactionType='pack_purchase',
-            description=f"Opened {packType.display_name}",
-        )
-        if result is None:
-            raise ValueError("Insufficient Floobits")
+            # Spend Floobits
+            result = currencyRepo.spendFunds(
+                userId, packType.cost,
+                transactionType='pack_purchase',
+                description=f"Opened {packType.display_name}",
+                season=currentSeason,
+            )
+            if result is None:
+                raise ValueError("Insufficient Floobits")
 
         # Get current-season templates for drawing
         allTemplates = templateRepo.getBySeason(currentSeason)
@@ -736,12 +741,12 @@ class CardManager:
 
         cardRepo.saveBatch(newCards)
 
-        # Record the opening
+        # Record the opening (cost=0 for free grants)
         openingRecord = PackOpening(
             user_id=userId,
             pack_type_id=packType.id,
             cards_received=[t.id for t in drawnTemplates],
-            cost=packType.cost,
+            cost=0 if skipCurrency else packType.cost,
         )
         openingRepo.save(openingRecord)
 
@@ -973,6 +978,7 @@ class CardManager:
             userId, buyPrice,
             transactionType='card_purchase',
             description=f"Bought {template.edition} {template.player_name}",
+            season=currentSeason,
         )
         if result is None:
             raise ValueError("Insufficient Floobits")

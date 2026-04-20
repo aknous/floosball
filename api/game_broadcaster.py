@@ -14,22 +14,30 @@ class GameBroadcaster:
     Singleton class that handles broadcasting game events to WebSocket clients
     Can be enabled/disabled to avoid overhead when not needed
     """
-    
+
     _instance = None
     _enabled = False
     _ws_manager = None
-    
+    _main_loop = None  # Main asyncio event loop — required for dispatching from threadpool (sync REST endpoints)
+    _suppress_game_events = False  # When True, per-game plays are skipped; season-level broadcasts still fire
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(GameBroadcaster, cls).__new__(cls)
         return cls._instance
-    
+
     @classmethod
     def enable(cls, ws_manager):
         """Enable broadcasting with a WebSocket manager"""
         cls._enabled = True
         cls._ws_manager = ws_manager
         logger.info("Game broadcasting ENABLED")
+
+    @classmethod
+    def set_main_loop(cls, loop):
+        """Store the main event loop reference so sync code (REST threadpool) can dispatch broadcasts."""
+        cls._main_loop = loop
+        logger.info("Main event loop registered for cross-thread broadcasts")
     
     @classmethod
     def disable(cls):
@@ -42,26 +50,49 @@ class GameBroadcaster:
     def is_enabled(cls) -> bool:
         """Check if broadcasting is enabled"""
         return cls._enabled and cls._ws_manager is not None
+
+    @classmethod
+    def set_suppress_game_events(cls, suppress: bool) -> None:
+        """Toggle suppression of per-game play broadcasts.
+
+        When True, broadcast_game_event / broadcast_sync calls that carry a
+        real game_id are dropped. Season-level broadcasts (week transitions,
+        standings, offseason, leaderboards, achievements) still fire. Used in
+        timing modes like FAST_WEEKLY where we want UI updates for season
+        structure but not the thousands of per-play events games produce.
+        """
+        cls._suppress_game_events = bool(suppress)
+        logger.info(f"Game-event broadcasts {'SUPPRESSED' if suppress else 'ALLOWED'}")
     
     @classmethod
-    async def broadcast_game_event(cls, game_id: int, event: Dict[str, Any]):
+    async def broadcast_game_event(cls, game_id, event: Dict[str, Any]):
         """
         Broadcast an event to game-specific channel
-        
+
         Args:
-            game_id: The game ID
+            game_id: The game ID (int for real games, or a string like 'season'
+                when this helper is used as a sync dispatcher for season events)
             event: Event dictionary to broadcast
         """
         if not cls.is_enabled():
             return
-        
+
+        # Game-event suppression only blocks real per-game plays. Season-wide
+        # broadcasts from seasonManager use this helper with game_id='season'
+        # and should always fire. game_start / game_end are also allowed
+        # through so the ticker still knows when games open and close.
+        if cls._suppress_game_events and isinstance(game_id, int):
+            eventType = event.get('event') if isinstance(event, dict) else None
+            if eventType not in ('game_start', 'game_end'):
+                return
+
         try:
             channel = f"game_{game_id}"
             await cls._ws_manager.broadcast(event, channel)
-            
+
             # Also broadcast to season channel for global listeners
             await cls._ws_manager.broadcast(event, "season")
-            
+
         except Exception as e:
             logger.error(f"Error broadcasting game event: {e}")
     
@@ -99,32 +130,66 @@ class GameBroadcaster:
             logger.error(f"Error broadcasting standings update: {e}")
     
     @classmethod
-    def broadcast_sync(cls, game_id: int, event: Dict[str, Any]):
+    async def broadcast_to_user(cls, userId: int, event: Dict[str, Any]) -> int:
+        """Send an event to every WebSocket identified as this user. Returns count."""
+        if not cls.is_enabled():
+            return 0
+        try:
+            return await cls._ws_manager.send_to_user(userId, event)
+        except Exception as e:
+            logger.error(f"Error broadcasting to user {userId}: {e}")
+            return 0
+
+    @classmethod
+    def broadcast_to_user_sync(cls, userId: int, event: Dict[str, Any]) -> None:
+        """Fire-and-forget user broadcast from sync code. Works from both async
+        context (running loop) and sync threadpool (FastAPI sync endpoints)."""
+        if not cls.is_enabled():
+            return
+        try:
+            # Prefer an already-running loop in the current thread
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.create_task(cls.broadcast_to_user(userId, event))
+                return
+            except RuntimeError:
+                pass
+            # Fallback: dispatch onto the main loop from a worker thread
+            if cls._main_loop is not None and cls._main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    cls.broadcast_to_user(userId, event), cls._main_loop,
+                )
+            else:
+                logger.warning("broadcast_to_user_sync: no running loop available")
+        except Exception as e:
+            logger.error(f"Error in sync user broadcast: {e}")
+
+    @classmethod
+    def broadcast_sync(cls, game_id, event: Dict[str, Any]):
         """
-        Synchronous wrapper for broadcasting (creates async task)
-        Use this from synchronous game code
-        
+        Synchronous wrapper for broadcasting (creates async task).
+        Works from both async context and sync threadpool.
+
         Args:
-            game_id: The game ID
+            game_id: The game ID (int) or 'season' for season-wide events
             event: Event dictionary to broadcast
         """
         if not cls.is_enabled():
             return
-        
+
         try:
-            # Get or create event loop
             try:
                 loop = asyncio.get_running_loop()
-            except RuntimeError:
-                # No running loop, create a task in the default loop
-                loop = asyncio.get_event_loop()
-            
-            # Schedule the broadcast as a task
-            if loop.is_running():
                 asyncio.create_task(cls.broadcast_game_event(game_id, event))
+                return
+            except RuntimeError:
+                pass
+            if cls._main_loop is not None and cls._main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    cls.broadcast_game_event(game_id, event), cls._main_loop,
+                )
             else:
-                loop.create_task(cls.broadcast_game_event(game_id, event))
-                
+                logger.warning("broadcast_sync: no running loop available")
         except Exception as e:
             logger.error(f"Error in sync broadcast: {e}")
 
