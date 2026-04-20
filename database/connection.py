@@ -298,6 +298,27 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # Two-way player columns on players (v0.10 defense)
+        for col, colDef in [
+            ('offensive_rating', 'INTEGER'),
+            ('defensive_rating', 'INTEGER'),
+            ('defensive_position', 'VARCHAR(5)'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added players.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Defensive talent on player_attributes (v0.10 defense)
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN defensive_talent INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.defensive_talent")
+        except Exception:
+            conn.rollback()
+
         # Coach scouting attribute (feature/prospects-pipeline Phase 7)
         try:
             conn.execute(text("ALTER TABLE coaches ADD COLUMN scouting INTEGER DEFAULT 80"))
