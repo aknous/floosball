@@ -126,6 +126,16 @@ class FloosballApplication:
         if self._needsInitialDraft():
             logger.info("Conducting initial draft...")
             self.playerManager.conductInitialDraft()
+
+        # Seed each team with a starter prospect class. Runs on every boot,
+        # but seedInitialProspects is idempotent: skips any team that already
+        # has prospects. So this fires on:
+        #   - Fresh starts (all 24 teams seeded)
+        #   - First deploy of this feature to existing prod (teams have full
+        #     rosters but empty pipelines → all seeded)
+        #   - Subsequent boots (prospects exist → no-op per team)
+        logger.info("Seeding initial prospect pipelines (idempotent)...")
+        self.playerManager.seedInitialProspects(prospectsPerTeam=3)
         
         # Now initialize teams after players are assigned
         logger.info("Initializing teams with rosters...")
@@ -195,11 +205,27 @@ class FloosballApplication:
         # Check for existing simulation state
         savedState = self._loadSimulationState()
         
+        resumeMidOffseason = False
         if savedState and savedState['is_active']:
-            logger.info(f"Resuming simulation from Season {savedState['current_season']}, Week {savedState['current_week']}")
             totalSeasons = savedState['total_seasons']
             seasonsPlayed = savedState['current_season'] - 1  # We'll restart the current season
             resumeFromWeek = savedState['current_week']  # Skip completed weeks on resume
+
+            # If the process died mid-offseason, the season's regular play + playoffs
+            # already persisted to DB. Replaying would roll rosters back and nuke
+            # that work (this is the bug that wiped production before). Treat the
+            # offseason as complete: advance past it, then start the next season.
+            if savedState.get('in_offseason'):
+                logger.warning(
+                    f"Resume: simulation_state.in_offseason=True for season "
+                    f"{savedState['current_season']} — treating offseason as complete "
+                    f"and advancing to the next season rather than replaying."
+                )
+                seasonsPlayed = savedState['current_season']  # advance past completed season
+                resumeFromWeek = 0
+                resumeMidOffseason = True
+            else:
+                logger.info(f"Resuming simulation from Season {savedState['current_season']}, Week {savedState['current_week']}")
 
             # Update game state
             gameState.setState('totalSeasons', totalSeasons)
@@ -209,6 +235,19 @@ class FloosballApplication:
             seasonsPlayed = gameState.getState('seasonsPlayed', 0)
             resumeFromWeek = 0
             logger.info(f"Starting new simulation - {totalSeasons} seasons")
+
+        # If we recovered from a mid-offseason crash, persist the advance + clear
+        # the flag right away so another immediate restart won't repeat this.
+        if resumeMidOffseason:
+            self._saveSimulationState(
+                current_season=seasonsPlayed + 1,
+                current_week=0,
+                in_playoffs=False,
+                total_seasons=totalSeasons,
+                is_active=True,
+                in_offseason=False,
+            )
+            gameState.setState('seasonsPlayed', seasonsPlayed)
         
         # Mark simulation as active (preserve resumeFromWeek so a second
         # restart before the week loop progresses doesn't lose the checkpoint)
@@ -243,11 +282,23 @@ class FloosballApplication:
             await self.seasonManager.runSeasonSimulation(resumeFromWeek=resumeFromWeek)
             resumeFromWeek = 0  # Only skip weeks for the first (resumed) season
 
+            # Mark offseason as in-progress BEFORE running it. If we crash mid-
+            # offseason (deploy, OOM, whatever), resume logic will skip replay.
+            self._saveSimulationState(
+                current_season=currentSeason,
+                current_week=self.seasonManager.currentSeason.currentWeek if self.seasonManager.currentSeason else 0,
+                in_playoffs=False,
+                total_seasons=totalSeasons,
+                is_active=True,
+                in_offseason=True,
+            )
+
             # Handle offseason
             await self.seasonManager.handleOffseason()
 
-            # Finalize season: increment counter and save all state immediately
-            # so a restart during the between-seasons wait doesn't replay the season.
+            # Finalize season: increment counter, clear the offseason flag, and
+            # save all state immediately so a restart during the between-seasons
+            # wait doesn't replay the season.
             seasonsPlayed += 1
             gameState = self.serviceContainer.getService('game_state')
             gameState.setState('seasonsPlayed', seasonsPlayed)
@@ -257,7 +308,8 @@ class FloosballApplication:
                 current_week=0,
                 in_playoffs=False,
                 total_seasons=totalSeasons,
-                is_active=True
+                is_active=True,
+                in_offseason=False,
             )
 
             # Wait between seasons (SCHEDULED: polls until Monday; others: fixed delay)
@@ -295,6 +347,7 @@ class FloosballApplication:
                     'playoff_round': state.playoff_round,
                     'total_seasons': state.total_seasons,
                     'is_active': state.is_active,
+                    'in_offseason': bool(getattr(state, 'in_offseason', False)),
                     'last_saved': state.last_saved
                 }
             return None
@@ -302,17 +355,24 @@ class FloosballApplication:
             logger.warning(f"Could not load simulation state: {e}")
             return None
     
-    def _saveSimulationState(self, current_season: int, current_week: int, 
-                            in_playoffs: bool, total_seasons: int, 
-                            is_active: bool, playoff_round: Optional[str] = None) -> None:
-        """Save simulation state to database using existing session"""
+    def _saveSimulationState(self, current_season: int, current_week: int,
+                            in_playoffs: bool, total_seasons: int,
+                            is_active: bool, playoff_round: Optional[str] = None,
+                            in_offseason: Optional[bool] = None) -> None:
+        """Save simulation state to database using existing session.
+
+        in_offseason is set True right before handleOffseason() runs, then
+        cleared after seasonsPlayed has been advanced. If omitted, the existing
+        value is preserved — so routine within-season saves don't accidentally
+        wipe the flag.
+        """
         try:
             # Use the teamManager's existing database session to avoid locking issues
             session = self.teamManager.db_session
             if not session:
                 logger.warning("No database session available, skipping state save")
                 return
-            
+
             state = session.query(DBSimulationState).filter_by(id=1).first()
             if not state:
                 state = DBSimulationState(
@@ -322,7 +382,8 @@ class FloosballApplication:
                     in_playoffs=in_playoffs,
                     playoff_round=playoff_round,
                     total_seasons=total_seasons,
-                    is_active=is_active
+                    is_active=is_active,
+                    in_offseason=bool(in_offseason) if in_offseason is not None else False,
                 )
                 session.add(state)
             else:
@@ -332,7 +393,9 @@ class FloosballApplication:
                 state.playoff_round = playoff_round
                 state.total_seasons = total_seasons
                 state.is_active = is_active
-            
+                if in_offseason is not None:
+                    state.in_offseason = bool(in_offseason)
+
             # Commit the transaction - WAL mode should prevent locking
             session.commit()
             logger.debug(f"Saved simulation state: Season {current_season}, Week {current_week}, Active: {is_active}")

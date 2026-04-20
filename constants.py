@@ -119,11 +119,56 @@ DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
 FUNDING_BASELINE_PER_TEAM = 200             # League baseline revenue every team receives at season start
-FUNDING_TIER_THRESHOLDS = [2000, 1000, 500]  # Fixed absolute thresholds: >= 2000 = MEGA, >= 1000 = LARGE, >= 500 = MID, else SMALL
+# Tiers are assigned by a team's share of total league funding. A team's
+# ratio = effective_funding / (total_league_funding / num_teams). That is,
+# "how many fair-shares of the league's floobits does this team hold?"
+# Self-scaling: as the economy inflates, fair-share inflates with it, so
+# MEGA/LARGE always mean "meaningfully ahead of the rest of the league today"
+# rather than a fixed floobit target that decays in value.
 FUNDING_TIER_NAMES = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
+# Multipliers of league fair-share (total funding / team count).
+FUNDING_TIER_THRESHOLDS = {
+    'MEGA_MARKET':  2.0,   # ≥ 2× the average team's funding
+    'LARGE_MARKET': 1.15,  # ≥ 15% above average
+    'MID_MARKET':   0.85,  # within ±15% of average
+    'SMALL_MARKET': 0.0,   # below 85% of average — genuinely fallen behind the pack
+}
 FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
+
+# ---- Prospect Pipeline ----
+# Prospects are drafted rookies stashed on the team's pipeline (not roster-eligible).
+# They develop each offseason via offseasonTraining(), same as active players, and
+# are eligible for promotion when a starter slot opens up.
+PROSPECT_SLOT_CAP_PER_POSITION = 2  # Each team may hold at most N prospects per position
+PROSPECT_DEVELOPMENT_WINDOW = 3     # Max offseasons a prospect can remain in the pipeline before forced release
+PROSPECT_PROMOTION_RATING_THRESHOLD = 70  # Fallback auto-promote if best prospect meets this rating
+ROOKIE_DRAFT_CLASS_SIZE = 24        # Rookies generated per season (one per team max)
+
+# ---- Rookie Scouting ----
+# Rookie class is generated at season start; fans can scout + vote on prospects
+# all season. Scouting accuracy = coach.scouting + funding tier bonus, and
+# determines how wide the potential-attribute range is in the scouted view.
+# Scouting band → potential attribute ± range (wider = less certain):
+SCOUTING_BANDS = [
+    (95, 0),    # ≥95: exact value
+    (80, 5),    # 80-94: ±5
+    (65, 10),   # 65-79: ±10
+    (0, 15),    # <65: ±15
+]
+FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 10, 'LARGE_MARKET': 5, 'MID_MARKET': 0, 'SMALL_MARKET': -5}
+# Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
+GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
+
+# ---- Retirement Risk Telegraphing ----
+# Surfaces during the season so fans can pre-vote replacements. Mirrors the actual
+# retirement chances used in seasonManager._processRosteredPlayerContracts.
+# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'forced'
+RETIREMENT_FORCED_SEASONS = 20      # Hard cap — no player plays past this
+RETIREMENT_HIGH_AGE_SEASONS = 15    # 70%+ chance band
+RETIREMENT_MID_AGE_SEASONS = 10     # 25-65% chance band
+RETIREMENT_EARLY_AGE_SEASONS = 7    # 5-10% chance band
 
 # ---- Player Fatigue ----
 BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
@@ -239,9 +284,19 @@ GM_VOTES_PER_SEASON = 20
 GM_VOTES_PER_TYPE = 8
 GM_VOTES_PER_TARGET = 5
 
+# Front Office voting window opens at this week. Before this, GM vote UIs show
+# a "convening..." state. Mirrors the frontend const GM_ACTIVE_WEEK in
+# FrontOfficePanel.tsx — keep them in sync.
+GM_ACTIVE_WEEK = 22
+
 # FA ballot
 GM_FA_BALLOT_COST = 15
 GM_FA_BALLOT_MAX_RANKINGS = 18  # 6 roster slots × 3 ranked candidates each
+
+# Rookie draft ballot — single flat cost (GM_VOTE_COST is a per-type dict and
+# doesn't fit here). Slightly cheaper than FA ballot since it's a lower-stakes
+# preference than a full FA requisition.
+GM_ROOKIE_BALLOT_COST = 10
 
 # FA voting window duration (seconds)
 GM_FA_WINDOW_FAST = 30

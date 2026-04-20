@@ -339,11 +339,22 @@ class GmManager:
                 )
                 continue
 
-            # RCV succeeded — tally full ranking per open position
+            # RCV succeeded — tally full ranking per open position. Prospects
+            # the team holds at each position are eligible ballot winners too;
+            # fans can rank them above any FA and they'll be promoted instead
+            # of signed at FA-draft time.
+            teamProspectsByPos: Dict[int, set] = {}
+            for prospect in getattr(team, 'prospects', []):
+                if hasattr(prospect, 'position') and hasattr(prospect.position, 'value'):
+                    teamProspectsByPos.setdefault(prospect.position.value, set()).add(prospect.id)
+
             openPositions = teamOpenPositions.get(team.id, [])
             positionRankings = {}
             for pos in openPositions:
-                ranked = self._tallyFullRanking(ballots, pos, freeAgentLists)
+                ranked = self._tallyFullRanking(
+                    ballots, pos, freeAgentLists,
+                    prospectIds=teamProspectsByPos.get(pos, set()),
+                )
                 if ranked:
                     positionRankings.setdefault(pos, []).extend(ranked)
 
@@ -374,13 +385,17 @@ class GmManager:
         return directives
 
     def _tallyFullRanking(self, ballots: List[List[int]], position: int,
-                          freeAgentLists: Dict) -> List[int]:
-        """Run repeated IRV for a position to produce a full ranking of candidates."""
+                          freeAgentLists: Dict, prospectIds: set = None) -> List[int]:
+        """Run repeated IRV for a position to produce a full ranking of candidates.
+        prospectIds are team-specific prospect IDs eligible for this position, which
+        share the ballot pool with FAs.
+        """
         ranking = []
         excluded = []
         while True:
             winner = self._tallyRankedChoice(ballots, position, freeAgentLists,
-                                              alreadyPicked=excluded)
+                                              alreadyPicked=excluded,
+                                              prospectIds=prospectIds or set())
             if winner is None:
                 break
             ranking.append(winner)
@@ -389,14 +404,20 @@ class GmManager:
 
     def _tallyRankedChoice(self, ballots: List[List[int]], position: int,
                             freeAgentLists: Dict,
-                            alreadyPicked: List[int]) -> Optional[int]:
-        """Run instant-runoff for a single position. Returns winner player ID or None."""
-        # Get all FA player IDs at this position
+                            alreadyPicked: List[int],
+                            prospectIds: set = None) -> Optional[int]:
+        """Run instant-runoff for a single position. Returns winner player ID or None.
+        prospectIds are team-specific prospects eligible for this position, treated
+        as first-class ballot candidates alongside FAs.
+        """
+        # Eligible candidates: FAs at this position + team's prospects at this position
         faAtPosition = set()
         for posKey, players in freeAgentLists.items():
             for p in players:
                 if getattr(p, 'position', None) is not None and p.position.value == position and p.id not in alreadyPicked:
                     faAtPosition.add(p.id)
+        if prospectIds:
+            faAtPosition |= {pid for pid in prospectIds if pid not in alreadyPicked}
 
         if not faAtPosition:
             return None

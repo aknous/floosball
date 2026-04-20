@@ -19,6 +19,7 @@ class GameBroadcaster:
     _enabled = False
     _ws_manager = None
     _main_loop = None  # Main asyncio event loop — required for dispatching from threadpool (sync REST endpoints)
+    _suppress_game_events = False  # When True, per-game plays are skipped; season-level broadcasts still fire
 
     def __new__(cls):
         if cls._instance is None:
@@ -49,26 +50,49 @@ class GameBroadcaster:
     def is_enabled(cls) -> bool:
         """Check if broadcasting is enabled"""
         return cls._enabled and cls._ws_manager is not None
+
+    @classmethod
+    def set_suppress_game_events(cls, suppress: bool) -> None:
+        """Toggle suppression of per-game play broadcasts.
+
+        When True, broadcast_game_event / broadcast_sync calls that carry a
+        real game_id are dropped. Season-level broadcasts (week transitions,
+        standings, offseason, leaderboards, achievements) still fire. Used in
+        timing modes like FAST_WEEKLY where we want UI updates for season
+        structure but not the thousands of per-play events games produce.
+        """
+        cls._suppress_game_events = bool(suppress)
+        logger.info(f"Game-event broadcasts {'SUPPRESSED' if suppress else 'ALLOWED'}")
     
     @classmethod
-    async def broadcast_game_event(cls, game_id: int, event: Dict[str, Any]):
+    async def broadcast_game_event(cls, game_id, event: Dict[str, Any]):
         """
         Broadcast an event to game-specific channel
-        
+
         Args:
-            game_id: The game ID
+            game_id: The game ID (int for real games, or a string like 'season'
+                when this helper is used as a sync dispatcher for season events)
             event: Event dictionary to broadcast
         """
         if not cls.is_enabled():
             return
-        
+
+        # Game-event suppression only blocks real per-game plays. Season-wide
+        # broadcasts from seasonManager use this helper with game_id='season'
+        # and should always fire. game_start / game_end are also allowed
+        # through so the ticker still knows when games open and close.
+        if cls._suppress_game_events and isinstance(game_id, int):
+            eventType = event.get('event') if isinstance(event, dict) else None
+            if eventType not in ('game_start', 'game_end'):
+                return
+
         try:
             channel = f"game_{game_id}"
             await cls._ws_manager.broadcast(event, channel)
-            
+
             # Also broadcast to season channel for global listeners
             await cls._ws_manager.broadcast(event, "season")
-            
+
         except Exception as e:
             logger.error(f"Error broadcasting game event: {e}")
     
@@ -141,13 +165,13 @@ class GameBroadcaster:
             logger.error(f"Error in sync user broadcast: {e}")
 
     @classmethod
-    def broadcast_sync(cls, game_id: int, event: Dict[str, Any]):
+    def broadcast_sync(cls, game_id, event: Dict[str, Any]):
         """
         Synchronous wrapper for broadcasting (creates async task).
         Works from both async context and sync threadpool.
 
         Args:
-            game_id: The game ID
+            game_id: The game ID (int) or 'season' for season-wide events
             event: Event dictionary to broadcast
         """
         if not cls.is_enabled():

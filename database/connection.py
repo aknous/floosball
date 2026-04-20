@@ -282,6 +282,79 @@ def _runPendingMigrations():
                     logger.info(f"  Migration: added {tbl}.{col}")
                 except Exception:
                     conn.rollback()
+
+        # Prospect pipeline columns on players (feature/prospects-pipeline)
+        for col, colDef in [
+            ('is_prospect', 'BOOLEAN DEFAULT 0'),
+            ('is_undrafted', 'BOOLEAN DEFAULT 0'),
+            ('prospect_seasons', 'INTEGER DEFAULT 0'),
+            ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
+            ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added players.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Coach scouting attribute (feature/prospects-pipeline Phase 7)
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN scouting INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added coaches.scouting")
+        except Exception:
+            conn.rollback()
+
+        # GmVote.details for structured payloads like ranked ballots (Phase 7)
+        try:
+            conn.execute(text("ALTER TABLE gm_votes ADD COLUMN details TEXT"))
+            conn.commit()
+            logger.info("  Migration: added gm_votes.details")
+        except Exception:
+            conn.rollback()
+
+        # Vacancy fallback preference on users (feature/prospects-pipeline)
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN vacancy_auto_pick VARCHAR(20) DEFAULT 'best_available' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added users.vacancy_auto_pick")
+        except Exception:
+            conn.rollback()
+
+        # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
+        # Protects against the "deploy during offseason → season replays on
+        # restart" bug. Set True just before handleOffseason() runs, cleared
+        # once seasonsPlayed has been advanced and saved.
+        try:
+            conn.execute(text("ALTER TABLE simulation_state ADD COLUMN in_offseason BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added simulation_state.in_offseason")
+        except Exception:
+            conn.rollback()
+
+        # Retire the 'random' powerup slug on stashed achievement rewards.
+        # Tycoon now grants income_boost; Veteran grants extra_swap. Map
+        # existing 'random' rows by their achievement source so the user
+        # gets the same powerup a freshly-earned reward would give.
+        try:
+            conn.execute(text(
+                "UPDATE pending_rewards SET slug = 'income_boost' "
+                "WHERE kind = 'powerup' AND slug = 'random' AND source = 'achievement:tycoon'"
+            ))
+            conn.execute(text(
+                "UPDATE pending_rewards SET slug = 'extra_swap' "
+                "WHERE kind = 'powerup' AND slug = 'random' AND source = 'achievement:veteran'"
+            ))
+            # Any remaining 'random' (unknown source) default to income_boost.
+            conn.execute(text(
+                "UPDATE pending_rewards SET slug = 'income_boost' "
+                "WHERE kind = 'powerup' AND slug = 'random'"
+            ))
+            conn.commit()
+            logger.info("  Migration: replaced 'random' powerup slugs in pending_rewards")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -759,10 +832,10 @@ def _seedAchievements():
              "reward_config": {"floobits": 0, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "tycoon", "name": "Tycoon", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 1000,
              "description": "Earn 1,000 floobits in a single season.",
-             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": ["random"], "deferred": False}},
+             "reward_config": {"floobits": 0, "packs": ["proper"], "powerups": ["income_boost"], "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
-             "reward_config": {"floobits": 500, "packs": [], "powerups": ["random"], "deferred": False}},
+             "reward_config": {"floobits": 500, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week
             {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 150,
              "description": "Earn 150+ fantasy points in a single week.",

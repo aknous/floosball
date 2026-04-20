@@ -7,6 +7,7 @@ Flow:
        - Floobits: added to UserCurrency via CurrencyRepository
        - Packs/powerups: PendingReward rows the user later claims
   4. Deferred rewards (Veteran) are held until processDeferredRewards() runs on season start
+  5. Any PendingReward left unclaimed and unstashed at season start is dropped by sweepExpiredRewards()
 """
 
 from datetime import datetime
@@ -170,6 +171,41 @@ def processDeferredRewards(session: Session, userId: Optional[int] = None) -> in
     if count:
         session.flush()
         logger.info(f"Processed {count} deferred achievement rewards")
+    return count
+
+
+def sweepExpiredRewards(session: Session, currentSeason: int = 0) -> int:
+    """Delete pending rewards the user never claimed or stashed-in-time.
+
+    Called at season start. Two categories get swept:
+      - Unclaimed rewards with no defer_until_season — abandoned from last
+        season's default pool.
+      - Unclaimed rewards whose defer_until_season is already past — the
+        user stashed them for a target season but didn't open them during
+        that season. E.g. a reward deferred to season 14 that wasn't
+        claimed by season 14's end gets swept at season 15's start.
+
+    Rewards with defer_until_season == currentSeason are preserved (that's
+    the current season they're meant to be claimed in).
+
+    Returns the number of rows deleted.
+    """
+    from sqlalchemy import or_
+    q = session.query(PendingReward).filter(PendingReward.claimed_at.is_(None))
+    if currentSeason:
+        # Sweep undeferred + past-due deferred
+        q = q.filter(or_(
+            PendingReward.defer_until_season.is_(None),
+            PendingReward.defer_until_season < currentSeason,
+        ))
+    else:
+        # No season context — only sweep undeferred (legacy safety)
+        q = q.filter(PendingReward.defer_until_season.is_(None))
+    count = q.count()
+    if count:
+        q.delete(synchronize_session=False)
+        session.flush()
+        logger.info(f"Swept {count} expired pending reward(s)")
     return count
 
 

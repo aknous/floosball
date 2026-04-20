@@ -286,6 +286,7 @@ def _buildCoachDict(team) -> Optional[dict]:
         'aggressiveness': coach.aggressiveness,
         'clockManagement': coach.clockManagement,
         'playerDevelopment': coach.playerDevelopment,
+        'scouting': getattr(coach, 'scouting', 80),
         'seasonsCoached': coach.seasonsCoached,
     }
 
@@ -403,9 +404,41 @@ async def get_team(team_id: int, response: Response):
         team_dict['coach'] = _buildCoachDict(team)
 
         # Roster
+        # Pre-fetch rating history for all roster players in one query so the
+        # response can inline sparkline data without N round-trips.
+        rosterPlayerIds = [p.id for p in team.rosterDict.values() if p is not None]
+        rosterHistoryByPlayer: Dict[int, List[Dict[str, int]]] = {}
+        if rosterPlayerIds:
+            try:
+                from database.connection import get_session as _rs_gs
+                from database.models import PlayerRatingHistory as _RH
+                _rs = _rs_gs()
+                try:
+                    _rows = _rs.query(_RH).filter(
+                        _RH.player_id.in_(rosterPlayerIds)
+                    ).order_by(_RH.player_id, _RH.season).all()
+                    for r in _rows:
+                        rosterHistoryByPlayer.setdefault(r.player_id, []).append({
+                            "season": r.season, "rating": r.rating,
+                        })
+                finally:
+                    _rs.close()
+            except Exception:
+                pass  # history is optional — skip on error
+
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
         roster = {}
         for pos, player in team.rosterDict.items():
             if player is not None:
+                # Append current live rating as the latest point so sparklines
+                # reflect in-season state even before the next snapshot fires
+                history = list(rosterHistoryByPlayer.get(player.id, []))
+                liveRating = int(round(player.playerRating or 0))
+                if currentSeasonNum and (not history or history[-1]["season"] != currentSeasonNum):
+                    history.append({"season": currentSeasonNum, "rating": liveRating})
+
                 roster[pos] = {
                     'id': player.id,
                     'name': player.name,
@@ -421,6 +454,7 @@ async def get_team(team_id: int, response: Response):
                     'tier': player.playerTier.name if hasattr(player.playerTier, 'name') else str(player.playerTier),
                     'fatigue': round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1),
                     'resilience': getattr(player.attributes, 'resilience', 80),
+                    'ratingHistory': history,
                 }
             else:
                 roster[pos] = None
@@ -459,11 +493,13 @@ async def get_team(team_id: int, response: Response):
                 continue
         team_dict['schedule'] = teamSchedule
 
-        # Funding details (current season)
+        # Funding details (current season) — tiers are relative quartiles across
+        # the league, so "next-tier threshold" is computed from live standings
+        # rather than a fixed Floobit amount.
         try:
             from database.connection import get_session as _gs
             from database.models import TeamFunding
-            from constants import FUNDING_TIER_THRESHOLDS, FUNDING_TIER_NAMES
+            from constants import FUNDING_TIER_NAMES
             fundSession = _gs()
             try:
                 # Get the latest funding record for this team
@@ -475,20 +511,45 @@ async def get_team(team_id: int, response: Response):
                     currentTier = latestFunding.funding_tier or 'SMALL_MARKET'
                     currentRank = latestFunding.tier_rank or 4
 
-                    # Compute progress to next tier
+                    # Threshold to climb one tier — computed from the current
+                    # league's fair-share (total funding / team count) and the
+                    # ratio required by the tier above this team. Matches the
+                    # share-of-league logic used in _assignFundingTiers.
+                    from constants import FUNDING_TIER_THRESHOLDS as _TT
+                    seasonRecs = fundSession.query(TeamFunding).filter_by(
+                        season=latestFunding.season
+                    ).all()
+                    totalLeague = sum((r.effective_funding or 0) for r in seasonRecs)
+                    fairShare = max(1, totalLeague / max(1, len(seasonRecs)))
                     nextTierThreshold = None
                     nextTierName = None
                     progressToNextTier = None
                     if currentRank > 1:
-                        # There's a higher tier to reach
-                        nextIdx = currentRank - 2  # index into FUNDING_TIER_THRESHOLDS
-                        nextTierThreshold = FUNDING_TIER_THRESHOLDS[nextIdx]
-                        nextTierName = FUNDING_TIER_NAMES[nextIdx]
-                        # Progress from current tier threshold to next tier threshold
-                        currentTierThreshold = FUNDING_TIER_THRESHOLDS[currentRank - 1] if currentRank - 1 < len(FUNDING_TIER_THRESHOLDS) else 0
-                        tierRange = nextTierThreshold - currentTierThreshold
-                        if tierRange > 0:
-                            progressToNextTier = round(min(1.0, max(0.0, (effectiveFunding - currentTierThreshold) / tierRange)), 2)
+                        nextTierName = FUNDING_TIER_NAMES[currentRank - 2]
+                        nextTierRatio = _TT[nextTierName]
+                        # Funding value that clears the next-tier threshold today
+                        nextTierThreshold = int(round(nextTierRatio * fairShare))
+                        if nextTierThreshold > effectiveFunding:
+                            # Progress fraction across this tier's band (from
+                            # current-tier threshold up to next-tier threshold)
+                            currentTierRatio = _TT[FUNDING_TIER_NAMES[currentRank - 1]]
+                            currentTierThreshold = currentTierRatio * fairShare
+                            tierRange = max(1, nextTierThreshold - currentTierThreshold)
+                            gap = nextTierThreshold - effectiveFunding
+                            progressToNextTier = round(min(1.0, max(0.0, 1.0 - gap / tierRange)), 2)
+                        else:
+                            progressToNextTier = 1.0
+
+                    # Per-tier thresholds — lets the frontend price any tier's
+                    # entry cost without a second round-trip. Used when the
+                    # displayed "next threshold" needs to follow where the
+                    # team's projected funding lands (vs. the locked current
+                    # tier), e.g. a team currently MID but projected MEGA
+                    # should show the MEGA threshold, not the LARGE one.
+                    tierThresholds = {
+                        name: int(round(_TT[name] * fairShare))
+                        for name in FUNDING_TIER_NAMES
+                    }
 
                     team_dict['funding'] = {
                         'season': latestFunding.season,
@@ -502,10 +563,8 @@ async def get_team(team_id: int, response: Response):
                         'nextTierThreshold': nextTierThreshold,
                         'nextTierName': nextTierName,
                         'progressToNextTier': progressToNextTier,
-                        'allTierThresholds': {
-                            FUNDING_TIER_NAMES[i]: t
-                            for i, t in enumerate(FUNDING_TIER_THRESHOLDS)
-                        },
+                        'fairShare': int(round(fairShare)),
+                        'tierThresholds': tierThresholds,
                     }
             finally:
                 fundSession.close()
@@ -642,7 +701,12 @@ async def get_players(
         elif status == 'hof':
             players = floosball_app.playerManager.hallOfFame
         elif status == 'fa':
-            players = floosball_app.playerManager.freeAgents
+            # Active FA pool excludes prospects — they're in team pipelines.
+            players = [p for p in floosball_app.playerManager.freeAgents
+                       if not getattr(p, 'is_prospect', False)]
+        elif status == 'prospects':
+            players = [p for p in floosball_app.playerManager.activePlayers
+                       if getattr(p, 'is_prospect', False)]
         else:  # 'active' or None
             players = floosball_app.playerManager.activePlayers
         
@@ -2992,6 +3056,8 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                 "id": getattr(t, 'id', None),
                 "color": getattr(t, 'color', None),
                 "complete": getattr(t, 'freeAgencyComplete', False),
+                "fundingTier": getattr(t, 'fundingTier', 'MID_MARKET'),
+                "fundingTierRank": getattr(t, 'fundingTierRank', 3),
             })
     transactions = getattr(sm, '_offseasonTransactions', [])
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
@@ -3108,7 +3174,7 @@ def get_projected_funding(team_id: int):
     based on their current balance and funding percentage.
     Also projects next season's tier after carry-forward decay."""
     import math
-    from constants import DEFAULT_FUNDING_PCT, FUNDING_DECAY_RATE, FUNDING_BASELINE_PER_TEAM, FUNDING_TIER_THRESHOLDS
+    from constants import DEFAULT_FUNDING_PCT, FUNDING_DECAY_RATE, FUNDING_BASELINE_PER_TEAM, FUNDING_TIER_NAMES
     from database.connection import get_session
     from database.models import User, UserCurrency, TeamFunding
     session = get_session()
@@ -3137,19 +3203,56 @@ def get_projected_funding(team_id: int):
         currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
         currentRec = session.query(TeamFunding).filter_by(
             team_id=team_id, season=currentSeasonNum).first()
-        endOfSeasonEffective = 0
-        if currentRec:
-            endOfSeasonEffective = (currentRec.current_funding or 0) + totalProjected
+        # Next-season projection: decay this season's effective funding + reset
+        # baseline. This is what locks in the tier the team starts NEXT season
+        # under. Tiers are computed as share-of-league on the same basis.
+        currentEffective = (currentRec.effective_funding or 0) if currentRec else 0
+        endOfSeasonEffective = currentEffective + totalProjected
         nextSeasonCarried = math.floor(endOfSeasonEffective * FUNDING_DECAY_RATE)
         nextSeasonEffective = FUNDING_BASELINE_PER_TEAM + nextSeasonCarried
 
-        # Determine next-season tier
-        thresholds = FUNDING_TIER_THRESHOLDS  # [2000, 1000, 500]
-        tierNames = ['MEGA_MARKET', 'LARGE_MARKET', 'MID_MARKET', 'SMALL_MARKET']
-        nextSeasonTier = tierNames[-1]
-        for i, threshold in enumerate(thresholds):
-            if nextSeasonEffective >= threshold:
-                nextSeasonTier = tierNames[i]
+        import math as _math
+        currentFundingByTeam = {
+            r.team_id: r for r in
+            session.query(TeamFunding).filter_by(season=currentSeasonNum).all()
+        }
+        # Fan auto-contributions per team
+        projectedByTeam: dict = {}
+        allFans = session.query(User).filter(User.favorite_team_id.isnot(None)).all()
+        balancesByUser = {
+            uc.user_id: uc.balance for uc in
+            session.query(UserCurrency).filter(UserCurrency.user_id.in_([f.id for f in allFans])).all()
+        }
+        for fan in allFans:
+            tid = fan.favorite_team_id
+            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT) or DEFAULT_FUNDING_PCT
+            pct = max(0, min(100, pct))
+            bal = balancesByUser.get(fan.id, 0) or 0
+            if pct > 0 and bal > 0:
+                projectedByTeam[tid] = projectedByTeam.get(tid, 0) + _math.floor(bal * pct / 100.0)
+
+        # Build every team's NEXT-season projected effective funding for the
+        # share-of-league tier calc.
+        allTeamIds = [t.id for t in floosball_app.teamManager.teams] if (floosball_app and floosball_app.teamManager) else []
+        teamProjections = []
+        for tid in allTeamIds:
+            rec = currentFundingByTeam.get(tid)
+            teamEndOfSeason = (rec.effective_funding or 0) if rec else 0
+            teamEndOfSeason += projectedByTeam.get(tid, 0)
+            teamCarried = _math.floor(teamEndOfSeason * FUNDING_DECAY_RATE)
+            teamProjections.append((tid, FUNDING_BASELINE_PER_TEAM + teamCarried))
+
+        from constants import FUNDING_TIER_THRESHOLDS as _TIER_THRESH
+        totalProjLeague = sum(p for _, p in teamProjections)
+        fairShareProj = max(1, totalProjLeague / max(1, len(teamProjections)))
+        nextSeasonTier = FUNDING_TIER_NAMES[-1]
+        for tid, projected in teamProjections:
+            if tid == team_id:
+                ratio = projected / fairShareProj
+                for name in FUNDING_TIER_NAMES:
+                    if ratio >= _TIER_THRESH[name]:
+                        nextSeasonTier = name
+                        break
                 break
 
         return build_success_response({
@@ -3166,6 +3269,425 @@ def get_projected_funding(team_id: int):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
+
+
+@app.get("/api/league/markets/history")
+def get_league_markets_history():
+    """Per-season tier/funding history for every team, all seasons.
+
+    Powers the tier-trajectory chart on the Markets section — shows which
+    teams have been climbing and which have been sliding. Returns sparse data
+    (teams only appear in seasons where they have a TeamFunding record).
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFunding
+
+    tm = floosball_app.teamManager
+    if not tm:
+        return build_success_response({"seasons": [], "teams": []})
+
+    session = get_session()
+    try:
+        # Pull every funding record across all seasons, group by team
+        rows = session.query(TeamFunding).order_by(
+            TeamFunding.team_id, TeamFunding.season
+        ).all()
+
+        historyByTeam: Dict[int, List[Dict[str, Any]]] = {}
+        seasonSet = set()
+        for r in rows:
+            seasonSet.add(r.season)
+            historyByTeam.setdefault(r.team_id, []).append({
+                "season": r.season,
+                "tier": r.funding_tier or 'MID_MARKET',
+                "tierRank": r.tier_rank or 3,
+                "effectiveFunding": r.effective_funding or 0,
+            })
+
+        teamsPayload = []
+        for team in tm.teams:
+            hist = historyByTeam.get(team.id, [])
+            teamsPayload.append({
+                "id": team.id,
+                "name": team.name,
+                "city": getattr(team, 'city', ''),
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', '#64748b'),
+                "history": hist,
+            })
+
+        return build_success_response({
+            "seasons": sorted(seasonSet),
+            "teams": teamsPayload,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/league/markets")
+def get_league_markets():
+    """League-wide market & funding view.
+
+    Returns every team with current tier, effective funding, contributing fan
+    count, and top patrons (highest-contributing users this season). Used by
+    the Markets page to surface tier rankings and social/economic pressure.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import User, TeamFunding, CurrencyTransaction, UserCurrency
+    from sqlalchemy import func
+
+    tm = floosball_app.teamManager
+    sm = floosball_app.seasonManager
+    if not tm or not sm or not sm.currentSeason:
+        return build_success_response({"season": 0, "teams": []})
+    currentSeason = sm.currentSeason.seasonNumber
+
+    session = get_session()
+    try:
+        # Map: team_id → TeamFunding row
+        fundingByTeam = {
+            r.team_id: r for r in
+            session.query(TeamFunding).filter_by(season=currentSeason).all()
+        }
+
+        # Contributing fans per team — users who favorite the team AND
+        # contributed floobits at least once this season.
+        contributorRows = (
+            session.query(
+                User.favorite_team_id.label('team_id'),
+                func.count(func.distinct(User.id)).label('fan_count'),
+            )
+            .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
+            .filter(
+                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.season == currentSeason,
+                User.favorite_team_id.isnot(None),
+            )
+            .group_by(User.favorite_team_id)
+            .all()
+        )
+        fanCountByTeam = {r.team_id: r.fan_count for r in contributorRows}
+
+        # Total fans per team — every user with favorite_team_id set,
+        # whether they've contributed this season or not.
+        totalFansRows = (
+            session.query(
+                User.favorite_team_id.label('team_id'),
+                func.count(User.id).label('total_fans'),
+            )
+            .filter(User.favorite_team_id.isnot(None))
+            .group_by(User.favorite_team_id)
+            .all()
+        )
+        totalFansByTeam = {r.team_id: r.total_fans for r in totalFansRows}
+
+        # Top patrons per team — up to 3, by total contributed this season
+        patronRows = (
+            session.query(
+                User.id.label('user_id'),
+                User.username.label('username'),
+                User.favorite_team_id.label('team_id'),
+                func.coalesce(func.sum(-CurrencyTransaction.amount), 0).label('total'),
+            )
+            .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
+            .filter(
+                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.season == currentSeason,
+                User.favorite_team_id.isnot(None),
+            )
+            .group_by(User.id, User.username, User.favorite_team_id)
+            .order_by(func.sum(-CurrencyTransaction.amount).desc())
+            .all()
+        )
+        patronsByTeam: Dict[int, List[Dict[str, Any]]] = {}
+        for row in patronRows:
+            existing = patronsByTeam.setdefault(row.team_id, [])
+            if len(existing) < 3 and row.total and row.total > 0:
+                existing.append({
+                    "userId": row.user_id,
+                    "username": row.username or f"User #{row.user_id}",
+                    "totalContributed": int(row.total),
+                })
+
+        # Previous season tier for movement indicator
+        prevTiers: Dict[int, str] = {}
+        if currentSeason > 1:
+            prevRows = session.query(TeamFunding).filter_by(season=currentSeason - 1).all()
+            for r in prevRows:
+                if r.funding_tier:
+                    prevTiers[r.team_id] = r.funding_tier
+
+        # Project each team's next-season effective funding using the same
+        # logic as /api/teams/{id}/projected-funding, but batched for all
+        # teams in one pass. Result: projectedTier per team so the markets
+        # view can show "where everyone is heading" alongside current tier.
+        from constants import (
+            DEFAULT_FUNDING_PCT as _DEF_PCT,
+            FUNDING_DECAY_RATE as _DECAY,
+            FUNDING_BASELINE_PER_TEAM as _BASE,
+            FUNDING_TIER_NAMES as _TIER_NAMES,
+        )
+        import math as _math
+        allFans = session.query(User).filter(User.favorite_team_id.isnot(None)).all()
+        balancesByUser = {
+            uc.user_id: uc.balance for uc in
+            session.query(UserCurrency).filter(
+                UserCurrency.user_id.in_([f.id for f in allFans] or [0])
+            ).all()
+        } if allFans else {}
+        projectedContribByTeam: Dict[int, int] = {}
+        for fan in allFans:
+            tid = fan.favorite_team_id
+            pct = getattr(fan, 'team_funding_pct', _DEF_PCT) or _DEF_PCT
+            pct = max(0, min(100, pct))
+            bal = balancesByUser.get(fan.id, 0) or 0
+            if pct > 0 and bal > 0:
+                projectedContribByTeam[tid] = projectedContribByTeam.get(tid, 0) + _math.floor(bal * pct / 100.0)
+        from constants import FUNDING_TIER_THRESHOLDS as _TIER_THRESH
+        projectedTierByTeam: Dict[int, str] = {}
+        projectedFundingByTeam: Dict[int, int] = {}
+        # Projection = NEXT season's effective funding after decay + fresh
+        # baseline. This is what locks in the tier for the next season.
+        # Decay compresses heavy-funded teams' shares (50% carry + flat
+        # baseline helps low teams relatively more), so projected share can
+        # be lower than current share even when absolute funding grows.
+        for team in tm.teams:
+            rec = fundingByTeam.get(team.id)
+            endOfSeason = (rec.effective_funding or 0) if rec else 0
+            endOfSeason += projectedContribByTeam.get(team.id, 0)
+            carried = _math.floor(endOfSeason * _DECAY)
+            projectedFundingByTeam[team.id] = _BASE + carried
+        totalProjLeague = sum(projectedFundingByTeam.values())
+        fairShareProj = max(1, totalProjLeague / max(1, len(projectedFundingByTeam)))
+        for tid, projFunding in projectedFundingByTeam.items():
+            ratio = projFunding / fairShareProj
+            tier = _TIER_NAMES[-1]
+            for name in _TIER_NAMES:
+                if ratio >= _TIER_THRESH[name]:
+                    tier = name
+                    break
+            projectedTierByTeam[tid] = tier
+
+        # Build per-team payload
+        tierOrderMap = {'MEGA_MARKET': 1, 'LARGE_MARKET': 2, 'MID_MARKET': 3, 'SMALL_MARKET': 4}
+        teamsPayload = []
+        for team in tm.teams:
+            fundingRec = fundingByTeam.get(team.id)
+            tier = fundingRec.funding_tier if fundingRec else 'MID_MARKET'
+            prevTier = prevTiers.get(team.id)
+            movement = 0
+            if prevTier and prevTier in tierOrderMap and tier in tierOrderMap:
+                # Lower rank = higher tier, so movement = prev_rank - current_rank
+                # Positive = climbed, negative = dropped
+                movement = tierOrderMap[prevTier] - tierOrderMap[tier]
+
+            teamsPayload.append({
+                "id": team.id,
+                "name": team.name,
+                "city": getattr(team, 'city', ''),
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', '#64748b'),
+                "tier": tier,
+                "tierRank": fundingRec.tier_rank if fundingRec else 3,
+                "effectiveFunding": fundingRec.effective_funding if fundingRec else 0,
+                "baselineFunding": fundingRec.baseline_funding if fundingRec else 0,
+                "fanContributions": fundingRec.fan_contributions if fundingRec else 0,
+                "carriedFunding": fundingRec.carried_funding if fundingRec else 0,
+                "fanCount": fanCountByTeam.get(team.id, 0),
+                "totalFans": totalFansByTeam.get(team.id, 0),
+                "topPatrons": patronsByTeam.get(team.id, []),
+                "tierMovement": movement,  # +1 = climbed one tier, -1 = dropped, 0 = held
+                "projectedTier": projectedTierByTeam.get(team.id, tier),
+                "projectedFunding": projectedFundingByTeam.get(team.id, fundingRec.effective_funding if fundingRec else 0),
+                "record": {
+                    "wins": team.seasonTeamStats.get('wins', 0) if hasattr(team, 'seasonTeamStats') else 0,
+                    "losses": team.seasonTeamStats.get('losses', 0) if hasattr(team, 'seasonTeamStats') else 0,
+                },
+            })
+
+        # Sort by tier rank then effective funding desc
+        teamsPayload.sort(key=lambda t: (t['tierRank'], -t['effectiveFunding']))
+
+        return build_success_response({
+            "season": currentSeason,
+            "teams": teamsPayload,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{team_id}/prospects")
+def get_team_prospects(team_id: int):
+    """Prospects stashed in this team's pipeline.
+
+    Surfaces the full list with development context so the UI can show progress,
+    window remaining, and promotion readiness. Ordered by rating desc.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    tm = floosball_app.teamManager
+    team = tm.getTeamById(team_id) if tm else None
+    if not team:
+        raise HTTPException(404, "Team not found")
+
+    from constants import PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD
+    from database.connection import get_session
+    from database.models import PlayerRatingHistory
+
+    # Pull every prospect's rating history in one batched query so the UI can
+    # render a sparkline without N extra fetches.
+    prospectList = list(getattr(team, 'prospects', []))
+    historyByPlayer: Dict[int, List[Dict[str, int]]] = {}
+    if prospectList:
+        session = get_session()
+        try:
+            rows = session.query(PlayerRatingHistory).filter(
+                PlayerRatingHistory.player_id.in_([p.id for p in prospectList])
+            ).order_by(PlayerRatingHistory.player_id, PlayerRatingHistory.season).all()
+            for r in rows:
+                historyByPlayer.setdefault(r.player_id, []).append({
+                    "season": r.season,
+                    "rating": r.rating,
+                })
+        finally:
+            session.close()
+
+    prospects = []
+    for p in prospectList:
+        rating = round(getattr(p, 'playerRating', 0), 1)
+        posName = p.position.name if hasattr(p.position, 'name') else str(p.position)
+        # Build a series including the current (live) rating as the latest
+        # point, tagged with the current season. For rookies with no prior
+        # history, this produces a single-point series.
+        history = list(historyByPlayer.get(p.id, []))
+        sm = floosball_app.seasonManager
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        if currentSeasonNum and (not history or history[-1]["season"] != currentSeasonNum):
+            history.append({"season": currentSeasonNum, "rating": int(round(rating))})
+        prospectSeasonsElapsed = getattr(p, 'prospect_seasons', 0) or 0
+        # draftSeason = the season the prospect entered the pipeline.
+        # prospect_seasons increments at each offseason, so during season N a
+        # prospect with prospect_seasons=0 was drafted into season N.
+        draftSeason = currentSeasonNum - prospectSeasonsElapsed if currentSeasonNum else None
+        prospects.append({
+            "playerId": p.id,
+            "name": p.name,
+            "position": posName,
+            "rating": rating,
+            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+            "prospectSeasons": prospectSeasonsElapsed,
+            "seasonsRemaining": max(0, PROSPECT_DEVELOPMENT_WINDOW - prospectSeasonsElapsed),
+            "draftSeason": draftSeason,
+            "isUndrafted": bool(getattr(p, 'is_undrafted', False)),
+            "ratingHistory": history,
+        })
+    prospects.sort(key=lambda x: -x['rating'])
+    return build_success_response({
+        "teamId": team_id,
+        "prospects": prospects,
+        "slotCapPerPosition": 2,  # mirrors constants.PROSPECT_SLOT_CAP_PER_POSITION
+        "developmentWindow": PROSPECT_DEVELOPMENT_WINDOW,
+        "promotionThreshold": PROSPECT_PROMOTION_RATING_THRESHOLD,
+    })
+
+
+@app.get("/api/players/{player_id}/rating-history")
+def get_player_rating_history(player_id: int):
+    """Rating trajectory for a single player across every season played.
+
+    Returns an ordered list of {season, rating} points — one per season where
+    a snapshot exists. The current season's live rating is appended as the
+    latest point if not yet snapshotted.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from database.connection import get_session
+    from database.models import PlayerRatingHistory
+
+    session = get_session()
+    try:
+        rows = session.query(PlayerRatingHistory).filter_by(
+            player_id=player_id
+        ).order_by(PlayerRatingHistory.season).all()
+        history = [
+            {"season": r.season, "rating": r.rating,
+             "offensiveRating": r.offensive_rating, "defensiveRating": r.defensive_rating}
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+    # Append the current live rating as the latest point so the sparkline
+    # reflects in-season state even before the next snapshot fires
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    player = pm.getPlayerById(player_id) if hasattr(pm, 'getPlayerById') else None
+    if player is None:
+        # fallback — scan activePlayers
+        player = next((p for p in pm.activePlayers if p.id == player_id), None)
+    if player is not None and currentSeasonNum:
+        currentRating = int(round(getattr(player, 'playerRating', 0) or 0))
+        if not history or history[-1]["season"] != currentSeasonNum:
+            history.append({
+                "season": currentSeasonNum, "rating": currentRating,
+                "offensiveRating": getattr(player, 'offensiveRating', None),
+                "defensiveRating": getattr(player, 'defensiveRating', None),
+            })
+
+    return build_success_response({
+        "playerId": player_id,
+        "history": history,
+    })
+
+
+@app.get("/api/teams/{team_id}/retirement-watch")
+def get_team_retirement_watch(team_id: int):
+    """Players on this team's roster flagged by retirement risk.
+
+    Surfaces the same tiers used at offseason time so fans can see farewell-tour
+    candidates all season and pre-vote replacements. Returns only players with
+    non-'safe' risk (plus 'safe' vets close to the bubble are filtered out).
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    tm = floosball_app.teamManager
+    pm = floosball_app.playerManager
+    team = tm.getTeamById(team_id) if tm else None
+    if not team:
+        raise HTTPException(404, "Team not found")
+
+    watch = []
+    for position, player in team.rosterDict.items():
+        if player is None:
+            continue
+        risk = pm.computeRetirementRisk(player)
+        if risk == 'safe':
+            continue
+        watch.append({
+            "playerId": player.id,
+            "name": player.name,
+            "position": player.position.name if hasattr(player.position, 'name') else str(player.position),
+            "rosterSlot": position,
+            "rating": round(getattr(player, 'playerRating', 0), 1),
+            "seasonsPlayed": getattr(player, 'seasonsPlayed', 0),
+            "longevity": getattr(getattr(player, 'attributes', None), 'longevity', 0),
+            "termRemaining": getattr(player, 'termRemaining', 0),
+            "risk": risk,
+        })
+
+    # Sort by risk severity (most at-risk first), then by rating (higher = more impactful loss)
+    riskOrder = {'forced': 0, 'very_likely': 1, 'likely': 2, 'possible': 3}
+    watch.sort(key=lambda w: (riskOrder.get(w['risk'], 9), -w['rating']))
+
+    return build_success_response({
+        "teamId": team_id,
+        "watch": watch,
+    })
 
 
 @app.get("/api/users/me")
@@ -5791,14 +6313,17 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             targetPlayerId=req.targetPlayerId,
         )
 
-        # Secret hooks — Mutineer (max fire_coach votes, capped at GM_VOTES_PER_TYPE)
-        # and Tribune (spend the entire season vote budget, any mix of types).
+        # Secret hooks — Mutineer (max fire_coach votes allowed against the
+        # single coach target = GM_VOTES_PER_TARGET) and Tribune (spend the
+        # entire season vote budget, any mix of types). Fire coach is capped
+        # per-target, not per-type, since there's only one coach to fire —
+        # so the per-target cap is the real ceiling for this achievement.
         try:
             updatedCounts = voteRepo.getUserVoteCounts(user.id, currentSeason)
             totalVotes = updatedCounts.get("total", 0)
             fireVotes = (updatedCounts.get("perType") or {}).get("fire_coach", 0)
             from managers import achievementManager as _am
-            if fireVotes >= GM_VOTES_PER_TYPE:
+            if fireVotes >= GM_VOTES_PER_TARGET:
                 _am.unlockSecret(session, user.id, "mutineer")
             if totalVotes >= GM_VOTES_PER_SEASON:
                 _am.unlockSecret(session, user.id, "tribune")
@@ -5908,6 +6433,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "aggressiveness": c.aggressiveness,
                 "clockManagement": c.clockManagement,
                 "playerDevelopment": c.playerDevelopment,
+                "scouting": getattr(c, 'scouting', 80),
             }
 
         # Available coaches in pool
@@ -5924,6 +6450,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "aggressiveness": c.aggressiveness,
                 "clockManagement": c.clock_management,
                 "playerDevelopment": c.player_development,
+                "scouting": getattr(c, 'scouting', 80),
             })
 
         # Rostered players (for cut votes — all players eligible)
@@ -5984,15 +6511,111 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 favTeam = t
                 break
 
+        # Build GM vote tallies so we can factor cut/resign sentiment into the
+        # "projected open slots" and "projected FA pool" calculations. A player
+        # with enough cut_player votes to meet quorum is likely leaving even
+        # if not in their walk year. A walk-year player with enough
+        # resign_player votes to meet quorum is likely staying.
+        from database.models import GmVote
+        from sqlalchemy import func as _func
+        from managers.gmManager import GmManager as _GmManager
+        _gm = _GmManager(session)
+
+        seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+
+        # Vote tallies per (team_id, vote_type, target_player_id)
+        voteRows = session.query(
+            GmVote.team_id, GmVote.vote_type, GmVote.target_player_id,
+            _func.count(GmVote.id).label('n'),
+        ).filter(
+            GmVote.season == seasonNum,
+            GmVote.vote_type.in_(['cut_player', 'resign_player']),
+        ).group_by(GmVote.team_id, GmVote.vote_type, GmVote.target_player_id).all()
+
+        # {(teamId, voteType, targetPlayerId): voteCount}
+        voteTally: Dict[tuple, int] = {
+            (r.team_id, r.vote_type, r.target_player_id): r.n
+            for r in voteRows
+        }
+
+        # Engaged-fan count per team for threshold calc
+        engagedPerTeam: Dict[int, int] = {}
+        engagedRows = session.query(
+            User.favorite_team_id,
+            _func.count(_func.distinct(GmVote.user_id)).label('n'),
+        ).join(GmVote, GmVote.user_id == User.id).filter(
+            GmVote.season == seasonNum,
+            User.favorite_team_id.isnot(None),
+        ).group_by(User.favorite_team_id).all()
+        for r in engagedRows:
+            engagedPerTeam[r.favorite_team_id] = r.n
+
+        def likelyCut(teamId: int, playerId: int) -> bool:
+            votes = voteTally.get((teamId, 'cut_player', playerId), 0)
+            if votes == 0: return False
+            threshold = _gm.calculateThreshold(engagedPerTeam.get(teamId, 0), 'cut_player')
+            return votes >= threshold
+
+        def likelyResigned(teamId: int, playerId: int) -> bool:
+            votes = voteTally.get((teamId, 'resign_player', playerId), 0)
+            if votes == 0: return False
+            threshold = _gm.calculateThreshold(engagedPerTeam.get(teamId, 0), 'resign_player')
+            return votes >= threshold
+
         openSlots = []
         slotPosMap = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
         if favTeam:
             for slot, posName in slotPosMap.items():
-                if favTeam.rosterDict.get(slot) is None:
-                    openSlots.append({"slot": slot, "position": posName})
+                rosterPlayer = favTeam.rosterDict.get(slot)
+                if rosterPlayer is None:
+                    # Slot is actually open right now
+                    openSlots.append({"slot": slot, "position": posName, "projected": False, "reason": "vacant"})
+                    continue
 
-        # Get season number for stats lookup
-        seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+                termRem = getattr(rosterPlayer, 'termRemaining', 99)
+                cutLikely = likelyCut(favTeam.id, rosterPlayer.id)
+                resignLikely = likelyResigned(favTeam.id, rosterPlayer.id)
+                # Retirement risk — an aging veteran projected to retire at
+                # season end creates an opening even with multi-year contract.
+                retireRisk = pm.computeRetirementRisk(rosterPlayer)
+                retireLikely = retireRisk in ('forced', 'very_likely', 'likely')
+
+                # Slot opens if ANY of: cut-vote at quorum, walk-year without
+                # resign backing, or high retirement risk.
+                if cutLikely:
+                    openSlots.append({
+                        "slot": slot, "position": posName, "projected": True,
+                        "reason": "cut_vote_likely",
+                        "incumbent": {
+                            "id": rosterPlayer.id, "name": rosterPlayer.name,
+                            "rating": round(rosterPlayer.playerRating, 1),
+                            "termRemaining": termRem,
+                        },
+                    })
+                elif termRem <= 1 and not resignLikely:
+                    openSlots.append({
+                        "slot": slot, "position": posName, "projected": True,
+                        "reason": "walk_year",
+                        "incumbent": {
+                            "id": rosterPlayer.id, "name": rosterPlayer.name,
+                            "rating": round(rosterPlayer.playerRating, 1),
+                            "termRemaining": termRem,
+                        },
+                    })
+                elif retireLikely:
+                    openSlots.append({
+                        "slot": slot, "position": posName, "projected": True,
+                        "reason": "retirement_risk",
+                        "incumbent": {
+                            "id": rosterPlayer.id, "name": rosterPlayer.name,
+                            "rating": round(rosterPlayer.playerRating, 1),
+                            "termRemaining": termRem,
+                            "retirementRisk": retireRisk,
+                        },
+                    })
+                # else: slot stays filled — safe contract, no cut/retire pressure
+
+        # seasonNum was computed above alongside the vote tallies
 
         # Build stats lookup for all FA player IDs
         faPlayerIds = [p.id for p in pm.freeAgents]
@@ -6029,7 +6652,15 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
             return base
 
         players = []
+        # Track emitted player IDs so the same player doesn't appear in
+        # multiple categories (FA + projected FA, or rostered + prospects)
+        # if underlying state is inconsistent. Frontend dedups too but we
+        # want a clean feed regardless.
+        seenPlayerIds: set = set()
         for p in pm.freeAgents:
+            if p.id in seenPlayerIds:
+                continue
+            seenPlayerIds.add(p.id)
             posName = p.position.name
             row = statsRows.get(p.id)
             perfRating = getattr(p, 'seasonPerformanceRating', 0) or 0
@@ -6044,7 +6675,96 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "ratingDelta": perfRating - overallRating,
                 "stats": formatStats(row, posName),
                 "isRookie": p.id in rookieIds,
+                "isProspect": False,
+                "isProjected": False,
             })
+
+        # Projected FAs: rostered players on OTHER teams whose contracts are
+        # ending OR who have enough cut votes to likely be cut. Walk-year
+        # players whose board is likely to re-sign them are excluded — they
+        # probably won't hit FA.
+        def isProjectedFa(teamId: int, rp) -> tuple:
+            """Returns (include, reason) — include=True means put them in the pool.
+            reason is 'walk_year' or 'cut_vote' for UI context.
+            """
+            termRem = getattr(rp, 'termRemaining', 99)
+            pid = rp.id
+            if likelyCut(teamId, pid):
+                return (True, 'cut_vote')
+            if termRem <= 1 and not likelyResigned(teamId, pid):
+                return (True, 'walk_year')
+            return (False, None)
+
+        if teamManager:
+            # Pre-collect eligible projected IDs so we can batch-fetch stats
+            projectedEntries = []  # (team, rp, reason)
+            for team in teamManager.teams:
+                if favTeam and team.id == favTeam.id:
+                    continue  # Fans can't draft their own roster
+                for pos, rp in team.rosterDict.items():
+                    if rp is None:
+                        continue
+                    include, reason = isProjectedFa(team.id, rp)
+                    if include:
+                        projectedEntries.append((team, rp, reason))
+
+            projStatsRows = {}
+            if projectedEntries:
+                projIds = [rp.id for _t, rp, _r in projectedEntries]
+                rows = session.query(PlayerSeasonStats).filter(
+                    PlayerSeasonStats.player_id.in_(projIds),
+                    PlayerSeasonStats.season == seasonNum,
+                ).all()
+                for r in rows:
+                    projStatsRows[r.player_id] = r
+
+            for team, rp, reason in projectedEntries:
+                if rp.id in seenPlayerIds:
+                    continue
+                seenPlayerIds.add(rp.id)
+                posName = rp.position.name
+                perfRating = getattr(rp, 'seasonPerformanceRating', 0) or 0
+                overallRating = round(rp.playerRating)
+                players.append({
+                    "id": rp.id,
+                    "name": rp.name,
+                    "position": posName,
+                    "rating": round(rp.playerRating, 1),
+                    "tier": rp.playerTier.name,
+                    "performanceRating": perfRating,
+                    "ratingDelta": perfRating - overallRating,
+                    "stats": formatStats(projStatsRows.get(rp.id), posName),
+                    "isRookie": False,
+                    "isProspect": False,
+                    "isProjected": True,
+                    "projectedReason": reason,  # 'walk_year' or 'cut_vote'
+                    "currentTeam": team.abbr,
+                })
+
+        # Include the favorite team's prospects as ballot candidates too, so fans
+        # can rank "promote this prospect" alongside "sign this FA" in a single
+        # ranked vote. Resolution treats prospect IDs as promote directives, FA
+        # IDs as sign directives. Both share the same ranked-choice space.
+        if favTeam:
+            for p in getattr(favTeam, 'prospects', []):
+                if p.id in seenPlayerIds:
+                    continue
+                seenPlayerIds.add(p.id)
+                posName = p.position.name
+                perfRating = getattr(p, 'seasonPerformanceRating', 0) or 0
+                overallRating = round(p.playerRating)
+                players.append({
+                    "id": p.id,
+                    "name": p.name,
+                    "position": posName,
+                    "rating": round(p.playerRating, 1),
+                    "tier": p.playerTier.name,
+                    "performanceRating": perfRating,
+                    "ratingDelta": perfRating - overallRating,
+                    "stats": None,  # prospects haven't played — no season stats
+                    "isRookie": False,
+                    "isProspect": True,
+                })
 
         return build_success_response({"openSlots": openSlots, "players": players})
     finally:
@@ -6073,10 +6793,16 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         sm = floosball_app.seasonManager if floosball_app else None
         currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
 
-        # Check if FA window is open
+        # Accept ballots whenever the Board is convened: week 22+, the offseason
+        # FA window, or any point during the offseason itself. Fans can draft
+        # and revise a ranked list well before the offseason opens.
+        from constants import GM_ACTIVE_WEEK
         faWindowOpen = getattr(sm, '_faWindowOpen', False) if sm else False
-        if not faWindowOpen:
-            raise HTTPException(400, "FA voting window is not currently open")
+        currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+        isOffseason = (sm.currentSeason.currentWeekText == 'Offseason') if sm and sm.currentSeason else False
+        boardActive = currentWeek >= GM_ACTIVE_WEEK or isOffseason or faWindowOpen
+        if not boardActive:
+            raise HTTPException(400, f"FA requisitions open in Week {GM_ACTIVE_WEEK}")
 
         ballotRepo = GmFaBallotRepository(session)
         existing = ballotRepo.getUserBallot(user.id, teamId, currentSeason)
@@ -6111,6 +6837,183 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         session.rollback()
         logger.error(f"FA ballot error: {e}")
         raise HTTPException(500, "Failed to submit ballot")
+    finally:
+        session.close()
+
+
+@app.get("/api/rookies/upcoming")
+def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
+    """The season's rookie class, with scouting-blurred potentials.
+
+    Generated at season start, visible all season. Potentials are revealed
+    according to the viewer's favorite team's effective scouting (coach
+    scouting + funding tier bonus). Unauthenticated visitors get the widest
+    blur band.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from constants import FUNDING_SCOUTING_BONUS, GM_ACTIVE_WEEK
+    pm = floosball_app.playerManager
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+
+    upcoming = [p for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
+
+    # Determine viewer's effective scouting
+    effectiveScouting = 60  # default: worst-band blur
+    scoutTeam = None
+    if user and getattr(user, 'favorite_team_id', None):
+        scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
+        if scoutTeam:
+            coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
+            tierBonus = FUNDING_SCOUTING_BONUS.get(getattr(scoutTeam, 'fundingTier', 'MID_MARKET'), 0)
+            effectiveScouting = max(0, min(100, coachScouting + tierBonus))
+
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    rookies = [pm.scoutRookie(r, effectiveScouting) for r in upcoming]
+    rookies.sort(key=lambda r: (-r['rating'], r['position'], r['name']))
+
+    return build_success_response({
+        "season": seasonNumber,
+        "currentWeek": currentWeek,
+        "votingOpensWeek": GM_ACTIVE_WEEK,
+        "votingOpen": isinstance(currentWeek, int) and currentWeek >= GM_ACTIVE_WEEK,
+        "effectiveScouting": effectiveScouting,
+        "scoutingTeamId": scoutTeam.id if scoutTeam else None,
+        "rookies": rookies,
+    })
+
+
+class RookieBallotRequest(BaseModel):
+    rankings: List[int]
+
+
+@app.post("/api/gm/rookie-ballot")
+def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCurrentUser)):
+    """Submit or update a ranked rookie-draft ballot.
+
+    Window: opens when the Front Office opens (week >= GM_ACTIVE_WEEK) and
+    closes when the regular season ends (start of offseason). Flat
+    GM_ROOKIE_BALLOT_COST — first submission charges once; updates are free.
+    """
+    import json as _json
+    from database.connection import get_session
+    from database.models import User, GmVote
+    from database.repositories.card_repositories import CurrencyRepository
+    from constants import GM_ROOKIE_BALLOT_COST, GM_ROOKIE_DRAFT_MAX_RANKINGS, GM_ACTIVE_WEEK
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    sm = floosball_app.seasonManager
+
+    if not req.rankings:
+        raise HTTPException(400, "Provide at least one ranked rookie ID")
+    if len(req.rankings) > GM_ROOKIE_DRAFT_MAX_RANKINGS:
+        raise HTTPException(400, f"Max {GM_ROOKIE_DRAFT_MAX_RANKINGS} rookies per ballot")
+
+    # Gate on week: Front Office opens at GM_ACTIVE_WEEK. Voting also blocked
+    # once playoffs start or offseason is running (rookies are mid-draft).
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not isinstance(currentWeek, int) or currentWeek < GM_ACTIVE_WEEK:
+        raise HTTPException(400, f"Rookie draft voting opens in Week {GM_ACTIVE_WEEK}")
+    if getattr(sm.currentSeason, 'currentPlayoffRound', None):
+        raise HTTPException(400, "Rookie draft voting is closed — offseason has begun")
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            raise HTTPException(400, "You must have a favorite team to vote")
+
+        teamId = dbUser.favorite_team_id
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        # Validate that every ID in rankings is an actual upcoming rookie
+        pm = floosball_app.playerManager
+        upcomingIds = {p.id for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)}
+        rankings = [int(r) for r in req.rankings if int(r) in upcomingIds]
+        if not rankings:
+            raise HTTPException(400, "None of the submitted IDs are upcoming rookies")
+
+        # Upsert: one draft_rookie vote per user per season
+        existing = session.query(GmVote).filter_by(
+            user_id=user.id, team_id=teamId, season=currentSeason,
+            vote_type='draft_rookie',
+        ).first()
+
+        costPaid = 0
+        if existing is None:
+            currencyRepo = CurrencyRepository(session)
+            result = currencyRepo.spendFunds(
+                user.id, GM_ROOKIE_BALLOT_COST, "gm_rookie_ballot",
+                "Rookie draft ballot", currentSeason,
+            )
+            if result is None:
+                raise HTTPException(400, "Insufficient Floobits")
+            costPaid = GM_ROOKIE_BALLOT_COST
+            vote = GmVote(
+                user_id=user.id, team_id=teamId, season=currentSeason,
+                vote_type='draft_rookie', cost_paid=costPaid,
+                details=_json.dumps(rankings),
+            )
+            session.add(vote)
+        else:
+            existing.details = _json.dumps(rankings)
+        session.commit()
+
+        return build_success_response({
+            "rankings": rankings,
+            "costPaid": costPaid,
+            "isUpdate": existing is not None,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Rookie ballot error: {e}")
+        raise HTTPException(500, "Failed to submit rookie ballot")
+    finally:
+        session.close()
+
+
+@app.get("/api/gm/rookie-ballot")
+def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
+    """Return the user's current rookie-draft ballot for this season."""
+    import json as _json
+    from database.connection import get_session
+    from database.models import User, GmVote
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    sm = floosball_app.seasonManager
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        teamId = dbUser.favorite_team_id if dbUser else None
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        if not teamId:
+            return build_success_response({"rankings": [], "hasBallot": False})
+
+        existing = session.query(GmVote).filter_by(
+            user_id=user.id, team_id=teamId, season=currentSeason,
+            vote_type='draft_rookie',
+        ).first()
+
+        rankings: List[int] = []
+        if existing and existing.details:
+            try:
+                parsed = _json.loads(existing.details)
+                if isinstance(parsed, list):
+                    rankings = [int(x) for x in parsed if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
+            except Exception:
+                pass
+        return build_success_response({
+            "rankings": rankings,
+            "hasBallot": existing is not None,
+        })
     finally:
         session.close()
 
@@ -7165,8 +8068,42 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             return build_success_response({"kind": "pack", **result})
 
         if reward.kind == "powerup":
-            # v2: actually grant a ShopPurchase for the selected powerup
-            raise HTTPException(status_code=501, detail="Powerup claims not yet implemented")
+            # Grant the powerup as a ShopPurchase with price_paid=0. Expiry
+            # follows the catalog's duration when the powerup has one
+            # (temp_flex, income_boost, etc.); one-shot slugs (extra_swap,
+            # modifier_nullifier) get expires_at_week=None.
+            from database.models import ShopPurchase
+            from constants import POWERUP_CATALOG
+            powerupInfo = POWERUP_CATALOG.get(reward.slug)
+            if not powerupInfo:
+                raise HTTPException(status_code=500, detail=f"Unknown powerup: {reward.slug}")
+            sm = floosball_app.seasonManager if floosball_app else None
+            currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 1
+            currentWeek = max(1, currentWeek)
+            durationWeeks = powerupInfo.get("durationWeeks")
+            if durationWeeks:
+                # Duration-based powerups expire at the end of week N+duration-1
+                gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None)) if sm and sm.currentSeason else False
+                expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            else:
+                expiresAtWeek = None
+            purchase = ShopPurchase(
+                user_id=user.id,
+                item_slug=reward.slug,
+                season=currentSeason,
+                week=currentWeek,
+                price_paid=0,
+                expires_at_week=expiresAtWeek,
+            )
+            session.add(purchase)
+            reward.claimed_at = datetime.utcnow()
+            session.commit()
+            return build_success_response({
+                "kind": "powerup",
+                "slug": reward.slug,
+                "name": powerupInfo.get("name", reward.slug),
+                "expiresAtWeek": expiresAtWeek,
+            })
 
         raise HTTPException(status_code=500, detail=f"Unknown reward kind: {reward.kind}")
     except HTTPException:

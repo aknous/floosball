@@ -56,6 +56,7 @@ class EventType(Enum):
     OFFSEASON_ON_CLOCK      = "offseason_on_clock"
     OFFSEASON_TEAM_COMPLETE = "offseason_team_complete"
     OFFSEASON_COMPLETE      = "offseason_complete"
+    FA_DRAFT_ORDER_UPDATE   = "fa_draft_order_update"
 
     # GM Mode events
     GM_VOTE_RESOLVED = "gm_vote_resolved"
@@ -465,6 +466,14 @@ class OffseasonEvent:
             'event': EventType.OFFSEASON_COMPLETE.value,
             'timestamp': datetime.now().isoformat(),
             'remainingFreeAgents': remainingFreeAgents,
+        }
+
+    @staticmethod
+    def fa_draft_order_update(draftOrder: list) -> Dict[str, Any]:
+        return {
+            'event': EventType.FA_DRAFT_ORDER_UPDATE.value,
+            'timestamp': datetime.now().isoformat(),
+            'draftOrder': draftOrder,
         }
 
 
