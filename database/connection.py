@@ -379,6 +379,13 @@ def _runPendingMigrations():
     finally:
         conn.close()
 
+    # Recompute funding tiers with the current share-of-league thresholds.
+    # v0.10 changed MEGA from ≥1.75× to ≥2.0×, LARGE from ≥1.0× to ≥1.15×,
+    # and MID from ≥0.5× to ≥0.85×. Any team_funding row assigned under the
+    # old thresholds has a stale tier label even though its effective_funding
+    # is correct. Idempotent: running on already-correct tiers is a no-op.
+    _recomputeFundingTiers()
+
     # Refresh stale effect_config text on reworked card effects
     _refreshCardEffectText()
 
@@ -386,6 +393,66 @@ def _runPendingMigrations():
     _backfillPlayerSeasonTeamIds()
     _backfillPlayerSeasonStatsFromGames()
     _backfillPlayerCareerStatsFromGames()
+
+
+def _recomputeFundingTiers():
+    """Recompute funding_tier / tier_rank for every team_funding row using the
+    current FUNDING_TIER_THRESHOLDS. Safe to run repeatedly — deterministic
+    from effective_funding."""
+    from sqlalchemy import text
+    from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
+
+    conn = engine.connect()
+    try:
+        seasons = [
+            row[0] for row in conn.execute(
+                text("SELECT DISTINCT season FROM team_funding")
+            ).fetchall()
+        ]
+        totalUpdated = 0
+        for season in seasons:
+            rows = conn.execute(
+                text(
+                    "SELECT id, effective_funding, funding_tier, tier_rank "
+                    "FROM team_funding WHERE season = :s"
+                ),
+                {"s": season},
+            ).fetchall()
+            if not rows:
+                continue
+            teamCount = len(rows)
+            totalFunding = sum((r[1] or 0) for r in rows)
+            fairShare = max(1.0, totalFunding / teamCount) if teamCount else 1.0
+
+            def tierFor(effective):
+                ratio = (effective or 0) / fairShare
+                for idx, name in enumerate(FUNDING_TIER_NAMES):
+                    if ratio >= FUNDING_TIER_THRESHOLDS[name]:
+                        return name, idx + 1
+                last = len(FUNDING_TIER_NAMES) - 1
+                return FUNDING_TIER_NAMES[last], last + 1
+
+            for rowId, effective, oldTier, oldRank in rows:
+                newTier, newRank = tierFor(effective)
+                if newTier != oldTier or newRank != oldRank:
+                    conn.execute(
+                        text(
+                            "UPDATE team_funding SET funding_tier = :t, tier_rank = :r "
+                            "WHERE id = :id"
+                        ),
+                        {"t": newTier, "r": newRank, "id": rowId},
+                    )
+                    totalUpdated += 1
+        if totalUpdated:
+            conn.commit()
+            logger.info(f"  Migration: recomputed {totalUpdated} funding tier labels")
+        else:
+            conn.rollback()
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Migration: funding tier recompute skipped ({e})")
+    finally:
+        conn.close()
 
 
 def _refreshCardEffectText():
