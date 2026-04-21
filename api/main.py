@@ -6212,6 +6212,35 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
                 "expiring": weeksRemaining <= 1,
             })
 
+        # Income boost (Endowment) — raises weekly FP floobit cap
+        activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
+        if activeBoost:
+            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            from constants import POWERUP_INCOME_BOOST, WEEKLY_FP_FLOOBIT_CAP
+            active.append({
+                "slug": "income_boost",
+                "displayName": "Endowment",
+                "expiresAtWeek": activeBoost.expires_at_week,
+                "weeksRemaining": max(0, weeksRemaining),
+                "expiring": weeksRemaining <= 1,
+                "boostedCap": POWERUP_INCOME_BOOST.get("boostedCap", 65),
+                "standardCap": WEEKLY_FP_FLOOBIT_CAP,
+            })
+
+        # Fortune's Favor (Patronage) — boosts chance card trigger rates
+        activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
+        if activeFavor:
+            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            weeksRemaining = activeFavor.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            active.append({
+                "slug": "fortunes_favor",
+                "displayName": "Patronage",
+                "expiresAtWeek": activeFavor.expires_at_week,
+                "weeksRemaining": max(0, weeksRemaining),
+                "expiring": weeksRemaining <= 1,
+            })
+
         # Modifier nullifier (current week)
         override = modRepo.getOverride(user.id, currentSeasonNum, currentWeek)
         if override:
