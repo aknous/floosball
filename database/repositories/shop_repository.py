@@ -55,14 +55,14 @@ class ShopPurchaseRepository:
         ).scalar() or 0
 
     def getActiveTempFlex(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
-        # Also returns rows purchased this week during active games (`week` set
-        # to currentWeek + 1 as the effective start). Visible immediately so
-        # users see the slot after purchase, even though the duration doesn't
-        # start counting until next week.
+        # `week` is the effective start week. Powerups bought during active games
+        # defer to the next week (start > currentWeek), so filter them out until
+        # they actually kick in.
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
             ShopPurchase.item_slug == "temp_flex",
+            ShopPurchase.week <= currentWeek,
             ShopPurchase.expires_at_week >= currentWeek,
         ).first()
 
@@ -71,6 +71,7 @@ class ShopPurchaseRepository:
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
             ShopPurchase.item_slug == "fortunes_favor",
+            ShopPurchase.week <= currentWeek,
             ShopPurchase.expires_at_week >= currentWeek,
         ).first()
 
@@ -79,6 +80,7 @@ class ShopPurchaseRepository:
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
             ShopPurchase.item_slug == "temp_card_slot",
+            ShopPurchase.week <= currentWeek,
             ShopPurchase.expires_at_week >= currentWeek,
         ).first()
 
@@ -87,6 +89,7 @@ class ShopPurchaseRepository:
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
             ShopPurchase.item_slug == "income_boost",
+            ShopPurchase.week <= currentWeek,
             ShopPurchase.expires_at_week >= currentWeek,
         ).first()
 
