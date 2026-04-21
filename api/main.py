@@ -5234,27 +5234,12 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             )
             .first()
         ) is not None
-        extraSlotSource = None  # "mvp" | "temp_card_slot"
-        extraSlotInfo = None
-        if mvpEquipped:
-            hasExtraSlot = True
-            extraSlotSource = "mvp"
-        else:
+        if not mvpEquipped:
             shopRepo = ShopPurchaseRepository(session)
             activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeason, currentWeek)
             hasExtraSlot = activeSlot is not None
-            if activeSlot is not None:
-                extraSlotSource = "temp_card_slot"
-                deferred = activeSlot.week > currentWeek
-                weeksRemaining = activeSlot.expires_at_week - currentWeek + (0 if deferred else 1)
-                extraSlotInfo = {
-                    "slug": "temp_card_slot",
-                    "displayName": "Accession",
-                    "expiresAtWeek": activeSlot.expires_at_week,
-                    "weeksRemaining": max(0, weeksRemaining),
-                    "expiring": weeksRemaining == 1,
-                    "pending": deferred,
-                }
+        else:
+            hasExtraSlot = True
 
         return build_success_response({
             "equippedCards": result,
@@ -5263,8 +5248,6 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             "gamesActive": _areGamesStarted(),
             "gamesScheduled": _areGamesScheduled(),
             "hasExtraSlot": hasExtraSlot,
-            "extraSlotSource": extraSlotSource,
-            "extraSlotPowerup": extraSlotInfo,
         })
     finally:
         session.close()
