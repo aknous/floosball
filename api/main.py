@@ -4833,7 +4833,14 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                         weekData[week][userId]["playerPoints"].get(playerId, 0) + earned
                     )
 
-        # Inject card bonus into weekData for each user/week
+        # Inject card bonus into weekData for each user/week. Stored bonuses
+        # (from WeeklyCardBonus) win over the live recomputation — at week-end
+        # both can exist simultaneously for the same week (stored was just
+        # written by _processWeekCardEffects, and gamesActive is still True
+        # because activeGames hasn't been cleared yet). Without this guard
+        # the current-week bonus gets counted twice, inflating weekPoints by
+        # roughly the card bonus amount — visible to anyone hitting the
+        # endpoint right when week_end fires (e.g. the Discord bot).
         for userId in rostersByUser:
             userStoredBonuses = storedBonuses.get(userId, {})
             for week, bonusFP in userStoredBonuses.items():
@@ -4844,9 +4851,13 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                 weekData[week][userId]["cardBonusPoints"] = bonusFP
                 weekData[week][userId]["weekPoints"] += bonusFP
 
-            # Live card bonus for current active week
+            # Live card bonus for current active week — only used when there's
+            # no stored bonus yet for this week.
             if userId in liveCardBonusByUser:
                 week = currentWeek
+                hasStoredThisWeek = week in userStoredBonuses
+                if hasStoredThisWeek:
+                    continue
                 if week not in weekData:
                     weekData[week] = {}
                 if userId not in weekData[week]:
