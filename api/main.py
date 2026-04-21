@@ -6011,6 +6011,8 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=400, detail="No active week")
             activeFlex = shopRepo.getActiveTempFlex(user.id, currentSeasonNum, currentWeek)
             if activeFlex:
+                if activeFlex.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Conscription starting next week")
                 raise HTTPException(status_code=409, detail="You already have an active flex slot")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
@@ -6029,6 +6031,8 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=400, detail="No active week")
             activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeasonNum, currentWeek)
             if activeSlot:
+                if activeSlot.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Accession starting next week")
                 raise HTTPException(status_code=409, detail="You already have an active 6th card slot")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
@@ -6047,6 +6051,8 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=400, detail="No active week")
             activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
             if activeFavor:
+                if activeFavor.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Patronage starting next week")
                 raise HTTPException(status_code=409, detail="You already have Patronage active")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
@@ -6062,6 +6068,8 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=400, detail="No active week")
             activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
             if activeBoost:
+                if activeBoost.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Endowment starting next week")
                 raise HTTPException(status_code=409, detail="You already have Endowment active")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
@@ -6197,27 +6205,32 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Temp flex
         activeFlex = shopRepo.getActiveTempFlex(user.id, currentSeasonNum, currentWeek)
         if activeFlex:
-            # expires_at_week is the LAST week the powerup is active.
-            # weeksRemaining = weeks including this one (so 1 == "expires after this week").
-            weeksRemaining = activeFlex.expires_at_week - currentWeek + 1
+            # ShopPurchase.week is the EFFECTIVE start week. A purchase made
+            # mid-games has week = currentWeek + 1, so during the purchase
+            # week we shouldn't count the partial week against the duration.
+            deferred = activeFlex.week > currentWeek
+            weeksRemaining = activeFlex.expires_at_week - currentWeek + (0 if deferred else 1)
             active.append({
                 "slug": "temp_flex",
                 "displayName": "Conscription",
                 "expiresAtWeek": activeFlex.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining == 1,
+                "pending": deferred,
             })
 
         # Temp card slot
         activeCardSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeasonNum, currentWeek)
         if activeCardSlot:
-            weeksRemaining = activeCardSlot.expires_at_week - currentWeek + 1
+            deferred = activeCardSlot.week > currentWeek
+            weeksRemaining = activeCardSlot.expires_at_week - currentWeek + (0 if deferred else 1)
             active.append({
                 "slug": "temp_card_slot",
                 "displayName": "Accession",
                 "expiresAtWeek": activeCardSlot.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining == 1,
+                "pending": deferred,
             })
 
         # Modifier nullifier (current week)
