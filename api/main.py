@@ -6006,9 +6006,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are active, the current partial week doesn't count against the duration
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         elif slug == "temp_card_slot":
             if currentWeek < 1:
@@ -6021,8 +6019,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         elif slug == "fortunes_favor":
             if currentWeek < 1:
@@ -6035,8 +6032,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 3)
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         elif slug == "income_boost":
             if currentWeek < 1:
@@ -6049,8 +6045,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         # ── Deduct Floobits ──
 
@@ -6168,28 +6163,27 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Temp flex
         activeFlex = shopRepo.getActiveTempFlex(user.id, currentSeasonNum, currentWeek)
         if activeFlex:
-            # If games are running, current is a partial week that doesn't count
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            weeksRemaining = activeFlex.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            # expires_at_week is the LAST week the powerup is active.
+            # weeksRemaining = weeks including this one (so 1 == "expires after this week").
+            weeksRemaining = activeFlex.expires_at_week - currentWeek + 1
             active.append({
                 "slug": "temp_flex",
                 "displayName": "Conscription",
                 "expiresAtWeek": activeFlex.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
-                "expiring": weeksRemaining <= 1,
+                "expiring": weeksRemaining == 1,
             })
 
         # Temp card slot
         activeCardSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeasonNum, currentWeek)
         if activeCardSlot:
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            weeksRemaining = activeCardSlot.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            weeksRemaining = activeCardSlot.expires_at_week - currentWeek + 1
             active.append({
                 "slug": "temp_card_slot",
                 "displayName": "Accession",
                 "expiresAtWeek": activeCardSlot.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
-                "expiring": weeksRemaining <= 1,
+                "expiring": weeksRemaining == 1,
             })
 
         # Modifier nullifier (current week)
@@ -8087,9 +8081,9 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             currentWeek = max(1, currentWeek)
             durationWeeks = powerupInfo.get("durationWeeks")
             if durationWeeks:
-                # Duration-based powerups expire at the end of week N+duration-1
-                gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None)) if sm and sm.currentSeason else False
-                expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+                # Active through the LAST week of the duration (inclusive).
+                # e.g. duration=4 purchased in week 1 → active weeks 1,2,3,4, expires after.
+                expiresAtWeek = currentWeek + durationWeeks - 1
             else:
                 expiresAtWeek = None
             purchase = ShopPurchase(
