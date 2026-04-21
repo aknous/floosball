@@ -689,7 +689,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "fortitude": "{perCardMult} FPx per active streak card in your hand",
     "immaculate": "+{rewardValue} FP when all season streak cards have active streaks",
     # ── Escalating / Pace Effects ──
-    "crescendo": "+{baseFP} FP guaranteed, chance at {bonusFP} FP. {baseChance}% to start, +{chanceStep}% each time you miss",
+    "crescendo": "+{baseFP} FP guaranteed, chance at {bonusFP} FP. Your {posLabel} slot rolls {baseChance}% per TD, +{chanceStep}% each miss",
     "eminence": "+{bonusPerFP} FPx per FP/game above position average (max {maxMult}x)",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
