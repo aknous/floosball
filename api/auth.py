@@ -291,21 +291,34 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                 logger.info(f"Migrated Clerk ID for user {existingByEmail.id}: {oldClerkId} -> {clerkUserId}")
                 user = existingByEmail
             else:
-                # Truly new user — auto-provision
-                user = User(
-                    clerk_id=clerkUserId,
-                    email=email,
-                    username=None,
-                    hashed_password="",
-                )
-                session.add(user)
-                session.flush()
+                # Truly new user — auto-provision. First-login browsers fire several
+                # /api/* calls in parallel, so two threads can both miss the existing-
+                # user lookup above and both try to INSERT. Handle the race by catching
+                # the unique-constraint violation and re-reading the row the other
+                # thread just wrote.
+                from sqlalchemy.exc import IntegrityError
+                try:
+                    user = User(
+                        clerk_id=clerkUserId,
+                        email=email,
+                        username=None,
+                        hashed_password="",
+                    )
+                    session.add(user)
+                    session.flush()
 
-                _provisionStarterPack(session, user)
+                    _provisionStarterPack(session, user)
 
-                session.commit()
-                session.refresh(user)
-                logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email} (username pending)")
+                    session.commit()
+                    session.refresh(user)
+                    logger.info(f"Auto-provisioned user: clerk_id={clerkUserId}, email={email} (username pending)")
+                except IntegrityError:
+                    session.rollback()
+                    user = session.query(User).filter(User.clerk_id == clerkUserId).first()
+                    if user is None:
+                        # Not a clerk_id conflict — surface the original error
+                        raise
+                    logger.info(f"Lost provisioning race for clerk_id={clerkUserId} — using existing row id={user.id}")
         else:
             # Existing user — update email if JWT now provides a real one
             jwtEmail = payload.get("email", "")

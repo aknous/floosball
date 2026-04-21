@@ -82,13 +82,30 @@ def recordProgress(session: Session, userId: int, key: str, increment: int = 1,
 
 
 def _grantReward(session: Session, userId: int, achievement: Achievement, ua: UserAchievement) -> None:
-    """Grant rewards for a just-completed achievement. Deferred rewards are held."""
+    """Grant rewards for a just-completed achievement. Deferred rewards are held.
+
+    Commits the session BEFORE broadcasting the achievement_unlocked event so
+    the PendingReward row is durable by the time the user sees the toast. If
+    a deploy killed the process between the broadcast and the commit, users
+    saw the toast but the claim endpoint returned "Reward not found" because
+    the row rolled back on process exit. Committing first makes the row
+    durable even if the subsequent broadcast or the caller's later work fails.
+    """
     cfg = achievement.reward_config or {}
     deferred = bool(cfg.get("deferred"))
 
     if not deferred:
         _applyReward(session, userId, cfg, source=f"achievement:{achievement.key}")
         ua.claimed_at = datetime.utcnow()
+
+    # Commit the PendingReward + UserAchievement updates before we tell the
+    # user about them. If the commit fails, we never broadcast.
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to commit achievement grant for user={userId} key={achievement.key}: {e}")
+        return
 
     # Push an achievement_unlocked event to the user's live websocket(s).
     # Fires for both immediate and deferred unlocks so the UI gets the notification.
@@ -148,6 +165,9 @@ def processDeferredRewards(session: Session, userId: Optional[int] = None) -> in
     if userId is not None:
         q = q.filter(UserAchievement.user_id == userId)
 
+    # Collect events during the loop; commit all rows before broadcasting so
+    # a crash between flush and broadcast can't produce a toast-without-row.
+    pendingEvents = []
     count = 0
     for ua, ach in q.all():
         cfg = ach.reward_config or {}
@@ -156,21 +176,32 @@ def processDeferredRewards(session: Session, userId: Optional[int] = None) -> in
         _applyReward(session, ua.user_id, cfg, source=f"achievement:{ach.key}")
         ua.claimed_at = datetime.utcnow()
         count += 1
-        # Notify user that their deferred reward is now available
+        pendingEvents.append((ua.user_id, ach, ua.season, cfg))
+
+    if not count:
+        return 0
+
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to commit deferred reward grants: {e}")
+        return 0
+
+    logger.info(f"Processed {count} deferred achievement rewards")
+
+    for userId, ach, season, cfg in pendingEvents:
         try:
             from api.event_models import AchievementEvent
             from api.game_broadcaster import broadcaster
             event = AchievementEvent.unlocked(
                 key=ach.key, name=ach.name, description=ach.description,
-                rewardConfig=cfg, season=ua.season,
+                rewardConfig=cfg, season=season,
             )
             event["deferredRelease"] = True
-            broadcaster.broadcast_to_user_sync(ua.user_id, event)
+            broadcaster.broadcast_to_user_sync(userId, event)
         except Exception as e:
             logger.warning(f"Failed to push deferred achievement event: {e}")
-    if count:
-        session.flush()
-        logger.info(f"Processed {count} deferred achievement rewards")
     return count
 
 
