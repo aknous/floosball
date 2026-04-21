@@ -6017,12 +6017,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are running, the current partial week can't actually be
-            # used (rosters/cards locked), so defer the effective start to next
-            # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
-            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         elif slug == "temp_card_slot":
             if currentWeek < 1:
@@ -6035,12 +6030,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are running, the current partial week can't actually be
-            # used (rosters/cards locked), so defer the effective start to next
-            # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
-            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         elif slug == "fortunes_favor":
             if currentWeek < 1:
@@ -6053,9 +6043,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 3)
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
-            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         elif slug == "income_boost":
             if currentWeek < 1:
@@ -6068,12 +6056,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are running, the current partial week can't actually be
-            # used (rosters/cards locked), so defer the effective start to next
-            # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
-            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
+            expiresAtWeek = currentWeek + durationWeeks - 1
 
         # ── Deduct Floobits ──
 
@@ -6087,16 +6070,10 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {price})")
 
         # ── Record purchase ──
-        # For duration-based powerups, `week` represents the EFFECTIVE start
-        # week (deferred one week when bought mid-games). For one-shot
-        # powerups (no expiresAtWeek), it's still the purchase week.
-        try:
-            purchaseWeek = effectiveStartWeek  # set by duration-based branches above
-        except NameError:
-            purchaseWeek = currentWeek
+
         shopRepo.createPurchase(
             userId=user.id, itemSlug=slug, season=currentSeasonNum,
-            week=purchaseWeek, pricePaid=price, expiresAtWeek=expiresAtWeek,
+            week=currentWeek, pricePaid=price, expiresAtWeek=expiresAtWeek,
         )
 
         # ── Execute item effect ──
@@ -8115,20 +8092,16 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             currentWeek = max(1, currentWeek)
             durationWeeks = powerupInfo.get("durationWeeks")
             if durationWeeks:
-                # Defer start to next week if games are live (current week can't
-                # be used). Active through the last week of the duration.
-                gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None)) if sm and sm.currentSeason else False
-                effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
-                expiresAtWeek = effectiveStartWeek + durationWeeks - 1
-                purchaseWeek = effectiveStartWeek
+                # Active through the LAST week of the duration (inclusive).
+                # e.g. duration=4 purchased in week 1 → active weeks 1,2,3,4, expires after.
+                expiresAtWeek = currentWeek + durationWeeks - 1
             else:
                 expiresAtWeek = None
-                purchaseWeek = currentWeek
             purchase = ShopPurchase(
                 user_id=user.id,
                 item_slug=reward.slug,
                 season=currentSeason,
-                week=purchaseWeek,
+                week=currentWeek,
                 price_paid=0,
                 expires_at_week=expiresAtWeek,
             )
