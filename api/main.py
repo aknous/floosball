@@ -5075,6 +5075,10 @@ def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.blendCards(session, user.id, req.offeringCardIds, currentSeason, currentWeek)
+        # Curator reflects unique templates in the collection — a blend replaces
+        # several sacrificed templates with one new one, so the count may change.
+        from managers import achievementManager as _am
+        _am.syncCuratorProgress(session, user.id, currentSeason)
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -5622,6 +5626,11 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
     session = get_session()
     try:
         card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason)
+
+        # Keep Curator progress in sync — shop buys add to the collection but
+        # weren't previously counted because the sync only ran on pack opens.
+        from managers import achievementManager as _am
+        _am.syncCuratorProgress(session, user.id, currentSeason)
 
         # Secret — Sweep (bought every card in the current day's featured shop).
         # Shop refreshes daily; the current batch shares the most recent generated_at.
@@ -7960,6 +7969,12 @@ def listAchievements(user: _User = Depends(_getCurrentUser)):
     try:
         try:
             achievementManager.backfillOnboardingAchievements(session, user.id)
+            # Curator's progress was historically only updated on pack-open and
+            # missed card-acquisition paths (blend, shop buy, achievement reward
+            # claim). Re-sync from the authoritative UserCard count here so users
+            # whose progress got stuck catch up the next time they check.
+            if currentSeason:
+                achievementManager.syncCuratorProgress(session, user.id, currentSeason)
             session.commit()
         except Exception as e:
             session.rollback()
@@ -8079,6 +8094,15 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
                 session, user.id, packType.id, currentSeason,
                 skipCurrency=True, source=reward.source,
             )
+            # Mirror the hooks from the normal pack-open endpoint so claimed
+            # pack rewards update achievements the same way. Without these,
+            # Pack Popper / Curator / Sparkler would only progress when the
+            # user spent Floobits, not when they claimed a free pack.
+            from managers import achievementManager as _am
+            _am.onPackOpened(session, user.id)
+            _am.syncCuratorProgress(session, user.id, currentSeason)
+            if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
+                _am.onDiamondOpened(session, user.id, currentSeason)
             reward.claimed_at = datetime.utcnow()
             session.commit()
             return build_success_response({"kind": "pack", **result})
