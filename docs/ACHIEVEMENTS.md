@@ -37,12 +37,12 @@ grants with packs reserved for the genuinely hard challenges.
 
 | Name | Trigger | Reward |
 |---|---|---|
-| Sharp | Earn a Clairvoyant in pick-em this season | 100F |
-| Curator | Collect 15 unique cards this season | 150F |
-| Tycoon | Earn 1,000 floobits this season | 150F + 1 powerup |
-| Veteran | Set a fantasy roster for 20+ regular-season weeks | 500F + 1 powerup |
-| Sparkler | Open your first Diamond card of the season | 150F |
-| Perfect Week | Get every prognostication correct in a single week | 250F + Grand pack |
+| Sharp | Earn a Clairvoyant in pick-em this season | 50F |
+| Curator | Collect 15 unique cards this season | 75F |
+| Tycoon | Earn 1,000 floobits this season | 75F + 1 powerup |
+| Veteran | Set a fantasy roster for 20+ regular-season weeks | 300F + 1 powerup |
+| Sparkler | Open your first Diamond card of the season | 75F |
+| Perfect Week | Get every prognostication correct in a single week | 150F + Grand pack |
 
 ### Dedicated — manual pick-em weeks (6 tiers)
 
@@ -50,12 +50,12 @@ Autopicks don't count. Pack only at the VI completion tier.
 
 | Tier | Target | Reward |
 |---|---|---|
-| I | 5 weeks | 50F |
-| II | 10 weeks | 100F |
-| III | 15 weeks | 150F |
-| IV | 20 weeks | 200F |
-| V | 25 weeks | 300F |
-| VI | 28 weeks (every week of regular season) | 500F + Exquisite pack |
+| I | 5 weeks | 25F |
+| II | 10 weeks | 50F |
+| III | 15 weeks | 75F |
+| IV | 20 weeks | 100F |
+| V | 25 weeks | 150F |
+| VI | 28 weeks (every week of regular season) | 250F + Exquisite pack |
 
 ### 4-tier families — Banner Week, Racket, Dynamo, Oracle, Magnate, Podium, Pundit, Benefactor, Compound
 
@@ -63,10 +63,10 @@ All follow the same reward shape: floobits scale up per tier, pack only at the I
 
 | Tier | Reward |
 |---|---|
-| I | 50F |
-| II | 100F |
-| III | 150F |
-| IV (family completion) | 250F + Grand pack |
+| I | 25F |
+| II | 50F |
+| III | 100F |
+| IV (family completion) | 150F + Grand pack |
 
 Targets per family:
 
@@ -93,29 +93,29 @@ difficult ones (Zenith and Giant Slayer).
 
 | Name | Trigger | Reward |
 |---|---|---|
-| Contrarian | Every pick-em pick this week on an underdog (≥2 picks) | 150F |
-| Shoestring | Full fantasy roster where every player is rated 3★ or lower | 150F |
-| Gilded | Equip a full set of Prismatic/Diamond cards only | 200F |
-| Giant Slayer | Top-3 weekly fantasy finish with all 3★-or-lower roster | 200F + Humble |
-| Purist | Play a full week with zero cards equipped | 150F |
-| Homer | Full fantasy roster entirely of players on your favorite team | 150F |
-| Blank | ≤20 fantasy points in a week with a full roster | 100F |
-| Cold-Blooded | Pick against your favorite team 5+ times in a season | 150F |
+| Contrarian | Every pick-em pick this week on an underdog (≥2 picks) | 75F |
+| Shoestring | Full fantasy roster where every player is rated 3★ or lower | 75F |
+| Gilded | Equip a full set of Prismatic/Diamond cards only | 100F |
+| Giant Slayer | Top-3 weekly fantasy finish with all 3★-or-lower roster | 100F + Humble |
+| Purist | Play a full week with zero cards equipped | 75F |
+| Homer | Full fantasy roster entirely of players on your favorite team | 75F |
+| Blank | ≤20 fantasy points in a week with a full roster | 50F |
+| Cold-Blooded | Pick against your favorite team 5+ times in a season | 75F |
 | Sovereign | Finish #1 on the season fantasy leaderboard | — (bragging rights) |
 | Soothsayer | Finish #1 on the season prognostication leaderboard | — (bragging rights) |
-| Zenith | Perfect Week + 300+ fantasy points in the same week | 250F + Grand |
+| Zenith | Perfect Week + 300+ fantasy points in the same week | 150F + Grand |
 | Consecration | Your favorite team wins the Floosbowl | — (bragging rights) |
-| Dabbler | Purchase every type of power-up at least once (lifetime) | 150F |
-| Arsenal | Hold 3+ roster swaps at the same time | 150F |
-| Finicky | 5 shop rerolls in a row without buying a card between | 150F |
-| Sweep | Buy every card featured in your shop in a single day | 150F |
-| Mutineer | Cast the maximum fire-coach votes in a single season | 150F |
-| Tribune | Cast all 20 of your GM votes in a single season | 200F |
-| Monk | Never open a card pack all season (engaged users only) | 200F |
-| Stalwart | No fantasy roster swaps all season (with a full roster) | 200F |
-| Faithful | Favorite team misses the playoffs 3 seasons in a row | 200F |
-| Devotee | 100% team funding % + end-of-season auto-contribution paid | 200F |
-| Completist | Own all 4 editions (base, holographic, prismatic, diamond) of the same player | 300F |
+| Dabbler | Purchase every type of power-up at least once (lifetime) | 75F |
+| Arsenal | Hold 3+ roster swaps at the same time | 75F |
+| Finicky | 5 shop rerolls in a row without buying a card between | 75F |
+| Sweep | Buy every card featured in your shop in a single day | 75F |
+| Mutineer | Cast the maximum fire-coach votes in a single season | 75F |
+| Tribune | Cast all 20 of your GM votes in a single season | 100F |
+| Monk | Never open a card pack all season (engaged users only) | 100F |
+| Stalwart | No fantasy roster swaps all season (with a full roster) | 100F |
+| Faithful | Favorite team misses the playoffs 3 seasons in a row | 100F |
+| Devotee | 100% team funding % + end-of-season auto-contribution paid | 100F |
+| Completist | Own all 4 editions (base, holographic, prismatic, diamond) of the same player | 150F |
 
 ---
 
