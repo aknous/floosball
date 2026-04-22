@@ -25,42 +25,125 @@ logger = logging.getLogger("floosball")
 
 
 # Effectiveness tier thresholds — score combines FP, Floobits (weight 0.3),
-# and mult bonus (weight 10 per +1.0). Chosen to feel reasonable given
-# typical base-card output ranges (2–10 FP).
-_TIER_STRONG = 8.0
-_TIER_GOOD = 3.0
-_TIER_MODERATE = 0.5
+# and mult bonus (weight 40 per +1.0). Calibrated so:
+#   strong   = +20 FP or ×1.50 (or ~+67 F)
+#   good     = +8  FP or ×1.20 (or ~+27 F)
+#   moderate = +2  FP or ×1.05 (or ~+7  F)
+# High bars — 'strong' should only fire for cards genuinely producing
+# top-tier output, not every playable card.
+_TIER_STRONG = 20.0
+_TIER_GOOD = 8.0
+_TIER_MODERATE = 2.0
+_MULT_SCORE_COEFFICIENT = 40.0
 
 
 def _classifyEffectiveness(
     projectedFP: float,
     projectedFloobits: float,
     projectedMult: float,
-    isContingent: bool,
     nullified: bool,
+    isDeterministic: bool,
 ) -> str:
     """Map a projection to a tier label.
 
-    Tiers (used by the UI for ++/+/=/⚠/✗ indicators):
+    Tiers (used by the UI for ++/+/=/?/× indicators):
       'strong'    — projected output is high
       'good'      — projected output is meaningful
-      'moderate'  — projected output is small but non-zero
-      'variable'  — output is zero but the effect can still trigger
-                    (chance cards, contingent events)
-      'nullified' — output is zero and the trigger is structurally
-                    unreachable this week (e.g. streak card with no
-                    active streak going in)
+      'moderate'  — projected output is small but non-zero, OR the
+                    card is deterministic and its current state
+                    produces a baseline no-bonus result (e.g.
+                    Vagabond with 0 swaps, Opulence with 0 floobits).
+                    Those cards know their output exactly — they just
+                    don't contribute anything right now.
+      'variable'  — output is zero and the effect might still trigger
+                    (chance cards, cards keyed to team/game outcomes
+                    that could still break the other way).
+      'nullified' — output is zero AND the trigger is structurally
+                    unreachable this week — proven dead, not just
+                    uncertain.
     """
     if nullified:
         return "nullified"
-    score = projectedFP + (projectedFloobits * 0.3) + max(projectedMult - 1.0, 0.0) * 10
+    score = projectedFP + (projectedFloobits * 0.3) + max(projectedMult - 1.0, 0.0) * _MULT_SCORE_COEFFICIENT
     if score >= _TIER_STRONG:
         return "strong"
     if score >= _TIER_GOOD:
         return "good"
     if score >= _TIER_MODERATE:
         return "moderate"
-    return "variable" if isContingent else "nullified"
+    # Zero-score branch — if the card isn't contingent on anything we
+    # haven't already projected, call it 'moderate' so the UI shows the
+    # actual baseline number instead of pretending there's uncertainty.
+    if isDeterministic:
+        return "moderate"
+    return "variable"
+
+
+# Effects whose output hinges on live game outcomes the projection can't
+# directly forecast (comebacks, walk-offs, the final team outcome when
+# win prob is ambiguous, etc.). Cards in this set are classified as
+# 'variable' rather than 'moderate' when they project to zero.
+_OUTCOME_SENSITIVE_EFFECTS = frozenset({
+    # Team-outcome gated
+    "bandwagon", "fairweather_fan", "bandwagon_express",
+    "upset_special", "comeback_kid", "walk_off", "gone_streaking",
+    # Game-event gated
+    "highlight_reel", "closer", "big_deal", "spectacle", "showoff",
+    # Player-threshold / conditional
+    "domination", "deep_threat", "bombs_away", "workhorse",
+    "target_share", "good_neighbor",
+})
+
+
+def _isDeterministicGivenProjection(effectName: str, effectConfig: Optional[dict]) -> bool:
+    """True if this card's output is fully determined by current state +
+    projected roster averages — no hidden dice, no game-outcome sensitivity.
+    """
+    ec = effectConfig or {}
+    if ec.get("isChanceEffect") or (ec.get("primary", {}) or {}).get("isChanceEffect"):
+        return False
+    return effectName not in _OUTCOME_SENSITIVE_EFFECTS
+
+
+# Effects whose output is fully determined by state we already know for
+# certain — balances, swap counts, season tallies, ELO thresholds, roster
+# composition. For these the projected number IS the number. Everything
+# else that isn't chance/outcome-sensitive is 'estimated' — based on
+# per-player stat averages that naturally vary game-to-game.
+_EXACT_EFFECTS = frozenset({
+    # Fixed-value
+    "freebie",
+    # Balance / currency based
+    "opulence", "fat_cat", "surplus",
+    # Swap counts
+    "vagabond", "stockpiler",
+    # Team ELO / record based
+    "pedigree", "underdog", "martyr",
+    # Roster composition based
+    "dark_horse", "home_alone",
+    # Kicker season tally
+    "good_neighbor",
+    # Streak-counter based (use streak_count from equip, not stats)
+    "bonsai",
+})
+
+
+def _certaintyOf(effectName: str, effectConfig: Optional[dict], hasOdds: bool) -> str:
+    """Classify how confident the projected number is:
+      'contingent' — has odds (chance / outcome-sensitive), already
+                     rendered as "X% · Y" so certainty is redundant.
+      'exact'      — number is derived from fully-known state.
+      'estimated'  — number is derived from season averages that will
+                     vary game-to-game (per-player yards, TDs, etc.).
+    """
+    if hasOdds:
+        return "contingent"
+    if effectName in _EXACT_EFFECTS:
+        return "exact"
+    ec = effectConfig or {}
+    if ec.get("isChanceEffect") or (ec.get("primary", {}) or {}).get("isChanceEffect"):
+        return "contingent"
+    return "estimated"
 
 
 def _perGameAverageStats(row) -> dict:
@@ -148,6 +231,7 @@ def buildProjectionContext(
     from database.models import (
         FantasyRoster, FantasyRosterPlayer, PlayerSeasonStats,
         User, UserCurrency, WeeklyModifier, FantasyRosterSwap,
+        EquippedCard, UserCard, CardTemplate,
     )
     from managers.cardEffectCalculator import computeEminenceData
 
@@ -238,6 +322,7 @@ def buildProjectionContext(
     favSeasonLosses = 0
     favSeasonUpsetWins = 0
     favInPlayoffs = False
+    favAvgBigPlays = 0.0  # per-game average, used as Highlight Reel forecast
     favTeam = None
     if favTeamId and teamManager:
         favTeam = teamManager.getTeamById(favTeamId)
@@ -249,6 +334,9 @@ def buildProjectionContext(
             favPeakStreak = favStats.get('peakStreak', abs(favStreak))
             favSeasonLosses = favStats.get('losses', 0)
             favSeasonUpsetWins = favStats.get('upsetWins', 0)
+            gamesPlayed = favStats.get('wins', 0) + favStats.get('losses', 0)
+            if gamesPlayed > 0:
+                favAvgBigPlays = favStats.get('bigPlays', 0) / gamesPlayed
 
     oppElo, oppName = _findUpcomingOpponent(session, favTeamId, season, week, teamManager)
     winProb = _winProbabilityFromElo(favElo, oppElo)
@@ -265,8 +353,17 @@ def buildProjectionContext(
     if favTeamId:
         teamResults[favTeamId] = winProb > 0.5
 
-    # Streak counts per equipped card
-    equipped = roster.equipped_cards or []
+    # Streak counts per equipped card — EquippedCard is keyed by
+    # (user_id, season, week) in the DB, not a FantasyRoster relation.
+    equipped = (
+        session.query(EquippedCard)
+        .filter(
+            EquippedCard.user_id == userId,
+            EquippedCard.season == season,
+            EquippedCard.week == week,
+        )
+        .all()
+    )
     streakCounts = {
         eq.id: getattr(eq, 'streak_count', 1) for eq in equipped
     }
@@ -361,8 +458,16 @@ def buildProjectionContext(
         favoriteTeamWonThisWeek=(winProb > 0.5),
         favoriteTeamOpponentElo=oppElo,
         favoriteTeamOpponentName=oppName,
-        favoriteTeamBigPlays=0,  # Unknowable pre-game
-        favoriteTeamGameFinal=False,
+        # Projected per-game big plays for Highlight Reel — avg across
+        # games the favorite team has played this season. Integer floor
+        # so the card shows zero output if the team has yet to generate
+        # a big play (rather than a confusing 0.3-weighted preview).
+        favoriteTeamBigPlays=int(favAvgBigPlays),
+        # Projection treats the game as "final" with the projected outcome
+        # so effects like Pedigree / Comeback Kid / Upset Win don't bail
+        # at the "waiting for game to end" guard. This is internally
+        # consistent with favoriteTeamWonThisWeek above.
+        favoriteTeamGameFinal=True,
         favoriteTeamSeasonUpsetWins=favSeasonUpsetWins,
         rosterUnchangedWeeks=rosterUnchangedWeeks,
         teamResults=teamResults,
@@ -419,7 +524,7 @@ def computeEquippedProjections(
             "projectedTotalFP": float,   # rosterFP + card bonus FP
         }
     """
-    from database.models import FantasyRoster
+    from database.models import FantasyRoster, EquippedCard
 
     roster = session.query(FantasyRoster).filter_by(
         user_id=userId, season=season
@@ -433,17 +538,40 @@ def computeEquippedProjections(
     if ctx is None:
         return _emptyProjectionPayload()
 
-    equipped = roster.equipped_cards or []
+    equipped = (
+        session.query(EquippedCard)
+        .filter(
+            EquippedCard.user_id == userId,
+            EquippedCard.season == season,
+            EquippedCard.week == week,
+        )
+        .all()
+    )
     result = calculateWeekCardBonuses(equipped, ctx)
+    # Happy-path run — every trigger fires, team wins, comeback happens.
+    # Used to derive "if it hits" upside for odds display.
+    optimisticResult = calculateWeekCardBonuses(equipped, _optimisticContext(ctx))
+    optBySlot = {b.slotNumber: b for b in optimisticResult.cardBreakdowns}
+
+    # Build a lookup: slotNumber → effect_config so we can pull chance
+    # min/max ranges back out for the UI.
+    configBySlot: Dict[int, dict] = {}
+    for eq in equipped:
+        ec = eq.user_card.card_template.effect_config or {}
+        configBySlot[eq.slot_number] = ec
 
     cards: List[Dict[str, Any]] = []
     for b in result.cardBreakdowns:
-        contingent = b.isChanceEffect or _isOutcomeSensitive(b.effectName)
-        nullified = _detectNullified(b, ctx)
+        effectConfig = configBySlot.get(b.slotNumber)
+        nullified = _detectNullified(b, ctx, effectConfig)
+        isDeterministic = _isDeterministicGivenProjection(b.effectName, effectConfig)
         tier = _classifyEffectiveness(
             b.totalFP, b.floobitsEarned, b.primaryMult,
-            isContingent=contingent, nullified=nullified,
+            nullified=nullified, isDeterministic=isDeterministic,
         )
+        oddsInfo = _deriveOdds(b, effectConfig, optBySlot.get(b.slotNumber), ctx)
+        certainty = _certaintyOf(b.effectName, effectConfig, oddsInfo is not None)
+        rangeInfo = _computeRange(b, effectConfig, certainty)
         cards.append({
             "slotNumber": b.slotNumber,
             "effectName": b.effectName,
@@ -455,6 +583,16 @@ def computeEquippedProjections(
             "tier": tier,
             "equation": b.equation,
             "outputType": b.outputType,
+            # Range describes the spread between a "cold" result (no
+            # triggers) and a "hot" result (everything fires). None if
+            # the card is deterministic given current projection inputs.
+            "range": rangeInfo,
+            # Odds replaces the generic "might trigger" label with a
+            # concrete "X% chance · +Y FP if it hits" payload.
+            "odds": oddsInfo,
+            # 'exact' | 'estimated' | 'contingent' — how confident the
+            # UI can be in the projected number (drives ~ prefix).
+            "certainty": certainty,
         })
 
     return {
@@ -491,16 +629,22 @@ def computeCandidateProjection(
 
     wrapped = _wrapUserCardAsEquipped(userCard)
     result = calculateWeekCardBonuses([wrapped], ctx)
+    optimisticResult = calculateWeekCardBonuses([wrapped], _optimisticContext(ctx))
     if not result.cardBreakdowns:
         return None
 
     b = result.cardBreakdowns[0]
-    contingent = b.isChanceEffect or _isOutcomeSensitive(b.effectName)
-    nullified = _detectNullified(b, ctx)
+    optB = optimisticResult.cardBreakdowns[0] if optimisticResult.cardBreakdowns else None
+    effectConfig = userCard.card_template.effect_config or {}
+    nullified = _detectNullified(b, ctx, effectConfig)
+    isDeterministic = _isDeterministicGivenProjection(b.effectName, effectConfig)
     tier = _classifyEffectiveness(
         b.totalFP, b.floobitsEarned, b.primaryMult,
-        isContingent=contingent, nullified=nullified,
+        nullified=nullified, isDeterministic=isDeterministic,
     )
+    oddsInfo = _deriveOdds(b, effectConfig, optB, ctx)
+    certainty = _certaintyOf(b.effectName, effectConfig, oddsInfo is not None)
+    rangeInfo = _computeRange(b, effectConfig, certainty)
     return {
         "userCardId": userCard.id,
         "effectName": b.effectName,
@@ -512,6 +656,9 @@ def computeCandidateProjection(
         "tier": tier,
         "outputType": b.outputType,
         "equation": b.equation,
+        "range": rangeInfo,
+        "odds": oddsInfo,
+        "certainty": certainty,
     }
 
 
@@ -530,43 +677,189 @@ def _emptyProjectionPayload() -> Dict[str, Any]:
     }
 
 
-# Effect names whose output depends on live-game events that the projection
-# can't directly forecast (big plays, comeback wins, walk-off wins, etc.).
-# These are treated as "variable" rather than "nullified" when they
-# project to zero.
-_OUTCOME_SENSITIVE_EFFECTS = frozenset({
-    "comeback_kid", "walk_off", "upset_win", "bombs_away", "underdog",
-    "big_play", "good_neighbor", "showoff", "domination", "gone_streaking",
-    "closer",
-})
+def _detectNullified(breakdown, ctx: CardCalcContext, effectConfig: Optional[dict]) -> bool:
+    """Return True when the card is proven dead this week — the trigger is
+    structurally unreachable given current state, not merely uncertain.
 
-
-def _isOutcomeSensitive(effectName: str) -> bool:
-    return effectName in _OUTCOME_SENSITIVE_EFFECTS
-
-
-def _detectNullified(breakdown, ctx: CardCalcContext) -> bool:
-    """Return True when the card produced zero AND its trigger is structurally
-    unreachable this week — as opposed to 'might trigger'. Used to draw the
-    ✗ icon for streak cards with no streak, etc.
-
-    Conservative: only returns True when we're confident. Ambiguous cases
-    fall through to 'variable'.
+    Conservative by design: if anything could still break the right way
+    (team could win, random roll could hit, conditional event could
+    happen), we prefer 'variable' over 'nullified'. Cards that return
+    positive output are never nullified.
     """
     if breakdown.totalFP > 0 or breakdown.floobitsEarned > 0 or breakdown.primaryMult > 0:
         return False
-    # Streak cards with streak count of 0 or 1 are effectively no-ops this
-    # week if their condition isn't being met.
+
+    # Chance cards can always break the other way — never nullified.
+    ec = effectConfig or {}
+    if ec.get("isChanceEffect") or (ec.get("primary", {}) or {}).get("isChanceEffect"):
+        return False
+
+    # Streak cards are only nullified when the reset condition can't be
+    # met this week AND the current streak is worthless. For weekly
+    # accumulators the count is meaningful, so don't null those.
     effectName = breakdown.effectName
     try:
         from managers.cardEffects import STREAK_CONFIGS
         if effectName in STREAK_CONFIGS:
-            count = ctx.streakCounts.get(breakdown.slotNumber, 0)  # slot is a proxy; real check is per-eq
-            if count <= 1 and breakdown.totalFP == 0:
+            cfg = STREAK_CONFIGS.get(effectName, {})
+            if cfg.get("isWeekly"):
+                return False
+            # Reset conditions that are already resolvable pre-game and
+            # would clearly fail this week.
+            resetCondition = cfg.get("resetCondition", "equipped")
+            if resetCondition == "favorite_team_wins" and ctx.favoriteTeamWinProb < 0.25:
                 return True
     except Exception:
         pass
+
     return False
+
+
+def _optimisticContext(ctx: CardCalcContext) -> CardCalcContext:
+    """Clone a projection context and flip every game-outcome knob to its
+    happy path — team wins, comeback happens, walk-off happens, every
+    chance card triggers. Used to compute 'if it hits' upside for the
+    odds display. Leaves deterministic fields (roster stats, ELOs)
+    untouched.
+    """
+    # dataclasses.replace keeps references to the same dicts — fine since
+    # we don't mutate the deterministic fields here.
+    from dataclasses import replace
+    opt = replace(
+        ctx,
+        projectionVariant='optimistic',
+        favoriteTeamWonThisWeek=True,
+        favoriteTeamScoreMargin=max(ctx.favoriteTeamScoreMargin, 21),
+        favoriteTeamComebackWin=True,
+        favoriteTeamLargestDeficit=max(ctx.favoriteTeamLargestDeficit, 14),
+        favoriteTeamWalkOffWin=True,
+        favoriteTeamBigPlays=max(ctx.favoriteTeamBigPlays, 2),
+        favoriteTeamGameFinal=True,
+    )
+    # teamResults needs the favorite team flipped to 'won'. Copy the map
+    # so the original expected-path dict isn't mutated.
+    if ctx.userFavoriteTeamId:
+        opt.teamResults = dict(ctx.teamResults or {})
+        opt.teamResults[ctx.userFavoriteTeamId] = True
+    return opt
+
+
+def _deriveOdds(
+    breakdown, effectConfig: Optional[dict],
+    optimisticBreakdown, ctx: CardCalcContext,
+) -> Optional[Dict[str, Any]]:
+    """Produce odds metadata the UI can render as 'X% · +Y FP'.
+
+    Returns None for deterministic cards (expected output already tells
+    the full story). Non-None payload includes the probability the card
+    hits its upside and what the output looks like on that path.
+    """
+    if optimisticBreakdown is None:
+        return None
+
+    ec = effectConfig or {}
+    primary = ec.get("primary", {}) or {}
+    isChance = ec.get("isChanceEffect") or primary.get("isChanceEffect")
+
+    # Probability of the upside path
+    if isChance:
+        probability = breakdown.chanceThreshold or 0.0
+    elif breakdown.effectName in _OUTCOME_SENSITIVE_EFFECTS:
+        probability = ctx.favoriteTeamWinProb
+    else:
+        return None
+
+    ifHitsFP = round(float(optimisticBreakdown.totalFP), 2)
+    ifHitsFloobits = int(optimisticBreakdown.floobitsEarned)
+    ifHitsMult = round(float(optimisticBreakdown.primaryMult), 2) if optimisticBreakdown.primaryMult > 0 else 0.0
+    hasUpside = (
+        ifHitsFP > (breakdown.totalFP or 0) + 0.01
+        or ifHitsFloobits > (breakdown.floobitsEarned or 0)
+        or ifHitsMult > (breakdown.primaryMult or 0) + 0.01
+    )
+    if not hasUpside:
+        return None
+
+    return {
+        "probability": round(float(probability), 3),
+        "ifHitsFP": ifHitsFP,
+        "ifHitsFloobits": ifHitsFloobits,
+        "ifHitsMult": ifHitsMult,
+        "outputType": optimisticBreakdown.outputType,
+    }
+
+
+_STATS_ESTIMATE_BAND = 0.25  # ±25% band applied to projected FP values
+
+
+def _computeRange(breakdown, effectConfig: Optional[dict], certainty: str) -> Optional[Dict[str, Any]]:
+    """Return range metadata for the UI when the card's output genuinely
+    swings. Three sources:
+      'random_roll'     — RNG-style cards with explicit min/max bounds
+      'chance'          — chance cards with base/enhanced split
+      'stats_estimate'  — estimated-from-averages FP cards; ±25% band
+                          around the projected value
+    Returns None for exact deterministic cards so the UI shows a single
+    number.
+    """
+    ec = effectConfig or {}
+    primary = ec.get("primary", {}) or {}
+    outputType = breakdown.outputType
+
+    # 1. RNG-style cards — range is declared right on the primary
+    if breakdown.effectName == "rng":
+        lo = float(primary.get("minFP", 0))
+        hi = float(primary.get("maxFP", 0))
+        if hi > lo:
+            return {
+                "min": round(lo, 2), "max": round(hi, 2),
+                "triggerChance": None,
+                "outputType": "fp",
+                "source": "random_roll",
+            }
+
+    # 2. Chance cards — base vs. enhanced outputs on trigger
+    isChance = ec.get("isChanceEffect") or primary.get("isChanceEffect")
+    if isChance:
+        if outputType == "fp":
+            lo = primary.get("baseFP", 0)
+            hi = primary.get("enhancedFP", lo)
+        elif outputType == "floobits":
+            lo = primary.get("baseFloobits", 0)
+            hi = primary.get("enhancedFloobits", lo)
+        elif outputType == "mult":
+            lo = primary.get("baseMult", 1)
+            hi = primary.get("enhancedMult", lo)
+        else:
+            lo, hi = 0, 0
+        if hi != lo:
+            triggerChance = (
+                round(float(breakdown.chanceThreshold), 3)
+                if breakdown.chanceThreshold > 0 else None
+            )
+            return {
+                "min": round(float(lo), 2),
+                "max": round(float(hi), 2),
+                "triggerChance": triggerChance,
+                "outputType": outputType,
+                "source": "chance",
+            }
+
+    # 3. Stat-estimated cards — band the projected FP value since season
+    # averages smooth over real week-to-week variance. Only for FP cards
+    # with meaningful output; mult/floobit estimates show the point value.
+    if certainty == "estimated" and outputType == "fp" and breakdown.totalFP > 0.5:
+        center = float(breakdown.totalFP)
+        lo = round(center * (1 - _STATS_ESTIMATE_BAND), 1)
+        hi = round(center * (1 + _STATS_ESTIMATE_BAND), 1)
+        return {
+            "min": lo, "max": hi,
+            "triggerChance": None,
+            "outputType": "fp",
+            "source": "stats_estimate",
+        }
+
+    return None
 
 
 def _wrapUserCardAsEquipped(userCard):

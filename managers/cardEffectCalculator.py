@@ -130,6 +130,12 @@ class CardCalcContext:
     # values. favoriteTeamWinProb is set alongside it for chance weighting.
     isProjection: bool = False
     favoriteTeamWinProb: float = 0.5
+    # Which projection variant is this run building:
+    #   'expected'   — most-likely path, chance cards scaled by threshold
+    #   'optimistic' — all triggers fire, chance cards return enhanced values
+    #                  without threshold scaling. Used to compute the "if it
+    #                  hits" upside for the odds display.
+    projectionVariant: str = 'expected'
 
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
@@ -474,10 +480,13 @@ def _computeCardPass(
                             firstPassBreakdowns=firstPassBreakdowns)
 
     # Projection mode: if this was a chance effect, the _ProjectionRNG forced
-    # it onto the 'triggered' path. Scale the output by the trigger
-    # probability to get an expected-value estimate the UI can show as a
-    # single number. Effects without a chance threshold are unaffected.
-    if getattr(ctx, 'isProjection', False) and primary.chanceThreshold > 0:
+    # it onto the 'triggered' path. For the 'expected' variant, scale the
+    # output by the trigger probability to get an expected-value estimate
+    # the UI can show as a single number. For 'optimistic' variant, leave
+    # the enhanced value as-is so the UI can show the "if it hits" upside.
+    if (getattr(ctx, 'isProjection', False)
+            and getattr(ctx, 'projectionVariant', 'expected') == 'expected'
+            and primary.chanceThreshold > 0):
         threshold = primary.chanceThreshold
         primary.fpBonus *= threshold
         primary.floobits = int(primary.floobits * threshold)
