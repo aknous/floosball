@@ -4711,6 +4711,67 @@ def get_weekly_modifier(response: Response):
         session.close()
 
 
+@app.get("/api/fantasy/card-projection")
+def get_card_projection(user: _User = Depends(_getCurrentUser),
+                        include_candidates: bool = Query(default=False)):
+    """Projected card payouts for the upcoming week based on season-to-date
+    averages + ELO forecasts.
+
+    Response:
+        equipped: projection per currently-equipped card (full-hand calc)
+        totals:   roster FP + card bonus FP projections
+        candidates: per-user-card solo projection, only included when
+                    include_candidates=true (used by the card picker modal)
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    from database.connection import get_session
+    from database.models import UserCard
+    from managers.cardProjection import (
+        computeEquippedProjections, computeCandidateProjection,
+    )
+
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not season:
+        return build_success_response({
+            "equipped": {
+                "cards": [], "totalBonusFP": 0.0, "totalFloobits": 0,
+                "multFactors": [], "projectedRosterFP": 0.0,
+                "projectedTotalFP": 0.0, "opponent": "", "winProbability": 0.5,
+            },
+            "candidates": [],
+        })
+
+    session = get_session()
+    try:
+        equipped = computeEquippedProjections(
+            session, user.id, season, week, sm, pm,
+        )
+        candidates: list = []
+        if include_candidates:
+            userCards = (
+                session.query(UserCard)
+                .filter_by(user_id=user.id)
+                .all()
+            )
+            for uc in userCards:
+                proj = computeCandidateProjection(
+                    uc, session, user.id, season, week, sm, pm,
+                )
+                if proj is not None:
+                    candidates.append(proj)
+        return build_success_response({
+            "equipped": equipped,
+            "candidates": candidates,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/fantasy/leaderboard")
 def get_fantasy_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
     """Get fantasy leaderboard for a season (defaults to current)."""

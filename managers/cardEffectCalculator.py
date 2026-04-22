@@ -123,6 +123,14 @@ class CardCalcContext:
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
     playerSeasonFPPerGame: Dict[int, float] = field(default_factory=dict)  # playerId → FP/game
 
+    # Projection mode — when True, the calc is running against expected values
+    # (season averages, ELO forecasts) instead of live game outcomes. Chance
+    # cards resolve to expected value (trigger prob × reward) rather than a
+    # coin-flip, and outcome-dependent booleans are filled with most-likely
+    # values. favoriteTeamWinProb is set alongside it for chance weighting.
+    isProjection: bool = False
+    favoriteTeamWinProb: float = 0.5
+
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
     _firstPassBreakdowns: Optional[List] = None  # Set for second-pass effects
@@ -376,12 +384,30 @@ class _AdvantageRNG:
         return min(r1, r2)
 
 
+class _ProjectionRNG:
+    """Deterministic RNG used when building a payout projection.
+
+    Always returns 0.0 so every chance-card trigger path evaluates as
+    'triggered'. The calculator then scales the result by the recorded
+    chance threshold in _computeCardPass, producing an expected-value
+    estimate without the effect functions needing to branch on
+    projection mode themselves.
+    """
+    def random(self) -> float:
+        return 0.0
+
+
 def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _random.Random:
     """Create a deterministic RNG seeded by user+season+week+card.
 
     Same card in same week always produces the same roll.
     When Advantage is active, returns a wrapper that rolls twice and takes the better result.
+    In projection mode, returns a zero-roll RNG so chance cards always
+    take the triggered path — the caller scales by the threshold to
+    produce expected value.
     """
+    if getattr(ctx, 'isProjection', False):
+        return _ProjectionRNG()
     seedStr = f"{ctx.userId}-{ctx.season}-{ctx.weekNumber}-{userCardId}-{seedExtra}"
     seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
     rng = _random.Random(seedHash)
@@ -446,6 +472,17 @@ def _computeCardPass(
     # 1. Compute primary effect
     primary = computeEffect(effectConfig, ctx, cardPlayerId, eq.id,
                             firstPassBreakdowns=firstPassBreakdowns)
+
+    # Projection mode: if this was a chance effect, the _ProjectionRNG forced
+    # it onto the 'triggered' path. Scale the output by the trigger
+    # probability to get an expected-value estimate the UI can show as a
+    # single number. Effects without a chance threshold are unaffected.
+    if getattr(ctx, 'isProjection', False) and primary.chanceThreshold > 0:
+        threshold = primary.chanceThreshold
+        primary.fpBonus *= threshold
+        primary.floobits = int(primary.floobits * threshold)
+        if primary.multBonus > 1:
+            primary.multBonus = 1 + (primary.multBonus - 1) * threshold
 
     # 2. Apply match bonus and weekly modifier
     isMatch = cardPlayerId in ctx.rosterPlayerIds
