@@ -7379,7 +7379,11 @@ class SeasonManager:
                 db_stats.interceptions = defense.get('ints', 0)
                 db_stats.fumbles_recovered = defense.get('fumRec', 0)
                 db_stats.total_yards_allowed = defense.get('totalYardsAlwd', 0)
-                
+
+                # Big plays — persisted so Highlight Reel's per-game
+                # average survives backend restarts.
+                db_stats.big_plays = stats.get('bigPlays', 0)
+
                 # JSON for detailed breakdown
                 db_stats.offense_stats = stats.get('Offense', {})
                 db_stats.defense_stats = stats.get('Defense', {})

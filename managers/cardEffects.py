@@ -1553,7 +1553,12 @@ def _computeAvalanche(primary, ctx, cardPlayerId, eqId):
     import math
     gates = [primary.get("td1", 2), primary.get("td2", 4), primary.get("td3", 7)]
     peakFP = primary.get("td4", 11)
-    tds = ctx.rosterTotalTds
+    # Projection contexts may carry per-game averages which make roster
+    # TDs a float. Cast to int so range() is safe regardless of caller.
+    try:
+        tds = int(round(float(ctx.rosterTotalTds or 0)))
+    except Exception:
+        tds = 0
     if tds == 0:
         return EffectResult(equation="No roster TDs this week")
     totalFP = 0
@@ -2213,9 +2218,13 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
 
 
 def _countWeeklyTicks(effectName, primary, ctx):
-    """Count ticks for weekly-reset streaks."""
+    """Count ticks for weekly-reset streaks. Always returns int —
+    projection contexts can carry float per-game averages for TD counts."""
     if effectName == "touchdown_jackpot":
-        return ctx.rosterTotalTds
+        try:
+            return int(round(float(ctx.rosterTotalTds or 0)))
+        except Exception:
+            return 0
     return 0
 
 
@@ -2649,18 +2658,24 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
 # ── Escalating / Pace Effects ────────────────────────────────────────────────
 
 def _getPositionTds(ctx, position: int) -> int:
-    """Get TDs relevant to position from roster stats."""
+    """Get TDs relevant to position from roster stats. Always returns int
+    so callers that iterate range(tds) don't choke on the float per-game
+    averages the projection context feeds in (e.g., 0.7 TDs/game)."""
     stats = _getRosterStatsAtPosition(ctx, position)
+    raw = 0
     if position == 1:  # QB — passing TDs
-        return stats.get("passing_stats", {}).get("tds", 0) if isinstance(stats.get("passing_stats"), dict) else 0
-    if position == 2:  # RB — rushing TDs
-        return stats.get("rushing_stats", {}).get("runTds", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
-    if position == 3:  # WR — receiving TDs
-        return stats.get("receiving_stats", {}).get("rcvTds", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
-    if position == 5:  # K — FGs made
+        raw = stats.get("passing_stats", {}).get("tds", 0) if isinstance(stats.get("passing_stats"), dict) else 0
+    elif position == 2:  # RB — rushing TDs
+        raw = stats.get("rushing_stats", {}).get("runTds", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
+    elif position == 3:  # WR — receiving TDs
+        raw = stats.get("receiving_stats", {}).get("rcvTds", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
+    elif position == 5:  # K — FGs made
         fgMade, _, _, _ = _getKickerFgStats(ctx)
-        return fgMade
-    return 0
+        raw = fgMade
+    try:
+        return int(round(float(raw)))
+    except Exception:
+        return 0
 
 
 def _getPositionYards(ctx, position: int) -> int:

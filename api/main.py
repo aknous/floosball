@@ -4713,7 +4713,8 @@ def get_weekly_modifier(response: Response):
 
 @app.get("/api/fantasy/card-projection")
 def get_card_projection(user: _User = Depends(_getCurrentUser),
-                        include_candidates: bool = Query(default=False)):
+                        include_candidates: bool = Query(default=False),
+                        replace_slot: Optional[int] = Query(default=None)):
     """Projected card payouts for the upcoming week based on season-to-date
     averages + ELO forecasts.
 
@@ -4761,6 +4762,7 @@ def get_card_projection(user: _User = Depends(_getCurrentUser),
             for uc in userCards:
                 proj = computeCandidateProjection(
                     uc, session, user.id, season, week, sm, pm,
+                    replaceSlot=replace_slot,
                 )
                 if proj is not None:
                     candidates.append(proj)

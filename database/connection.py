@@ -376,6 +376,16 @@ def _runPendingMigrations():
             logger.info("  Migration: replaced 'random' powerup slugs in pending_rewards")
         except Exception:
             conn.rollback()
+
+        # Big plays counter on team_season_stats — used by the Highlight
+        # Reel card projection. Counts WPA-based big plays per team per
+        # season so the per-game average survives backend restarts.
+        try:
+            conn.execute(text("ALTER TABLE team_season_stats ADD COLUMN big_plays INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added team_season_stats.big_plays")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 

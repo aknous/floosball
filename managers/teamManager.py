@@ -800,6 +800,7 @@ class TeamManager:
                     team.seasonTeamStats['elo'] = dbStats.elo or team.seasonTeamStats.get('elo', 1500)
                     team.elo = team.seasonTeamStats['elo']
                     team.seasonTeamStats['madePlayoffs'] = dbStats.made_playoffs
+                    team.seasonTeamStats['bigPlays'] = dbStats.big_plays or 0
                     if dbStats.offense_stats:
                         team.seasonTeamStats['Offense'].update(dbStats.offense_stats)
                     if dbStats.defense_stats:
