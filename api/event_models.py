@@ -50,13 +50,16 @@ class EventType(Enum):
     PLAYER_INJURY = "player_injury"
     
     # Offseason events
-    OFFSEASON_START         = "offseason_start"
-    OFFSEASON_PICK          = "offseason_pick"
-    OFFSEASON_CUT           = "offseason_cut"
-    OFFSEASON_ON_CLOCK      = "offseason_on_clock"
-    OFFSEASON_TEAM_COMPLETE = "offseason_team_complete"
-    OFFSEASON_COMPLETE      = "offseason_complete"
-    FA_DRAFT_ORDER_UPDATE   = "fa_draft_order_update"
+    OFFSEASON_START             = "offseason_start"
+    OFFSEASON_PICK              = "offseason_pick"
+    OFFSEASON_CUT               = "offseason_cut"
+    OFFSEASON_ON_CLOCK          = "offseason_on_clock"
+    OFFSEASON_TEAM_COMPLETE     = "offseason_team_complete"
+    OFFSEASON_COMPLETE          = "offseason_complete"
+    OFFSEASON_PREDRAFT_START    = "offseason_predraft_start"
+    OFFSEASON_TEAM_SETUP        = "offseason_team_setup"
+    OFFSEASON_PREDRAFT_COMPLETE = "offseason_predraft_complete"
+    FA_DRAFT_ORDER_UPDATE       = "fa_draft_order_update"
 
     # GM Mode events
     GM_VOTE_RESOLVED = "gm_vote_resolved"
@@ -416,7 +419,8 @@ class OffseasonEvent:
 
     @staticmethod
     def pick(teamName: str, teamAbbr: str, playerName: str,
-             position: str, rating: float, tier: str) -> Dict[str, Any]:
+             position: str, rating: float, tier: str,
+             isPromotion: bool = False) -> Dict[str, Any]:
         return {
             'event': EventType.OFFSEASON_PICK.value,
             'timestamp': datetime.now().isoformat(),
@@ -426,6 +430,7 @@ class OffseasonEvent:
             'position': position,
             'rating': rating,
             'tier': tier,
+            'isPromotion': isPromotion,
         }
 
     @staticmethod
@@ -474,6 +479,35 @@ class OffseasonEvent:
             'event': EventType.FA_DRAFT_ORDER_UPDATE.value,
             'timestamp': datetime.now().isoformat(),
             'draftOrder': draftOrder,
+        }
+
+    @staticmethod
+    def predraft_start(totalTeams: int) -> Dict[str, Any]:
+        return {
+            'event': EventType.OFFSEASON_PREDRAFT_START.value,
+            'timestamp': datetime.now().isoformat(),
+            'totalTeams': totalTeams,
+        }
+
+    @staticmethod
+    def team_setup(teamName: str, teamAbbr: str, teamId: int,
+                   resigns: list, cuts: list, promotions: list) -> Dict[str, Any]:
+        return {
+            'event': EventType.OFFSEASON_TEAM_SETUP.value,
+            'timestamp': datetime.now().isoformat(),
+            'teamName': teamName,
+            'teamAbbr': teamAbbr,
+            'teamId': teamId,
+            'resigns': resigns,
+            'cuts': cuts,
+            'promotions': promotions,
+        }
+
+    @staticmethod
+    def predraft_complete() -> Dict[str, Any]:
+        return {
+            'event': EventType.OFFSEASON_PREDRAFT_COMPLETE.value,
+            'timestamp': datetime.now().isoformat(),
         }
 
 

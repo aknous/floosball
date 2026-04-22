@@ -307,10 +307,12 @@ GM_FA_WINDOW_SCHEDULED = 64800  # 18 hours
 # "Engaged fans" = users with favorite_team_id who cast ≥1 GM vote this season
 GM_THRESHOLD_USER_FACTOR = 0.35
 
-# Probability: at threshold = 45%, linear to 95% at 2x threshold
+# Probability: at threshold = 45%, linear to 100% at 2x threshold. Hitting
+# 2× threshold is the UI-maxed scenario — making that deterministic avoids
+# the "I hit the vote ceiling and it still failed" bad UX.
 GM_PROB_BASE = 0.45
-GM_PROB_RANGE = 0.50
-GM_PROB_CAP = 0.95
+GM_PROB_RANGE = 0.55
+GM_PROB_CAP = 1.0
 
 # Minimum ballot appearance rate for a player to be an eligible directive target
 GM_FA_MIN_APPEARANCE_PCT = 0.25
