@@ -3121,11 +3121,20 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             pass
 
     draftComplete = len(draftOrder) > 0 and all(t.get("complete") for t in draftOrder)
+    # GM vote resolutions for the Directives tab — survives refresh.
+    gmResolutions = getattr(sm, '_offseasonGmResults', []) or []
+    # Active phase — lets the frontend restore tier grouping + rookie list on refresh.
+    phase = getattr(sm, '_offseasonPhase', None)
+    # Per-team per-position fan vote rankings (after FA ballot resolution).
+    faVoteResults = getattr(sm, '_offseasonFaVoteResults', {}) or {}
     return {
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
         "faWindowEnd": faWindowEnd, "faPool": faPool,
         "existingBallot": existingBallot, "faDirectives": faDirectives,
+        "gmResolutions": gmResolutions,
+        "faVoteResults": faVoteResults,
+        "phase": phase,
         "draftComplete": draftComplete,
     }
 
@@ -6689,7 +6698,11 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
             rookieIds = set(faPlayerIds) - playersWithStats
 
         def formatStats(row, posName):
-            if not row:
+            # Rows with zero games played = player was on the books but never
+            # saw the field (FA who sat out, injured, buried on depth chart).
+            # Treat these as no-stats so the UI falls through to the
+            # "No stats this season" label instead of rendering a line of 0s.
+            if not row or (getattr(row, 'games_played', 0) or 0) == 0:
                 return None
             base = {"gamesPlayed": row.games_played, "fantasyPoints": row.fantasy_points}
             if posName == 'QB':
@@ -6818,7 +6831,62 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isProspect": True,
                 })
 
-        return build_success_response({"openSlots": openSlots, "players": players})
+        # Live ballot tally — aggregates fan votes in real time during the
+        # voting window so users can see who's leading before IRV resolution.
+        # Counts each ballot's mention of a candidate as one vote, with a
+        # separate first-choice count for depth.
+        from database.repositories.gm_repository import GmFaBallotRepository
+        ballotRepo = GmFaBallotRepository(session)
+        ballots = ballotRepo.getRankingsForTeam(favTeam.id, seasonNum) if favTeam else []
+
+        mentionCount: Dict[int, int] = {}
+        firstChoiceCount: Dict[int, int] = {}
+        for ballot in ballots:
+            for rank, pid in enumerate(ballot):
+                mentionCount[pid] = mentionCount.get(pid, 0) + 1
+                if rank == 0:
+                    firstChoiceCount[pid] = firstChoiceCount.get(pid, 0) + 1
+
+        # Build candidate lookup. Ballots can rank:
+        #   - current FAs (pm.freeAgents)
+        #   - fan team's prospects (pipeline promotions)
+        #   - projected FAs from OTHER teams (walk-year / cut-vote candidates
+        #     who are still rostered). Must sweep every team's roster +
+        #     prospect pool so these IDs resolve, otherwise whole positions
+        #     silently drop out of the tally.
+        playerLookup = {p.id: p for p in pm.freeAgents}
+        if teamManager:
+            for t in teamManager.teams:
+                for p in getattr(t, 'prospects', []):
+                    playerLookup[p.id] = p
+                for _slot, p in t.rosterDict.items():
+                    if p is not None:
+                        playerLookup[p.id] = p
+
+        ballotTally: Dict[str, List[Dict]] = {}
+        for pid, count in mentionCount.items():
+            p = playerLookup.get(pid)
+            if not p:
+                continue
+            posName = p.position.name
+            ballotTally.setdefault(posName, []).append({
+                "id": p.id,
+                "name": p.name,
+                "position": posName,
+                "rating": round(getattr(p, 'playerRating', 0), 1),
+                "votes": count,
+                "firstChoice": firstChoiceCount.get(pid, 0),
+                "isProspect": bool(getattr(p, 'is_prospect', False)),
+            })
+        for posName in ballotTally:
+            ballotTally[posName].sort(key=lambda x: (-x['votes'], -x['firstChoice'], -x['rating']))
+
+        return build_success_response({
+            "openSlots": openSlots,
+            "players": players,
+            "ballotTally": ballotTally,
+            "totalBallots": len(ballots),
+        })
     finally:
         session.close()
 

@@ -2587,27 +2587,23 @@ class PlayerManager:
                 # Yield on-the-clock before attempting pick
                 yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
 
-                # Priority order: fan directives first, then auto-fallback.
-                # Fans' ranked ballot determines whether to promote a prospect
-                # or sign an FA — if they rank an FA #1, the team signs that
-                # FA rather than auto-promoting a pipeline prospect. Only when
-                # the ballot is exhausted (or nonexistent) does the team fall
-                # back to the "promote best prospect ≥ 70, else sign best FA"
-                # auto-logic.
+                # Priority order: walk fan directives (which may interleave FA
+                # and prospect IDs). Fan-ranked #1 prospects were already
+                # promoted in the pre-draft pass; any remaining prospect in
+                # the queue is a fall-through pick (Rule 2 — their higher-
+                # ranked FAs ahead of them are gone or no longer eligible).
                 directivePick = False
                 prospectsById = {p.id: p for p in getattr(team, 'prospects', [])}
                 queue = teamDirectiveQueues.get(team.id, [])
                 while queue:
                     targetId = queue.pop(0)
 
-                    # Case A — ranked target is a prospect: promote them directly
+                    # Case A — ranked target is a prospect: promote them
                     prospectTarget = prospectsById.get(targetId)
                     if prospectTarget is not None:
                         openSlot = self._findOpenSlotForPosition(team, prospectTarget.position.value)
                         if not openSlot:
                             continue
-                        # Manual targeted promote (bypass the auto-threshold check —
-                        # fans voted for this prospect specifically)
                         prospectTarget.is_prospect = False
                         prospectTarget.prospect_seasons = 0
                         prospectTarget.drafting_team_id = None
@@ -2627,11 +2623,12 @@ class PlayerManager:
                         leagueHighlights.insert(0, {
                             'event': {'text': f"{team.name} promoted prospect {prospectTarget.name} ({prospectTarget.position.name}) by fan vote"}
                         })
-                        logFa(f"  FAN VOTE PROMOTE: {team.name} promotes {prospectTarget.name} at {openSlot}")
+                        logFa(f"  FAN VOTE PROMOTE (fall-through): {team.name} promotes {prospectTarget.name} at {openSlot}")
                         yield {
                             'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
                             'player': prospectTarget.name, 'position': prospectTarget.position.name,
                             'rating': round(prospectTarget.playerRating, 1), 'tier': prospectTarget.playerTier.name,
+                            'isPromotion': True,
                         }
                         directivePick = True
                         openPositions = [k for k, v in team.rosterDict.items() if v is None
@@ -2642,7 +2639,7 @@ class PlayerManager:
                             yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
                         break  # One action per turn
 
-                    # Case B — ranked target is an FA: sign them (existing path)
+                    # Case B — ranked target is an FA: sign them
                     targetPlayer = None
                     targetListKey = None
                     for lKey, faList in freeAgentLists.items():
@@ -2677,17 +2674,17 @@ class PlayerManager:
                     break  # One pick per turn
 
                 if not directivePick:
-                    # Auto-fallback: first try to promote a qualifying prospect
-                    # (rating ≥ PROSPECT_PROMOTION_RATING_THRESHOLD), then if
-                    # none qualify, sign the best available FA. Only reached
-                    # when no directive picked a player.
+                    # Rule 3 — no fan directive matched, so try the auto-
+                    # fallback: promote a qualifying prospect if one exists
+                    # at rating ≥ threshold; otherwise sign the best FA.
                     promoted = self._tryPromoteProspect(team, freeAgencyDict, leagueHighlights)
                     if promoted is not None:
-                        logFa(f"  PROSPECT PROMOTED: {team.name} promotes {promoted['name']} at {promoted['slot']}")
+                        logFa(f"  PROSPECT PROMOTED (auto): {team.name} promotes {promoted['name']} at {promoted['slot']}")
                         yield {
                             'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
                             'player': promoted['name'], 'position': promoted['position'],
                             'rating': promoted['rating'], 'tier': promoted['tier'],
+                            'isPromotion': True,
                         }
                         openPositions = [k for k, v in team.rosterDict.items() if v is None
                                          and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
@@ -2697,7 +2694,7 @@ class PlayerManager:
                             yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
                         continue  # One action per turn
 
-                    # No prospect qualified — best available FA
+                    # No prospect qualified — sign best available FA
                     pickEvents = []
                     rosterComplete = self._attemptRosterFill(
                         team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,

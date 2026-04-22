@@ -156,6 +156,10 @@ def sendDayReport(email: str, data: dict) -> bool:
     pickEm = data.get('pickEm', {})
     favTeam = data.get('favoriteTeam')
     leaderboardTop = data.get('leaderboardTop', [])
+    pickEmLeaderboardTop = data.get('pickEmLeaderboardTop', [])
+    userPickEmSeasonRank = data.get('userPickEmSeasonRank', 0)
+    pickEmTotalUsers = data.get('pickEmTotalUsers', 0)
+    achievementsToday = data.get('achievementsToday', [])
     isDay4 = (dayNum == 4)
 
     if isDay4:
@@ -213,9 +217,50 @@ def sendDayReport(email: str, data: dict) -> bool:
             </tr>"""
         leaderboardHtml = f"""
         <div style="background: #1e293b; border-radius: 8px; padding: 14px; margin-top: 16px;">
-            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; margin-bottom: 10px;">Season Leaderboard</div>
+            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; margin-bottom: 10px;">Season Fantasy Leaderboard</div>
             <table style="width: 100%; border-collapse: collapse;">{lbRows}</table>
             {f'<div style="font-size: 12px; color: #94a3b8; margin-top: 8px; text-align: center;">Your rank: <span style="color: #818cf8; font-weight: 600;">#{userRank}</span> of {totalUsers}</div>' if userRank > 10 else ''}
+        </div>"""
+
+    # Prognostication leaderboard (all days)
+    pickEmLeaderboardHtml = ""
+    if pickEmLeaderboardTop:
+        peRows = ""
+        for entry in pickEmLeaderboardTop:
+            isUser = (entry['rank'] == userPickEmSeasonRank)
+            nameColor = "#818cf8" if isUser else "#e2e8f0"
+            rowBg = "rgba(99,102,241,0.08)" if isUser else "transparent"
+            record = f"{entry['correct']}/{entry['total']}"
+            peRows += f"""<tr style="background: {rowBg};">
+                <td style="padding: 5px 8px; font-size: 12px; color: #94a3b8; font-weight: 600;">#{entry['rank']}</td>
+                <td style="padding: 5px 8px; font-size: 12px; color: {nameColor}; font-weight: {'700' if isUser else '400'};">{entry['username']}</td>
+                <td style="padding: 5px 8px; font-size: 12px; color: #64748b; text-align: right;">{record}</td>
+                <td style="padding: 5px 8px; font-size: 12px; color: #e2e8f0; font-weight: 600; text-align: right;">{entry['points']}</td>
+            </tr>"""
+        userRankFooter = ""
+        if userPickEmSeasonRank > 10 and pickEmTotalUsers > 0:
+            userRankFooter = f'<div style="font-size: 12px; color: #94a3b8; margin-top: 8px; text-align: center;">Your rank: <span style="color: #818cf8; font-weight: 600;">#{userPickEmSeasonRank}</span> of {pickEmTotalUsers}</div>'
+        pickEmLeaderboardHtml = f"""
+        <div style="background: #1e293b; border-radius: 8px; padding: 14px; margin-top: 16px;">
+            <div style="font-size: 13px; font-weight: 700; color: #e2e8f0; margin-bottom: 10px;">Prognostication Leaderboard</div>
+            <table style="width: 100%; border-collapse: collapse;">{peRows}</table>
+            {userRankFooter}
+        </div>"""
+
+    # Achievements unlocked today
+    achievementsHtml = ""
+    if achievementsToday:
+        achRows = ""
+        for ach in achievementsToday:
+            achRows += f"""
+            <div style="padding: 8px 0; border-bottom: 1px solid #1e293b;">
+                <div style="font-size: 13px; color: #fbbf24; font-weight: 700;">{ach['name']}</div>
+                <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">{ach['description']}</div>
+            </div>"""
+        achievementsHtml = f"""
+        <div style="background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.2); border-radius: 8px; padding: 14px; margin-top: 16px;">
+            <div style="font-size: 13px; font-weight: 700; color: #fbbf24; margin-bottom: 4px;">Achievements Unlocked</div>
+            {achRows}
         </div>"""
 
     heading = "Regular Season Complete" if isDay4 else f"Day {dayNum} Report"
@@ -230,7 +275,9 @@ def sendDayReport(email: str, data: dict) -> bool:
         </table>
 
         {prizeHtml}
+        {achievementsHtml}
         {leaderboardHtml}
+        {pickEmLeaderboardHtml}
         {teamHtml}
 
         <div style="margin-top: 24px; text-align: center;">

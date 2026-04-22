@@ -305,13 +305,18 @@ class GmManager:
 
     def resolveSignFaVotes(self, teams, season: int,
                            freeAgentLists: Dict,
-                           teamOpenPositions: Dict) -> Dict[int, List[int]]:
+                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, Dict[int, List[int]]]]:
         """Resolve sign_fa ballots via ranked choice voting.
 
-        Returns {teamId: [playerId, ...]} directives for the FA draft.
-        Directives are player IDs the team should prioritize signing.
+        Returns:
+          - directives: {teamId: [playerId, ...]} flat priority list used by
+            the FA draft. Interleaves positions round-robin.
+          - positionRankings: {teamId: {positionValue: [playerId, ...]}} raw
+            per-position IRV rankings. Lets the UI show "for QB fans ranked:
+            X, Y, Z" without the interleave collapsing the structure.
         """
         directives: Dict[int, List[int]] = {}
+        positionRankingsByTeam: Dict[int, Dict[int, List[int]]] = {}
 
         for team in teams:
             ballots = self.ballotRepo.getRankingsForTeam(team.id, season)
@@ -322,6 +327,27 @@ class GmManager:
             engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
             threshold = self.calculateThreshold(engagedFans, "sign_fa")
             probability = self.calculateProbability(totalBallots, threshold)
+
+            # Tally per-position rankings for EVERY team with ballots, even
+            # below quorum — fans still want to see how votes shook out. The
+            # threshold/roll only gate whether the directives actually drive
+            # the FA draft.
+            teamProspectsByPos: Dict[int, set] = {}
+            for prospect in getattr(team, 'prospects', []):
+                if hasattr(prospect, 'position') and hasattr(prospect.position, 'value'):
+                    teamProspectsByPos.setdefault(prospect.position.value, set()).add(prospect.id)
+
+            openPositions = teamOpenPositions.get(team.id, [])
+            positionRankings = {}
+            for pos in openPositions:
+                ranked = self._tallyFullRanking(
+                    ballots, pos, freeAgentLists,
+                    prospectIds=teamProspectsByPos.get(pos, set()),
+                )
+                if ranked:
+                    positionRankings.setdefault(pos, []).extend(ranked)
+            if positionRankings:
+                positionRankingsByTeam[team.id] = dict(positionRankings)
 
             if probability == 0.0:
                 self.voteRepo.recordResult(
@@ -338,25 +364,6 @@ class GmManager:
                     probability=probability, outcome="failed_roll",
                 )
                 continue
-
-            # RCV succeeded — tally full ranking per open position. Prospects
-            # the team holds at each position are eligible ballot winners too;
-            # fans can rank them above any FA and they'll be promoted instead
-            # of signed at FA-draft time.
-            teamProspectsByPos: Dict[int, set] = {}
-            for prospect in getattr(team, 'prospects', []):
-                if hasattr(prospect, 'position') and hasattr(prospect.position, 'value'):
-                    teamProspectsByPos.setdefault(prospect.position.value, set()).add(prospect.id)
-
-            openPositions = teamOpenPositions.get(team.id, [])
-            positionRankings = {}
-            for pos in openPositions:
-                ranked = self._tallyFullRanking(
-                    ballots, pos, freeAgentLists,
-                    prospectIds=teamProspectsByPos.get(pos, set()),
-                )
-                if ranked:
-                    positionRankings.setdefault(pos, []).extend(ranked)
 
             # Interleave: first picks from all positions, then second picks, etc.
             teamDirectives = []
@@ -382,7 +389,7 @@ class GmManager:
                 f"({totalBallots} ballots, p={probability:.0%})"
             )
 
-        return directives
+        return directives, positionRankingsByTeam
 
     def _tallyFullRanking(self, ballots: List[List[int]], position: int,
                           freeAgentLists: Dict, prospectIds: set = None) -> List[int]:
