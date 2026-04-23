@@ -3237,7 +3237,9 @@ def get_projected_funding(team_id: int):
         }
         for fan in allFans:
             tid = fan.favorite_team_id
-            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT) or DEFAULT_FUNDING_PCT
+            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT)
+            if pct is None:
+                pct = DEFAULT_FUNDING_PCT
             pct = max(0, min(100, pct))
             bal = balancesByUser.get(fan.id, 0) or 0
             if pct > 0 and bal > 0:
@@ -3454,7 +3456,9 @@ def get_league_markets():
         projectedContribByTeam: Dict[int, int] = {}
         for fan in allFans:
             tid = fan.favorite_team_id
-            pct = getattr(fan, 'team_funding_pct', _DEF_PCT) or _DEF_PCT
+            pct = getattr(fan, 'team_funding_pct', _DEF_PCT)
+            if pct is None:
+                pct = _DEF_PCT
             pct = max(0, min(100, pct))
             bal = balancesByUser.get(fan.id, 0) or 0
             if pct > 0 and bal > 0:
@@ -3722,7 +3726,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailOptOut": user.email_opt_out,
             "emailDayReport": user.email_day_report,
             "emailSeasonReport": user.email_season_report,
-            "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
+            "teamFundingPct": 25 if getattr(user, 'team_funding_pct', 25) is None else user.team_funding_pct,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
             "isAdmin": getattr(user, 'is_admin', False),
         }
