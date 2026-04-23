@@ -210,12 +210,12 @@ class CardBonusResult:
 # Effects that use the roster player's stats at the card's position
 _ROSTER_POSITION_EFFECTS = {
     "luminary", "squire", "cha_ching", "ace_up_the_sleeve",
-    "showoff", "spotlight_moment", "schadenfreude", "hot_hand",
+    "showoff", "spotlight_moment",
     # New position-based effects
     "gunslinger", "air_raid", "workhorse", "goal_line_vulture",
     "possession", "trebuchet", "double_trouble",
     "safety_blanket", "mismatch", "sniper",
-    "game_ball", "spectacle", "indemnity",
+    "spectacle", "indemnity",
 }
 
 
@@ -321,8 +321,8 @@ def _checkConditional(conditional: Optional[dict], playerStats: dict) -> tuple:
 _SECOND_PASS_EFFECTS = frozenset({
     "copycat", "chain_reaction", "bonus_round",
     "double_down", "last_resort",
-    "high_roller", "jackpot",
-    "fortitude", "immaculate",
+    "high_roller",
+    "fortitude",
 })
 
 # Tradeoff effects that modify the overall bonus aggregation
@@ -758,18 +758,19 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     normalBreakdowns = [b for b in breakdowns if b.effectName not in _TRADEOFF_EFFECTS]
 
     if "double_down" in tradeoffNames and normalBreakdowns:
-        # Large FPx applied to lowest non-zero bonus, zeroes highest bonus
-        nonZero = [b for b in normalBreakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0]
-        if len(nonZero) >= 2:
-            # Sort by total FP (using FP as primary metric)
-            sorted_ = sorted(nonZero, key=lambda b: b.totalFP)
-            highest = sorted_[-1]
-            # Zero out the highest card
-            highest.primaryFP = 0
-            highest.primaryFloobits = 0
-            highest.primaryMult = 0
-            highest.totalFP = highest.conditionalBonus + highest.secondaryFP
-            highest.floobitsEarned = highest.secondaryFloobits
-            highest.equation = f"zeroed by Double Down (was {highest.equation})"
+        # Double the lowest non-zero card's FP payout. Pure upside at diamond tier.
+        ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
+        multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
+        nonZeroFP = [b for b in normalBreakdowns if b.totalFP > 0]
+        if nonZeroFP:
+            lowest = min(nonZeroFP, key=lambda b: b.totalFP)
+            originalFP = lowest.totalFP
+            bonusFP = round(originalFP * (multValue - 1), 1)
+            lowest.primaryFP = round(lowest.primaryFP + bonusFP, 1)
+            lowest.totalFP = round(lowest.totalFP + bonusFP, 1)
+            lowest.equation = f"{lowest.equation} × {multValue} (Double Down)"
+        # Clear the marker mult so it doesn't stack on the global FPx aggregation
+        if ddBreakdown:
+            ddBreakdown.primaryMult = 0
 
 

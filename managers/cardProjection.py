@@ -523,6 +523,19 @@ def _shapeCardPayload(breakdown, amplifier: Optional[Dict[str, Any]], effectConf
         except Exception:
             pass
 
+    # Snake Eyes outputs an FPx whose size is inverse to the lowest-FP
+    # roster player's weekly score. Projection uses the actual mult the
+    # compute produced (from real stats); otherwise estimates a typical
+    # middle-tier multiplier assuming lowest ~5-9 FP.
+    if breakdown.effectName == "snake_eyes" and primary:
+        try:
+            if float(breakdown.preMatchMult) > 1.0:
+                projectedMult = round(float(breakdown.preMatchMult), 2)
+            else:
+                projectedMult = 2.0
+        except Exception:
+            pass
+
     # Chance cards: recompute as a proper expected-value blend of
     # base-floor × (1 - trigger_chance) + enhanced × trigger_chance.
     # The calculator's per-card scaling previously used `enhanced ×
