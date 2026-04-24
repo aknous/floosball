@@ -4861,6 +4861,36 @@ class Game:
         homeWinProb = eloWeight * eloHomeWp + (1 - eloWeight) * scoreWp
         awayWinProb = 100 - homeWinProb
 
+        # Late-game possession adjustment: under ~2 minutes in Q4 with a
+        # non-tied score, the formula above ignores who has the ball.
+        # In reality a leading team with possession can kneel the clock
+        # out, and a trailing team without the ball likely never gets it
+        # back. Pull WP toward the leader proportionally to how little
+        # time (and how few possessions) remain.
+        if self.currentQuarter == 4 and scoreDiff != 0 and total_seconds < 120:
+            homeLeading = scoreDiff > 0
+            leadingTeam = self.homeTeam if homeLeading else self.awayTeam
+            leaderHasBall = (self.offensiveTeam == leadingTeam)
+            # Confidence ramps as clock drains. Leader-with-ball reaches
+            # near-certainty faster; trailing-team-with-ball still has a
+            # chance to score but needs time on the clock.
+            if leaderHasBall:
+                # Leader can kneel out. Confidence scales from ~0 at 120s
+                # remaining to ~1 at 0s. Three kneels burn ~120 sec.
+                confidence = min(1.0, (120 - total_seconds) / 100.0)
+                pull = 0.9 * confidence
+            else:
+                # Trailing team has the ball. Their odds depend on time
+                # plus their field position/EP (already in scoreDiff).
+                # Still apply some pull toward the leader because the
+                # possession flipping back to them is unlikely.
+                confidence = min(1.0, (60 - total_seconds) / 60.0) if total_seconds < 60 else 0.0
+                pull = 0.4 * confidence
+            if pull > 0:
+                targetWp = 99 if homeLeading else 1
+                homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
+                awayWinProb = 100 - homeWinProb
+
         # Overtime win probability — replaces generic formula above
         if self.currentQuarter >= 5:
             isSuddenDeath = self.otSecondPossComplete
@@ -4896,16 +4926,14 @@ class Game:
                     fgProb = max(0.05, min(1.0, fgProb))
                 else:
                     fgProb = baseFgProb
-                # Approximate scoring probability for this drive based on field position
-                if yte <= 40:
-                    # In FG range: scoring prob ≈ FG make prob (they'll kick)
-                    scoringProb = fgProb * 100
-                elif yte <= 60:
-                    # Approaching FG range: decent chance of getting there + scoring
-                    scoringProb = fgProb * 100 * 0.6
-                else:
-                    # Deep in own territory: lower but still have possession edge
-                    scoringProb = 25 + expectedPoints * 3
+                # Continuous scoring probability: union of two paths —
+                # FG probability (viable when in range, drops smoothly to
+                # ~0 outside of kicker range) and drive-TD probability
+                # (declines exponentially with yards-to-endzone). Using a
+                # smooth function here avoids large WP swings when the
+                # offense gains a few yards across an arbitrary threshold.
+                tdDriveProb = max(0.02, 0.25 * math.exp(-yte / 40.0))
+                scoringProb = (1 - (1 - fgProb) * (1 - tdDriveProb)) * 100
 
                 if isSuddenDeath:
                     # Next score wins outright — scoring prob maps directly to WP

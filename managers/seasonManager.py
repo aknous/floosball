@@ -34,7 +34,7 @@ except ImportError:
 # WebSocket broadcasting support (optional)
 try:
     from api.game_broadcaster import broadcaster
-    from api.event_models import SeasonEvent, StandingsEvent, LeagueNewsEvent, OffseasonEvent
+    from api.event_models import SeasonEvent, StandingsEvent, LeagueNewsEvent, OffseasonEvent, GmEvent
     from api_response_builders import LeagueResponseBuilder
     BROADCASTING_AVAILABLE = True
 except ImportError:
@@ -1148,7 +1148,7 @@ class SeasonManager:
             from database.connection import get_session as _getSession
             from database.models import (
                 FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
-                Player, User, WeeklyCardBonus, WeeklyPlayerFP
+                Player, User, UserCurrency, WeeklyCardBonus, WeeklyPlayerFP
             )
             from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
             from managers.cardEffectCalculator import calculateWeekCardBonuses, CardCalcContext
@@ -1451,6 +1451,18 @@ class SeasonManager:
                     except Exception:
                         pass
 
+                    # Fat Cat / Opulence reads the user's Floobits balance. Mirrors
+                    # fantasyTracker._buildCardCalcContext so the week-end persisted
+                    # bonus matches what the live snapshot showed.
+                    userFloobitsBalance = 0
+                    try:
+                        uc = session.query(UserCurrency).filter_by(user_id=userId).first()
+                        if uc:
+                            session.refresh(uc)
+                            userFloobitsBalance = uc.balance or 0
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
+
                     # Build context
                     calcCtx = CardCalcContext(
                         userId=userId,
@@ -1485,6 +1497,7 @@ class SeasonManager:
                         activeModifier=userModifier,
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
                         seasonSwapsUsed=seasonSwapsUsed,
+                        userFloobitsBalance=userFloobitsBalance,
                         positionAvgFPs=positionAvgFPs,
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
                     )
@@ -3309,7 +3322,17 @@ class SeasonManager:
 
         # Clear stale state from previous season's offseason
         self._offseasonTransactions = []
+        self._offseasonGmResults = []
+        self._offseasonFaVoteResults = {}
+        self._offseasonPhase = None
         self.playerManager._gmFaDirectives = {}
+        # Reset freeAgencyComplete on every team — last season's FA draft
+        # left it True, which would make this season's panel boot with every
+        # team showing DONE + "FREE AGENCY COMPLETE" until the draft starts.
+        teamManager = self.serviceContainer.getService('team_manager')
+        if teamManager:
+            for t in teamManager.teams:
+                t.freeAgencyComplete = False
 
         # Set offseason status
         if self.currentSeason:
@@ -3414,6 +3437,48 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"Could not broadcast offseason start: {e}")
 
+        # Replay accumulated GM vote resolutions (fire coach, resign, cut)
+        # now that the panel is mounted. The OffseasonPanel's Directives tab
+        # surfaces these so users see what passed without bouncing to the
+        # Front Office tab.
+        self._offseasonGmResults = list(gmResults)
+        if BROADCASTING_AVAILABLE and broadcaster:
+            for r in gmResults:
+                try:
+                    await broadcaster.broadcast_season_event(
+                        GmEvent.voteResolved(
+                            teamId=r.get('teamId'),
+                            teamName=r.get('teamName', ''),
+                            voteType=r.get('voteType', ''),
+                            outcome=r.get('outcome', ''),
+                            targetPlayerName=r.get('targetPlayerName'),
+                            totalVotes=r.get('totalVotes', 0),
+                            threshold=r.get('threshold', 0),
+                            probability=r.get('probability', 0.0),
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not broadcast gm vote resolution: {e}")
+
+        # STEP 3.70: FA Voting Window close + ballot resolution.
+        # Moved ahead of predraft so we know each team's #1 ranked choice —
+        # if a team's top pick is a prospect, the predraft pass promotes them
+        # immediately (clearing a slot before the rookie draft). Ballots that
+        # rank an FA #1 are consumed during the FA draft instead.
+        logger.info("Step 3.70: FA voting window + ballot resolution")
+        await self._runFaVotingWindow()
+
+        # STEP 3.75: Pre-draft team setup pass
+        # Rolls through teams worst→best and reports each team's resigns,
+        # cuts, and prospect promotions. Fan-directed prospect promotions
+        # run here (ballot #1 is a prospect). FA-first ballots defer to
+        # the FA draft (Rule 2), and un-ranked prospects are considered
+        # during the FA auto-fallback (Rule 3).
+        logger.info("Step 3.75: Pre-draft team setup pass")
+        faOrderForPredraft = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+        if faOrderForPredraft:
+            await self._runPreDraftPass(faOrderForPredraft, gmResults)
+
         # STEP 4: FA retirements + rookie draft
         # (Rookie class was generated at season start — fans have been scouting/
         # voting all season. This step consumes the class via the worst-first
@@ -3451,14 +3516,28 @@ class SeasonManager:
             rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
         )
 
+        self._offseasonPhase = 'rookie_draft'
         # Broadcast a phase-start marker so the frontend knows to show the
-        # "Rookie Draft" header before picks start streaming
+        # "Rookie Draft" header before picks start streaming. Includes the full
+        # rookie pool so the UI can show prospects coming off the board as they
+        # are drafted.
         if BROADCASTING_AVAILABLE and broadcaster:
             try:
+                rookiePool = [
+                    {
+                        'id': getattr(r, 'id', 0),
+                        'name': r.name,
+                        'position': r.position.name,
+                        'rating': round(getattr(r, 'playerRating', 0), 1),
+                        'tier': getattr(r, 'playerTier', None).name if getattr(r, 'playerTier', None) else 'TierC',
+                    }
+                    for r in rookies
+                ]
                 await broadcaster.broadcast_season_event({
                     'event': 'rookie_draft_start',
                     'season': seasonNum,
                     'totalRookies': len(rookies),
+                    'rookies': rookiePool,
                 })
             except Exception as e:
                 logger.warning(f"Could not broadcast rookie_draft_start: {e}")
@@ -3508,6 +3587,7 @@ class SeasonManager:
                     })
                 elif kind == 'complete':
                     draftSummary = entry
+                    self._offseasonPhase = None
                     if BROADCASTING_AVAILABLE and broadcaster:
                         await broadcaster.broadcast_season_event({
                             'event': 'rookie_draft_complete',
@@ -3526,10 +3606,6 @@ class SeasonManager:
         if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
                 and not getattr(self.timingManager, '_isFastCatchingUp', False):
             await asyncio.sleep(3)
-
-        # STEP 5: FA Voting Window (GM Mode sign_fa)
-        logger.info("Step 5: FA voting window")
-        await self._runFaVotingWindow()
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (rookie draft just promoted some
@@ -3821,6 +3897,184 @@ class SeasonManager:
         finally:
             session.close()
 
+    async def _runPreDraftPass(self, teamsWorstFirst: list, gmResults: list) -> None:
+        """Roll through teams worst→best BEFORE the rookie draft begins.
+
+        For each team, broadcast a setup event with:
+          - resigns: players whose GM re-sign vote succeeded (still rostered)
+          - cuts: players who left the roster this offseason (GM vote + contract
+            expiration — both set previousTeam and reset freeAgentYears to 0)
+          - promotions: prospects moved onto the roster. Promotion is RUN HERE
+            (not during the FA draft) so the prospect slot opens up before the
+            rookie draft fills it.
+
+        The pass emits offseason_predraft_start, then offseason_team_setup per
+        team (plus offseason_on_clock so the UI highlights the current row),
+        then offseason_predraft_complete when done.
+        """
+        if not (BROADCASTING_AVAILABLE and broadcaster):
+            # Still run promotions even without broadcasting — they mutate state
+            for team in teamsWorstFirst:
+                self._promoteAllQualifyingProspects(team)
+            return
+
+        # Index resign successes by team for O(1) lookup
+        resignsByTeam: dict = {}
+        # Track which players were released via GM cut vote (vs. contract expiry)
+        # so the UI can show CUT (team decision) vs EXPIRED (natural departure).
+        gmCutPlayerNames: set = set()
+        for r in gmResults or []:
+            if r.get('outcome') != 'success':
+                continue
+            vt = r.get('voteType')
+            if vt == 'resign_player':
+                tid = r.get('teamId')
+                resignsByTeam.setdefault(tid, []).append(r.get('targetPlayerName'))
+            elif vt == 'cut_player':
+                gmCutPlayerNames.add(r.get('targetPlayerName'))
+
+        # Collect cuts (FAs with previousTeam from this offseason)
+        cutsByTeamName: dict = {}
+        for p in self.playerManager.freeAgents:
+            if getattr(p, 'freeAgentYears', 99) != 0:
+                continue
+            prev = getattr(p, 'previousTeam', None)
+            if not prev:
+                continue
+            cutsByTeamName.setdefault(prev, []).append(p)
+
+        self._offseasonPhase = 'predraft'
+        try:
+            await broadcaster.broadcast_season_event(
+                OffseasonEvent.predraft_start(len(teamsWorstFirst))
+            )
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.warning(f"Could not broadcast predraft start: {e}")
+
+        for team in teamsWorstFirst:
+            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+            teamId = getattr(team, 'id', None)
+
+            # Build resign list — look up player details from the roster
+            resignList = []
+            resignNames = set(resignsByTeam.get(teamId, []))
+            if resignNames:
+                for slot, p in team.rosterDict.items():
+                    if p and p.name in resignNames:
+                        resignList.append({
+                            'name': p.name,
+                            'position': p.position.name,
+                            'rating': round(p.playerRating, 1),
+                            'tier': p.playerTier.name,
+                        })
+
+            # Build cut list. GM-voted cuts are tagged 'gm_vote'; contract
+            # expirations are 'expired' (player walked to FA naturally — not
+            # the team's active decision).
+            cutList = []
+            for p in cutsByTeamName.get(team.name, []):
+                reason = 'gm_vote' if p.name in gmCutPlayerNames else 'expired'
+                cutList.append({
+                    'name': p.name,
+                    'position': p.position.name,
+                    'rating': round(p.playerRating, 1),
+                    'tier': p.playerTier.name,
+                    'reason': reason,
+                })
+
+            # Fan-voted promotion: only promote if the team's #1 fan ballot
+            # directive is one of this team's prospects. Other promotions
+            # (ballot fall-through or auto-fallback) happen in the FA draft.
+            promotionList = self._promoteFanVotedProspect(team)
+
+            # Highlight + broadcast
+            try:
+                await broadcaster.broadcast_season_event(
+                    OffseasonEvent.on_clock(team.name, teamAbbr)
+                )
+                await broadcaster.broadcast_season_event(
+                    OffseasonEvent.team_setup(
+                        team.name, teamAbbr, teamId,
+                        resigns=resignList, cuts=cutList, promotions=promotionList,
+                    )
+                )
+                # Persist for /api/offseason replay on refresh
+                self._offseasonTransactions.append({
+                    'type': 'team_setup',
+                    'team': team.name, 'teamAbbr': teamAbbr, 'teamId': teamId,
+                    'resigns': resignList, 'cuts': cutList, 'promotions': promotionList,
+                })
+                await self.timingManager.waitBetweenOffseasonPicks()
+            except Exception as e:
+                logger.warning(f"Predraft broadcast error for {team.name}: {e}")
+
+        self._offseasonPhase = None
+        try:
+            await broadcaster.broadcast_season_event(
+                OffseasonEvent.predraft_complete()
+            )
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.warning(f"Could not broadcast predraft complete: {e}")
+
+    def _promoteFanVotedProspect(self, team) -> list:
+        """Promote this team's prospect if fans ranked them #1 on the FA ballot.
+
+        Returns list of promotion dicts (empty if no fan-directed promotion).
+        Consumes the directive from _gmFaDirectives so the FA draft doesn't
+        try to re-promote the same player.
+
+        Falls back to empty — ballot-deferred and un-ranked prospects are
+        handled during the FA draft itself (see freeAgencyPickGenerator).
+        """
+        directives = getattr(self.playerManager, '_gmFaDirectives', {}).get(
+            getattr(team, 'id', None), []
+        )
+        if not directives:
+            return []
+
+        firstTargetId = directives[0]
+        prospectTarget = next(
+            (p for p in getattr(team, 'prospects', []) if p.id == firstTargetId),
+            None,
+        )
+        if prospectTarget is None:
+            # Fan ranked an FA first — defer to FA draft.
+            return []
+
+        openSlot = self.playerManager._findOpenSlotForPosition(
+            team, prospectTarget.position.value,
+        )
+        if not openSlot:
+            return []
+
+        # Fan-directed promotion bypasses the auto-threshold — they voted for
+        # this specific prospect regardless of rating.
+        prospectTarget.is_prospect = False
+        prospectTarget.prospect_seasons = 0
+        prospectTarget.drafting_team_id = None
+        prospectTarget.team = team
+        team.rosterDict[openSlot] = prospectTarget
+        if prospectTarget in team.prospects:
+            team.prospects.remove(prospectTarget)
+        try:
+            prospectTarget.term = self.playerManager._getPlayerTerm(prospectTarget)
+            prospectTarget.termRemaining = prospectTarget.term
+        except Exception:
+            prospectTarget.termRemaining = 1
+
+        # Consume the directive so FA draft moves on to #2
+        directives.pop(0)
+
+        return [{
+            'name': prospectTarget.name,
+            'position': prospectTarget.position.name,
+            'rating': round(prospectTarget.playerRating, 1),
+            'tier': prospectTarget.playerTier.name,
+            'slot': openSlot,
+        }]
+
     async def _processFreeAgency(self) -> None:
         """Process free agency with live per-pick broadcasting.
 
@@ -3916,6 +4170,7 @@ class SeasonManager:
                 await broadcaster.broadcast_season_event(
                     OffseasonEvent.fa_draft_order_update(draftOrderList)
                 )
+                self._offseasonPhase = 'free_agency'
             except Exception as e:
                 logger.warning(f"Could not broadcast FA draft order update: {e}")
 
@@ -3947,6 +4202,7 @@ class SeasonManager:
                                 entry['team'], entry['teamAbbr'],
                                 entry['player'], entry['position'],
                                 entry['rating'], entry['tier'],
+                                isPromotion=entry.get('isPromotion', False),
                             )
                         )
                         self._offseasonTransactions.append(entry)
@@ -3954,6 +4210,7 @@ class SeasonManager:
                         await broadcaster.broadcast_season_event(
                             OffseasonEvent.team_complete(entry['team'], entry['teamAbbr'])
                         )
+                self._offseasonPhase = None
                 await broadcaster.broadcast_season_event(
                     OffseasonEvent.complete(len(self.playerManager.freeAgents))
                 )
@@ -4334,7 +4591,7 @@ class SeasonManager:
             }
 
             gm = GmManager(session, lowQuorum=self._isTestMode)
-            directives = gm.resolveSignFaVotes(
+            directives, positionRankings = gm.resolveSignFaVotes(
                 teamManager.teams, season,
                 freeAgentLists, teamOpenPositions
             )
@@ -4344,6 +4601,47 @@ class SeasonManager:
             self.playerManager._gmFaDirectives = directives
             if directives:
                 logger.info(f"GM FA directives for {len(directives)} team(s)")
+
+            # Build enriched per-team per-position ranking structure so the
+            # UI can show fans' tallied votes for every open position across
+            # the league (not just the user's favorite team). Uses team's
+            # prospects pool in addition to FAs so promoted prospects still
+            # resolve by ID.
+            POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+            playerLookup = {p.id: p for p in self.playerManager.freeAgents}
+            for t in teamManager.teams:
+                for p in getattr(t, 'prospects', []):
+                    playerLookup[p.id] = p
+                for slot, p in t.rosterDict.items():
+                    if p is not None:
+                        playerLookup[p.id] = p
+            teamLookup = {t.id: t for t in teamManager.teams}
+            enrichedPositionRankings = {}
+            for tId, perPos in positionRankings.items():
+                team = teamLookup.get(tId)
+                teamAbbr = getattr(team, 'abbr', None) if team else None
+                if not teamAbbr:
+                    continue
+                posEntry = {}
+                for posValue, playerIds in perPos.items():
+                    posName = POS_NAMES.get(posValue, str(posValue))
+                    entries = []
+                    for pid in playerIds:
+                        p = playerLookup.get(pid)
+                        if not p:
+                            continue
+                        entries.append({
+                            "id": p.id,
+                            "name": p.name,
+                            "position": p.position.name,
+                            "rating": round(getattr(p, 'playerRating', 0), 1),
+                            "isProspect": bool(getattr(p, 'is_prospect', False)),
+                        })
+                    if entries:
+                        posEntry[posName] = entries
+                if posEntry:
+                    enrichedPositionRankings[teamAbbr] = posEntry
+            self._offseasonFaVoteResults = enrichedPositionRankings
 
             # Broadcast directives to frontend with player details
             if BROADCASTING_AVAILABLE and broadcaster and directives:
@@ -4363,9 +4661,9 @@ class SeasonManager:
                                     "rating": round(p.playerRating, 1),
                                 })
                     from api.event_models import GmEvent
-                    await broadcaster.broadcast_season_event(
-                        GmEvent.faDirectives(enriched)
-                    )
+                    event = GmEvent.faDirectives(enriched)
+                    event['positionRankings'] = enrichedPositionRankings
+                    await broadcaster.broadcast_season_event(event)
                 except Exception as e:
                     logger.warning(f"Could not broadcast FA directives: {e}")
         except Exception as e:
@@ -5362,9 +5660,10 @@ class SeasonManager:
         """Send game day recap emails to opted-in users."""
         try:
             from database.connection import get_session
-            from database.models import User, CurrencyTransaction, Game
+            from database.models import User, CurrencyTransaction, Game, UserAchievement, Achievement
             from database.repositories.pickem_repository import PickEmRepository
             from managers.emailManager import sendDayReport
+            from datetime import datetime, timedelta
 
             fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
             if not fantasyTracker:
@@ -5400,6 +5699,35 @@ class SeasonManager:
 
                 # Pre-fetch team objects for name lookup
                 teamManager = self.serviceContainer.getService('team_manager')
+
+                from sqlalchemy import func
+                # Season prognostication leaderboard (top 10 + rank lookup)
+                pickEmSeasonRows = pickemRepo.getSeasonLeaderboard(season)
+                pickEmRankByUser = {}
+                pickEmLeaderboardTop = []
+                usernameById = {e['userId']: e['username'] for e in entries}
+                for idx, (uid, correct, total, points) in enumerate(pickEmSeasonRows):
+                    pickEmRankByUser[uid] = idx + 1
+                    if idx < 10:
+                        uname = usernameById.get(uid)
+                        if not uname:
+                            u = session.query(User).filter_by(id=uid).first()
+                            uname = u.username if u else f"User {uid}"
+                        pickEmLeaderboardTop.append({
+                            'rank': idx + 1,
+                            'username': uname,
+                            'points': int(points),
+                            'correct': int(correct),
+                            'total': int(total),
+                        })
+                pickEmTotalUsers = len(pickEmSeasonRows)
+
+                # Day window for achievements unlocked today: earliest game start in weekRange
+                earliestGame = session.query(func.min(Game.game_date)).filter(
+                    Game.season == season,
+                    Game.week.in_(weekRange),
+                ).scalar()
+                dayStart = earliestGame if earliestGame else (datetime.utcnow() - timedelta(hours=24))
 
                 # Day 4: compute playoff teams + season leaderboard
                 isDay4 = (dayNum == 4)
@@ -5566,6 +5894,21 @@ class SeasonManager:
                                     madePlayoffs = user.favorite_team_id in playoffTeamIds
                                     favTeamData['madePlayoffs'] = madePlayoffs
 
+                        # Achievements unlocked during this day
+                        achievementsToday = []
+                        achRows = session.query(UserAchievement, Achievement).join(
+                            Achievement, UserAchievement.achievement_id == Achievement.id
+                        ).filter(
+                            UserAchievement.user_id == user.id,
+                            UserAchievement.completed_at.isnot(None),
+                            UserAchievement.completed_at >= dayStart,
+                        ).order_by(UserAchievement.completed_at.asc()).all()
+                        for ua, ach in achRows:
+                            achievementsToday.append({
+                                'name': ach.name,
+                                'description': ach.description,
+                            })
+
                         data = {
                             'season': season,
                             'dayNum': dayNum,
@@ -5577,6 +5920,10 @@ class SeasonManager:
                             'leaderboardPrizes': leaderboardPrizes,
                             'pickEm': pickEmData,
                             'favoriteTeam': favTeamData,
+                            'pickEmLeaderboardTop': pickEmLeaderboardTop,
+                            'userPickEmSeasonRank': pickEmRankByUser.get(user.id, 0),
+                            'pickEmTotalUsers': pickEmTotalUsers,
+                            'achievementsToday': achievementsToday,
                         }
                         if isDay4:
                             data['leaderboardTop'] = leaderboardTop

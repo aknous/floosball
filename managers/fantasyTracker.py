@@ -275,8 +275,8 @@ class FantasyTracker:
         """
         from database.connection import get_session
         from database.models import (
-            FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
-            Player, User, WeeklyCardBonus, WeeklyPlayerFP, WeeklyModifier
+            EquippedCard, FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+            Player, User, UserCard, WeeklyCardBonus, WeeklyPlayerFP, WeeklyModifier
         )
         from database.repositories.card_repositories import EquippedCardRepository
         from managers.cardEffectCalculator import calculateWeekCardBonuses

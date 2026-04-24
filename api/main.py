@@ -3121,11 +3121,20 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             pass
 
     draftComplete = len(draftOrder) > 0 and all(t.get("complete") for t in draftOrder)
+    # GM vote resolutions for the Directives tab — survives refresh.
+    gmResolutions = getattr(sm, '_offseasonGmResults', []) or []
+    # Active phase — lets the frontend restore tier grouping + rookie list on refresh.
+    phase = getattr(sm, '_offseasonPhase', None)
+    # Per-team per-position fan vote rankings (after FA ballot resolution).
+    faVoteResults = getattr(sm, '_offseasonFaVoteResults', {}) or {}
     return {
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
         "faWindowEnd": faWindowEnd, "faPool": faPool,
         "existingBallot": existingBallot, "faDirectives": faDirectives,
+        "gmResolutions": gmResolutions,
+        "faVoteResults": faVoteResults,
+        "phase": phase,
         "draftComplete": draftComplete,
     }
 
@@ -3228,7 +3237,9 @@ def get_projected_funding(team_id: int):
         }
         for fan in allFans:
             tid = fan.favorite_team_id
-            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT) or DEFAULT_FUNDING_PCT
+            pct = getattr(fan, 'team_funding_pct', DEFAULT_FUNDING_PCT)
+            if pct is None:
+                pct = DEFAULT_FUNDING_PCT
             pct = max(0, min(100, pct))
             bal = balancesByUser.get(fan.id, 0) or 0
             if pct > 0 and bal > 0:
@@ -3445,7 +3456,9 @@ def get_league_markets():
         projectedContribByTeam: Dict[int, int] = {}
         for fan in allFans:
             tid = fan.favorite_team_id
-            pct = getattr(fan, 'team_funding_pct', _DEF_PCT) or _DEF_PCT
+            pct = getattr(fan, 'team_funding_pct', _DEF_PCT)
+            if pct is None:
+                pct = _DEF_PCT
             pct = max(0, min(100, pct))
             bal = balancesByUser.get(fan.id, 0) or 0
             if pct > 0 and bal > 0:
@@ -3713,7 +3726,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailOptOut": user.email_opt_out,
             "emailDayReport": user.email_day_report,
             "emailSeasonReport": user.email_season_report,
-            "teamFundingPct": getattr(user, 'team_funding_pct', 25) or 25,
+            "teamFundingPct": 25 if getattr(user, 'team_funding_pct', 25) is None else user.team_funding_pct,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
             "isAdmin": getattr(user, 'is_admin', False),
         }
@@ -4833,7 +4846,14 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                         weekData[week][userId]["playerPoints"].get(playerId, 0) + earned
                     )
 
-        # Inject card bonus into weekData for each user/week
+        # Inject card bonus into weekData for each user/week. Stored bonuses
+        # (from WeeklyCardBonus) win over the live recomputation — at week-end
+        # both can exist simultaneously for the same week (stored was just
+        # written by _processWeekCardEffects, and gamesActive is still True
+        # because activeGames hasn't been cleared yet). Without this guard
+        # the current-week bonus gets counted twice, inflating weekPoints by
+        # roughly the card bonus amount — visible to anyone hitting the
+        # endpoint right when week_end fires (e.g. the Discord bot).
         for userId in rostersByUser:
             userStoredBonuses = storedBonuses.get(userId, {})
             for week, bonusFP in userStoredBonuses.items():
@@ -4844,9 +4864,13 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                 weekData[week][userId]["cardBonusPoints"] = bonusFP
                 weekData[week][userId]["weekPoints"] += bonusFP
 
-            # Live card bonus for current active week
+            # Live card bonus for current active week — only used when there's
+            # no stored bonus yet for this week.
             if userId in liveCardBonusByUser:
                 week = currentWeek
+                hasStoredThisWeek = week in userStoredBonuses
+                if hasStoredThisWeek:
+                    continue
                 if week not in weekData:
                     weekData[week] = {}
                 if userId not in weekData[week]:
@@ -5064,6 +5088,10 @@ def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.blendCards(session, user.id, req.offeringCardIds, currentSeason, currentWeek)
+        # Curator reflects unique templates in the collection — a blend replaces
+        # several sacrificed templates with one new one, so the count may change.
+        from managers import achievementManager as _am
+        _am.syncCuratorProgress(session, user.id, currentSeason)
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -5628,6 +5656,11 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
     session = get_session()
     try:
         card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason)
+
+        # Keep Curator progress in sync — shop buys add to the collection but
+        # weren't previously counted because the sync only ran on pack opens.
+        from managers import achievementManager as _am
+        _am.syncCuratorProgress(session, user.id, currentSeason)
 
         # Secret — Sweep (bought every card in the current day's featured shop).
         # Shop refreshes daily; the current batch shares the most recent generated_at.
@@ -6239,6 +6272,35 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
                 "pending": deferred,
             })
 
+        # Income boost (Endowment) — raises weekly FP floobit cap
+        activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
+        if activeBoost:
+            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            from constants import POWERUP_INCOME_BOOST, WEEKLY_FP_FLOOBIT_CAP
+            active.append({
+                "slug": "income_boost",
+                "displayName": "Endowment",
+                "expiresAtWeek": activeBoost.expires_at_week,
+                "weeksRemaining": max(0, weeksRemaining),
+                "expiring": weeksRemaining <= 1,
+                "boostedCap": POWERUP_INCOME_BOOST.get("boostedCap", 65),
+                "standardCap": WEEKLY_FP_FLOOBIT_CAP,
+            })
+
+        # Fortune's Favor (Patronage) — boosts chance card trigger rates
+        activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
+        if activeFavor:
+            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            weeksRemaining = activeFavor.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            active.append({
+                "slug": "fortunes_favor",
+                "displayName": "Patronage",
+                "expiresAtWeek": activeFavor.expires_at_week,
+                "weeksRemaining": max(0, weeksRemaining),
+                "expiring": weeksRemaining <= 1,
+            })
+
         # Modifier nullifier (current week)
         override = modRepo.getOverride(user.id, currentSeasonNum, currentWeek)
         if override:
@@ -6687,7 +6749,11 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
             rookieIds = set(faPlayerIds) - playersWithStats
 
         def formatStats(row, posName):
-            if not row:
+            # Rows with zero games played = player was on the books but never
+            # saw the field (FA who sat out, injured, buried on depth chart).
+            # Treat these as no-stats so the UI falls through to the
+            # "No stats this season" label instead of rendering a line of 0s.
+            if not row or (getattr(row, 'games_played', 0) or 0) == 0:
                 return None
             base = {"gamesPlayed": row.games_played, "fantasyPoints": row.fantasy_points}
             if posName == 'QB':
@@ -6816,7 +6882,62 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isProspect": True,
                 })
 
-        return build_success_response({"openSlots": openSlots, "players": players})
+        # Live ballot tally — aggregates fan votes in real time during the
+        # voting window so users can see who's leading before IRV resolution.
+        # Counts each ballot's mention of a candidate as one vote, with a
+        # separate first-choice count for depth.
+        from database.repositories.gm_repository import GmFaBallotRepository
+        ballotRepo = GmFaBallotRepository(session)
+        ballots = ballotRepo.getRankingsForTeam(favTeam.id, seasonNum) if favTeam else []
+
+        mentionCount: Dict[int, int] = {}
+        firstChoiceCount: Dict[int, int] = {}
+        for ballot in ballots:
+            for rank, pid in enumerate(ballot):
+                mentionCount[pid] = mentionCount.get(pid, 0) + 1
+                if rank == 0:
+                    firstChoiceCount[pid] = firstChoiceCount.get(pid, 0) + 1
+
+        # Build candidate lookup. Ballots can rank:
+        #   - current FAs (pm.freeAgents)
+        #   - fan team's prospects (pipeline promotions)
+        #   - projected FAs from OTHER teams (walk-year / cut-vote candidates
+        #     who are still rostered). Must sweep every team's roster +
+        #     prospect pool so these IDs resolve, otherwise whole positions
+        #     silently drop out of the tally.
+        playerLookup = {p.id: p for p in pm.freeAgents}
+        if teamManager:
+            for t in teamManager.teams:
+                for p in getattr(t, 'prospects', []):
+                    playerLookup[p.id] = p
+                for _slot, p in t.rosterDict.items():
+                    if p is not None:
+                        playerLookup[p.id] = p
+
+        ballotTally: Dict[str, List[Dict]] = {}
+        for pid, count in mentionCount.items():
+            p = playerLookup.get(pid)
+            if not p:
+                continue
+            posName = p.position.name
+            ballotTally.setdefault(posName, []).append({
+                "id": p.id,
+                "name": p.name,
+                "position": posName,
+                "rating": round(getattr(p, 'playerRating', 0), 1),
+                "votes": count,
+                "firstChoice": firstChoiceCount.get(pid, 0),
+                "isProspect": bool(getattr(p, 'is_prospect', False)),
+            })
+        for posName in ballotTally:
+            ballotTally[posName].sort(key=lambda x: (-x['votes'], -x['firstChoice'], -x['rating']))
+
+        return build_success_response({
+            "openSlots": openSlots,
+            "players": players,
+            "ballotTally": ballotTally,
+            "totalBallots": len(ballots),
+        })
     finally:
         session.close()
 
@@ -7996,6 +8117,12 @@ def listAchievements(user: _User = Depends(_getCurrentUser)):
     try:
         try:
             achievementManager.backfillOnboardingAchievements(session, user.id)
+            # Curator's progress was historically only updated on pack-open and
+            # missed card-acquisition paths (blend, shop buy, achievement reward
+            # claim). Re-sync from the authoritative UserCard count here so users
+            # whose progress got stuck catch up the next time they check.
+            if currentSeason:
+                achievementManager.syncCuratorProgress(session, user.id, currentSeason)
             session.commit()
         except Exception as e:
             session.rollback()
@@ -8115,6 +8242,15 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
                 session, user.id, packType.id, currentSeason,
                 skipCurrency=True, source=reward.source,
             )
+            # Mirror the hooks from the normal pack-open endpoint so claimed
+            # pack rewards update achievements the same way. Without these,
+            # Pack Popper / Curator / Sparkler would only progress when the
+            # user spent Floobits, not when they claimed a free pack.
+            from managers import achievementManager as _am
+            _am.onPackOpened(session, user.id)
+            _am.syncCuratorProgress(session, user.id, currentSeason)
+            if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
+                _am.onDiamondOpened(session, user.id, currentSeason)
             reward.claimed_at = datetime.utcnow()
             session.commit()
             return build_success_response({"kind": "pack", **result})
