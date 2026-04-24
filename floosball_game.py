@@ -4628,6 +4628,13 @@ class Game:
         self.yardsToFirstDown = 2
 
         self.play = Play(self)
+        # Give the conversion its own play number so it has a stable identity
+        # separate from the touchdown that preceded it. Without this the Play
+        # object has no playNumber attribute, which serializes as 0 and can
+        # collide with other 2-pt conversions (or missing-playNumber plays)
+        # in the REST response and frontend React keys.
+        self.totalPlays += 1
+        self.play.playNumber = self.totalPlays
 
         # 60% pass, 40% run (2-pt conversions favor passing)
         if batched_randint(1, 10) <= 6:
@@ -4648,7 +4655,11 @@ class Game:
         self.play.awayTeamScore = self.awayScore
 
         self.formatPlayText()
-        self.gameFeed.insert(0, {'play': self.play})
+        # Defensive: only insert if this Play object isn't already at the top
+        # of the feed. Guards against any unexpected double-invocation path.
+        alreadyInFeed = bool(self.gameFeed) and self.gameFeed[0].get('play') is self.play
+        if not alreadyInFeed:
+            self.gameFeed.insert(0, {'play': self.play})
         if twoPointGood:
             self.highlights.insert(0, {'play': self.play})
             self.leagueHighlights.insert(0, {'play': self.play})
@@ -4717,11 +4728,6 @@ class Game:
                     'quarter': self.currentQuarter,
                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                 }})
-                self.broadcastGameState(includeLastPlay=False, eventMessage={
-                    'text': 'Two-Minute Warning',
-                    'quarter': self.currentQuarter,
-                    'timeRemaining': self.formatTime(self.gameClockSeconds)
-                })
                 self.broadcastGameState(includeLastPlay=False, eventMessage={
                     'text': 'Two-Minute Warning',
                     'quarter': self.currentQuarter,
