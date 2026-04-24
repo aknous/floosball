@@ -5723,7 +5723,7 @@ class SeasonManager:
                 pickEmTotalUsers = len(pickEmSeasonRows)
 
                 # Day window for achievements unlocked today: earliest game start in weekRange
-                earliestGame = session.query(func.min(Game.start_time)).filter(
+                earliestGame = session.query(func.min(Game.game_date)).filter(
                     Game.season == season,
                     Game.week.in_(weekRange),
                 ).scalar()
