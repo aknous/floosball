@@ -815,6 +815,21 @@ class RecordManager:
             homeScoreDiff = gameInstance.homeScore - gameInstance.awayScore
             homeTeam.seasonTeamStats['scoreDiff'] += homeScoreDiff
 
+            # Big plays in this game — count once and credit both teams,
+            # since Highlight Reel counts big plays in games the favorite
+            # team participated in regardless of which side executed them.
+            bigPlayCount = sum(
+                1 for entry in getattr(gameInstance, 'gameFeed', [])
+                if entry.get('isBigPlay')
+            )
+            if bigPlayCount:
+                homeTeam.seasonTeamStats['bigPlays'] = (
+                    homeTeam.seasonTeamStats.get('bigPlays', 0) + bigPlayCount
+                )
+                awayTeam.seasonTeamStats['bigPlays'] = (
+                    awayTeam.seasonTeamStats.get('bigPlays', 0) + bigPlayCount
+                )
+
             # Away team offensive stats (lines 1238-1248)
             awayTeam.seasonTeamStats['Offense']['pts'] += gameInstance.awayScore
             awayTeam.seasonTeamStats['Offense']['runTds'] += awayTeam.rosterDict['rb'].gameStatsDict['rushing']['tds']

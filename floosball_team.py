@@ -15,12 +15,17 @@ teamStatsDict = {
                     'leagueChamp': False,
                     'floosbowlChamp': False,
                     'topSeed': False,
-                    'wins': 0, 
-                    'losses': 0, 
-                    'winPerc': 0, 
+                    'wins': 0,
+                    'losses': 0,
+                    'winPerc': 0,
                     'streak': 0,
                     'peakStreak': 0,
                     'scoreDiff': 0,
+                    # Cumulative big plays in games this team played this
+                    # season (either side of the ball). Used for the
+                    # Highlight Reel card projection — per-game avg =
+                    # bigPlays / (wins + losses).
+                    'bigPlays': 0,
                     'Offense': {
                         'runTds': 0,
                         'passTds': 0,

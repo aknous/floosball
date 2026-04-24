@@ -123,6 +123,20 @@ class CardCalcContext:
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
     playerSeasonFPPerGame: Dict[int, float] = field(default_factory=dict)  # playerId → FP/game
 
+    # Projection mode — when True, the calc is running against expected values
+    # (season averages, ELO forecasts) instead of live game outcomes. Chance
+    # cards resolve to expected value (trigger prob × reward) rather than a
+    # coin-flip, and outcome-dependent booleans are filled with most-likely
+    # values. favoriteTeamWinProb is set alongside it for chance weighting.
+    isProjection: bool = False
+    favoriteTeamWinProb: float = 0.5
+    # Which projection variant is this run building:
+    #   'expected'   — most-likely path, chance cards scaled by threshold
+    #   'optimistic' — all triggers fire, chance cards return enhanced values
+    #                  without threshold scaling. Used to compute the "if it
+    #                  hits" upside for the odds display.
+    projectionVariant: str = 'expected'
+
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
     _firstPassBreakdowns: Optional[List] = None  # Set for second-pass effects
@@ -196,12 +210,12 @@ class CardBonusResult:
 # Effects that use the roster player's stats at the card's position
 _ROSTER_POSITION_EFFECTS = {
     "luminary", "squire", "cha_ching", "ace_up_the_sleeve",
-    "showoff", "spotlight_moment", "schadenfreude", "hot_hand",
+    "showoff", "spotlight_moment",
     # New position-based effects
     "gunslinger", "air_raid", "workhorse", "goal_line_vulture",
     "possession", "trebuchet", "double_trouble",
     "safety_blanket", "mismatch", "sniper",
-    "game_ball", "spectacle", "indemnity",
+    "spectacle", "indemnity",
 }
 
 
@@ -307,8 +321,8 @@ def _checkConditional(conditional: Optional[dict], playerStats: dict) -> tuple:
 _SECOND_PASS_EFFECTS = frozenset({
     "copycat", "chain_reaction", "bonus_round",
     "double_down", "last_resort",
-    "high_roller", "jackpot",
-    "fortitude", "immaculate",
+    "high_roller",
+    "fortitude",
 })
 
 # Tradeoff effects that modify the overall bonus aggregation
@@ -376,12 +390,30 @@ class _AdvantageRNG:
         return min(r1, r2)
 
 
+class _ProjectionRNG:
+    """Deterministic RNG used when building a payout projection.
+
+    Always returns 0.0 so every chance-card trigger path evaluates as
+    'triggered'. The calculator then scales the result by the recorded
+    chance threshold in _computeCardPass, producing an expected-value
+    estimate without the effect functions needing to branch on
+    projection mode themselves.
+    """
+    def random(self) -> float:
+        return 0.0
+
+
 def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _random.Random:
     """Create a deterministic RNG seeded by user+season+week+card.
 
     Same card in same week always produces the same roll.
     When Advantage is active, returns a wrapper that rolls twice and takes the better result.
+    In projection mode, returns a zero-roll RNG so chance cards always
+    take the triggered path — the caller scales by the threshold to
+    produce expected value.
     """
+    if getattr(ctx, 'isProjection', False):
+        return _ProjectionRNG()
     seedStr = f"{ctx.userId}-{ctx.season}-{ctx.weekNumber}-{userCardId}-{seedExtra}"
     seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
     rng = _random.Random(seedHash)
@@ -446,6 +478,20 @@ def _computeCardPass(
     # 1. Compute primary effect
     primary = computeEffect(effectConfig, ctx, cardPlayerId, eq.id,
                             firstPassBreakdowns=firstPassBreakdowns)
+
+    # Projection mode: if this was a chance effect, the _ProjectionRNG forced
+    # it onto the 'triggered' path. For the 'expected' variant, scale the
+    # output by the trigger probability to get an expected-value estimate
+    # the UI can show as a single number. For 'optimistic' variant, leave
+    # the enhanced value as-is so the UI can show the "if it hits" upside.
+    if (getattr(ctx, 'isProjection', False)
+            and getattr(ctx, 'projectionVariant', 'expected') == 'expected'
+            and primary.chanceThreshold > 0):
+        threshold = primary.chanceThreshold
+        primary.fpBonus *= threshold
+        primary.floobits = int(primary.floobits * threshold)
+        if primary.multBonus > 1:
+            primary.multBonus = 1 + (primary.multBonus - 1) * threshold
 
     # 2. Apply match bonus and weekly modifier
     isMatch = cardPlayerId in ctx.rosterPlayerIds
@@ -712,18 +758,19 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     normalBreakdowns = [b for b in breakdowns if b.effectName not in _TRADEOFF_EFFECTS]
 
     if "double_down" in tradeoffNames and normalBreakdowns:
-        # Large FPx applied to lowest non-zero bonus, zeroes highest bonus
-        nonZero = [b for b in normalBreakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0]
-        if len(nonZero) >= 2:
-            # Sort by total FP (using FP as primary metric)
-            sorted_ = sorted(nonZero, key=lambda b: b.totalFP)
-            highest = sorted_[-1]
-            # Zero out the highest card
-            highest.primaryFP = 0
-            highest.primaryFloobits = 0
-            highest.primaryMult = 0
-            highest.totalFP = highest.conditionalBonus + highest.secondaryFP
-            highest.floobitsEarned = highest.secondaryFloobits
-            highest.equation = f"zeroed by Double Down (was {highest.equation})"
+        # Double the lowest non-zero card's FP payout. Pure upside at diamond tier.
+        ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
+        multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
+        nonZeroFP = [b for b in normalBreakdowns if b.totalFP > 0]
+        if nonZeroFP:
+            lowest = min(nonZeroFP, key=lambda b: b.totalFP)
+            originalFP = lowest.totalFP
+            bonusFP = round(originalFP * (multValue - 1), 1)
+            lowest.primaryFP = round(lowest.primaryFP + bonusFP, 1)
+            lowest.totalFP = round(lowest.totalFP + bonusFP, 1)
+            lowest.equation = f"{lowest.equation} × {multValue} (Double Down)"
+        # Clear the marker mult so it doesn't stack on the global FPx aggregation
+        if ddBreakdown:
+            ddBreakdown.primaryMult = 0
 
 
