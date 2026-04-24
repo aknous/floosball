@@ -4788,13 +4788,25 @@ class Game:
         
         # In OT (Q5+), check if game should end
         if self.currentQuarter >= 5:
-            # Both teams must have had their guaranteed possession before game can end
+            # Both teams finished their guaranteed possession and someone leads
             if self.homeScore != self.awayScore and self.otSecondPossComplete:
+                return True
+            # Clock expired during the trailing team's guaranteed possession:
+            # the first team already scored (otFirstPossComplete) and the
+            # second team ran out of time without tying or taking the lead.
+            # Their possession is effectively over — game is over. Without
+            # this check, isGameOver stayed False and the main loop printed
+            # "Start Additional Overtime Period" + coin-toss messages
+            # repeatedly until a subsequent turnover happened to flip
+            # otSecondPossComplete.
+            if (self.gameClockSeconds <= 0
+                    and self.homeScore != self.awayScore
+                    and self.otFirstPossComplete):
                 return True
             # Clock expired and still tied — let advanceQuarter handle the new OT period
             if self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
                 return False
-        
+
         return False
     
     def calculateWinProbability(self) -> dict:
