@@ -50,12 +50,12 @@ EFFECT_CATEGORY = {
     "buy_low": "floobits", "trust_fund": "floobits",
     "feeding_frenzy": "floobits", "highlight_reel": "floobits", "workhorse": "flat_fp",
     "expedition": "flat_fp",
-    "goal_line_vulture": "floobits", "connection": "floobits",
+    "goal_line_vulture": "floobits",
     # conditional
     "showoff": "conditional", "bandwagon": "conditional",
     "upset_special": "conditional", "believe": "conditional",
     "reclamation": "conditional", "pedigree": "conditional",
-    "mismatch": "conditional", "team_chemistry": "conditional",
+    "mismatch": "conditional",
     "comeback_kid": "conditional", "domination": "conditional", "walk_off": "conditional",
     # streak
     "on_fire": "streak",
@@ -116,8 +116,8 @@ EFFECT_EDITION_TIER = {
     "luminary": "holographic", "stampede": "holographic",
     "stack": "holographic", "backfield_buddies": "holographic",
     "cha_ching": "holographic", "feeding_frenzy": "holographic",
-    "highlight_reel": "holographic", "connection": "holographic",
-    "team_chemistry": "holographic", "hometown_hero": "holographic",
+    "highlight_reel": "holographic",
+    "hometown_hero": "holographic",
     "loyalty_bonus": "holographic",
     "ace_up_the_sleeve": "holographic", "trebuchet": "holographic",
     "double_trouble": "holographic", "lead_blocker": "holographic",
@@ -188,12 +188,12 @@ EFFECT_DISPLAY_NAMES = {
     "loyalty_bonus": "Loyalty Bonus",
     "windfall": "Windfall",
     "rng": "RNG",
-    "snake_eyes": "Snake Eyes",
+    "snake_eyes": "Bizarro",
     "avalanche": "Avalanche",
     "hedge": "Hedge",
     "complacency": "Complacency",
     "spotlight_moment": "Spotlight Moment",
-    "ace_up_the_sleeve": "Ace Up the Sleeve",
+    "ace_up_the_sleeve": "Pocket Aces",
     "lead_blocker": "Lead Blocker",
     # Multiplier (QB) — 10 effects
     "big_deal": "Big Deal",
@@ -203,7 +203,7 @@ EFFECT_DISPLAY_NAMES = {
     "babysitter": "Babysitter",
     "martyr": "Martyr",
     "juggernaut": "Juggernaut",
-    "resplendent": "Resplendent",
+    "resplendent": "Hot Stove",
     "underdog": "Underdog",
     "stockpiler": "Stockpiler",
     "providence": "Providence",
@@ -226,7 +226,7 @@ EFFECT_DISPLAY_NAMES = {
     "upset_special": "Upset Special",
     "believe": "Believe",
     "reclamation": "Reclamation",
-    "pedigree": "Pedigree",
+    "pedigree": "Blue Ribbon",
     # Streak (K) — 10 effects
     "on_fire": "On Fire",
     "snowball_fight": "Snowball Fight",
@@ -260,26 +260,24 @@ EFFECT_DISPLAY_NAMES = {
     "backfield_buddies": "Backfield Buddies",
     "homer": "Homer",
     "gone_streaking": "Gone Streaking",
-    "hometown_hero": "Hometown Hero",
-    "connection": "Connection",
-    "team_chemistry": "Team Chemistry",
+    "hometown_hero": "Clique",
     # ── Game-Outcome Effects ──
     "comeback_kid": "Comeback Kid",
     "domination": "Domination",
     "walk_off": "Walk Off",
     # ── Card-to-Card Interaction Effects ──
-    "full_roster": "Full Roster",
+    "full_roster": "Second String",
     "all_in": "All In",
     "diversified": "Diversified",
     "gold_rush": "Gold Rush",
     "stacked_deck": "Stacked Deck",
     "copycat": "Copycat",
     "chain_reaction": "Chain Reaction",
-    "bonus_round": "Bonus Round",
-    "double_down": "Double Down",
+    "bonus_round": "Group Project",
+    "double_down": "Lemons",
     "last_resort": "Last Resort",
     "high_roller": "High Roller",
-    "fortitude": "Fortitude",
+    "fortitude": "Heat Check",
     # ── Escalating / Pace Effects ──
     "crescendo": "Crescendo",
     "eminence": "Eminence",
@@ -290,7 +288,7 @@ EFFECT_DISPLAY_NAMES = {
     # ── Strategy-Warping Effects ──
     "alchemy": "Alchemy",
     "home_alone": "Home Alone",
-    "closer": "Closer",
+    "closer": "Closers",
     "dark_horse": "Dark Horse",
     "vagabond": "Vagabond",
     "fat_cat": "Fat Cat",
@@ -317,21 +315,21 @@ STAT_DISPLAY_NAMES = {
 EFFECT_TAGLINES = {
     # Flat FP (WR)
     "freebie": "Free real estate",
-    "entourage": "Stars attract stars",
+    "entourage": "Seeing stars",
     "touchdown_pinata": "Smash for points",
     "scrappy": "Root for the little guy",
     "honor_roll": "Straight A's",
-    "three_pointer": "Cash money kicks",
+    "three_pointer": "Count it",
     "garbage_time": "Participation trophies",
     "loyalty_bonus": "Faithful fan rewards",
-    "windfall": "Cashing in on talent",
+    "windfall": "Cashing in",
     "rng": "Feeling lucky?",
-    "snake_eyes": "Long shots pay",
-    "avalanche": "Each one hits harder",
+    "snake_eyes": "Down is up",
+    "avalanche": "Bury them",
     "hedge": "Downside protection",
     "complacency": "Stop tinkering",
-    "spotlight_moment": "Your {posLabel} delivers",
-    "ace_up_the_sleeve": "Your WRs hit the mark",
+    "spotlight_moment": "Lights please",
+    "ace_up_the_sleeve": "AA",
     # Multiplier (QB)
     "big_deal": "Kind of a big deal",
     "cornucopia": "Every touchdown compounds",
@@ -348,31 +346,31 @@ EFFECT_TAGLINES = {
     "rising_tide": "Lifts all boats",
     # Floobits (RB)
     "allowance": "Weekly pocket money",
-    "cha_ching": "Your {posLabel} scores, you profit",
+    "cha_ching": "Cash out",
     "piggy_bank": "Points into coins",
-    "good_neighbor": "Silver lining included",
+    "good_neighbor": "You're covered",
     "consolation_prize": "Better luck next time",
     "rock_bottom": "Silver lining",
     "buy_low": "Buy the dip",
     "trust_fund": "Set it and collect",
-    "feeding_frenzy": "TD feast",
-    "highlight_reel": "Big play bonus",
+    "feeding_frenzy": "Eat up",
+    "highlight_reel": "Did you see that?",
     # Conditional (TE)
     "showoff": "Your {posLabel} showed up",
-    "bandwagon": "Your team wins, you win",
+    "bandwagon": "Get in, loser",
     "upset_special": "Giant slayer",
-    "believe": "Playoff or bust",
+    "believe": "Playoffs or bust",
     "reclamation": "Fixer's bonus",
     # ── Strategy-Warping Effects ──
     "alchemy": "Lead into gold",
     "home_alone": "Keep the change, ya filthy animal",
-    "closer": "Finish the job",
+    "closer": "See this watch?",
     "dark_horse": "Nobody saw them coming",
     "vagabond": "A restless spirit",
-    "fat_cat": "Money makes money",
+    "fat_cat": "Rolling in it",
     "surplus": "More where that came from",
-    "bonsai": "Snip snip, grow grow",
-    "pedigree": "Blue blood benefits",
+    "bonsai": "Snip snip",
+    "pedigree": "Pedigree",
     # Streak (K)
     "on_fire": "Keep the flame alive",
     "snowball_fight": "Getting bigger",
@@ -391,10 +389,10 @@ EFFECT_TAGLINES = {
     "stampede": "Unstoppable force",
     "goal_line_vulture": "Opportunistic scavenging",
     "possession": "Catch everything",
-    "trebuchet": "Going deep",
-    "double_trouble": "Both WRs showed up",
+    "trebuchet": "Siege engine",
+    "double_trouble": "Both WRs deliver",
     "slippery": "Can't bring me down",
-    "jailbreak": "Breaking tackles, breaking records",
+    "jailbreak": "Breaking out",
     "safety_blanket": "Reliable target",
     "industrious": "Honest work",
     "lead_blocker": "Paving the way",
@@ -406,31 +404,29 @@ EFFECT_TAGLINES = {
     "stack": "QB-WR stack",
     "backfield_buddies": "Same backfield",
     "homer": "Hometown discount",
-    "gone_streaking": "Streaks of all kinds",
-    "hometown_hero": "Full stack",
-    "connection": "TD connection",
-    "team_chemistry": "Chemistry bonus",
+    "gone_streaking": "CENSORED",
+    "hometown_hero": "BFFs",
     # ── Game-Outcome Effects ──
     "comeback_kid": "Never count them out",
     "domination": "Total destruction",
     "walk_off": "Buzzer beater",
     # ── Card-to-Card Interaction Effects ──
-    "full_roster": "Five positions, one bonus",
-    "all_in": "Go deep on one position",
+    "full_roster": "Backup team",
+    "all_in": "Eggs + basket",
     "diversified": "Variety pack",
     "gold_rush": "Floobits love company",
-    "stacked_deck": "Multipliers on multipliers",
+    "stacked_deck": "Let's get exponential",
     "copycat": "Imitation is flattery",
     "chain_reaction": "Cards feeding cards",
     "bonus_round": "Everyone showed up",
-    "double_down": "Your weakest card, amplified",
+    "double_down": "Burn the house down",
     "last_resort": "The ultimate insurance",
     "high_roller": "Degenerate strategy",
-    "fortitude": "Persistence is a virtue",
+    "fortitude": "Staying hot",
     # ── Escalating / Pace Effects ──
     "crescendo": "Keep missing, it only gets easier",
     "eminence": "Stats don't lie",
-    "traverse": "Long road, big payoff",
+    "traverse": "Take the long way",
     # ── Chance Synergy Effects ──
     "advantage": "Double or nothing (minus the nothing)",
     "catalyst": "Points in, luck out",
@@ -438,8 +434,8 @@ EFFECT_TAGLINES = {
 
 EFFECT_TOOLTIPS = {
     # Flat FP (WR)
-    "freebie": "It pays to show up. Bonus FP every week.",
-    "entourage": "Strength in numbers. Bonus FP for each high-rated player on your roster.",
+    "freebie": "It's free. Bonus FP every week.",
+    "entourage": "Seeing stars. Bonus FP for each high-rated player on your roster.",
     "touchdown_pinata": "Every house call fills the piñata. Bonus FP per roster TD.",
     "scrappy": "Somebody has to believe in them. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more low-rated players are on your roster.",
     "honor_roll": "Good grades get rewarded. Bonus FP for each roster player putting up a solid score.",
@@ -447,15 +443,15 @@ EFFECT_TOOLTIPS = {
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
     "windfall": "When your players ball out, you get paid. Floobits per overperforming roster player.",
-    "rng": "Feeling lucky? Random FP rolled each week — could be a little, could be a lot.",
-    "snake_eyes": "Rock bottom pays out. The lower your lowest-scoring roster player's FP this week, the bigger the FPx on your total. Rolling snake eyes (0 FP) maxes it at 3x.",
+    "rng": "Feeling lucky? Random FP rolled each week.",
+    "snake_eyes": "Bad is good. The lower your lowest-scoring roster player's FP this week, the bigger the FPx on your total.",
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
     "hedge": "Insurance policy. Starts with an FP pool. Roster FP subtracts from it, and whatever remains is your payout.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Resets if you make a swap. Stacking streak cards accelerates growth.",
-    "spotlight_moment": "When your {posLabel} finds the endzone, you cash in. FP whenever your roster's {posLabel} scores a TD. For WR, either counts.",
-    "ace_up_the_sleeve": "Your WRs put in the work. Base FP every week, plus bonus FP when your roster's WRs hit a combined stat threshold.",
+    "spotlight_moment": "Lights, camera, action. FP whenever your roster's {posLabel} scores a TD. For WR, either counts.",
+    "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when your roster's WRs hit a combined stat threshold.",
     # Multiplier (QB)
-    "big_deal": "Show me the money. Flat FPx on your total score.",
+    "big_deal": "Don't you know who I am? Flat FPx on your total score.",
     "cornucopia": "Every touchdown compounds. FPx that stacks per roster TD.",
     "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your roster's {posLabel} earns.",
     "squire": "The crowd goes wild. FP that stacks with each TD your roster's {posLabel} scores.",
@@ -470,22 +466,22 @@ EFFECT_TOOLTIPS = {
     "rising_tide": "A rising tide lifts all boats. FPx that grows with each roster player outperforming their rating.",
     # Floobits (RB)
     "allowance": "Don't spend it all in one place. Free Floobits every week just for existing.",
-    "cha_ching": "Your {posLabel}'s endzone is your cash register. Floobits for every TD your roster's {posLabel} scores.",
+    "cha_ching": "The endzone is your cash register. Floobits for every TD your roster's {posLabel} scores.",
     "piggy_bank": "Automatic savings plan. Converts a chunk of your roster's total FP into Floobits.",
-    "good_neighbor": "Every cloud has a silver lining. Guaranteed Floobits plus a bonus for each FG your kicker misses.",
+    "good_neighbor": "Worry free. Guaranteed Floobits plus a bonus for each FG your kicker misses.",
     "consolation_prize": "Here's a little something for your troubles. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more roster players have a bad week.",
     "rock_bottom": "Rock bottom has a cash reward. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the longer your favorite team's losing streak.",
     "buy_low": "Buy low, sell... whenever. Floobits for every underperforming roster player.",
     "trust_fund": "The lazy investor strategy. Floobits that grow each week your roster stays unchanged.",
     "feeding_frenzy": "Dinner is served. Floobits per roster TD, plus a jackpot bonus when your roster hits the TD threshold.",
-    "highlight_reel": "Highlight reel material pays. Floobits for every big play your favorite team pulls off.",
+    "highlight_reel": "Highlight reel material. Floobits for every big play your favorite team pulls off.",
     # Conditional (TE)
-    "showoff": "Your {posLabel} had a career day. FP when your roster's {posLabel} overperforms expectations in a single game.",
-    "bandwagon": "Bandwagoning has never been so rewarding. FPx whenever your favorite team wins.",
+    "showoff": "Your {posLabel} had a good day. FP when your roster's {posLabel} overperforms expectations in a single game.",
+    "bandwagon": "Hop on the bandwagon. FPx whenever your favorite team wins.",
     "upset_special": "Giant killer. FP when your favorite team beats a higher-rated opponent.",
     "believe": "Keep the dream alive. FP as long as your favorite team holds a playoff spot.",
     "reclamation": "Someone has to fix this mess. FP when most of your roster is underperforming.",
-    "pedigree": "Good breeding shows. FP with a bonus when your favorite team's ELO reaches elite status (1600+).",
+    "pedigree": "Prize winner. FP with a bonus when your favorite team's ELO reaches elite status (1600+).",
     # Streak (K) — streak cards boost each other's growth when stacked
     "on_fire": "Don't let the flame die. FPx that grows each week your roster's K makes a FG. Resets if they don't. Stacking streak cards accelerates growth.",
     "snowball_fight": "It just keeps getting bigger. FP growing each week your roster scores a TD. Resets if they don't. Stacking streak cards accelerates growth.",
@@ -501,16 +497,16 @@ EFFECT_TOOLTIPS = {
     "air_raid": "Death from above. Floobits for each passing TD your roster's QB throws.",
     "workhorse": "Pound the rock. FP scaling with rushing attempts by your roster's RB.",
     "expedition": "Yards are yards. FP that scales with how many rushing yards your roster's RB gains.",
-    "stampede": "Get rolling. Base FPx always, enhanced FPx when your roster's RB hits 75+ rushing yards.",
+    "stampede": "Get rolling. Base FPx, enhanced FPx when your roster's RB hits 75+ rushing yards.",
     "goal_line_vulture": "Vulture season. Floobits for every rushing TD your roster's RB punches in.",
     "possession": "Chain-mover. FP that scales with how many catches your roster's WRs haul in combined.",
     "trebuchet": "Send it deep. Base FP every week, plus bonus FP when either of your roster's WRs catches a pass of 25+ yards.",
-    "double_trouble": "Two is better than one. FP when either WR scores a TD, with a bonus when both WRs score.",
+    "double_trouble": "Two is better than one. FP when either WR scores a TD, bonus when both WRs score.",
     "slippery": "Yards after the catch turn into points. FP that scales with your roster's WRs' combined YAC.",
-    "jailbreak": "Big YAC day = big bonus. Base FP every week, plus bonus FP when your roster's WRs combine for enough yards after catch.",
+    "jailbreak": "Can't catch them. Base FP every week, plus bonus FP when your roster's WRs combine for enough yards after catch.",
     "safety_blanket": "Every QB needs one. FP scaling with receptions by your roster's TE.",
     "industrious": "Honest work deserves honest pay. Floobits scaling with receptions by your roster's TE.",
-    "lead_blocker": "Clearing the path. FP per TD by your TE — RB touchdowns on the same team count as TE TDs.",
+    "lead_blocker": "Clearing the path. FP per TD by your TE. RB TDs count as TE TDs if they are on the same team.",
     "mismatch": "They can't cover this guy. FP per TD by your roster's {posLabel}, plus a bonus when they score multiple TDs.",
     "sniper": "From long range. FP for each field goal your roster's K makes from 40+ yards out.",
     "spectacle": "Going off. FP that scales with how much your roster's {posLabel} overperforms expectations this week.",
@@ -519,10 +515,8 @@ EFFECT_TOOLTIPS = {
     "stack": "Stack attack. FPx when your roster's QB and any WR play on the same team.",
     "backfield_buddies": "Same backfield, double the payoff. FPx when your roster's QB and RB play on the same team.",
     "homer": "Loyalty has its perks. FP scaling with how many of your roster players play on your favorite team.",
-    "gone_streaking": "It doesn't matter if they're winning or losing — the longer the streak, the bigger the payout. Uses your favorite team's longest streak this season.",
-    "hometown_hero": "Full stack activated. Floobits when 3 or more of your roster players share the same team.",
-    "connection": "Shared teams pay off. Earn Floobits when two or more of your fantasy roster players are on the same team and one scores a TD.",
-    "team_chemistry": "Good chemistry lifts all boats. Floobits that grow with the number of same-team pairs on your roster.",
+    "gone_streaking": "Don't look away. FP based on your favorite team's longest streak (wins or losses).",
+    "hometown_hero": "Always together. Floobits when 3 or more of your roster players share the same team.",
     # ── Game-Outcome Effects ──
     "comeback_kid": "Down but never out. Base FP every week, plus a big bonus when your favorite team comes back from a deficit to win.",
     "domination": "Run up the score. Floor FP on a loss, more on a win, and a big bonus for blowout victories.",
@@ -532,14 +526,14 @@ EFFECT_TOOLTIPS = {
     "all_in": "Bet big on one position. FPx that grows with how many of your equipped cards share the same position.",
     "diversified": "Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards.",
     "gold_rush": "Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand.",
-    "stacked_deck": "Multipliers boost multipliers. FPx for each FPx card in your hand.",
+    "stacked_deck": "Multiply the multipliers. FPx for each FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
-    "bonus_round": "Everyone showed up to play. Large FP if 4 or more of your other cards triggered a non-zero bonus this week.",
-    "double_down": "Nothing wasted. Multiplies the FP output of your lowest-earning card this week.",
+    "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
+    "double_down": "With the lemons. Multiplies the FP output of your lowest-earning card this week.",
     "last_resort": "When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more of your other cards fail to produce a bonus.",
     "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
-    "fortitude": "The resolute are rewarded. FPx that scales with how many of your streak cards have active streaks.",
+    "fortitude": "Are you feeling the heat? FPx that scales with how many of your streak cards have active streaks.",
     # ── Escalating / Pace Effects ──
     "crescendo": "Miss enough and eventually you can't miss. Each TD by your roster's {posLabel} rolls for a bonus. Miss and the odds go up. For K, triggers on FGs.",
     "eminence": "Good players get paid more. FPx that scales with how far above position average your player performs. Active from week 3.",
@@ -550,7 +544,7 @@ EFFECT_TOOLTIPS = {
     # ── Strategy-Warping Effects ──
     "alchemy": "Transmutation complete. Each FG by your roster's K counts as a TD for fantasy scoring and other card effects.",
     "home_alone": "Embrace the void. FPx that grows with each empty roster slot.",
-    "closer": "Fourth quarter closer. Bonus FP from a multiple of your roster's Q4 and OT production.",
+    "closer": "Always be closing. Bonus FP from your roster's Q4 and OT production.",
     "dark_horse": "The stars shine brightest from below. FPx that scales inversely with the star rating of your roster's {posLabel}.",
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
@@ -644,8 +638,6 @@ EFFECT_DETAIL_TEMPLATES = {
     "homer": "+{perPlayerFP} FP per roster player on your favorite team",
     "gone_streaking": "+{baseFP} FP base, +{perStreakFP} per game in longest streak",
     "hometown_hero": "+{rewardFloobits} Floobits when 3+ roster players share a team",
-    "connection": "{perTdFloobits} Floobits per TD when the scorer shares a team with another roster player",
-    "team_chemistry": "+{perGroupFloobits} Floobits per same-team pair on your roster",
     # ── Game-Outcome Effects ──
     "comeback_kid": "+{baseFP} FP base, +{perPointFP} FP per point of deficit overcome on a favorite-team comeback win",
     "domination": "+{lossFP} FP floor on loss, +{baseFP} FP on favorite-team win, +{rewardValue} FP on blowout ({marginThreshold}+ pt margin)",
@@ -655,7 +647,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "all_in": "{baseXMult} FPx + {perDuplicateXMult} per duplicate position card",
     "diversified": "+{perTypeFP} FP per unique output type in your hand",
     "gold_rush": "{perCardFloobits} Floobits per other floobits card in your hand",
-    "stacked_deck": "+{perCardMult} FPx per multiplier card in your hand",
+    "stacked_deck": "Compounds (1 + {perCardMult})x per other FPx card in your hand",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "{perCardXMult} FPx per other card that produced a bonus",
     "bonus_round": "+{rewardValue} FP when 4+ of your other cards triggered",
@@ -713,7 +705,7 @@ SHARED_EFFECT_POOL = [
     # cross-position
     "spectacle", "indemnity",
     # same-team / game-outcome
-    "hometown_hero", "connection", "team_chemistry",
+    "hometown_hero",
     "comeback_kid", "domination", "walk_off",
     # card-to-card
     "full_roster", "all_in", "diversified", "gold_rush",
@@ -889,7 +881,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
                 "td3": round((7.0 + rn * 0.28) * editionScale, 1),
                 "td4": round((11.0 + rn * 0.44) * editionScale, 1)}
     if effectName == "hedge":
-        return {"floorFP": 75}
+        return {"floorFP": 100}
     if effectName == "honor_roll":
         return {"perPlayerFP": round((2.0 + rn * 0.06) * editionScale, 1), "fpThreshold": 15}
     if effectName == "three_pointer":
@@ -1084,8 +1076,6 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "perAttemptFP": round((0.2 + rn * 0.01) * editionScale, 1)}
     if effectName == "goal_line_vulture":
         return {"perTdFloobits": int(round((8 + rn * 0.4) * editionScale))}
-    if effectName == "connection":
-        return {"perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "industrious":
         return {"perReceptionFloobits": int(round((1.5 + rn * 0.06) * editionScale))}
     # ── Strategy-Warping: Prosperity (Floobits payout ceiling raiser)
@@ -1129,8 +1119,6 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "perTdFP": round((5 + rn * 0.20) * editionScale, 1),
                 "bonusFP": round((8 + rn * 0.30) * editionScale, 1),
                 "tdThreshold": 2}
-    if effectName == "team_chemistry":
-        return {"rewardType": "floobits", "perGroupFloobits": int(round((8 + rn * 0.3) * editionScale))}
     if effectName == "comeback_kid":
         return {"rewardType": "fp",
                 "baseFP": round((4 + rn * 0.15) * editionScale, 1),
@@ -2902,41 +2890,6 @@ def _computeHometownHero(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
-def _computeConnection(primary, ctx, cardPlayerId, eqId):
-    """Floobits per TD scored by a roster player who shares a team with another."""
-    perTd = primary.get("perTdFloobits", 3)
-    groups = _getSameTeamGroups(ctx)
-    # Find players who share a team with at least one other roster player
-    connectedPids = set()
-    for _, pids in groups.items():
-        if len(pids) >= 2:
-            connectedPids.update(pids)
-    # Count TDs by connected players
-    tds = 0
-    for pid in connectedPids:
-        tds += _countPlayerTds(ctx.weekPlayerStats.get(pid, {}))
-    floobits = int(perTd * tds)
-    eq = f"{perTd}/TD × {tds} TDs by connected players"
-    return EffectResult(floobits=floobits, equation=eq)
-
-
-def _computeTeamChemistry(primary, ctx, cardPlayerId, eqId):
-    """Floobits scaling with number of same-team groups."""
-    groups = _getSameTeamGroups(ctx)
-    numGroups = sum(1 for pids in groups.values() if len(pids) >= 2)
-    # New Floobits path
-    perGroupFloobits = primary.get("perGroupFloobits", 0)
-    if perGroupFloobits:
-        bonus = int(perGroupFloobits * numGroups)
-        eq = f"{perGroupFloobits}F/group × {numGroups} same-team pairs"
-        return EffectResult(floobits=bonus, equation=eq)
-    # Legacy FPx path
-    perGroup = primary.get("perGroupMult", 0.15)
-    bonus = round(perGroup * numGroups, 2)
-    eq = f"1 + ({perGroup}/group × {numGroups} same-team pairs) = {1 + bonus:.2f}x"
-    return EffectResult(multBonus=1 + bonus, equation=eq)
-
-
 # ── Card-to-Card Interaction Effects ─────────────────────────────────────────
 
 # -- Hand Composition (first pass) --
@@ -2995,14 +2948,15 @@ def _computeGoldRush(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeStackedDeck(primary, ctx, cardPlayerId, eqId):
-    """FPx per multiplier card in hand."""
+    """Compounding FPx — each FPx card in hand multiplies the bonus.
+    True 'multipliers on multipliers': (1 + perCardMult)^otherMults."""
     perCard = primary.get("perCardMult", 0.1)
     multCount = sum(1 for t in ctx.equippedCardOutputTypes if t == "mult")
     # Subtract 1 for this card itself
     otherMults = max(0, multCount - 1)
-    bonus = round(perCard * otherMults, 2)
-    eq = f"1 + ({perCard}/card × {otherMults} other FPx cards) = {1 + bonus:.2f}x"
-    return EffectResult(multBonus=1 + bonus, equation=eq)
+    mult = round((1 + perCard) ** otherMults, 2)
+    eq = f"(1 + {perCard})^{otherMults} other FPx cards = {mult:.2f}x"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 # -- Trigger-Chain (second pass) --
@@ -3447,8 +3401,6 @@ EFFECT_REGISTRY = {
     "homer": _computeHomer,
     "gone_streaking": _computeGoneStreaking,
     "hometown_hero": _computeHometownHero,
-    "connection": _computeConnection,
-    "team_chemistry": _computeTeamChemistry,
     # ── Game-Outcome Effects ──
     "comeback_kid": _computeComebackKid,
     "domination": _computeDomination,
