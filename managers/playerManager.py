@@ -432,7 +432,9 @@ class PlayerManager:
                 player.attributes.luckModifier = attrs.luck_modifier
                 player.attributes.defensiveTalent = getattr(attrs, 'defensive_talent', 0) or 0
                 player.attributes.fatigue = getattr(attrs, 'fatigue', 0.0) or 0.0
-                player.attributes.demeanor = getattr(attrs, 'demeanor', None)
+                player.attributes.personality = getattr(attrs, 'personality', None)
+                player.attributes.quirk = getattr(attrs, 'quirk', None)
+                player.attributes.mood = getattr(attrs, 'mood', 3) or 3
 
             # Load career stats from related table
             if db_player.career_stats:
@@ -731,7 +733,15 @@ class PlayerManager:
         # Assign the name to the player
         if player:
             player.name = name
-        
+            # Assign personality immediately so newly-generated rookies/replacements
+            # never enter the pool with NULL personality.
+            try:
+                personalityManager = self.serviceContainer.getService('personality_manager')
+                if personalityManager:
+                    personalityManager.assignPersonality(player)
+            except Exception as e:
+                logger.warning(f"Failed to assign personality to new {position.name}: {e}")
+
         return player
     
     def addToPositionList(self, player: FloosPlayer.Player) -> None:
@@ -1373,7 +1383,9 @@ class PlayerManager:
                             luck_modifier=attrs.luckModifier,
                             defensive_talent=getattr(attrs, 'defensiveTalent', 0),
                             fatigue=attrs.fatigue,
-                            demeanor=attrs.demeanor,
+                            personality=getattr(attrs, 'personality', None),
+                            quirk=getattr(attrs, 'quirk', None),
+                            mood=getattr(attrs, 'mood', 3) or 3,
                         )
                         self.db_session.add(db_attrs)
                     else:
@@ -1416,7 +1428,9 @@ class PlayerManager:
                         db_attrs.luck_modifier = attrs.luckModifier
                         db_attrs.defensive_talent = getattr(attrs, 'defensiveTalent', 0)
                         db_attrs.fatigue = attrs.fatigue
-                        db_attrs.demeanor = attrs.demeanor
+                        db_attrs.personality = getattr(attrs, 'personality', None)
+                        db_attrs.quirk = getattr(attrs, 'quirk', None)
+                        db_attrs.mood = getattr(attrs, 'mood', 3) or 3
 
                 # Save career stats (season 0 = career totals)
                 if hasattr(player, 'careerStatsDict') and player.careerStatsDict:

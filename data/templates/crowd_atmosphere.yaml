@@ -1,0 +1,45 @@
+# Layer 3: Crowd/Atmosphere - fan reactions to the player's quirk
+#
+# Schema:
+#   <quirk_key>:
+#     - text: "sentence with {tokens}"
+#       weight: optional integer (default 1)
+#
+# Fires rarely - on big moments or low-frequency ambient beats. Keyed on
+# quirk. These establish the player as a public figure whose fans SEE
+# their quirk.
+
+tinfoil:
+  - text: "A fan in section 214 is wearing a tinfoil hat. {name} points at them approvingly."
+  - text: "Someone in the crowd is holding a sign that reads 'I BELIEVE YOU, {name}.'"
+  - text: "A cluster of fans behind the bench are all wearing matching silver-wrapped helmets."
+  - text: "The jumbotron catches a fan mouthing conspiracy theories. {name} gives a knowing nod."
+  - text: "A fan holds up a hand-drawn diagram. {name} squints, then nods slowly."
+
+snacker:
+  - text: "A group of fans behind the bench have all brought granola bars. They hold them up in salute."
+  - text: "Someone throws a bag of sunflower seeds onto the sideline. {name} gives an approving thumbs-up."
+  - text: "A fan in the front row is eating an identical snack to {name}'s. Pure synchronicity."
+  - text: "A kid in the crowd offers {name} a goldfish cracker through the railing. He accepts."
+  - text: "The crowd chants what sounds vaguely like 'SNACK. SNACK. SNACK.' {name} waves."
+
+wholesome:
+  - text: "A kid in the front row hands {name} a drawing. He tears up."
+  - text: "The crowd erupts when {name} helps an opposing player to his feet."
+  - text: "A fan's sign reads 'MY SON NAMED HIS HAMSTER AFTER YOU, {name}.' He blows them a kiss."
+  - text: "{name} spots a kid crying in the stands and points at him with a reassuring nod."
+  - text: "The broadcast shows {name} waving at a grandmother holding a homemade sign."
+
+showboat:
+  - text: "The crowd eats up every move. {name} feeds them more."
+  - text: "A section of fans has been imitating {name}'s celebration all game. He points at them, delighted."
+  - text: "{name} blows a kiss to the crowd and gets a full-throated cheer in return."
+  - text: "The student section unveils a ten-foot {name} cutout. He strikes a matching pose."
+  - text: "A fan's sign reads 'PLEASE NOTICE ME, {name}.' He absolutely does."
+
+fourth_wall:
+  - text: "A sign in the crowd reads 'WE KNOW YOU KNOW.' {name} nods at it."
+  - text: "The broadcast camera catches {name} mouthing what appears to be the commentator's exact words."
+  - text: "Someone in section 109 is holding a sign with a very specific inside reference. {name} winks at them."
+  - text: "The director cuts away just as {name} starts to say something into the camera."
+  - text: "A fan's sign reads 'HE SEES US.' {name} holds eye contact with the lens for a long moment."

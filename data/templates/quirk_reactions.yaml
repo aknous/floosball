@@ -1,0 +1,556 @@
+# Quirk reaction templates.
+#
+# Quirks are lightweight sideline-flavor traits — small observable behaviors
+# that layer on top of an eligible personality without overriding its voice.
+# A Stoic Snacker reads differently from a Lively Snacker, but both still
+# read as the same kind of "snack-on-the-bench" beat.
+#
+# Three pools per quirk:
+#   - positive: appended after positive plays — TRANSITIONAL post-play
+#     actions (during the celebration, jog back, or just-arriving-at-bench)
+#   - negative: same but for negative plays
+#   - sideline: pure downtime cutaways (timeouts, possession changes,
+#     halftime, two-minute warning) — SETTLED bench activities with no
+#     immediate play context
+#
+# Don't put settled bench activity in positive/negative — those should
+# read as transitional, time-connected to the play that just fired.
+#
+# Rules:
+#   - Description-only — never quotes. Quotes are voice-locked to the
+#     personality; mixing a Stoic player with a chatty Snacker quote would
+#     break voice.
+#   - Must read cleanly standalone (no references to "the celebration",
+#     "the replay", or "the play" — those don't make sense in downtime).
+#   - Use {name} for substitution; no first-person speech.
+#
+# Personality eligibility:
+#   - Strong-characterization personalities don't take quirks at all
+#     (their `takes_quirks: false` field marks them). Their sideline pool
+#     replaces what a quirk would do for them.
+#   - For eligible personalities, each quirk's `incompatible:` field lists
+#     additional personalities that don't pair well (tonal mismatch).
+
+
+hugger:
+  # Yearns for hugs. Hugs are emotional necessity. Hugs anyone within
+  # reach: teammates, coaches, refs, equipment.
+  positive:
+    - "{name} grabs the nearest teammate in a desperate full-body bear hug, lifts them off the ground."
+    - "{name} hugs the referee on their way past. The referee tolerates it."
+    - "{name} pulls the entire huddle into a group hug."
+    - "{name} hugs the ball, kisses it, then hands it over reluctantly."
+    - "{name} sprints back to the bench arms wide for a group hug."
+    - "{name} hugs a teammate from behind, pinning their arms."
+  negative:
+    - "{name} hugs a teammate without a word on the way back."
+    - "{name} hugs a referee who clearly did not want to be hugged."
+    - "{name} hugs the equipment manager on the way to the bench."
+    - "{name} jogs back and immediately wraps a teammate in a long hug."
+    - "{name} hugs a coach. The coach was trying to give a play."
+    - "{name} jogs off, finds a teammate, holds them too long."
+  sideline:
+    - "{name} is standing at the edge of the bench, arms slightly open, hoping for a hug."
+    - "{name} is on the bench, sitting close enough to a teammate that their shoulders touch."
+    - "{name} has both arms wrapped around a Gatorade jug for warmth."
+    - "{name} is lingering near a teammate, hoping for a hug."
+    - "{name} has a coach trapped in a side-hug during the timeout."
+    - "{name} is mid-hug with the equipment manager. Nobody asked why."
+    - "{name} is hugging themselves on the bench."
+    - "{name} has been hugging the same teammate for an unsettling amount of time."
+  incompatible: [wholesome, trash_talker, paranoid, cursed]
+
+bling:
+  # Excessive jewelry. Amazing it doesn't impede their ability to play.
+  # Often blinding teammates and cameras with reflected light.
+  positive:
+    - "{name} kisses one of several chains hanging out of their pads."
+    - "{name} flashes a pinky ring at the camera. There are seven pinky rings."
+    - "{name}'s helmet visor catches the light from one of their many chains."
+    - "{name} jogs back. The metal clinks audibly."
+    - "{name} momentarily blinds a teammate by turning their head."
+    - "{name} adjusts a watch on the way back. There is also one on the other wrist."
+  negative:
+    - "{name} adjusts their chain like nothing happened. There is more than one chain."
+    - "{name} flicks an imaginary speck off a diamond stud."
+    - "{name} tucks several chains back under their pads on the way to the bench."
+    - "{name} jogs back. Catches the sun. Several teammates shield their eyes."
+    - "{name} polishes a ring on their glove as they walk off."
+    - "{name} adjusts a watch face the size of a coaster."
+  sideline:
+    - "{name} is polishing a pinky ring. It catches the sun and nearly blinds a teammate."
+    - "{name} is on the bench. Metal clinks audibly with every shift of weight."
+    - "{name} is untangling two chains that have become friends."
+    - "{name} has their head angled so a watch face catches the stadium lights."
+    - "{name} is counting the rings on their fingers, satisfied."
+    - "{name} is buffing a stud earring the size of a marble with their glove."
+    - "{name} is wiping down a chain. The chain is reflecting half the stadium."
+  incompatible: [stoic, melancholy, cursed, superstitious]
+
+gym_rat:
+  # Compulsion to lift. Always needs another rep. Conjures actual gym
+  # equipment from nowhere on the sideline ("where did that even come
+  # from?"). Same comedic absurdity as sketcher producing a sketch pad
+  # but with kettlebells, foam rollers, resistance bands, dumbbells.
+  positive:
+    - "{name} flexes once on the way back, then drops and does push-ups."
+    - "{name} does a quick set of curls with an invisible weight while jogging back."
+    - "{name} flexes at a coach mid-conversation."
+    - "{name} counts reps under their breath as they jog off."
+    - "{name} grunts and lifts an invisible bar above their head."
+    - "{name} drops and does twenty push-ups before reaching the bench. A teammate sits on their back for the last rep."
+  negative:
+    - "{name} does sideline lunges as they walk back."
+    - "{name} adds a rep to their internal counter, mouths the new total."
+    - "{name} doesn't sit down. There's a workout to fit in."
+    - "{name} drops to the turf for a quick set of burpees."
+    - "{name} jogs back already stretching out a hamstring."
+    - "{name} cracks their neck, immediately starts shadowboxing on the sideline."
+  sideline:
+    - "{name} is swinging a kettlebell on the sideline. Where did it come from?"
+    - "{name} is rolling out a hamstring with a foam roller from nowhere."
+    - "{name} is mid-swing with a kettlebell that wasn't there a moment ago."
+    - "{name} is doing curls with a 25-pound dumbbell that came from somewhere in their uniform."
+    - "{name} is in a deep yoga stretch on a mat that didn't exist a minute ago."
+    - "{name} is jumping rope on the sideline."
+    - "{name} is deadlifting a barbell. Where it came from is unclear."
+    - "{name} is doing pull-ups on a chin-up bar that should not exist on a sideline."
+    - "{name} is stretching on the bench, every joint."
+  incompatible: [chill, melancholy, cursed]
+
+snacker:
+  # Snacks in every pocket. Always chewing on something.
+  positive:
+    - "{name} chews triumphantly on the way back."
+    - "{name} unwraps a granola bar without breaking stride."
+    - "{name} pulls a handful of seeds from a pocket nobody knew the uniform had as they jog back."
+    - "{name} pulls a hard-boiled egg from inside their helmet, eats it whole on the way back."
+    - "{name} is somehow still chewing whatever they were chewing during the snap."
+    - "{name} produces a cookie from a pocket. Who gave them a cookie?"
+    - "{name} produces an entire breakfast burrito from somewhere in their pads, takes a bite mid-jog."
+  negative:
+    - "{name} chews thoughtfully on the way back, staring at nothing."
+    - "{name} eats an entire sub sandwich in four bites without sitting down."
+    - "{name} produces another snack from a different pocket as they jog off."
+    - "{name} chews harder on the way back."
+    - "{name} hands a teammate a piece of jerky from their thigh pocket. Comforting."
+    - "{name} swallows whatever they were chewing, immediately starts on something new."
+    - "{name} sips from a bowl of soup somehow tucked into their pads. The soup is comforting."
+  sideline:
+    - "{name} is cracking open a fresh bag of sunflower seeds on the bench."
+    - "{name} is unwrapping a foot-long sub sandwich with practiced efficiency."
+    - "{name} is chewing on a piece of jerky from a thigh pocket."
+    - "{name} has a slice of pizza, takes a bite, hands the rest to a teammate."
+    - "{name} is chewing on something nobody can quite identify."
+    - "{name} is handing a teammate a handful of seeds without looking up."
+    - "{name} has a small charcuterie board set up on the bench."
+    - "{name} has set up a small picnic on the bench."
+    - "{name} is trying to buy a hotdog off of someone in the stands."
+    - "{name} is flipping something on a small portable grill near the bench. Where did the grill come from?"
+    - "{name} is plating a small dish and handing it to a teammate."
+  incompatible: []
+
+ear_buds:
+  # Always listening to something. Often oblivious to what's happening.
+  positive:
+    - "{name} pops a headphone back in on the way to the bench."
+    - "{name} air-conducts whatever they are listening to as they jog back."
+    - "{name} bobs their head to a rhythm only they can hear."
+    - "{name} doesn't notice a teammate trying to high-five them, lost in their music."
+    - "{name} celebrates a beat after everyone else, in time with their music."
+    - "{name} dances briefly to whatever is playing in their headphones."
+  negative:
+    - "{name} turns up the volume on their headphones."
+    - "{name} doesn't hear the coach through their headphones. The coach calls them again."
+    - "{name} doesn't notice the play has ended. They are still in their music."
+    - "{name} mouths along to a lyric only they can hear."
+    - "{name} jogs the wrong direction briefly, headphones in, course-corrects without looking up."
+    - "{name} pulls a headphone out only to hear what just happened, then puts it back."
+  sideline:
+    - "{name} is air-conducting a song nobody else can hear."
+    - "{name} is bobbing their head to a rhythm only they know."
+    - "{name} is on the bench, eyes closed, lost in the music."
+    - "{name} is mouthing along to a song, eyes closed."
+    - "{name} isn't hearing a coach calling their name. Headphones in."
+    - "{name} is dancing briefly on the bench to whatever's playing in their ears, oblivious."
+  incompatible: [paranoid]
+
+phone_addict:
+  # Always checking social media. Has to see the reactions. Plays mobile
+  # games between snaps.
+  positive:
+    - "{name} pulls out their phone the moment they hit the sideline."
+    - "{name} checks how their last play is performing online."
+    - "{name} laughs at a meme about themselves on their phone."
+    - "{name} screenshots a reaction post about themselves."
+    - "{name} jogs back already typing on their phone."
+    - "{name} grins at a funny comment someone posted."
+  negative:
+    - "{name} pulls out their phone, stares at it, sighs."
+    - "{name} reads a hot take about themselves on the way to the bench, sighs."
+    - "{name} screenshots a post, types a long response, deletes it."
+    - "{name} mutes all notification on their phone."
+    - "{name} scrolls past their own name in a feed without reacting."
+    - "{name} jogs back already typing furiously into their phone."
+  sideline:
+    - "{name} is thumbing through one of three phones on the bench, one for each social network."
+    - "{name} is laughing at something on their feed."
+    - "{name} is screenshotting a post about themselves."
+    - "{name} is on the bench playing a level of a brick breaker."
+    - "{name} is replying to a notification, then another, then another."
+    - "{name} is intensely reading comments about their performance."
+    - "{name} is typing furiously into their phone."
+  incompatible: [trash_talker]
+
+hydrated:
+  # Obsessed with water. Evangelical — makes sure everyone else drinks too.
+  positive:
+    - "{name} grabs a water bottle and toasts the crowd."
+    - "{name} hands a teammate a water bottle as they jog past."
+    - "{name} drinks a full bottle in one pull, refills, drinks again."
+    - "{name} mouths 'electrolytes' at a coach who didn't ask."
+    - "{name} carries three water bottles back to the bench."
+    - "{name} mouths 'hydrate' at a teammate from across the field."
+  negative:
+    - "{name} insists everyone drink water before getting back in."
+    - "{name} chugs a full bottle without pausing on the way back."
+    - "{name} hands a fresh water to a downcast teammate."
+    - "{name} lectures a passing teammate on hydration. They didn't ask."
+    - "{name} brings a coach a Gatorade without being asked."
+    - "{name} taps a teammate's water bottle as they jog past, mouths 'drink it.'"
+  sideline:
+    - "{name} is handing a teammate a fresh water bottle on the bench."
+    - "{name} is draining half a bottle in one pull."
+    - "{name} is carrying six water bottles back to the bench in a custom harness."
+    - "{name} is mouthing 'drink' at a teammate from across the bench."
+    - "{name} is refilling a teammate's bottle without being asked."
+    - "{name} is tapping their own bottle against a teammate's, mouths 'cheers.'"
+  incompatible: []
+
+napper:
+  # Naps any chance they get. Drowsy energy on the way to the bench;
+  # actually asleep once settled.
+  positive:
+    - "{name} yawns mid-celebration."
+    - "{name} jogs to the sideline rubbing their eyes."
+    - "{name} hands the ball to the ref, yawning."
+    - "{name} blinks slowly the whole way back to the bench."
+    - "{name} yawns into a sleeve mid-jog."
+  negative:
+    - "{name} jogs back already half-asleep."
+    - "{name} stretches and yawns on the way to the bench."
+    - "{name} jogs back rubbing their eyes."
+    - "{name} yawns through the whole jog back."
+    - "{name} blinks slowly, looks half-conscious all the way off."
+  sideline:
+    - "{name} is asleep on the bench, eyes already closed."
+    - "{name} has a towel pulled over their face, asleep."
+    - "{name} is napping with their helmet on as a pillow. The snoring is audible on the broadcast."
+    - "{name} is stretched across two bench seats, asleep."
+    - "{name} is dozing lightly between drives."
+    - "{name} is asleep sitting up, eyes shut, head tilted."
+  incompatible: [paranoid, perfectionist, fiery]
+
+reader:
+  # Has multiple books stashed around the bench. Quotes famous lines.
+  positive:
+    - "{name} mouths a famous opening line while jogging back. 'It was the best of times.'"
+    - "{name} quotes Shakespeare under their breath on the way to the bench."
+    - "{name} jogs back already opening a book."
+    - "{name} pulls a paperback from their shoulder pad as they walk off."
+    - "{name} mouths a line from a poem they know by heart."
+  negative:
+    - "{name} marks their place in their book with a sigh as they sit."
+    - "{name} mouths a melancholy line from a poem nobody but them has read."
+    - "{name} dog-ears a page on the way back to the bench."
+    - "{name} pulls a different book from a different pocket."
+    - "{name} jogs back already reading."
+  sideline:
+    - "{name} is back to a book on the bench. There are three other books open beside it."
+    - "{name} is switching from one book to another, the first set aside."
+    - "{name} is reading a paragraph, then another, then closing the book."
+    - "{name} is dog-earing a page in a book that already has many dog-eared pages."
+    - "{name} is mouthing a line they're reading."
+    - "{name} has a different book in hand. It came from a different pocket."
+    - "{name} is reading slower, as if comforted by the prose."
+  incompatible: [lively, fiery, goofy, trash_talker, prankster]
+
+gamer:
+  # Has a handheld gaming console. Plays between plays on the sideline.
+  positive:
+    - "{name} pulls a handheld gaming console from somewhere in their pads."
+    - "{name} mimes pressing buttons on an invisible controller."
+    - "{name} grins at their game console. Just hit a high score."
+    - "{name} does a tiny boss-defeated celebration."
+    - "{name} hands their console to a teammate, who plays it for them on the field."
+    - "{name} jogs back already pulling out their handheld."
+  negative:
+    - "{name} pretends to rage-quit, then sits back down."
+    - "{name} dies in their game on the way back."
+    - "{name} pulls their handheld out, sees Game Over, sighs."
+    - "{name} mutters about hitboxes on the way to the bench."
+  sideline:
+    - "{name} is on the sideline at a full gaming setup that wasn't there before."
+    - "{name} is staring at a Game Over screen on the bench."
+    - "{name} is muttering something about boss patterns at a confused teammate."
+    - "{name} is pausing their game with a sigh, stuffing the console back in their pads."
+    - "{name} is grinning at their handheld. Just hit a milestone."
+    - "{name} is miming buttons on an imaginary controller while watching the field."
+  incompatible: [stoic, melancholy, cool, fiery, cursed]
+
+whistler:
+  # Always whistling. Often loud, often annoying. Will not stop when asked.
+  positive:
+    - "{name} starts whistling a victory march on the way to the bench."
+    - "{name} whistles a few triumphant notes."
+    - "{name} whistles loud enough to make a teammate flinch."
+    - "{name} whistles all the way back to the bench."
+    - "{name} whistles a melody as they jog off."
+  negative:
+    - "{name} whistles a slow funeral march on the way back."
+    - "{name} whistles to themself, distracted, on the way to the bench."
+    - "{name} whistles a passive-aggressive tune at the coach's back."
+    - "{name} starts whistling, stops, starts again, slower, on the way back."
+    - "{name} whistles louder when a teammate tries to talk to them."
+  sideline:
+    - "{name} is whistling a tune nobody recognizes."
+    - "{name} is still whistling. A coach has asked them to stop. Twice. Three times now."
+    - "{name} is whistling the same eight bars on a loop."
+    - "{name} is whistling louder than is strictly necessary."
+    - "{name} keeps whistling. A teammate has covered their ears."
+    - "{name} stops whistling for three seconds, then starts again."
+  incompatible: [stoic, melancholy, paranoid, cursed]
+
+sketcher:
+  # Sketches things as they happen — people, plays, doodles. Always
+  # producing a sketch pad from somewhere in their uniform that should
+  # not be capable of holding a sketch pad.
+  positive:
+    - "{name} produces a sketch pad from somewhere in their pads. Where? Unclear."
+    - "{name} doodles a tiny celebration on a wristband."
+    - "{name} sketches the play that just happened from memory."
+    - "{name} captures the crowd's reaction in three quick lines."
+    - "{name} jogs back already sketching."
+  negative:
+    - "{name} produces a sketch pad from a pocket that did not exist a moment ago."
+    - "{name} sketches a play diagram on a notepad with a sigh."
+    - "{name} marks an X over a doodle on their wristband."
+    - "{name} sketches the opposing defender from memory. Adds horns."
+    - "{name} produces a charcoal pencil. From where, nobody sees."
+  sideline:
+    - "{name} is sketching at a small easel that has appeared on the sideline. Where did the easel come from?"
+    - "{name} is sketching a teammate stretching on the sideline."
+    - "{name} is doodling in the corner of a play sheet."
+    - "{name} is drawing a quick caricature of an opposing player. With horns."
+    - "{name} is capturing the crowd in three quick lines."
+    - "{name} is flipping to a new page, starting a new sketch."
+    - "{name} is drawing a sad portrait of themselves on the back of a clipboard."
+  incompatible: [lively, fiery, trash_talker]
+
+singer:
+  # Always singing or humming. Often loud, often annoying. Same as
+  # whistler but with words (or wordless melodies).
+  positive:
+    - "{name} sings a triumphant phrase under their breath on the way back."
+    - "{name} hums a victory tune."
+    - "{name} belts out one loud note in the huddle. The huddle stops."
+    - "{name} sings as they jog off."
+    - "{name} adds an impromptu chorus to whatever they were humming."
+  negative:
+    - "{name} hums a sad melody to themself in the huddle."
+    - "{name} sings a single mournful note."
+    - "{name} starts a quiet hymn under their breath on the way to the bench."
+    - "{name} sings a passive-aggressive song at a teammate's back."
+    - "{name} hums in a key nobody can identify."
+  sideline:
+    - "{name} is humming a tune nobody recognizes."
+    - "{name} is singing the same chorus on a loop."
+    - "{name} is still singing. A coach has asked them to stop."
+    - "{name} is adding harmonies to their own singing. It is one person."
+    - "{name} is performing what appears to be a full operatic aria, loud enough to be heard several rows up."
+    - "{name} stops singing for three seconds, then starts again in a different key."
+  incompatible: [paranoid]
+
+streamer:
+  # Has a selfie stick somehow on the field. Streams every play. Talks
+  # to chat constantly.
+  positive:
+    - "{name} produces a selfie stick from somewhere in their pads, goes live mid-celebration."
+    - "{name} films their own celebration on the live stream, narrating to chat the whole way."
+    - "{name} winks at the live camera. 'And THAT is how you do it, chat.'"
+    - "{name} says 'don't forget to like and subscribe' on the way back, loud enough for the crowd to hear."
+    - "{name} thrusts the camera in a teammate's face. 'Say hi to chat!'"
+    - "{name} reads a chat message aloud, laughs into the live stream."
+  negative:
+    - "{name} groans into the live stream. 'Chat, are you SEEING this?'"
+    - "{name} gives the camera an exaggerated 'can you believe this' look. The viewer count climbs."
+    - "{name} says 'donations would help right now, chat' on the way to the bench. The crowd hears."
+    - "{name} reads a hostile chat message aloud, sighs into the stream, jogs off."
+    - "{name} narrates the play loudly to their live audience as they jog off."
+  sideline:
+    - "{name} is live-streaming the timeout from the bench, narrating to chat the whole time."
+    - "{name} is reading a live chat message, laughing, typing a reply."
+    - "{name} is saying 'don't forget to like and subscribe' to the camera, for the third time this drive."
+    - "{name} is panning the stream slowly across the bench for chat."
+    - "{name} is muting the stream briefly. 'Sorry chat, water.' Unmuting."
+    - "{name} is reading a subscribers comment aloud and thanking them by name."
+  incompatible: [stoic, melancholy, paranoid, cursed]
+
+trinket:
+  # Fidgets obsessively with a small object — Rubik's cube, fidget spinner,
+  # lucky coin, dice, worry stone, mechanical puzzle. Always solving or
+  # rotating something with one hand. Pulls a different trinket from a
+  # different pocket each time.
+  positive:
+    - "{name} pulls a Rubik's cube from somewhere, scrambles it as they jog back."
+    - "{name} jogs back spinning a fidget spinner with one hand."
+    - "{name} flips a coin off their thumb on the way back, catches it without looking."
+    - "{name} pulls a small wooden puzzle from their pads, rotates a piece, jogs off satisfied."
+    - "{name} jogs back rolling a single die between their fingers."
+    - "{name} pulls a worry stone from a pocket and rubs it on the way back."
+  negative:
+    - "{name} is scrambling a Rubik's cube faster than a teammate can react to."
+    - "{name} flips a coin between their fingers on the way back, lands tails, sighs."
+    - "{name} pulls out a fidget spinner, spins it hard."
+    - "{name} rolls dice in their hand on the way to the bench, gets a number they don't like."
+    - "{name} pulls a trinket from a pocket, frowns at it, puts it back."
+  sideline:
+    - "{name} is solving a Rubik's cube on the bench. They have solved it many times this game."
+    - "{name} is spinning a fidget spinner on the bench, eyes on the field."
+    - "{name} is flipping a coin off their thumb, catching it without looking."
+    - "{name} is rolling dice on the bench, mouthing the numbers."
+    - "{name} is rotating a small wooden puzzle, half-solved, on the bench."
+    - "{name} has a worry stone in one hand, rubbing it slowly."
+    - "{name} is fiddling with a small mechanical lock, picking it open and closing it again."
+  incompatible: [lively, fiery, trash_talker, prankster]
+
+bird_watcher:
+  # Watches birds during plays and downtime. Has binoculars produced from
+  # nowhere. Keeps a small bird-identification log book. Mouths Latin
+  # species names. Genuinely more interested in the local fauna than
+  # the game.
+  positive:
+    - "{name} jogs back already pulling out binoculars."
+    - "{name} pulls a small bird-identification book from a pocket, mouths a species name."
+    - "{name} pauses the celebration to point at a passing bird."
+    - "{name} jogs back muttering about the migration patterns this week."
+    - "{name} watches a hawk circle the stadium between snaps."
+  negative:
+    - "{name} pulls binoculars from somewhere, scans the upper deck for nesting activity."
+    - "{name} mouths a Latin species name to themselves."
+    - "{name} sighs at the bad play, immediately notes a sparrow in their book."
+    - "{name} watches a hawk overhead, distracted from their disappointment."
+    - "{name} pulls a bird-identification book from a pocket, leafs through it on the way back."
+  sideline:
+    - "{name} is watching a hawk circle the stadium with binoculars produced from somewhere."
+    - "{name} is updating a small bird-identification log book between plays."
+    - "{name} is pointing out a bird species to a confused teammate."
+    - "{name} is watching a passing pigeon with great patience."
+    - "{name} has binoculars trained on the press box. Are there nests up there? Possibly."
+    - "{name} is mouthing a Latin species name into the wind."
+    - "{name} is feeding a sunflower seed to a sparrow that has landed near the bench."
+  incompatible: [lively, fiery, trash_talker, prankster, perfectionist]
+
+plant_parent:
+  # Has a small potted plant on the bench. Waters it during games. Talks
+  # to it. Frets about its leaves. Repotting on the sideline is a real
+  # possibility.
+  positive:
+    - "{name} jogs back, mists a fern with a small spray bottle."
+    - "{name} pauses to pluck a dead leaf off a small succulent."
+    - "{name} jogs to the bench, immediately checks on the plant."
+    - "{name} mouths something encouraging to a small bonsai before the next snap."
+    - "{name} celebrates by gently rotating a potted plant toward the sun."
+  negative:
+    - "{name} jogs back, drops to one knee to inspect a yellow leaf on their fern."
+    - "{name} mists a small plant with a spray bottle, mournfully."
+    - "{name} mouths an apology to a small succulent on the bench."
+    - "{name} jogs back, repots a small plant briefly."
+    - "{name} returns to the bench, removes a single dead leaf with reverence."
+  sideline:
+    - "{name} is watering a small fern stationed at the end of the bench."
+    - "{name} is checking the soil moisture of a succulent on the bench."
+    - "{name} is talking quietly to a small bonsai. The bonsai is responding by being a bonsai."
+    - "{name} is rotating a potted plant so it gets even sun."
+    - "{name} is repotting a stressed succulent. There is potting soil on the sideline."
+    - "{name} is misting a fern with a small spray bottle on the bench."
+  incompatible: [fiery, trash_talker, prankster, lively, paranoid]
+
+pet_owner:
+  # Has a small pet on the sideline somehow — hamster, lizard, parakeet,
+  # turtle. Pet appears at random moments. Where it lives between
+  # appearances is unclear. The pet has been there the whole game.
+  positive:
+    - "{name} jogs back already feeding a sunflower seed to a hamster retrieved from somewhere."
+    - "{name} pauses to scratch a small lizard's head before jogging off."
+    - "{name} jogs back with a parakeet on their shoulder. It has been there all game."
+    - "{name} pulls a hamster from a chest pocket, kisses its head, jogs off."
+    - "{name} celebrates by holding a small lizard up to the camera."
+  negative:
+    - "{name} jogs back, immediately checks on a small reptile in a pocket."
+    - "{name} mouths an apology to a hamster they're holding."
+    - "{name} pets a parakeet on their shoulder for comfort."
+    - "{name} jogs back, gently feeds a treat to a hamster in their pads."
+    - "{name} cradles a small lizard, sighs, jogs to the bench."
+  sideline:
+    - "{name} is feeding a hamster a sunflower seed on the bench. The hamster has been there all game."
+    - "{name} has a small lizard on their shoulder."
+    - "{name} is tending to a small terrarium kept under the bench."
+    - "{name} is holding a parakeet on one finger, talking to it quietly."
+    - "{name} is watching their pet hamster run on a tiny wheel on the bench."
+    - "{name} has a turtle on their lap. Where the turtle came from is unclear."
+  incompatible: [fiery, trash_talker, perfectionist]
+
+magician:
+  # Does cheap sleight-of-hand tricks. Card tricks, coin tricks, pulls
+  # things from ears, scarves from sleeves. Cheesy but committed. The
+  # audience is usually a single confused teammate.
+  positive:
+    - "{name} pulls a quarter from a teammate's ear, hands it to them, jogs off."
+    - "{name} mimes a coin disappearing into thin air, finds it in a teammate's helmet."
+    - "{name} produces a small bouquet of fake flowers from somewhere, hands it to a teammate."
+    - "{name} jogs back fanning a deck of cards, fans it shut."
+    - "{name} pulls an endless scarf from a sleeve, drops it over a teammate's head."
+    - "{name} performs a sleight-of-hand flourish on the football, says 'Ta-da!', hands it to the ref."
+  negative:
+    - "{name} attempts a card trick on the way to the bench. The teammate did not pick a card."
+    - "{name} mimes pulling a rabbit from their helmet. There is no rabbit."
+    - "{name} pulls a fake flower from their pads, frowns at it."
+    - "{name} attempts to vanish into a puff of smoke."
+    - "{name} pulls a coin from a coach's ear. The coach is not amused."
+    - "{name} jogs back doing a card flourish, drops the deck."
+  sideline:
+    - "{name} is shuffling a deck of cards on the bench, performing flourishes."
+    - "{name} is doing a coin-vanishing trick for a teammate. The teammate has seen it many times."
+    - "{name} is pulling endless scarves from a sleeve at the end of the bench."
+    - "{name} is producing a fake bouquet of flowers from a pocket. Nobody asked for flowers."
+    - "{name} is performing card tricks for a confused trainer."
+    - "{name} is mid-trick, looks like they're about to pull something from someone's ear."
+    - "{name} is practicing sleight-of-hand on a quarter, dropping it occasionally."
+  incompatible: [stoic, fiery, trash_talker, paranoid, cursed]
+
+card_player:
+  # Always trying to start a card game. Pulls a deck, deals on the bench,
+  # tries to recruit teammates for a hand. Has chips somehow. Mutters
+  # about pot odds and bad beats.
+  positive:
+    - "{name} pulls a deck of cards from a pocket, shuffles as they jog back."
+    - "{name} jogs back already dealing cards to seated teammates."
+    - "{name} mouths 'split aces' to a teammate as they jog past."
+    - "{name} flicks a card off the top of a deck on their way to the bench."
+    - "{name} jogs back pocketing chips from a hand they just won on the sideline."
+  negative:
+    - "{name} jogs back muttering about a bad beat from earlier in the game."
+    - "{name} pulls a deck of cards from a pocket, sighs at it, puts it back."
+    - "{name} mouths something about pot odds at a confused coach."
+    - "{name} jogs back, immediately starts shuffling, looks for a game."
+    - "{name} jogs back, mumbles 'misplayed the river' at no one."
+  sideline:
+    - "{name} is dealing a hand of poker to three confused teammates on the bench."
+    - "{name} is shuffling a deck of cards with bridge-style fanning, eyes on the field."
+    - "{name} is collecting chips from a hand they just won. There are chips on the bench."
+    - "{name} is trying to recruit the equipment manager into a quick game of gin."
+    - "{name} is laying out a game of solitaire on the bench."
+    - "{name} is teaching a teammate a card trick that is also a card game."
+    - "{name} is reading a book on poker strategy, marking the page first."
+  incompatible: [stoic, fiery, trash_talker, paranoid, cursed]

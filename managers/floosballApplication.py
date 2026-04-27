@@ -16,6 +16,7 @@ from managers.leagueManager import LeagueManager
 from managers.seasonManager import SeasonManager
 from managers.recordManager import RecordManager
 from managers.fantasyTracker import FantasyTracker
+from managers.personalityManager import PersonalityManager
 
 logger = get_logger("floosball.application")
 
@@ -37,6 +38,7 @@ class FloosballApplication:
         self.teamManager = TeamManager(serviceContainer)
         self.leagueManager = LeagueManager(serviceContainer)
         self.recordsManager = RecordManager(serviceContainer)
+        self.personalityManager = PersonalityManager(serviceContainer)
         
         # Override each manager's session with the shared one to prevent lock conflicts
         if self.shared_db_session:
@@ -88,6 +90,7 @@ class FloosballApplication:
         self.serviceContainer.registerService('season_manager', self.seasonManager)
         self.serviceContainer.registerService('records_manager', self.recordsManager)
         self.serviceContainer.registerService('fantasy_tracker', self.fantasyTracker)
+        self.serviceContainer.registerService('personality_manager', self.personalityManager)
         
         logger.info("Registered all managers with service container")
     
@@ -105,7 +108,7 @@ class FloosballApplication:
         logger.info("Setting up players...")
         self.playerManager.generatePlayers(config, force_fresh=force_fresh)
         self.playerManager.sortPlayersByPosition()
-        
+
         # Generate teams (but don't initialize yet - need players first)
         logger.info("Setting up teams...")
         self.teamManager.generateTeams(config)
@@ -136,7 +139,51 @@ class FloosballApplication:
         #   - Subsequent boots (prospects exist → no-op per team)
         logger.info("Seeding initial prospect pipelines (idempotent)...")
         self.playerManager.seedInitialProspects(prospectsPerTeam=3)
-        
+
+        # Assign personality + quirk + mood to the full player pool.
+        # Runs AFTER seedInitialProspects so prospects are included. Idempotent:
+        # players who already have a personality keep theirs. Catches any new
+        # players added by upstream steps (initial draft, prospect seeding,
+        # legacy DB rows with NULL personality).
+        logger.info("Assigning personality traits...")
+        allPlayers = (
+            self.playerManager.activePlayers
+            + self.playerManager.freeAgents
+            + self.playerManager.rookieDraftList
+        )
+        unassignedBefore = sum(
+            1 for p in allPlayers
+            if getattr(getattr(p, 'attributes', None), 'personality', None) is None
+        )
+        summary = self.personalityManager.assignToPlayerPool(allPlayers)
+
+        from managers.personalityReactionEngine import (
+            BASE_VIBES, COMMON_VARIANTS, RARE_VARIANTS,
+        )
+        personalityCounts = summary.get('personalities', {})
+        baseCount = sum(c for p, c in personalityCounts.items() if p in BASE_VIBES)
+        commonVariantCount = sum(c for p, c in personalityCounts.items() if p in COMMON_VARIANTS)
+        rareVariantCount = sum(c for p, c in personalityCounts.items() if p in RARE_VARIANTS)
+        rareVariantsActive = sorted(p for p in personalityCounts if p in RARE_VARIANTS)
+        quirkedCount = sum(summary.get('quirks', {}).values())
+
+        logger.info(
+            f"Personality assigned: {summary['total']} players "
+            f"({baseCount} base, {commonVariantCount} common variants, "
+            f"{rareVariantCount} rare variants), {quirkedCount} quirked"
+        )
+        if unassignedBefore > 0:
+            logger.info(f"  → {unassignedBefore} backfilled this run")
+        if rareVariantsActive:
+            logger.info(f"  → rare variants in league: {', '.join(rareVariantsActive)}")
+
+        if unassignedBefore > 0:
+            try:
+                logger.info(f"Persisting {unassignedBefore} backfilled personalities to DB...")
+                self.playerManager.savePlayerData()
+            except Exception as e:
+                logger.error(f"Failed to persist backfilled personalities: {e}")
+
         # Now initialize teams after players are assigned
         logger.info("Initializing teams with rosters...")
         self.teamManager.initializeTeams()
@@ -147,10 +194,36 @@ class FloosballApplication:
         
         # Register state update callback with season manager
         self.seasonManager.setStateUpdateCallback(self._onSeasonStateUpdate)
-        
+
+        # If card_reset wiped templates mid-season, regenerate them now so
+        # the season can resume with the new card-effects code. Without this,
+        # templates wouldn't regenerate until the next season start.
+        try:
+            currentSeason = (
+                self.seasonManager.currentSeason.seasonNumber
+                if self.seasonManager.currentSeason else None
+            )
+            if currentSeason:
+                from database.connection import get_session
+                from database.models import CardTemplate
+                session = get_session()
+                try:
+                    count = session.query(CardTemplate).filter_by(
+                        season_created=currentSeason).count()
+                finally:
+                    session.close()
+                if count == 0:
+                    logger.info(
+                        f"No card templates for season {currentSeason} — regenerating "
+                        f"(post card-reset recovery)"
+                    )
+                    self.seasonManager._generateCardTemplates(currentSeason)
+        except Exception as e:
+            logger.error(f"Card template regeneration check failed: {e}")
+
         # Save initial state
         await self._saveInitialState()
-        
+
         logger.info("League initialization complete")
     
     def _loadConfiguration(self, config: Dict[str, Any]) -> None:

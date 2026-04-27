@@ -1005,6 +1005,16 @@ class SeasonManager:
         if not in_playoffs:
             self._checkWeekEndSecrets(self.currentSeason.seasonNumber, week)
 
+        # Recompute mood (1-5) for all active players based on confidence/determination.
+        # Personalities are static (assigned at creation); only mood updates over time.
+        try:
+            personalityManager = self.serviceContainer.getService('personality_manager')
+            if personalityManager:
+                for player in self.playerManager.activePlayers:
+                    personalityManager.updateMood(player)
+        except Exception as e:
+            logger.error(f"Mood update failed: {e}")
+
         # Unlock equipped cards now that week is over
         try:
             from database.connection import get_session as _getSession
@@ -2209,7 +2219,7 @@ class SeasonManager:
                     game = weekGames[x]
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
-                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager)
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'))
                     
                     # Assign unique integer ID and metadata
                     self._gameIdCounter += 1
@@ -2284,7 +2294,8 @@ class SeasonManager:
 
             self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
-                                     timingManager=self.timingManager)
+                                     timingManager=self.timingManager,
+                                     personalityManager=self.serviceContainer.getService('personality_manager'))
             newGame.id = self._gameIdCounter
             newGame.dbId = row.id
             newGame.seasonNumber = seasonNumber
@@ -2910,8 +2921,12 @@ class SeasonManager:
                     lowSeed = len(teamsInRound) - 1
 
                     while lowSeed > hiSeed:
-                        newGame = FloosGame.Game(teamsInRound[hiSeed], teamsInRound[lowSeed], timingManager=self.timingManager)
-                        
+                        newGame = FloosGame.Game(
+                            teamsInRound[hiSeed], teamsInRound[lowSeed],
+                            timingManager=self.timingManager,
+                            personalityManager=self.serviceContainer.getService('personality_manager'),
+                        )
+
                         # Assign unique integer ID and metadata
                         self._gameIdCounter += 1
                         newGame.id = self._gameIdCounter
@@ -2947,7 +2962,11 @@ class SeasonManager:
                 for team in floosbowlTeams:
                     team.leagueChampion = True
                 list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-                newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1], timingManager=self.timingManager)
+                newGame = FloosGame.Game(
+                    floosbowlTeams[0], floosbowlTeams[1],
+                    timingManager=self.timingManager,
+                    personalityManager=self.serviceContainer.getService('personality_manager'),
+                )
 
                 # Assign unique integer ID and metadata
                 self._gameIdCounter += 1
@@ -7379,7 +7398,11 @@ class SeasonManager:
                 db_stats.interceptions = defense.get('ints', 0)
                 db_stats.fumbles_recovered = defense.get('fumRec', 0)
                 db_stats.total_yards_allowed = defense.get('totalYardsAlwd', 0)
-                
+
+                # Big plays — persisted so Highlight Reel's per-game
+                # average survives backend restarts.
+                db_stats.big_plays = stats.get('bigPlays', 0)
+
                 # JSON for detailed breakdown
                 db_stats.offense_stats = stats.get('Offense', {})
                 db_stats.defense_stats = stats.get('Defense', {})
