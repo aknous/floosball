@@ -812,6 +812,7 @@ async def get_player(player_id: int, response: Response):
         
         # Build detailed response
         player_dict = PlayerResponseBuilder.buildPlayerWithAttributes(player)
+
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
@@ -1125,6 +1126,7 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
                                 'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
                                 'insights': getattr(play_data, 'insights', None),
+                                'personalityEvent': getattr(play_data, 'personalityEvent', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
@@ -1640,6 +1642,23 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
         pm.name_repo.add_names_batch(names)
         pm.db_session.commit()
     return {"added": len(names), "total": len(pm.unusedNames)}
+
+
+@app.post("/api/admin/personality/reload")
+async def admin_reload_personality_templates(_auth: None = Depends(_checkAdminAuth)):
+    """Hot-reload vibe_reactions.yaml + quirk_reactions.yaml from disk.
+    Use after uploading new template files (e.g. via `fly ssh sftp`) to apply
+    changes without restarting the app. Clears the shuffled-deck cache so
+    the next reaction draw uses the updated pools."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    floosball_app.personalityManager.reloadTemplates()
+    eng = floosball_app.personalityManager.engine
+    return {
+        "ok": True,
+        "personalities": len(eng.personalities),
+        "quirks": len(eng.quirks),
+    }
 
 
 @app.post("/api/admin/players")
@@ -2514,6 +2533,52 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
                     gamesWithPlays += 1
                     totalPlays += feedLen
 
+    # Personality distribution across all players
+    personality = {
+        'total': 0,
+        'baseVibes': 0,
+        'commonVariants': 0,
+        'rareVariants': 0,
+        'unassigned': 0,
+        'quirked': 0,
+        'rareVariantList': [],
+        'personalityCounts': {},
+        'quirkCounts': {},
+    }
+    try:
+        from collections import Counter
+        from managers.personalityReactionEngine import (
+            BASE_VIBES, COMMON_VARIANTS, RARE_VARIANTS,
+        )
+        allPlayers = (
+            pm.activePlayers + pm.freeAgents + pm.rookieDraftList
+        ) if pm else []
+        pCounts: Counter = Counter()
+        qCounts: Counter = Counter()
+        for p in allPlayers:
+            attrs = getattr(p, 'attributes', None)
+            if attrs is None:
+                continue
+            pers = getattr(attrs, 'personality', None)
+            quirk = getattr(attrs, 'quirk', None)
+            if pers:
+                pCounts[pers] += 1
+            else:
+                personality['unassigned'] += 1
+            if quirk:
+                qCounts[quirk] += 1
+        personality['total'] = len(allPlayers)
+        personality['baseVibes'] = sum(c for p, c in pCounts.items() if p in BASE_VIBES)
+        personality['commonVariants'] = sum(c for p, c in pCounts.items() if p in COMMON_VARIANTS)
+        personality['rareVariants'] = sum(c for p, c in pCounts.items() if p in RARE_VARIANTS)
+        personality['rareVariantList'] = sorted(p for p in pCounts if p in RARE_VARIANTS)
+        personality['quirked'] = sum(qCounts.values())
+        personality['personalityCounts'] = dict(pCounts.most_common())
+        personality['quirkCounts'] = dict(qCounts.most_common())
+    except Exception as _e:
+        # Don't fail the dashboard if personality system isn't loaded
+        pass
+
     return build_success_response({
         "deploySafety": {
             "safe": deploySafe,
@@ -2561,6 +2626,7 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
             "pid": os.getpid(),
         },
         "websockets": ws_manager.get_stats(),
+        "personality": personality,
     })
 
 
@@ -4715,6 +4781,69 @@ def get_weekly_modifier(response: Response):
         session.close()
 
 
+@app.get("/api/fantasy/card-projection")
+def get_card_projection(user: _User = Depends(_getCurrentUser),
+                        include_candidates: bool = Query(default=False),
+                        replace_slot: Optional[int] = Query(default=None)):
+    """Projected card payouts for the upcoming week based on season-to-date
+    averages + ELO forecasts.
+
+    Response:
+        equipped: projection per currently-equipped card (full-hand calc)
+        totals:   roster FP + card bonus FP projections
+        candidates: per-user-card solo projection, only included when
+                    include_candidates=true (used by the card picker modal)
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    from database.connection import get_session
+    from database.models import UserCard
+    from managers.cardProjection import (
+        computeEquippedProjections, computeCandidateProjection,
+    )
+
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not season:
+        return build_success_response({
+            "equipped": {
+                "cards": [], "totalBonusFP": 0.0, "totalFloobits": 0,
+                "multFactors": [], "projectedRosterFP": 0.0,
+                "projectedTotalFP": 0.0, "opponent": "", "winProbability": 0.5,
+            },
+            "candidates": [],
+        })
+
+    session = get_session()
+    try:
+        equipped = computeEquippedProjections(
+            session, user.id, season, week, sm, pm,
+        )
+        candidates: list = []
+        if include_candidates:
+            userCards = (
+                session.query(UserCard)
+                .filter_by(user_id=user.id)
+                .all()
+            )
+            for uc in userCards:
+                proj = computeCandidateProjection(
+                    uc, session, user.id, season, week, sm, pm,
+                    replaceSlot=replace_slot,
+                )
+                if proj is not None:
+                    candidates.append(proj)
+        return build_success_response({
+            "equipped": equipped,
+            "candidates": candidates,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/fantasy/leaderboard")
 def get_fantasy_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
     """Get fantasy leaderboard for a season (defaults to current)."""
@@ -5251,12 +5380,27 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             )
             .first()
         ) is not None
-        if not mvpEquipped:
+        extraSlotSource = None  # "mvp" | "temp_card_slot"
+        extraSlotInfo = None
+        if mvpEquipped:
+            hasExtraSlot = True
+            extraSlotSource = "mvp"
+        else:
             shopRepo = ShopPurchaseRepository(session)
             activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeason, currentWeek)
             hasExtraSlot = activeSlot is not None
-        else:
-            hasExtraSlot = True
+            if activeSlot is not None:
+                extraSlotSource = "temp_card_slot"
+                deferred = activeSlot.week > currentWeek
+                weeksRemaining = activeSlot.expires_at_week - currentWeek + (0 if deferred else 1)
+                extraSlotInfo = {
+                    "slug": "temp_card_slot",
+                    "displayName": "Accession",
+                    "expiresAtWeek": activeSlot.expires_at_week,
+                    "weeksRemaining": max(0, weeksRemaining),
+                    "expiring": weeksRemaining == 1,
+                    "pending": deferred,
+                }
 
         return build_success_response({
             "equippedCards": result,
@@ -5265,6 +5409,8 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             "gamesActive": _areGamesStarted(),
             "gamesScheduled": _areGamesScheduled(),
             "hasExtraSlot": hasExtraSlot,
+            "extraSlotSource": extraSlotSource,
+            "extraSlotPowerup": extraSlotInfo,
         })
     finally:
         session.close()
@@ -6033,35 +6179,48 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=400, detail="No active week")
             activeFlex = shopRepo.getActiveTempFlex(user.id, currentSeasonNum, currentWeek)
             if activeFlex:
+                if activeFlex.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Conscription starting next week")
                 raise HTTPException(status_code=409, detail="You already have an active flex slot")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are active, the current partial week doesn't count against the duration
+            # If games are running, the current partial week can't actually be
+            # used (rosters/cards locked), so defer the effective start to next
+            # week. Otherwise start this week.
             gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         elif slug == "temp_card_slot":
             if currentWeek < 1:
                 raise HTTPException(status_code=400, detail="No active week")
             activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeasonNum, currentWeek)
             if activeSlot:
+                if activeSlot.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Accession starting next week")
                 raise HTTPException(status_code=409, detail="You already have an active 6th card slot")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
+            # If games are running, the current partial week can't actually be
+            # used (rosters/cards locked), so defer the effective start to next
+            # week. Otherwise start this week.
             gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         elif slug == "fortunes_favor":
             if currentWeek < 1:
                 raise HTTPException(status_code=400, detail="No active week")
             activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
             if activeFavor:
+                if activeFavor.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Patronage starting next week")
                 raise HTTPException(status_code=409, detail="You already have Patronage active")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
@@ -6069,21 +6228,28 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 3)
             gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         elif slug == "income_boost":
             if currentWeek < 1:
                 raise HTTPException(status_code=400, detail="No active week")
             activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
             if activeBoost:
+                if activeBoost.week > currentWeek:
+                    raise HTTPException(status_code=409, detail="You already have Endowment starting next week")
                 raise HTTPException(status_code=409, detail="You already have Endowment active")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
+            # If games are running, the current partial week can't actually be
+            # used (rosters/cards locked), so defer the effective start to next
+            # week. Otherwise start this week.
             gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         # ── Deduct Floobits ──
 
@@ -6097,10 +6263,16 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {price})")
 
         # ── Record purchase ──
-
+        # For duration-based powerups, `week` represents the EFFECTIVE start
+        # week (deferred one week when bought mid-games). For one-shot
+        # powerups (no expiresAtWeek), it's still the purchase week.
+        try:
+            purchaseWeek = effectiveStartWeek  # set by duration-based branches above
+        except NameError:
+            purchaseWeek = currentWeek
         shopRepo.createPurchase(
             userId=user.id, itemSlug=slug, season=currentSeasonNum,
-            week=currentWeek, pricePaid=price, expiresAtWeek=expiresAtWeek,
+            week=purchaseWeek, pricePaid=price, expiresAtWeek=expiresAtWeek,
         )
 
         # ── Execute item effect ──
@@ -6201,28 +6373,32 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Temp flex
         activeFlex = shopRepo.getActiveTempFlex(user.id, currentSeasonNum, currentWeek)
         if activeFlex:
-            # If games are running, current is a partial week that doesn't count
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            weeksRemaining = activeFlex.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            # ShopPurchase.week is the EFFECTIVE start week. A purchase made
+            # mid-games has week = currentWeek + 1, so during the purchase
+            # week we shouldn't count the partial week against the duration.
+            deferred = activeFlex.week > currentWeek
+            weeksRemaining = activeFlex.expires_at_week - currentWeek + (0 if deferred else 1)
             active.append({
                 "slug": "temp_flex",
                 "displayName": "Conscription",
                 "expiresAtWeek": activeFlex.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
-                "expiring": weeksRemaining <= 1,
+                "expiring": weeksRemaining == 1,
+                "pending": deferred,
             })
 
         # Temp card slot
         activeCardSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeasonNum, currentWeek)
         if activeCardSlot:
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
-            weeksRemaining = activeCardSlot.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            deferred = activeCardSlot.week > currentWeek
+            weeksRemaining = activeCardSlot.expires_at_week - currentWeek + (0 if deferred else 1)
             active.append({
                 "slug": "temp_card_slot",
                 "displayName": "Accession",
                 "expiresAtWeek": activeCardSlot.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
-                "expiring": weeksRemaining <= 1,
+                "expiring": weeksRemaining == 1,
+                "pending": deferred,
             })
 
         # Income boost (Endowment) — raises weekly FP floobit cap
@@ -8223,16 +8399,20 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             currentWeek = max(1, currentWeek)
             durationWeeks = powerupInfo.get("durationWeeks")
             if durationWeeks:
-                # Duration-based powerups expire at the end of week N+duration-1
+                # Defer start to next week if games are live (current week can't
+                # be used). Active through the last week of the duration.
                 gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None)) if sm and sm.currentSeason else False
-                expiresAtWeek = currentWeek + durationWeeks if gamesRunning else currentWeek + durationWeeks - 1
+                effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+                expiresAtWeek = effectiveStartWeek + durationWeeks - 1
+                purchaseWeek = effectiveStartWeek
             else:
                 expiresAtWeek = None
+                purchaseWeek = currentWeek
             purchase = ShopPurchase(
                 user_id=user.id,
                 item_slug=reward.slug,
                 season=currentSeason,
-                week=currentWeek,
+                week=purchaseWeek,
                 price_paid=0,
                 expires_at_week=expiresAtWeek,
             )
