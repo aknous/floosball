@@ -1,7 +1,7 @@
 import enum
 from os import stat
 import math
-from random import randint, choice
+from random import randint
 from random_batch import batched_randint, batched_random
 import copy
 from stats_optimization import OptimizedPlayerStats, get_optimized_stats
@@ -404,29 +404,8 @@ class Player:
         self.stat_tracker.add_fantasy_points(-3)
 
 
-DEMEANOR_TYPES = [
-    'stoic', 'fiery', 'goofy', 'dramatic', 'cool',
-    'intense', 'shy', 'melancholy', 'rude', 'wholesome',
-    'paranoid', 'enigmatic', 'superstitious', 'oblivious',
-]
-
-MOOD_LABELS = {
-    'stoic':         {5: 'Immovable',    4: 'Composed',    3: 'Measured',     2: 'Distant',      1: 'Hollow'},
-    'fiery':         {5: 'Blazing',      4: 'Fired Up',    3: 'Simmering',    2: 'Fuming',       1: 'Volcanic'},
-    'goofy':         {5: 'Vibing',       4: 'Playful',     3: 'Restless',     2: 'Deflated',     1: 'Lost'},
-    'dramatic':      {5: 'Euphoric',     4: 'Inspired',    3: 'Brooding',     2: 'Anguished',    1: 'Shattered'},
-    'cool':          {5: 'Untouchable',  4: 'Smooth',      3: 'Unbothered',   2: 'Detached',     1: 'Cracked'},
-    'intense':       {5: 'Locked In',    4: 'Focused',     3: 'Calculating',  2: 'Overthinking',  1: 'Unraveling'},
-    'shy':           {5: 'Glowing',      4: 'Hopeful',     3: 'Guarded',      2: 'Withdrawn',    1: 'Invisible'},
-    'melancholy':    {5: 'Wistful',      4: 'Reflective',  3: 'Pensive',      2: 'Heavy',        1: 'Haunted'},
-    'rude':          {5: 'Insufferable', 4: 'Cocky',       3: 'Annoyed',      2: 'Bitter',       1: 'Hostile'},
-    'wholesome':     {5: 'Radiant',      4: 'Warm',        3: 'Gentle',       2: 'Worried',      1: 'Heartbroken'},
-    'paranoid':      {5: 'Vindicated',   4: 'Suspicious',  3: 'Watchful',     2: 'Rattled',      1: 'Cornered'},
-    'enigmatic':     {5: 'Transcendent', 4: 'Cryptic',     3: 'Inscrutable',  2: 'Distant',      1: 'Void'},
-    'superstitious': {5: 'Blessed',      4: 'Ritualistic', 3: 'Uneasy',       2: 'Jinxed',       1: 'Cursed'},
-    'oblivious':     {5: 'Oblivious',    4: 'Cheerful',    3: 'Confused',     2: 'Clueless',     1: 'Vacant'},
-}
-
+# Mood tier names (1-5). Used by getMood() to return a coarse-grained tier
+# label alongside the personality-flavored mood name.
 MOOD_TIER_NAMES = {5: 'electric', 4: 'confident', 3: 'steady', 2: 'frustrated', 1: 'miserable'}
 
 
@@ -490,27 +469,40 @@ class PlayerAttributes:
         # Fatigue (0.0 = fresh, accumulates over the season)
         self.fatigue = 0.0
 
-        # Personality
-        self.demeanor = None
+        # Personality (single layer + mood, plus optional quirk)
+        # Personality is one of 28 personalities (9 base vibes + 19 variants).
+        # Quirk is optional sideline-flavor trait. Mood is 1-5, recomputed
+        # from confidence + determination, surfaced on UI as a personality-
+        # flavored label via PersonalityReactionEngine.getMoodName().
+        self.personality = None
+        self.quirk = None
+        self.mood = 3  # neutral start
 
-        
-    def getMood(self):
-        """Compute mood label and tier from confidence + determination modifiers."""
+    def computeMoodTier(self):
+        """Compute the 1-5 mood tier from confidence + determination."""
         combined = self.confidenceModifier + self.determinationModifier
         if combined >= 6:
-            tier = 5
+            return 5
         elif combined >= 3:
-            tier = 4
+            return 4
         elif combined >= -2:
-            tier = 3
+            return 3
         elif combined >= -5:
-            tier = 2
+            return 2
         else:
-            tier = 1
-        demeanor = self.demeanor or 'stoic'
-        label = MOOD_LABELS.get(demeanor, MOOD_LABELS['stoic']).get(tier, 'Measured')
+            return 1
+
+    def getMood(self):
+        """Return (mood label, tier name) using personality + computed tier."""
+        tier = self.computeMoodTier()
         tierName = MOOD_TIER_NAMES[tier]
-        return label, tierName
+        # Mood label is personality-flavored; engine looks it up.
+        try:
+            from managers.personalityReactionEngine import getEngine
+            label = getEngine().getMoodName(self.personality, tier) if self.personality else None
+        except Exception:
+            label = None
+        return (label or 'Measured', tierName)
 
     def calculateIntangibles(self):
         self.playMakingAbility = round((self.instinct+self.creativity)/2)
@@ -668,9 +660,9 @@ class PlayerAttributes:
                 generated = int(np.clip(np.random.normal(physicalSeed, stdDev), 60, 100))
                 setattr(self, attr, generated)
 
-        # Assign demeanor if not already set (new players)
-        if not self.demeanor:
-            self.demeanor = choice(DEMEANOR_TYPES)
+        # Personality (personality + quirk + mood) is assigned by personalityManager
+        # via playerManager after this method returns, since OVR-tiered variant
+        # gating depends on the final overall rating.
 
     # ── Defensive attribute calculations ─────────────────────────────────
     # Derived from the same base athletics using different formulas per

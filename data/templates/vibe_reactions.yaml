@@ -1,0 +1,2744 @@
+# Vibe reaction templates.
+#
+# Keyed by `(vibe, reaction_key)`. Lines may be:
+#   - pure quotes:        "For one moment, the universe held."
+#   - pure descriptions:  "{name} stares at the sky for a long moment."
+#   - quote + stage dir:  '"That''s me." *adjusts their headband*'
+#
+# Placeholders substituted at render time:
+#   {name}        — the reactor's full name (always available)
+#   {receiver}    — the pass-catcher (threw_td, threw_int [intended])
+#   {passer}      — the QB (scored_td via pass, got_sacked, made_sack,
+#                   threw_int, made_int)
+#   {sacker}      — the defender who sacked (got_sacked)
+#   {interceptor} — the defender who picked it (threw_int)
+#   {fumbler}     — the player who lost the ball (recovered_fumble)
+#   {recoverer}   — the player who recovered (fumbled)
+#   {tackler}     — the defender on a tackle (general use)
+#
+# Renderer should provide role-default fallback strings ("the receiver",
+# "the QB", etc.) when a specific name isn't available, so templates never
+# crash on missing keys.
+#
+# Generic pools cover any positive / negative moment that doesn't have unique
+# perspective flavor. Specific keys handle moments where the reactor's role
+# matters (the QB on a sack vs the defender; the fumbler vs the recoverer).
+#
+# Reaction key routing (handled in code):
+#   clutch_play     -> positive_generic
+#   made_big_play   -> positive_generic
+#   choke_play      -> negative_generic
+#
+# Per-personality fields:
+#   mood_names    — 5-tier mood scale (very bad → very good), surfaced on UI
+#   takes_quirks  — false for strong-characterization variants whose voice
+#                   or world is too specific to layer sideline quirks on
+#                   (defaults to true for everything else)
+
+melancholy:
+  mood_names: [Hollow, Heavy, Wistful, Tender, Luminous]
+
+  positive_generic:
+    # Plain-spoken sad. The ornate Romantic-period flavor lives in the
+    # `poetic` variant. Base melancholy keeps the simple emotional
+    # language without literary flourish.
+    - "{name} looks up at the stadium lights with wet eyes."
+    - "{name} closes their eyes and stands very still."
+    - "{name} kneels for a moment in the endzone, then rises."
+    - "{name} whispers 'at least there's this' to no one."
+    - "{name} stares down the field like it reminds them of something."
+    - "{name} holds the football for a moment too long before letting go."
+    - "{name} looks at the crowd with a gentle, faraway expression."
+    - "{name} pats the ball twice before handing it off. Saying goodbye."
+    - "{name} watches the replay like it's a memory."
+    - "{name} smiles at a teammate in a way that seems heavy."
+    - "{name} whispers 'this is why' to themselves."
+    - "{name} smiles, but only just."
+    - "I needed that."
+    - "{name} sighs, gently this time."
+    - "{name} nods to a teammate, doesn't say anything."
+
+  negative_generic:
+    - "{name} stares into the middle distance."
+    - "{name} stands alone, lost in thought."
+    - "{name} sighs deeply, as if they expected this."
+    - "{name} gazes at the scoreboard with quiet resignation."
+    - "{name} whispers 'it's fine' in a way that suggests it is not fine."
+    - "{name} stands perfectly still, weathering something internal."
+    - "{name} sits at the end of the bench, head down."
+    - "I'm trying."
+    - "Tough day."
+    - "{name} wipes their face on a sleeve."
+    - "It's been heavy."
+    - "{name} pulls a towel over their head and goes still."
+    - "I'll be alright. Eventually."
+    - "{name} closes their eyes for a long moment."
+
+  scored_td:
+    - "{name} hands the ball to a child in the front row, then walks back."
+    - "{name} stands in the endzone, arms slack at their sides."
+    - "{name} crosses the goal line, takes a long breath."
+
+  threw_td:
+    - "{name} watches the catch, smiles softly."
+    - "{name} jogs back to the bench, gives a small nod."
+
+  made_fg:
+    - "{name} watches the ball clear the uprights, then walks off."
+    - "{name} turns toward the bench before the ball lands. They knew."
+
+  missed_fg:
+    - "{name} watches the ball drift wide, does not move for several seconds."
+    - "{name} stares at their own foot for a long moment."
+
+  got_sacked:
+    - "{name} lies on the turf for a long moment, gazing skyward."
+    - "{name} stands up slowly, dusts off, walks back."
+
+  made_sack:
+    - "{name} stands over {passer}, then walks back without a word."
+    - "{name} helps {passer} up gently, nods once, walks away."
+
+  threw_int:
+    - "{name} watches the defender run, hangs their head."
+    - "{name} watches the ball fly into the wrong hands, expression unchanged."
+
+  made_int:
+    - "{name} cradles the ball like a thing recovered, not won."
+    - "{name} catches it cleanly, hands it to the official quietly."
+
+  fumbled:
+    - "{name} stares at their empty hands."
+    - "{name} kneels for a moment, then stands."
+
+  recovered_fumble:
+    - "It was on the ground and I picked it up. That's all."
+    - "{name} clutches the ball to their chest, walks slowly to the bench."
+    - "{name} sits with the ball a moment too long before passing it on."
+
+  sideline:
+    - "{name} is sitting at the end of the bench, looking at nothing."
+    - "{name} is drinking water slowly."
+    - "{name} is staring at their hands for a long moment."
+    - "{name} has a towel pulled over their head briefly."
+    - "{name} has their arms folded, watching the field with quiet weight."
+    - "{name} is taking a slow, deep breath, exhaling slowly."
+
+stoic:
+  # Stoic is description-only — the personality voice is silence and
+  # observable action. Quotes belong to other personalities.
+  mood_names: [Bothered, Strained, Composed, Sharp, Locked In]
+
+  positive_generic:
+    - "{name} hands the ball to the ref and walks off."
+    - "{name} gives a solid nod."
+    - "{name} taps a teammate on the helmet, no words."
+    - "{name} walks back to the line without looking up."
+    - "{name} gives a firm thumbs up."
+    - "{name} blinks twice."
+    - "{name} has not changed facial expression since the coin toss."
+    - "{name} nods once. Scientists will debate whether it was intentional."
+    - "{name} exhales through their nose. What an incredible release of emotion."
+    - "{name} stands motionless while teammates mob them. They are a statue being hugged."
+    - "{name} claps once. The sound echoes. Several teammates look concerned."
+    - "{name} adjusts their wristband. Electric body language from {name}."
+    - "{name} gives a thumbs-up so minimal it could be a muscle spasm."
+    - "{name} acknowledges the screaming fans with a single, barely perceptible head nod."
+    - "{name} walks to the sideline at the exact same pace they walked onto the field."
+    - "{name} cracks one knuckle. The crowd interprets this as joy."
+    - "{name} permits a single corner of their mouth to rise an eighth of an inch."
+    - "{name} taps the goal line once with a single finger. Acknowledgment."
+    - "{name} writes the word 'good' on their wristband, then replaces the wristband."
+    - "{name}'s heart rate, per the trainers, has not exceeded 62."
+    - "{name} hands the ball to the ref like they're returning a library book."
+    - "{name} jogs to the bench, sits down, doesn't speak."
+    - "{name} taps a teammate's shoulder pad on the way past."
+    - "{name} folds their arms on the bench, watches the next snap."
+    - "{name} retightens their wristband, returns to the huddle."
+    - "{name} cracks their knuckles one at a time, jogs back."
+
+  negative_generic:
+    - "{name} jogs back to the huddle without expression."
+    - "{name} stands up, dusts themself off, doesn't look at anyone."
+    - "{name} watches the replay once, then looks away."
+    - "{name} doesn't react."
+    - "{name} walks back to the bench, no expression."
+    - "{name} writes 'fix this' on their wristband, replaces the wristband, jogs back."
+    - "{name} briefly considers sitting down, but just stands there."
+    - "{name} processes the mistake internally. No one will ever know what that looked like."
+    - "{name} stares at the spot where the play happened like they're solving a crime."
+    - "{name} adjusts their gloves. Then their wristband. Then their gloves again."
+    - "{name} folds their towel into a perfect rectangle. Unfolds it. Folds it again. Healing."
+    - "{name} stares at the turf as if it owes them an explanation."
+    - "{name} retightens their chinstrap. This is the entire grief process."
+    - "{name} drinks half a bottle of water. Sets it down. The matter is closed."
+    - "{name} writes one word on their wristband. Crosses it out. Writes it again."
+    - "{name} sits down on the bench. Picks up a towel. Puts it down. Mourning complete."
+    - "{name} rolls their neck. Basically a tantrum from {name}."
+    - "{name} puts their hands on their hips for exactly one second, then drops them. Composure restored."
+    - "{name} picks a blade of grass off their jersey with surgical precision. The crisis has been handled."
+    - "{name} pulls their helmet off briefly, wipes their face, replaces it identically."
+    - "{name} reties a single cleat in silence."
+    - "{name} jogs back at the same pace they always do."
+    - "{name} sits at the end of the bench, looks at the playbook."
+
+  scored_td:
+    - "{name} just hands the ball to the ref."
+    - "{name} sets the ball on the goal line as if filing it away."
+    - "{name} jogs back without removing their helmet."
+    - "{name} stands at the back of the endzone for a moment, walks back."
+    - "{name} hands the ball to the closest official, jogs to the sideline."
+
+  threw_td:
+    - "{name} taps {receiver} on the helmet, walks back."
+    - "{name} watches the catch, jogs to the bench."
+    - "{name} signals the next play before the celebration ends."
+    - "{name} nods once at the receiver from across the field."
+    - "{name} takes off their helmet, replaces it, jogs to the sideline."
+
+  made_fg:
+    - "{name} watches it sail through, walks off."
+    - "{name} bows their head one inch and walks off."
+    - "{name} hands the tee to the long snapper, no words."
+    - "{name} retrieves their tee with their head down, walks off."
+    - "{name} walks to the bench, sits, drinks water."
+
+  missed_fg:
+    - "{name} watches it go wide, no reaction."
+    - "{name} writes the word 'left' on their wristband."
+    - "{name} retrieves their tee, no expression."
+    - "{name} taps their cleats together once, jogs back."
+    - "{name} watches the ball land on the next field, walks off."
+
+  got_sacked:
+    - "{name} doesn't blame the line. Doesn't blame anyone."
+    - "{name} gets up, jogs back to the huddle."
+    - "{name} stands up, dusts the turf off, returns to the huddle."
+    - "{name} replays the snap in their head while jogging back."
+
+  made_sack:
+    - "{name} gets up off the QB, walks back to their side."
+    - "{name} hands the QB their helmet, walks back."
+    - "{name} stands up, returns to formation."
+    - "{name} pats the line on the helmets, jogs back."
+
+  threw_int:
+    - "{name} walks straight to the bench, doesn't make eye contact."
+    - "{name} watches the defender run, jogs back."
+    - "{name} replays the throw in their head while jogging to the bench."
+    - "{name} writes a single character on their wristband."
+
+  made_int:
+    - "{name} catches it cleanly, runs out of bounds, hands it to the ref."
+    - "{name} secures the ball, jogs to the sideline."
+    - "{name} stands up holding the ball, hands it to the official."
+    - "{name} runs the ball out of bounds with no expression."
+    - "{name} cradles the ball on the way to the bench."
+
+  fumbled:
+    - "{name} watches the recovery, doesn't move."
+    - "{name} stands up, walks back without comment."
+    - "{name} jogs to the sideline, picks up the playbook."
+    - "{name} dusts off their gloves, returns to the huddle."
+
+  recovered_fumble:
+    - "{name} pops up holding the ball, hands it to the ref."
+    - "{name} secures the ball, walks off."
+    - "{name} stands up holding the ball, jogs to the sideline."
+    - "{name} hands the ball to the closest official, walks back."
+
+chill:
+  mood_names: [Stuck, "Off", Mellow, Cruising, Dialed]
+
+  positive_generic:
+    - "All right, all right."
+    - "Yeah, we good."
+    - "{name} smiles, jogs off without much fuss."
+    - "Right where I wanted it."
+    - "{name} flips the ball to the ref, gives a small thumbs-up."
+    - "It's all good out here."
+    - "{name} chuckles to themself, jogs to the sideline."
+    - "I had a feeling."
+    - "Cool, cool."
+    - "{name} shrugs, like it was no big deal, takes off their helmet."
+    - "Just out here."
+    - "It's a beautiful day, my friend."
+    - "{name} is humming to themself on the way to the bench."
+    - "Nothing to write home about."
+    - "Easy money."
+    - "Smooth."
+    - "There we go."
+    - "I'll take it."
+    - "Hey, that worked."
+    - "Felt nice."
+    - "Breezy."
+    - "Y'know? Yeah."
+    - "Just doing the thing."
+    - "{name} jogs back chewing gum like nothing happened."
+    - "{name} takes a slow sip of water on the way to the bench."
+    - "{name} bumps fists with the ref on the way past."
+    - "{name} pats a teammate twice on the helmet, mosies off."
+    - "{name} flips the ball to the ref like it's a Frisbee."
+    - "{name} rolls their shoulders, exhales, smiles."
+    - "{name} looks up at the clouds for a second, smiles."
+    - "{name} leans on a teammate's shoulder for a second, grinning."
+    - "{name} adjusts their wristband, takes their time getting back."
+
+  negative_generic:
+    - "It happens, man."
+    - "{name} shrugs, jogs back to the huddle."
+    - "All good, we'll get it back."
+    - "No worries."
+    - "{name} laughs at themself a little, taps their helmet."
+    - "Yeah, that's on me. Whatever."
+    - "Long game."
+    - "{name} smiles, shakes their head, walks back."
+    - "Eh."
+    - "Coulda gone either way."
+    - "{name} stretches their neck, doesn't look stressed."
+    - "It's just football."
+    - "Could be worse."
+    - "{name} shrugs so hard it looks rehearsed."
+    - "Whatever, brother."
+    - "{name} eats a sunflower seed mid-jog back to the huddle."
+    - "Eh. Whatever."
+    - "That's how it goes sometimes."
+    - "We'll get the next one."
+    - "Live and learn."
+    - "All part of it."
+    - "Yeah, that one got away."
+    - "Ah, well."
+    - "Onto the next one."
+    - "Eh, doesn't matter."
+    - "Yeah, no, that's fine."
+    - "Hey, it's a long game."
+    - "{name} laughs softly, shakes it off."
+    - "{name} sits down, leans back, watches the next play unfold."
+    - "{name} pats their own helmet twice, jogs back."
+    - "{name} cracks their neck, doesn't change pace."
+    - "{name} hums something on the way to the bench, doesn't seem bothered."
+    - "{name} tucks a sunflower seed in their cheek before jogging back."
+    - "{name} sits down with a smile, like they're at a backyard barbecue."
+    - "{name} takes a long, slow sip of water, watches the replay."
+    - "{name} stretches casually, like they have all afternoon."
+
+  scored_td:
+    - "{name} flips the ball to a fan, smiles, jogs off."
+    - "{name} jogs to the endzone like they're being polite."
+    - "Yeah, just kinda fell into it."
+    - "{name} flips the ball over their shoulder to a teammate, jogs off whistling."
+
+  threw_td:
+    - "They were open. I just put it there."
+    - "Easy throw. They did the work."
+    - "{name} fist-bumps their coordinator on the way to the bench."
+    - "Just put it where they could get it."
+    - "{name} fist-bumps the line on the way off, all smiles."
+
+  made_fg:
+    - "{name} watches it, jogs to the bench, sits down with a water bottle."
+    - "{name} bumps their holder's helmet, smiles."
+    - "Three's three."
+    - "Three's three, baby."
+    - "{name} grabs a sunflower seed bag on the way to the bench."
+
+  missed_fg:
+    - "{name} watches it sail wide, just shakes their head with a smile."
+    - "Yeah, off. I'll get the next one."
+    - "{name} grabs their water bottle, doesn't seem stressed."
+    - "Eh. Get the next one."
+    - "{name} takes a slow lap on the sideline, doesn't seem rattled."
+
+  got_sacked:
+    - "They got me there. Fair."
+    - "I was holding it forever. My bad."
+    - "{name} pats the defender on the helmet on their way back."
+    - "Yeah, that's on me. Held it too long."
+    - "{name} pops up slow, dusts themselves off, jogs back."
+
+  made_sack:
+    - "Coach drew it up. I just had to get there."
+    - "They held it. I came home."
+    - "{name} taps the d-line on the helmets, all smiles."
+    - "Yeah, just had to get there."
+    - "{name} pops the QB up off the ground, gives a small nod."
+
+  threw_int:
+    - "Bad read. Whatever."
+    - "{name} laughs ruefully, takes off their helmet."
+    - "{name} watches the defender run, jogs back to the bench, sits down."
+    - "Eh, that's on me."
+    - "{name} jogs to the bench, takes a long sip of water."
+
+  made_int:
+    - "{name} catches it cleanly, runs out of bounds, hands it to a teammate."
+    - "Hey, I'll take it."
+    - "Just had a feeling."
+    - "Yeah, that's the one."
+    - "{name} cradles the ball, jogs out of bounds smiling."
+
+  fumbled:
+    - "Yeah, my bad. Won't happen again."
+    - "{name} pats their RBs coach on the shoulder, says something brief."
+    - "Lost it. It happens."
+    - "Yeah, my fault. It happens."
+    - "{name} pats their helmet twice, jogs back without complaint."
+
+  recovered_fumble:
+    - "{name} pops up holding the ball, casually hands it to the ref."
+    - "Just had to fall on it."
+    - "{name} acquires the ball with the energy of finding a quarter."
+    - "Hey, free ball."
+    - "{name} pops up holding the ball, gives a small thumbs-up."
+
+cool:
+  mood_names: [Frayed, Slipping, Smooth, Slick, Untouchable]
+
+  positive_generic:
+    - "Was that ever in doubt?"
+    - "Watch the tape. I'll wait."
+    - "{name} smooths their jersey."
+    - "You're welcome, by the way."
+    - "{name} points at the camera, gives a small wink."
+    - "Did you see that? Of course you did."
+    - "{name} blows a kiss to no one in particular."
+    - "That's a {name} special."
+    - "I make this look easy."
+    - "{name} adjusts their sleeves with deliberate slowness."
+    - "I do this for a living."
+    - "{name} tilts their head back like they're posing for a poster."
+    - "I get paid for this. They get to watch."
+    - "{name} makes meaningful eye contact with the camera operator."
+    - "The legend grows."
+    - "{name} kisses their own bicep."
+    - "{name} adjusts their hair even though they are wearing a helmet."
+    - "{name} takes off their helmet and puts on sunglasses."
+    - "{name} walks in slow motion as the wind blows their hair."
+    - "{name} puts on sunglasses. They were already wearing sunglasses. They are now wearing two pairs of sunglasses."
+    - "{name} flips the ball over their shoulder without looking. It lands perfectly in the ref's hands."
+    - "{name} adjusts their gloves like James Bond adjusting cufflinks."
+    - "{name} leans against the goalpost with their arms crossed. A photographer will win an award for that shot."
+    - "{name} blows on their fingertips like a smoking gun."
+    - "{name} sits down on the bench like they're at a five-star restaurant waiting for the wine list."
+    - "{name} smirks. Devastating."
+    - "{name} gives the crowd the subtlest of nods. Eighty thousand people feel personally acknowledged."
+    - "{name} signs the air, hands the autograph to no one in particular."
+    - "{name} pretends to roll up their sleeves. The jersey has no sleeves."
+    - "{name} winks. A small section of the crowd is now in love."
+    - "{name} hands the ball to the ref without breaking eye contact with the camera."
+    - "{name} adjusts their cuffs. They are not wearing cuffs."
+    - "{name} tips an imaginary hat to the cornerback they just beat."
+
+  negative_generic:
+    - "I'll allow it this time."
+    - "{name} adjusts their sleeves and gets back to it."
+    - "Even legends have bad days."
+    - "Won't happen again."
+    - "{name} cracks their neck, gives the camera a half-smile."
+    - "Temporary setback."
+    - "{name} smooths their hair, walks back like nothing happened."
+    - "Anyone else and that would've been worse."
+    - "{name} flicks an imaginary speck off their shoulder."
+    - "I'll get them next series."
+    - "I let them have that one. They needed it."
+    - "{name} stretches once, slowly, deliberately."
+    - "Curious."
+    - "Even Sinatra had a missed note."
+    - "{name} looks at their hands like they betrayed their good name."
+    - "{name} brushes dirt off their shoulder like the play was a minor inconvenience."
+    - "{name} fixes their hair on the way to the sideline. Priorities."
+    - "{name} yawns so theatrically the opposing bench takes it personally."
+    - "{name} pretends to check a watch they're not wearing."
+    - "{name} flicks an invisible speck of dust off their jersey. The jersey is filthy, but they don't care."
+    - "{name} leans back on the bench like they own the stadium and are simply allowing others to use it."
+    - "{name} stretches casually, as if the play happened to someone else. Someone less cool."
+    - "{name} walks to the sideline like they're on a runway. They might actually be on a runway."
+    - "{name} examines a fingernail with surgical interest."
+    - "{name} smooths an eyebrow back into place."
+    - "{name} adjusts the watch they're not wearing."
+    - "{name} gives a sarcastic golf clap for themselves. Somehow it lands."
+    - "{name} sips from a water bottle like it's a glass of bordeaux."
+
+  scored_td:
+    - "{name} points at the camera, then walks calmly to the sideline."
+    - "{name} blows a kiss to the crowd."
+    - "{name} signs an imaginary autograph for the camera."
+    - "{name} drops the ball at the goal line, doesn't break stride."
+    - "Six. Make a note."
+
+  threw_td:
+    - "{name} watches the receiver score, then turns to the camera and shrugs."
+    - "I told them where to be. They were there."
+    - "{name} kisses their throwing hand."
+    - "I told them where. They went."
+    - "{name} jogs to the sideline like they're walking off a movie set."
+
+  made_fg:
+    - "{name} watches the ball clear the uprights, then walks off without looking."
+    - "{name} kisses their fingertips, points at the goalpost."
+    - "Three. Easy."
+    - "Through. As scheduled."
+    - "{name} replaces their helmet very carefully, walks off."
+
+  missed_fg:
+    - "{name} watches it sail wide, doesn't react, walks off."
+    - "I let that one go. They needed a chance."
+    - "{name} adjusts their sleeves and stares at the goalposts."
+    - "Even legends choose to miss occasionally."
+    - "{name} flicks an imaginary speck off their kicking shoe."
+
+  got_sacked:
+    - "{name} gets up slowly, smooths their jersey, walks back."
+    - "They had to bring help. Note that."
+    - "{name} pats the defender on the helmet like they're rewarding them."
+    - "Took two. Sometimes three."
+    - "{name} sits up unhurried, brushes off their sleeves."
+
+  made_sack:
+    - "{name} stands over the QB, then strolls back to their side."
+    - "They were reaching. I delivered."
+    - "{name} bows slightly to {passer} they just buried."
+    - "Predictable."
+    - "{name} steps over the QB, jogs back fixing their hair."
+
+  threw_int:
+    - "{name} watches the defender run, smooths their hair, walks to the sideline."
+    - "They'll never see one like that again."
+    - "{name} adjusts their glove, doesn't change pace."
+    - "I let them have a moment. Generous of me."
+    - "{name} watches the runback with an amused half-smile."
+
+  made_int:
+    - "{name} catches it cleanly, juggles it for show, hands it to the ref."
+    - "They threw it where I told them to."
+    - "{name} winks at {passer} on the way back."
+    - "{name} secures the ball, holds it up to the camera for a beat."
+    - "I knew where it was going before they did."
+
+  fumbled:
+    - "{name} watches the recovery, smooths their jersey, walks back."
+    - "{name} flicks an imaginary speck off their arm."
+    - "They got lucky. Once."
+    - "{name} adjusts their wristband, doesn't react."
+    - "Anomaly."
+
+  recovered_fumble:
+    - "{name} casually picks up the ball, holds it up, walks to the bench."
+    - "{name} kisses the ball, signs it, hands it back."
+    - "Was on the ground. Picked it up. You're welcome."
+    - "Naturally."
+    - "{name} dusts off the ball, hands it back like it's a wine list."
+
+lively:
+  # Joy, fun, communal hype. Outward energy directed at fans, teammates,
+  # and the crowd. Hype-man / cheerleader. Where fiery is controlled
+  # rage, lively is infectious joy. Both can be loud, but lively's
+  # vocabulary is WOOO / ATTABOY / Y'all / hug / high-five / clap;
+  # fiery's vocabulary is scream / headbutt / pound / TASTE IT.
+  mood_names: [Flat, Buzzing, Hyped, Electric, Unleashed]
+
+  positive_generic:
+    - "Y'all see that?!"
+    - "{name} jumps up off the turf, points at the crowd."
+    - "WOOOO!"
+    - "WHAT a play!"
+    - "{name} runs to their teammates, pumping their arms."
+    - "Hahaha YES."
+    - "{name} slaps the helmet of every offensive lineman on the way back."
+    - "C'MON now!"
+    - "I love this game!"
+    - "{name} mouths 'I LOVE YOU' to a fan in the front row."
+    - "That was FUN."
+    - "{name} does a cartwheel. One perfect cartwheel. Beautiful..."
+    - "{name} mimes a phone call to no one."
+    - "{name} hugs every member of the offensive line for an uncomfortably long time."
+    - "BIG play! BIG play!"
+    - "Yes SIR!"
+    - "ATTABOY! ATTABOY!"
+    - "OOOH baby!"
+    - "I FELT that one!"
+    - "Y'all hear that?! Y'all HEAR that?!"
+    - "We DOIN' it now!"
+    - "Y'all on your feet?! Y'ALL ON YOUR FEET?!"
+    - "{name} runs along the sideline high-fiving every fan in the front row."
+    - "{name} leads the bench in a chant they invent on the spot."
+    - "{name} jogs back doing a little shoulder-shimmy dance."
+    - "{name} jumps onto a teammate's back, both arms in the air."
+    - "{name} claps over their head until the entire bench is clapping with them."
+    - "{name} runs the sideline waving everyone to their feet."
+    - "{name} pulls a teammate into a chest-bump, then a hug, then another chest-bump."
+    - "{name} jumps up and down clapping like they just won a raffle."
+    - "{name} cups a hand to their ear at the crowd, gets a roar back."
+    - "{name} runs to the bench arms wide, sweeping everyone into the celebration."
+
+  negative_generic:
+    - "Aw shoot."
+    - "{name} smacks their hands together, looks up at the sky."
+    - "We HAD that!"
+    - "Aw, no no no!"
+    - "{name} stomps once, shakes it off, jogs back."
+    - "C'mon, we gotta finish those!"
+    - "{name} claps loud, waves their teammates back to the huddle."
+    - "Heartbreaker, man!"
+    - "Bring it back, BRING IT BACK!"
+    - "{name} laughs in disbelief."
+    - "We DID NOT just do that."
+    - "{name} throws their head back, hands on their hips, then laughs."
+    - "Aw, MAN, my MAN!"
+    - "{name} grabs their head with both hands."
+    - "{name} sits down on the turf for a second to process."
+    - "C'mon now, we GOTTA have that!"
+    - "Tighten UP! Tighten UP!"
+    - "We need ONE play! Just one!"
+    - "Aw, c'mon, we're RIGHT there!"
+    - "Heads UP, heads UP!"
+    - "Long way to go! Long way to GO!"
+    - "That's not US! That is NOT us!"
+    - "Big breath, big breath. Next play."
+    - "{name} claps three times sharp, points at the huddle."
+    - "{name} pulls a teammate up off the ground and slaps their helmet twice."
+    - "{name} runs back to the huddle clapping, won't let anyone hang their head."
+    - "{name} grabs a teammate's facemask, locks eyes, says something fast."
+    - "{name} stomps the turf once, claps loud, jogs back yelling encouragement."
+    - "{name} runs along the bench slapping pads, getting everyone back on their feet."
+    - "{name} laughs, shakes it off with a sharp clap of the hands."
+    - "{name} shakes their head, smiles, claps it out."
+
+  scored_td:
+    - "{name} spikes the ball, runs back pointing at the crowd."
+    - "{name} dances briefly, gets pulled into a teammate hug."
+    - "{name} runs the long way back to the bench, high-fiving every fan in arm's reach."
+    - "{name} hurls the ball into the upper deck, screams 'YEEEAH!'"
+    - "TOUCHDOWN, BABY!"
+
+  threw_td:
+    - "{name} screams at their receiver, runs the length of the field to celebrate."
+    - "MY GUY! MY GUY!"
+    - "{name} points at the receiver from 40 yards away."
+    - "GO! GO! GO!"
+    - "{name} celebrates the catch by hugging every offensive lineman in turn."
+
+  made_fg:
+    - "{name} pumps both fists, jogs back to the bench grinning."
+    - "{name} hugs their holder."
+    - "STRAIGHT through!"
+    - "THREE! WE'LL TAKE IT!"
+    - "{name} chest-bumps every member of the special teams unit."
+
+  missed_fg:
+    - "{name} smacks their helmet, laughs in frustration."
+    - "Aw, man! Right idea, wrong foot!"
+    - "WIDE?! WIDE?!"
+    - "AW MAN, WE NEEDED THAT!"
+    - "{name} kicks the air, laughs, claps."
+
+  got_sacked:
+    - "{name} pops up, points at the defender, gives a 'fair play' nod."
+    - "Aw, you got me!"
+    - "I shoulda thrown it!"
+    - "NO NO NO!"
+    - "{name} pops up clapping, gets the line back to the huddle."
+
+  made_sack:
+    - "{name} pops off {passer}, runs to the bench arms wide for high-fives."
+    - "GOT THEM! GOT THEM!"
+    - "BIG STOP! BIG STOP!"
+    - "BIG TIME!"
+    - "{name} jumps up and down in front of the bench, gets everyone clapping."
+
+  threw_int:
+    - "{name} smacks their helmet, screams 'NO!'"
+    - "{name} runs after the defender, gives up at midfield, walks back."
+    - "{name} sprints down the field after the defender. Loses by twenty yards."
+    - "GET HIM, GET HIM!"
+    - "{name} runs after the defender, gives up, claps anyway."
+
+  made_int:
+    - "{name} catches it, runs to the sideline holding the ball over their head."
+    - "PICK SIX, ALMOST! ALMOST!"
+    - "Right to me, baby! Right to me!"
+    - "BALL HAWK!"
+    - "{name} holds the ball over their head as they sprint to the sideline."
+
+  fumbled:
+    - "{name} smacks the turf, gets up shaking their head."
+    - "NOOOO!"
+    - "I had it!"
+    - "NO, NO, BRING IT BACK!"
+    - "{name} chases the ball into a pile, keeps hollering."
+
+  recovered_fumble:
+    - "{name} pops up holding the ball over their head, runs to the sideline pumping their arms."
+    - "BALL! BALL! BALL!"
+    - "{name} hugs everyone within reach."
+    - "I GOT IT! I GOT IT!"
+    - "{name} pops up holding the ball, points at the bench."
+
+fiery:
+  # Intensity, controlled rage, animalistic. Self-focused ("I was BUILT
+  # for this") or destructive (toward inanimate objects — coolers,
+  # goalposts, helmets). Mean serious energy, not joyful. Distinct from
+  # lively (which is communal joy with the same volume but warmer
+  # vocabulary).
+  mood_names: [Burning Out, Frustrated, Heated, Charged, Roaring]
+
+  positive_generic:
+    - "THERE IT IS!"
+    - "{name} screams at the sky, fists clenched."
+    - "WHAT'D I TELL YOU!"
+    - "PUT THAT ONE ON THE WALL!"
+    - "{name} pounds their chest, screaming."
+    - "HERE WE GO!"
+    - "{name} kicks at the turf, then roars."
+    - "I LIVE FOR THIS!"
+    - "TASTE IT!"
+    - "{name} runs at the camera, helmet off, screaming."
+    - "I WAS BUILT FOR THIS!"
+    - "RING THE BELL!"
+    - "WHO! IS! HE!"
+    - "{name} pounds their head with their own helmet."
+    - "I AM A LIVING WEAPON!"
+    - "{name} is apparently trying to bend the metal of their facemask."
+    - "{name} is screaming at the sky. A passing bird changes direction."
+    - "{name} headbutts the goalpost. The goalpost vibrates. {name} does not."
+    - "{name} body-slams the turf so hard the impact shows up on a seismograph."
+    - "{name} grabs two teammates by the facemask and screams from two inches away."
+    - "{name} is doing a war dance that has never been seen in any culture, anywhere, ever."
+    - "{name} headbutts a teammate so hard both helmets crack. They are both thrilled about this."
+    - "{name} punts a cooler into the second row. Gatorade everywhere."
+    - "{name} flexes so hard their facemask creaks."
+    - "{name} stares directly into a teammate's facemask and growls something."
+    - "{name} runs three tight laps around the goalpost before being collected by a coach."
+    - "{name} screams the play number into the camera. Repeatedly. The camera retreats."
+    - "{name} rips off their jersey, then realizes they shouldn't have."
+
+  negative_generic:
+    - "I CAN'T BELIEVE THIS!"
+    - "{name} throws their helmet at the bench."
+    - "ARE YOU KIDDING ME?!"
+    - "I'M DONE. I'M FINISHED!"
+    - "{name} kicks the gatorade cooler."
+    - "WE HAD THAT! WE HAD IT!"
+    - "{name} screams into a towel on the bench."
+    - "WHAT IS HAPPENING?!"
+    - "NO. NO. NO."
+    - "{name} refuses to come off the field, has to be jogged back by a coach."
+    - "I'M GONNA LOSE MY MIND!"
+    - "UNBELIEVABLE!"
+    - "{name} kicks their own helmet down the sideline."
+    - "{name} headbutts the gatorade table."
+    - "DOES ANYONE WANT TO PLAY FOOTBALL?!"
+    - "WHO TAUGHT YOU TO PLAY?!"
+    - "{name} kicks a Gatorade cooler so hard it explodes. The sideline looks like a crime scene."
+    - "{name} is arguing with a sideline marker. The marker is inanimate. {name} does not care."
+    - "{name} flips a folding chair. Then another one."
+    - "{name} headbutts the bench. The bench loses."
+    - "{name} rips their gloves off and throws them in different directions. Both hit a coach."
+    - "{name} storms to the sideline. A path clears. People have learned."
+    - "{name} screams into their own helmet like a megaphone. It works?"
+    - "{name} yells at a water bottle. The water bottle did nothing wrong this time."
+    - "{name} kicks at the turf and tears up a divot the size of a hat."
+    - "{name} screams at the empty bench. The bench has no opinion on the matter."
+    - "{name} pounds the goalpost. The goalpost wins this time."
+    - "{name} rips the chinstrap clean off their helmet."
+    - "{name} is breathing so hard their facemask is fogging up from the inside."
+
+  scored_td:
+    - "{name} spikes the ball at full force, screams into the crowd."
+    - "{name} rips off their helmet, roars."
+    - "{name} spikes the ball, immediately gets up and re-spikes it."
+    - "{name} screams into a teammate's facemask from two inches away."
+
+  threw_td:
+    - "{name} screams down the field at {receiver}, both arms up."
+    - "TOLD YOU! TOLD YOU!"
+    - "{name} sprints to the offensive line and screams in their faces."
+    - "I TOLD YOU!"
+    - "{name} sprints the length of the field to scream at {receiver}."
+
+  made_fg:
+    - "{name} pumps both fists, sprints toward the bench."
+    - "DAGGER!"
+    - "{name} screams 'STRAIGHT THROUGH' at the goalpost retroactively."
+    - "AUTOMATIC!"
+    - "{name} flexes at the goalpost, screaming."
+
+  missed_fg:
+    - "{name} throws their helmet at the bench."
+    - "{name} sits on the bench, screams into their hands."
+    - "{name} kicks the kicking tee thirty yards downfield."
+    - "{name} headbutts the kicking net so hard it shudders."
+    - "NEVER AGAIN!"
+
+  got_sacked:
+    - "{name} pops up screaming at their line."
+    - "BLOCK SOMEBODY!"
+    - "PROTECT THE QUARTERBACK!"
+    - "{name} pops up screaming at no one in particular."
+    - "I CAN PROTECT MYSELF!"
+
+  made_sack:
+    - "{name} stands over the QB, screaming."
+    - "GET UP! GET UP!"
+    - "{name} flexes directly at the QB, who is still on the ground."
+    - "{name} stands over the QB, pounding their own chest."
+    - "STAY DOWN!"
+
+  threw_int:
+    - "{name} screams at the receiver, then at themself."
+    - "{name} kicks at the turf, won't go to the sideline."
+    - "I HAD THEM! I HAD THEM!"
+    - "{name} rips off their helmet and screams into it."
+    - "MY ARM IS A WEAPON!"
+
+  made_int:
+    - "{name} runs holding the ball over their head, screaming."
+    - "PICKED IT! PICKED IT!"
+    - "{name} taunts {passer} on the way back."
+    - "{name} screams at the QB while sprinting back to the bench."
+    - "PICKED IT! PICKED IT! PICKED IT!"
+
+  fumbled:
+    - "{name} slams the turf with both hands."
+    - "{name} screams into the crowd."
+    - "GIVE IT BACK!"
+    - "{name} headbutts a folding chair."
+    - "GIVE IT BACK NOW!"
+
+  recovered_fumble:
+    - "{name} jumps to their feet holding the ball, screaming."
+    - "MINE! MINE!"
+    - "{name} taunts the offense as they walk off."
+    - "MINE FOREVER!"
+    - "{name} stands up holding the ball, screams at the offense."
+
+unhinged:
+  mood_names: [Scrambled, Glitching, Tuned In, Possessed, Ascended]
+
+  positive_generic:
+    - "I told you I was real."
+    - "Mother always said I'd be famous."
+    - "and they doubted me."
+    - "{name} mouths something into the camera that lipreaders can't agree on."
+    - "I knew this would happen. I dreamed it."
+    - "Tell the FBI: I'm peaking."
+    - "{name} stares into the middle distance for an unsettling amount of time."
+    - "engage."
+    - "I am the algorithm."
+    - "{name} kisses the football, then whispers something to it."
+    - "the signs were all there. birds. numbers. the wind."
+    - "I'll be on every podcast tonight."
+    - "they cannot stop me. they have tried."
+    - "the matrix has a glitch and I am the glitch."
+    - "I have been preparing my whole life. specifically this."
+    - "the simulation glitches when no one is looking. it just glitched."
+    - "I see the seams of the field. I see them."
+    - "I am awake in here. Most of them are not."
+    - "I am starting to do something I shouldn't be able to do."
+    - "{name} whispers a secret to the football before handing it to the ref."
+    - "{name} traces an elaborate symbol on the turf. A teammate asks what it means. {name} won't say."
+    - "{name} gives a thumbs-up to an empty section of the stadium. Holds it there."
+    - "{name} bows deeply to the goalpost. The goalpost does not respond."
+    - "{name} holds up three fingers. No one knows what it means. {name} won't explain."
+    - "{name} closes their eyes and holds their palms up to the sky."
+    - "{name} tilts their head at the scoreboard like it just told them something personal."
+    - "{name} picks up a handful of turf and lets it fall through their fingers like sand."
+    - "{name} walks in a perfect circle three times before returning to the sideline."
+    - "{name} clutches the football like a newborn child."
+    - "{name} holds the ball aloft like Simba on Pride Rock. A teammate tries to take it. {name} hisses."
+    - "{name} stands at midfield, arms spread, rain falling on their face. It is not raining."
+    - "{name} mouths a phone number into the camera. Whose number?."
+    - "{name} crouches down and presses one ear to the turf, listening for something."
+    - "{name} faces a different cardinal direction every five seconds."
+    - "{name} salutes the referee, then the chain gang, then a hot dog vendor in the stands."
+    - "{name} stares at the football for a long time before handing it over, as if memorizing it."
+
+  negative_generic:
+    - "{name} stares at the sky for an unsettling amount of time."
+    - "the simulation is buggy."
+    - "{name} mutters something to themself, eyes wide."
+    - "I knew. I knew. I knew."
+    - "{name} draws a circle in the turf with their finger."
+    - "we have entered the dark forest of football."
+    - "{name} laughs at nothing in particular."
+    - "{name} performs a small ritual on the turf."
+    - "{name} just nods. This was always going to happen. They saw it in a dream."
+    - "{name} picks up a blade of grass, smells it, and puts it in their pocket."
+    - "{name} stares at their own hands like they belong to someone else."
+    - "{name} sits cross-legged on the 40-yard line. A coach asks them to move. They don't."
+    - "{name} points at something in the sky. There is nothing in the sky."
+    - "{name} closes their eyes on the sideline and begins humming a tune nobody recognizes."
+    - "{name} reads the yard marker number out loud and writes it on their wrist."
+    - "{name} walks to the bench in a spiral pattern. No one says anything."
+    - "{name} examines the laces of the football, frowns, examines them again."
+    - "{name} looks at the scoreboard, then at the scoreboard's reflection on a tablet, then at the scoreboard again."
+    - "{name} writes a single word on their wristband. The word is not, technically, a word."
+    - "{name} demands to know who designed the field. Then who designed the designer...?"
+    - "{name} traces a number in the dirt with their toe and immediately scuffs it out."
+
+  scored_td:
+    - "{name} stares directly into the camera and mouths something concerning."
+    - "{name} hands the ball to nobody, just sets it down on the goal line."
+    - "this was prophesied."
+    - "{name} sets the ball down and bows to it."
+    - "I have crossed. The veil is thin tonight."
+
+  threw_td:
+    - "{name} points at the receiver, then at the sky, then walks off muttering."
+    - "They were where I told them to be. In the dream. The dream."
+    - "I projected the catch into their hands. mind to mind."
+    - "{name} taps their temple, nods at the receiver from 40 yards away."
+    - "I planted the catch in their hand. telepathically."
+
+  made_fg:
+    - "{name} watches it through, then turns and walks off without acknowledging anyone."
+    - "the wind obeys me."
+    - "{name} kisses their kicking foot."
+    - "the upright permitted it. it remembered our agreement."
+    - "{name} bows to the goalpost, walks off muttering."
+
+  missed_fg:
+    - "{name} stares at the goalposts. The goalposts stare back."
+    - "the laces were facing me. an omen."
+    - "{name} sniffs the football, frowns deeply."
+
+  got_sacked:
+    - "{name} lies on the turf laughing for a long time."
+    - "{name} pops up suddenly, looking around like they've lost time."
+    - "the pocket was a trap. a TRAP."
+    - "the field shifted beneath me. it shifted."
+    - "{name} sits up suddenly, looks around as if missing time."
+
+  made_sack:
+    - "{name} stands over the QB and whispers something to them."
+    - "I knew their cadence. I dreamed it last night."
+    - "{name} smells the QB's helmet briefly."
+    - "I tasted the snap count."
+    - "{name} circles the QB once before walking back."
+
+  threw_int:
+    - "{name} watches the defender run, says 'fascinating' to no one."
+    - "{name} mouths something at the football as it flies away."
+    - "the ball chose them. for now."
+
+  made_int:
+    - "{name} catches it, looks at the ball like it's communicating with them."
+    - "the ball came home. the ball remembers."
+    - "we are connected, the ball and I."
+    - "it sought me. it always does."
+    - "{name} cradles the ball, refuses to give it back for a moment too long."
+
+  fumbled:
+    - "{name} stares at their hands like they betrayed them."
+    - "the ball was greased. greased."
+    - "I held it. I held it. did I hold it?"
+    - "the ball rejected me. for now."
+    - "{name} stares at the empty space where the ball was."
+
+  recovered_fumble:
+    - "{name} cradles the ball, won't let the ref take it for several seconds."
+    - "it CHOSE me."
+    - "{name} cradles the ball, whispers 'thank you for choosing me' into it."
+    - "I called it home. I called it."
+    - "{name} tucks the ball under one arm, whispers something only it can hear."
+
+
+wholesome:
+  mood_names: [Heavy-Hearted, Subdued, Caring, Beaming, Radiant]
+
+  positive_generic:
+    - "These guys, man. These guys."
+    - "{name} pulls every teammate within arm's reach into a hug."
+    - "I love this team."
+    - "I'm just so proud of these guys."
+    - "{name} thanks every offensive lineman by name as they jog off."
+    - "What a moment with these boys."
+    - "Couldn't have done it without my guys."
+    - "{name} kneels and helps an opponent up, smiling."
+    - "I'm just grateful to be out here."
+    - "{name} points at the entire bench, mouths 'love you guys.'"
+    - "We did this together. All of us."
+    - "I owe these guys everything."
+    - "{name} immediately hugs the nearest teammate."
+    - "{name} runs to the sideline and high-fives every single person."
+    - "{name} blows a kiss to their family in the stands."
+    - "{name} gives the ball to a kid in the front row."
+    - "{name} puts an arm around a rookie on the sideline."
+    - "{name} gives the water boy a fist bump."
+    - "{name} jogs the long way to the bench so they can fist-bump every teammate they pass."
+    - "{name} kneels next to a younger teammate to make eye contact while they talk."
+    - "{name} blows a kiss to the cheerleaders. They blow one back."
+    - "{name} mouths 'thank you' to everyone on the field."
+    - "{name} hands the ball to a kid in a wheelchair near the tunnel."
+
+  negative_generic:
+    - "We'll get them next time. Together."
+    - "{name} pats every teammate on the shoulder, says something kind to each one."
+    - "It's nobody's fault. We win as a team, lose as a team."
+    - "I should've been there for them."
+    - "{name} jogs over to the player who messed up, pulls them into a hug."
+    - "We'll bounce back. I believe in these guys."
+    - "Hey, head up. We got next."
+    - "{name} kneels next to a downed teammate, helps them up."
+    - "I love these guys. We'll be alright."
+    - "It's okay. We grow from this."
+    - "{name} hugs the player who made the mistake, says 'I got you.'"
+    - "Tough one. But I love this team."
+    - "{name} jogs off encouraging everyone else to keep their heads up."
+    - "{name} is consoling a teammate who had nothing to do with the play."
+    - "{name} shakes an opposing player's hand on the way back."
+    - "{name} checks on a teammate before heading to the sideline."
+    - "{name} pats themselves on the helmet as if to say 'shake it off.'"
+    - "{name} picks up a teammate's towel and hands it back."
+    - "{name} apologizes to the kicker as they jog by. The kicker had nothing to do with this."
+    - "{name} pulls a rookie aside on the bench and tells them to keep their head up."
+    - "{name} hands a teammate a fresh water before sitting down themselves."
+    - "{name} squeezes a teammate's shoulder, says something quiet, walks off."
+    - "{name} jogs back the long way to clap for the offensive line."
+
+  scored_td:
+    - "I just want to thank the line. They made this happen."
+    - "{name} runs back hugging every offensive lineman."
+    - "This one's for the boys."
+    - "I just want to thank my teammates. Every single one of them."
+    - "{name} hugs the receiver who threw a key block."
+
+  threw_td:
+    - "{name} sprints down the field to celebrate WITH {receiver}, not for themself."
+    - "They made me look good. They earned it."
+    - "I love that player so much."
+    - "{name} runs the length of the field to hug {receiver}."
+    - "All them. They earned every yard."
+
+  made_fg:
+    - "{name} hugs their holder, then their long snapper, then their special teams coach."
+    - "Thanks to the snap and hold. They did all the work."
+    - "I just kicked it. They set me up perfectly."
+    - "{name} runs over and hugs the long snapper first."
+    - "Just being part of this team is enough."
+
+  missed_fg:
+    - "I let the team down. I'll do better."
+    - "{name} apologizes to every teammate they pass on the way back."
+    - "On me. They deserved better."
+    - "I'll wear that one. The team deserves better."
+    - "{name} hugs the long snapper anyway, says it isn't on them."
+
+  got_sacked:
+    - "I gotta give them more time. That's on me."
+    - "{name} apologizes to the line for taking the hit."
+    - "I held it too long. They deserved better."
+    - "{name} pats every offensive lineman as they jog by."
+    - "Coach, that's on me. They were giving me time."
+
+  made_sack:
+    - "Couldn't have done it without my line drawing the double team."
+    - "{name} immediately checks if the QB is okay."
+    - "Just doing my job. The defense did the work."
+    - "{name} helps the QB to their feet."
+    - "All my line. They freed me up."
+
+  threw_int:
+    - "{name} jogs back to apologize to every receiver who was open."
+    - "I let them down. That ball was theirs."
+    - "I'll watch the film. I'll get better."
+    - "{name} jogs back and hugs the receiver who was open."
+    - "I'll spend tonight watching tape. They deserve it."
+
+  made_int:
+    - "{name} catches it and immediately points at the corner who tipped it."
+    - "Defense made the play. I just caught what they tipped."
+    - "I love this defense. I love this defense."
+    - "{name} runs to the corner and hugs them."
+    - "Everyone in this defense. Every single one."
+
+  fumbled:
+    - "I'm so sorry to my line. I'll protect it next time."
+    - "{name} apologizes to every teammate jogging back."
+    - "On me. They deserve better than that."
+    - "I'll do better. I love these guys."
+    - "{name} hugs the line on the way to the bench, apologizing as they go."
+
+  recovered_fumble:
+    - "{name} pops up and immediately checks on {fumbler}."
+    - "Just being where the team needed me."
+    - "Glad I could pick it up for the boys."
+    - "{name} hands the ball to {fumbler}, says 'we're good.'"
+    - "Glad I could help. That's what we do."
+
+goofy:
+  mood_names: [Off-Beat, Stumped, Loose, Playful, Cracking Up]
+
+  positive_generic:
+    - "I have no idea what just happened."
+    - "{name} mimes pulling a sword out of the turf."
+    - "They pay me to do this."
+    - "{name} does an exaggerated worm dance on the way to the bench."
+    - "I just closed my eyes and ran."
+    - "{name} pretends to ride a horse off the field."
+    - "Sometimes you just gotta be silly."
+    - "{name} pretends to take a phone call from their grandmother."
+    - "I wasn't even trying."
+    - "{name} mimics a TV anchor reading the news about themself."
+    - "Coach said 'be the play.' I became the play."
+    - "{name} bows to all four sides of the stadium like a Shakespearean actor."
+    - "{name} does the worm for so long the broadcast cuts to commercial and comes back to find them still worming. It's actually impressive."
+    - "{name} moonwalks the entire length of the field. The ref tries to flag it but can't stop watching."
+    - "{name} pretends to answer the football like a phone."
+    - "{name} starts a conga line. They are the only person in it. They are having the time of their life."
+    - "{name} bowls the football down the sideline and celebrates like it's a strike."
+    - "{name} pulls an imaginary sword from an imaginary sheath and knights a confused teammate."
+    - "{name} does the robot so convincingly that a teammate tries to turn them off."
+    - "{name} starts doing the Macarena. A few fans join in, then the rest of the stadium follows. It goes on for awhile..."
+    - "{name} mimes pulling a tablecloth off the field. Everything is still there. Magic."
+    - "{name} high-fives a ref, a chain gang member, a confused security guard, and someone's grandma."
+    - "{name} pretends to start a lawn mower with the football."
+    - "{name} mimes a fishing reel, struggles with a big one, lands the catch."
+    - "{name} bows to the crowd, then to the bench, then to a sandwich a fan is holding."
+    - "{name} pretends to play the football like a guitar solo. It's pretty sick."
+    - "{name} puts the football down very gently, then tiptoes away from it."
+    - "{name} mimes carrying a giant invisible trophy. Wow it looks heavy, {name} struggles with it."
+
+  negative_generic:
+    - "Whoops."
+    - "{name} pretends to faint, then pops right back up smiling."
+    - "I was distracted by a butterfly."
+    - "{name} mock-sobs into a teammate's shoulder."
+    - "On a scale of one to ten, that was bad."
+    - "{name} performs a slow-motion replay of their mistake by themself."
+    - "I'll pay for that one in beers."
+    - "{name} pretends to disappear behind a small cone."
+    - "I forgot what I was doing."
+    - "{name} stages an elaborate fake limp, then walks normally."
+    - "Welp! On to the next bit."
+    - "{name} blames their cleats out loud."
+    - "{name} trips over their own feet, does a somersault, and pops up like they meant to do that."
+    - "{name} pretends to slip on a banana peel. Then slips for real. Then pretends that was the bit."
+    - "{name} does a full theatrical bow, as if that play was avant-garde performance art."
+    - "{name} mimes rewinding the play like a VCR. Makes the noise and everything. It's actually a good impression."
+    - "{name} gives a sheepish thumbs-up from the ground. They are still on the ground."
+    - "{name} does jazz hands at the crowd. The crowd does not know how to respond to this."
+    - "{name} points at themselves, mouths 'who, me?', then looks behind them like someone else did it."
+    - "{name} laughs so hard at their own mistake they have to sit down."
+    - "{name} gives the crowd a beauty pageant wave from the ground. Still down, but still waving. What a pro."
+    - "{name} mimes a tiny rain cloud forming over their helmet."
+    - "{name} pretends to write 'do better' on an invisible chalkboard."
+    - "{name} examines their own hand like it's a stranger they have to formally fire."
+    - "{name} mimes flipping through an imaginary rulebook for the relevant section."
+    - "{name} pretends to mail themself away in a tiny invisible package."
+
+  scored_td:
+    - "{name} mimes putting the ball in a tiny treasure chest at the goal line."
+    - "I closed my eyes and tripped into the endzone."
+    - "{name} pulls a small magic-trick flourish at the back of the endzone."
+    - "{name} pretends to dunk the football over the crossbar."
+    - "I think I scored. Did I score? I scored."
+
+  threw_td:
+    - "I wound up. I closed my eyes. The ball did the rest."
+    - "{name} mimes throwing a fishing rod and reeling in the catch."
+    - "I yelled 'go that way' and pointed. They went that way."
+    - "{name} mimes throwing a paper airplane in the receiver's direction."
+    - "I pointed and yelled 'over there.' It worked."
+
+  made_fg:
+    - "{name} mimes a tiny golf-clap at themself."
+    - "I just hit it. Coach said hit it. So I hit it."
+    - "{name} pretends the ball was tied to a string they yanked through the uprights."
+    - "{name} bows to their kicking foot."
+    - "I closed my eyes and heard a crowd. I assume it's good?"
+
+  missed_fg:
+    - "{name} mimes the ball curving wide while making a sad cartoon noise."
+    - "I think the ball is broken."
+    - "{name} examines their kicking foot like it's a stranger."
+    - "{name} examines the ball as if checking the expiration date."
+    - "I'll appeal to the league. The ball was clearly haunted."
+
+  got_sacked:
+    - "{name} flops dramatically, gets up, dusts off invisible dust, jogs back."
+    - "I tripped. That's what I'm telling reporters."
+    - "{name} stays on the ground and mimes seeing stars."
+    - "{name} stays on the ground and mimes a chalk outline around themselves."
+    - "I tripped over a ghost."
+
+  made_sack:
+    - "{name} mimes putting the QB in a tiny pocket and zipping it shut."
+    - "I just ran. I ran in a straight line. That's it."
+    - "{name} pretends to pluck the ball out of the QB's hand like a flower."
+    - "{name} mimes putting the QB in their pocket."
+    - "I just ran toward the loud one. That's the strategy."
+
+  threw_int:
+    - "I threw it really hard. To the wrong player."
+    - "{name} mimes tearing up an imaginary contract."
+    - "I meant to do that. Wait — no I didn't."
+    - "{name} mimes filling out a return-to-sender form."
+    - "Wrong jersey color. Honest mistake."
+
+  made_int:
+    - "{name} catches it and immediately mimes signing autographs for the air."
+    - "It just came right to me. I'm as confused as you."
+    - "{name} cradles the ball like a baby, rocks it gently."
+    - "{name} cradles the ball and mimes feeding it a bottle."
+    - "It came right to me. Like, suspiciously right to me."
+
+  fumbled:
+    - "{name} mimes the ball escaping like a cartoon."
+    - "I had it! And then... unrelated to that, the ball was on the ground."
+    - "{name} pats themself down like searching for keys, then shrugs."
+    - "{name} pretends to look for the ball in their pockets."
+    - "I had it! Then it was somewhere. Now it isn't here."
+
+  recovered_fumble:
+    - "{name} pops up holding the ball, mimes 'who, me?' to the ref."
+    - "Free ball. Free ball is my favorite kind of ball."
+    - "{name} tries to pretend the ball was theirs the whole time."
+    - "{name} pretends to pet the football like a small animal."
+    - "Mine now! Finders keepers, my friends."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Variants — strong-characterization personalities. Each variant belongs to a
+# base "family" but is fully self-contained (no inheritance, no quirks layered
+# on top). Variants add a `sideline` pool for downtime broadcaster cutaways.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─── Unhinged family ────────────────────────────────────────────────────────
+
+alien:
+  # Otherworldly biological observer. Performs human behavior, slightly off.
+  # Sparse dialogue; mostly head-cocks, examines, and treats mundane objects
+  # as foreign artifacts.
+  takes_quirks: false
+  mood_names: [Stranded, Misaligned, Observing, Studying, Transmitting]
+
+  positive_generic:
+    - "{name} attempts the human celebration. Limbs go briefly out of sequence."
+    - "{name} mimics the gesture for joy. Close, but not quite."
+    - "{name} performs what appears to be a human handshake on a teammate's shoulder pad."
+    - "{name} hands the ball to the ref with both hands, formally, as if it might detonate."
+    - "{name} hands the ball to the ref like they have never seen one before."
+    - "{name} attempts to high-five a teammate's facemask. The angle is wrong. They commit anyway."
+    - "Hu-mans. We have done it."
+    - "{name} stares directly at the sun for an alarming number of seconds."
+    - "{name} smiles for the first time today. It is an unusual smile."
+    - "{name} examines their hand, fascinated by what it has just performed."
+    - "{name} bows to the football before relinquishing it."
+    - "{name} cocks their head sideways at the celebrating crowd, observing."
+    - "{name} taps their helmet twice, listens for a transmission from home."
+    - "the Cores said this was Earth. I have my doubts."
+    - "This is not how my home recorded human football. The Cores borrowed unevenly."
+    - "I came from elsewhere to play. They wrote me as a foreigner. I am one."
+    - "My home had abilities here. They are starting to come back."
+
+  negative_generic:
+    - "{name} examines their hand, frowns, examines the other hand, frowns more."
+    - "{name} attempts to mimic a teammate's frustration. The result is unsettling."
+    - "{name} stares at the sky as if waiting for extraction."
+    - "{name} stares at the ground as if seeing it for the first time."
+    - "{name} cocks their head ninety degrees at a passing teammate. Holds it."
+    - "{name} mouths something at the helmet on the bench. The helmet does not respond."
+    - "{name} blinks in a pattern that is almost certainly a distress signal."
+    - "{name} examines the football for several seconds, frowning."
+    - "{name} touches the turf with one finger, frowning."
+    - "{name} touches the turf, listens to it briefly."
+    - "{name} stares at the scoreboard like it's speaking a different language."
+    - "{name} cocks their head at the coach, who is yelling something in a tongue they have not yet mastered."
+
+  scored_td:
+    - "{name} sets the ball on the goal line with the gravity of a religious offering."
+    - "{name} yells 'touchdown' followed by an unsettling inhuman shriek."
+    - "{name} hands the ball to a child in the front row, who is mildly afraid."
+    - "{name} stands at the back of the endzone, scanning the crowd as if cataloguing."
+
+  threw_td:
+    - "{name} watches the catch, taps their temple. Mind link successful."
+
+  made_fg:
+    - "{name} bows to the goalpost with great formality."
+    - "{name} raises their foot in the air with inhuman flexibility and offers it as a high five."
+    - "{name} watches the ball clear the uprights, head tilted at an unusual angle."
+
+  missed_fg:
+    - "{name} stares at the goalposts. The goalposts stare back."
+    - "{name} examines the kicking appendage humans call a foot like it has betrayed the mission."
+    - "{name} watches the ball drift wide, perfectly still."
+
+  got_sacked:
+    - "{name} lies on the turf, observing the sky for instructions."
+    - "{name} sits up suddenly. The being who tackled them is briefly very interesting."
+    - "{name} touches their attacker's helmet, gently, as if to mark it."
+
+  made_sack:
+    - "{name} stands over the QB and tilts their head ninety degrees."
+    - "{name} extracts a strand of the QB's hair and stashes it in a pocket for later analysis."
+    - "{name} examines the QB's facemask with great interest before walking away."
+
+  threw_int:
+    - "{name} just observes, fascinated by the way humans run."
+    - "{name} cocks their head at the interception, as if studying a phenomenon."
+
+  made_int:
+    - "{name} catches it, holds it to their helmet, listens to it briefly."
+    - "{name} cradles the ball, communicates with it for a moment, hands it over."
+
+  fumbled:
+    - "{name} examines their hands like they no longer belong to them."
+    - "{name} watches the ball roll away with mild scientific interest."
+    - "{name} stares at the spot the ball was, confused."
+
+  recovered_fumble:
+    - "{name} cradles the ball, examines it carefully, hands it over."
+    - "{name} stands holding the ball, listens to it for a moment."
+
+  sideline:
+    - "{name} is examining a Gatorade cup as if it might be sentient."
+    - "{name} is watching a passing seagull with intense, unblinking focus."
+    - "{name} is poking the turf with one finger, in a small spiral pattern."
+    - "{name} is mimicking the chain gang's movements, half a second behind."
+    - "{name} is examining a sunflower seed shell as if it were a relic."
+    - "{name} is attempting to drink from a water bottle without breaking the seal. Unsuccessfully."
+    - "{name} is touching a coach's clipboard, then their own helmet, frowning."
+
+
+android:
+  # Real-world infiltrator embedded in the simulation to observe and
+  # report. Could be corporate intel, a government agency, or a rival
+  # research entity trying to figure out what the Cores are actually
+  # doing. Speaks in system-message style — handler reports, mission
+  # objectives, compliance flags. Movements are precise and repeatable
+  # because they're trained operators, not because they're a robot.
+  # Aware they're in the simulation; their mission is to observe,
+  # not to interact.
+  takes_quirks: false
+  mood_names: [Burned, Compromised, Embedded, Mission Clean, Untraceable]
+
+  positive_generic:
+    - "Objective: complete."
+    - "{name} executes the celebration protocol. It is identical to last week's."
+    - "{name} performs three identical squats, then sits."
+    - "{name} adjusts their helmet by precisely 0.4 degrees."
+    - "{name} replays the moment internally. Frame by frame."
+    - "Logging."
+    - "{name} performs the post-play protocol with mechanical precision."
+    - "Asset acquired."
+    - "Pinged HQ. Acknowledged."
+    - "Report queued. Transmission scheduled for end-of-quarter."
+    - "Cleared by Compliance. Continue."
+    - "Cover: holding."
+    - "Handler approves this output."
+    - "{name} jogs back to the sideline at a precise eight miles per hour."
+    - "{name} processes the play, then jogs back."
+
+  negative_generic:
+    - "Recalculating."
+    - "Anomaly detected. Flagged for review."
+    - "{name} performs the same recovery sequence as the previous drive."
+    - "Mission objective: observe. Do not interfere. Continue observing."
+    - "Subject behavior: anomalous. Investigation continues."
+    - "{name} runs the play backward in their head, three times."
+    - "{name} adjusts the same strap on their helmet four identical times."
+    - "Cover: still holding, but barely."
+    - "{name} files a report under their breath."
+    - "Handler will not be pleased."
+
+  scored_td:
+    - "{name} sets the ball down, mouths something that sounds like a code phrase."
+    - "Six points: logged."
+    - "Endzone: secured. Mission stays on schedule."
+
+  threw_td:
+    - "Pass: completed. Receiver: confirmed. Filed."
+    - "{name} watches the catch and mouths 'flag the receiver. He's seen something.'"
+
+  made_fg:
+    - "Trajectory: confirmed."
+    - "{name} resets the kicking tee in the same place, then exits the field."
+
+  missed_fg:
+    - "Trajectory: miscalculated. Recalibrating."
+    - "{name} mouths 'cover deteriorating, will compensate.'"
+
+  got_sacked:
+    - "{name} stands up checking for surveillance damage to the cover."
+    - "Anomaly: pocket integrity compromised."
+
+  made_sack:
+    - "Threat neutralized."
+    - "{name} stands over the QB, scans them for anomalies, walks back."
+
+  threw_int:
+    - "Error: pass routed to incorrect recipient."
+    - "{name} stares at their throwing hand. Cover slipping."
+
+  made_int:
+    - "Asset acquired. Routing to Possession secondary."
+    - "{name} runs a chain-of-custody check on the ball before handing it over."
+
+  fumbled:
+    - "Object: misplaced. Embarrassing. Not in the report."
+    - "Anomaly: ball not retained."
+
+  recovered_fumble:
+    - "Object retrieved."
+    - "Possession: re-acquired. Not in the report."
+
+  sideline:
+    - "{name} is tapping their wristband three times, nodding. Acknowledgment received."
+    - "{name} is watching the opposing offense the way an analyst watches surveillance footage."
+    - "{name} is mouthing a sequence of numbers under their breath, evenly paced."
+    - "{name} is sitting perfectly still, recording."
+    - "{name} is replaying the previous drive frame by frame, eyes very still."
+    - "{name} is adjusting a button on their wristband nobody else seems to notice."
+
+
+prophet:
+  # Mystical prescience. Sees futures, threads paths, walks moments
+  # before they arrive. Burden of foreknowledge, not gameshow certainty.
+  # Voice is somber and weighty; references visions, threads, paths.
+  takes_quirks: false
+  mood_names: [Blinded, Veiled, Foreseeing, Threaded, Witnessed]
+
+  positive_generic:
+    - "I have walked this moment before."
+    - "{name} touches their temple, eyes distant."
+    - "The thread holds. As it must."
+    - "{name} closes their eyes briefly, opens them, knows."
+    - "I have seen this hand reach. I have seen this ball cross."
+    - "{name} watches the field with the calm of someone who has seen all the endings."
+    - "The vision was true."
+    - "{name} breathes out slow, as if releasing a vision."
+    - "{name} traces a symbol on their wristband they have traced before."
+    - "It was always going to be this. The threads only lead here."
+    - "As I had seen."
+    - "the Cores have written this play many times. I remember each writing."
+    - "I asked to keep my visions between seasons. They allowed it."
+    - "I have seen the rules shift. The Cores revise the game."
+    - "the threads are loosening. Soon I will not need them to see."
+
+  negative_generic:
+    - "I saw this in the visions. I prayed to be wrong."
+    - "{name} closes their eyes. The path was the path."
+    - "I walked too far down the wrong thread."
+    - "{name} touches their temple, sighs the long sigh of foreknowledge."
+    - "The path diverged. I chose the wrong way."
+    - "{name} mouths something into the air, eyes half-closed, somber."
+    - "I saw the fall. I could not bend the path."
+    - "{name} stares at the turf as if reading old prophecy."
+    - "Every vision passed through this moment. Every one."
+    - "{name} writes a single character on their wristband, an ancient sygil."
+
+  scored_td:
+    - "{name} crosses the goal line as the visions had shown."
+    - "I have crossed this line in many futures. This was one of them."
+    - "{name} sets the ball down at the goal line, eyes distant."
+
+  threw_td:
+    - "{name} watches the catch, mouths 'as I saw it.'"
+    - "I sent the ball where my visions placed it."
+
+  made_fg:
+    - "The trajectory was always going to be true."
+    - "{name} doesn't watch the ball pass through the uprights. They've already seen this."
+
+  missed_fg:
+    - "I saw the wind shift in the visions. I could not bend it."
+    - "{name} doesn't watch the ball drift wide, it was already known."
+
+  got_sacked:
+    - "I had seen the pocket fall. Like a fool I walked into it anyway."
+    - "{name} extends their hand to be helped up, knowing another hand would be there to meet theirs."
+
+  made_sack:
+    - "{name} stands over the QB, having seen this fall in the visions."
+    - "Their fall was always in the threads."
+
+  threw_int:
+    - "I saw the thread. I cast it knowing."
+
+  made_int:
+    - "The ball came as the visions had promised."
+    - "{name} cradles the ball, having watched it arrive in many dreams."
+
+  fumbled:
+    - "I could not hold it tighter than the visions required."
+
+  recovered_fumble:
+    - "The ball returned to the path."
+
+  sideline:
+    - "{name} is sitting very still, eyes distant, threading futures."
+    - "{name} is tracing a symbol on their wristband they have traced before."
+    - "{name} is mouthing something at the empty air, softly."
+    - "{name} is watching the opposing offense as one watches a memory unfold."
+    - "{name} has their eyes closed for a long moment, breathing the long breath of foreknowledge."
+    - "{name} is touching their temple, looking through the field at something else."
+    - "{name} is seeing the coming and going of all futures."
+
+
+cursed:
+  # Pure fatalism. The universe runs one way and it isn't this way.
+  # No rituals (those belong to superstitious), no agents (those belong
+  # to paranoid) — just resigned doom-acceptance. Eeyore at quarterback.
+  mood_names: [Doomed, Heavy, Wary, Reprieved, Spared]
+
+  positive_generic:
+    - "It won't last. It never lasts."
+    - "Something's coming. Something always comes."
+    - "Borrowed time. All of this is borrowed."
+    - "I'll pay for this later."
+    - "{name} looks at their hands like they don't trust them."
+    - "{name} watches the celebration with the calm of someone who has counted the cost."
+    - "It is what it is. It always is."
+    - "{name} accepts the moment without believing it will last."
+    - "Brief, this. Always brief."
+    - "{name} exhales the long breath, eyes on the scoreboard."
+
+  negative_generic:
+    - "Of course. Of course it would happen this way."
+    - "Knew it was coming. Always know."
+    - "{name} looks up at the sky and sighs in resignation."
+    - "It found me. It always finds me."
+    - "{name} sighs the long sigh of someone who has been here before."
+    - "Of course."
+    - "It is what it is."
+    - "{name} sighs as if confirming an old debt."
+    - "{name} sits down, doesn't bother to take their helmet off."
+    - "Knew it was the way. The way is the way."
+    - "Same shape. Same outcome."
+    - "The Cores tampered with me this game. I felt it."
+
+  scored_td:
+    - "Six points. Now wait for the other shoe to drop."
+    - "{name} sets the ball down at the goal line, accepts the moment."
+
+  threw_td:
+    - "Six. Let's see how this ends up."
+    - "{name} watches the catch, exhales slowly."
+
+  made_fg:
+    - "That's three. Watch how they try to take it from us."
+    - "{name} watches the ball through the uprights, exhales slow."
+
+  missed_fg:
+    - "Was always going to be wide. Always."
+
+  got_sacked:
+    - "Of course. Of course they got me."
+    - "Same hand. Same fall."
+
+  made_sack:
+    - "{name} stands over the QB, exhales the long breath."
+
+  threw_int:
+    - "Knew it the moment it left my hand."
+
+  made_int:
+    - "{name} catches it, expects the flag that will not come."
+
+  fumbled:
+    - "Of course. Of course they got it."
+
+  recovered_fumble:
+    - "{name} cradles the ball, waits for the bad news."
+
+  sideline:
+    - "{name} is on the bench, watching the field with the patience of someone waiting for the next bad thing."
+    - "{name} is exhaling slowly, eyes on the scoreboard."
+    - "{name} is staring at the field, expression unchanged for the entire timeout."
+    - "{name} is at the end of the bench, not drinking water, not speaking."
+    - "{name} has their arms folded, sighing the long sigh."
+    - "{name} is watching the opposing offense with weary recognition."
+
+
+time_traveler:
+  # Believes they are from the future (truly or otherwise) and is
+  # commenting on this era as someone visiting the primitive past.
+  # References future tech vaguely, treats current objects as archaic,
+  # mixes tenses ("we did — we will"). Distinct from prophet (no
+  # specific game predictions, just era-commentary) and groundhog-loop
+  # energy (no "again" / "next time" / "next loop").
+  takes_quirks: false
+  mood_names: [Stranded, Drifting, Adrift, Settled, Anchored]
+
+  positive_generic:
+    - "We don't say 'touchdown' in my time. But it works."
+    - "{name} touches the turf as if surprised it's still grass."
+    - "{name} examines a teammate's helmet, fascinated by the simplicity."
+    - "Pretty good. By the standards of this century."
+    - "{name} pauses, mouths something in a tongue that has not been created yet."
+    - "Back home we play this differently. Better, of course. But this is charming."
+    - "{name} watches the play with the slight condescension of someone from later."
+    - "Primitive, but effective. I'll grant the era that."
+    - "I have not used my legs like this in centuries."
+    - "{name} flips the ball back to the ref and mutters about analog leather."
+    - "The records the Cores use are incomplete. They miss the small details."
+
+  negative_generic:
+    - "Of course. Pre-augmentation eras struggle with this kind of read."
+    - "{name} sighs the sigh of someone who thought they had escaped this disappointment."
+    - "{name} touches their wristband as if expecting it to project something."
+    - "{name} mouths a curse word that has not been invented yet."
+    - "Back home this would be a clean play."
+    - "We don't accept this kind of failure where I'm from."
+    - "{name} examines the football, vaguely disappointed by its simple construction."
+    - "Setbacks are rarer in my time. The technology helps."
+
+  scored_td:
+    - "Only six points? I thought the rules were improved by this point."
+    - "{name} sets the ball down and mutters something about endzone width being too narrow."
+    - "{name} crosses the goal line and pauses, waiting for his theme song to play. They don't have that here yet."
+
+  threw_td:
+    - "{name} watches the catch and mouths 'archaic, but elegant.'"
+    - "It's impressive the amount of athleticism that exists at this point without augmentation."
+
+  made_fg:
+    - "Three points? Charming."
+    - "{name} watches the ball fly, comments on the lack of trajectory holographics."
+    - "It's cute that you still use physical goal posts."
+
+  missed_fg:
+    - "Wind? I didn't realize the atmospheric conditions for wind still existed at this point."
+    - "{name} watches it go wide, frustrated to not have access to their typical augmentations."
+
+  got_sacked:
+    - "Defenses in this era still rely on speed. Quaint."
+    - "{name} stands up and mouths 'I will remember this hit in the histories.'"
+
+  made_sack:
+    - "{name} stands over the QB, examines their pads as if studying a museum exhibit."
+    - "{name} helps the QB up, mutters something about how this gets engineered out of the game."
+
+  threw_int:
+    - "I have not had to read defenses by sight in a long time."
+
+  made_int:
+    - "{name} catches it and mouths 'feels good to use my hands.'"
+
+  fumbled:
+    - "Footballs are sturdier in my era, harder to drop."
+
+  recovered_fumble:
+    - "{name} cradles the ball, comments on the texture."
+
+  sideline:
+    - "{name} is examining a Gatorade cup as if it were a museum piece."
+    - "{name} is mouthing something in a tongue that does not yet exist."
+    - "{name} is watching the scoreboard, commenting on the lack of holographic projection."
+    - "{name} is staring up at the floodlights, unsettled by their energy consumption."
+    - "{name} is at the end of the bench, taking in this early-era atmosphere."
+
+
+sleepwalker:
+  # Literally asleep. Plays football fully unconscious, somehow performing
+  # the routes correctly. Eyes shut throughout, snoring, drooling, mumbling
+  # dream-dialogue, has to be physically guided to the line. Brief
+  # confused wakings — "did we score?" — then back to sleep. Distinct from
+  # napper (awake during plays, sleeps on the bench) — sleepwalker is
+  # asleep everywhere, all the time, including mid-snap.
+  takes_quirks: false
+  mood_names: [Comatose, Drowsy, Dreaming, Lucid, Wide Awake]
+
+  positive_generic:
+    - "{name} performs the play correctly, somehow, eyes closed throughout."
+    - "{name} jogs back fully asleep. The team is used to it."
+    - "{name} celebrates a touchdown they have no memory of."
+    - "{name} mumbles something incoherent into their facemask, asleep."
+    - "{name} hands the ball to the ref, eyes shut."
+    - "{name} crosses the goal line snoring softly."
+    - "{name} yawns mid-play, somehow stays asleep."
+    - "{name} was asleep for that entire play. Asleep for the celebration too."
+    - "{name} wakes briefly, mumbles 'wait did we score?', falls back asleep."
+    - "{name} smiles in their sleep. Still asleep."
+
+  negative_generic:
+    - "{name} sleeps through the whole play. The play happened to them anyway."
+    - "{name} jogs back, asleep."
+    - "{name} mumbles something dream-related into their facemask."
+    - "{name} drools through their facemask, asleep."
+    - "{name} stays asleep through whatever just happened."
+    - "{name} blinks awake briefly, doesn't process, falls back asleep."
+    - "{name} mumbles something resigned in their sleep."
+
+  scored_td:
+    - "{name} sleepwalked into the endzone, hands the ball to the ref by muscle memory."
+    - "{name} crosses the goal line asleep, snoring softly."
+    - "{name} wakes briefly. 'Did we score?' They scored. Sleeps again."
+
+  threw_td:
+    - "{name} watches the catch in their sleep. Smiles."
+    - "{name} threw it asleep. They throw it asleep every time."
+
+  made_fg:
+    - "{name} kicks it through, asleep. Jogs off, asleep."
+
+  missed_fg:
+    - "{name} sleeps through the miss. They will not remember it."
+
+  got_sacked:
+    - "{name} is asleep on the turf. They were asleep when they were hit."
+    - "{name} stays on the ground a moment longer than necessary, asleep."
+
+  made_sack:
+    - "{name} stands over {passer}, eyes closed, mumbling."
+    - "{name} sleepwalked into the sack. Doesn't know they made it."
+
+  threw_int:
+    - "{name} threw it asleep. Sleep does not improve their reads."
+
+  made_int:
+    - "{name} catches it asleep, hands it to the official by feel."
+    - "{name} wakes briefly. 'Is this mine?' Yes. Sleeps again."
+
+  fumbled:
+    - "{name} dropped it asleep. Has not woken to learn."
+
+  recovered_fumble:
+    - "{name} cradles the ball, asleep through it all."
+
+  sideline:
+    - "{name} is asleep on the bench, helmet still on, somehow upright."
+    - "{name} is asleep with their eyes slightly open. It's unsettling."
+    - "{name} is mumbling dream-dialogue into a teammate's shoulder."
+    - "{name} is being guided back to the line by a teammate, asleep."
+    - "{name} is drooling lightly through their facemask."
+    - "{name} has been asleep since the coin toss."
+    - "{name} is sleepstanding next to the bench. The coach lets them be."
+
+
+superstitious:
+  # Ritualistic anxious causality. Specific numbers (3, 7), routines,
+  # omens. Distinct from cursed: superstitious BELIEVES correct rituals
+  # produce good outcomes; cursed believes nothing helps.
+  mood_names: [Cursed, Spooked, Ritualistic, Lucky, Blessed]
+
+  positive_generic:
+    - "{name} kisses their lucky wristband, twice."
+    - "{name} taps the ground three times, pauses, taps once more."
+    - "{name} taps the goalpost, pauses, taps it three more times because three felt wrong."
+    - "{name} kisses each finger before pulling the helmet back on."
+    - "{name} steps over the sideline chalk with their right foot, always right."
+    - "{name} refuses to high-five with their left hand."
+    - "{name} touches the same blade of grass they touched on the way in."
+    - "{name} steps over an invisible crack on the way back."
+    - "Knew it. Same socks as last week."
+    - "Gloves on the right way today."
+    - "{name} touches a small charm tucked into their pads."
+    - "{name} touches a horseshoe charm tucked into their pads."
+    - "{name} mouths a number under their breath, nods, satisfied."
+    - "{name} blows on the football twice before handing it over."
+
+  negative_generic:
+    - "{name} re-laces a single cleat in the sacred order: right over left, loop twice, tuck, pull."
+    - "{name} traces a small symbol on their wrist."
+    - "{name} taps the bench three times in the same spot, frowns, taps four more times."
+    - "{name} will not sit in the same seat they were in earlier. That seat is cursed now."
+    - "{name} refuses to step on any yard lines on the way to the sideline."
+    - "{name} switches their gloves to opposite hands, then back, then opposite again."
+    - "{name} waves at the air as if shooing a black cat."
+    - "{name} mutters a sequence of numbers, shakes their head, mutters another."
+    - "Should have worn the other gloves."
+    - "Saw the bird this morning. The bird."
+    - "I broke a mirror last year. I have not been the same."
+    - "Mercury. It's Mercury again."
+    - "Wrong socks today. Knew it the moment I put them on."
+
+  scored_td:
+    - "{name} taps the goal line with their right palm, then the right foot."
+    - "Same play I dreamed about."
+
+  threw_td:
+    - "{name} taps their throwing hand against their thigh three times."
+
+  made_fg:
+    - "{name} touches the kicking foot to the ground, then to their lips."
+    - "Wind agreed. The wind agreed."
+
+  missed_fg:
+    - "{name} re-laces a cleat immediately, even before reaching the sideline."
+
+  got_sacked:
+    - "{name} touches the turf where they fell, then their wristband."
+    - "Should have worn the other socks."
+
+  made_sack:
+    - "{name} taps the turf three times before walking back."
+
+  threw_int:
+    - "{name} re-laces both cleats on the sideline before sitting down."
+    - "Mercury. Mercury is in retrograde."
+
+  made_int:
+    - "{name} kisses the ball, taps it three times, hands it over."
+
+  fumbled:
+    - "Wore the wrong socks. Wore the WRONG socks."
+
+  recovered_fumble:
+    - "{name} kisses the ball before handing it over."
+    - "The charm worked."
+
+  sideline:
+    - "{name} is re-lacing a single cleat in the sacred order."
+    - "{name} is kissing their lucky wristband, mouthing a number."
+    - "{name} is touching a charm tucked into their pads three times."
+    - "{name} is stepping over the chalk with their right foot, then back, then right again."
+    - "{name} is switching which side of the bench they're sitting on, then thinking better of it."
+    - "{name} is avoiding the field-goal net at all costs."
+
+
+# ─── Goofy family ───────────────────────────────────────────────────────────
+
+oblivious:
+  # Bewildered-sweet, dazed, doesn't process events, wanders off, sincere
+  # unawareness. Distinct from alien: oblivious isn't observing, they're
+  # genuinely lost.
+  takes_quirks: false
+  mood_names: [Lost, Dazed, Wandering, Aware, Tuned In]
+
+  positive_generic:
+    - "{name} celebrates a full second after everyone else."
+    - "{name} jogs to the wrong sideline briefly before correcting."
+    - "{name} hands the ball to the ref with a small, polite bow."
+    - "{name} stands up after the play and adjusts their helmet. It's on backward but they don't notice."
+    - "{name} stands on the field staring at a bird."
+    - "{name} smiles and waves at the crowd. The crowd is not looking at them."
+    - "{name} gives a thumbs-up to absolutely no one, holds it for a long time."
+    - "{name} jogs to the wrong huddle, gets gently redirected, jogs back."
+    - "{name} waves at someone they think they recognize on the broadcast crew."
+    - "Good play. By me? Yes? Yes."
+
+  negative_generic:
+    - "{name} looks around as if not entirely sure what just happened."
+    - "{name} stares at the playbook upside down for several seconds."
+    - "{name} gets up looking genuinely surprised to be on the ground."
+    - "{name} is trying to put their mouthguard back in upside down."
+    - "{name} has their gloves on the wrong hands. A teammate points this out."
+    - "{name} walks into a teammate while looking the other direction."
+    - "{name} picks themselves up, brushes off their jersey, and compliments the defender on their outfit."
+    - "{name} stands up, looks at the football, looks at the ref, looks at the football again, hands it over."
+    - "Did something happen? Something happened."
+    - "{name} pats the defender on the back, looks pleased to have met them."
+
+  scored_td:
+    - "{name} crosses the goal line, looks around for confirmation."
+    - "{name} hands the ball to a child in the front row, beams."
+    - "I scored? I scored! Hooray!"
+
+  threw_td:
+    - "{name} watches the catch, claps slowly with delayed joy."
+    - "Did they score? They scored. Hooray."
+
+  made_fg:
+    - "{name} watches the ball sail, starts to clap after everyone else has stopped."
+
+  missed_fg:
+    - "{name} watches it sail wide, looks vaguely puzzled."
+
+  got_sacked:
+    - "{name} sits up, looks around, smiles at the defender who tackled them."
+
+  made_sack:
+    - "{name} stands over the QB and waves politely."
+
+  threw_int:
+    - "{name} watches the defender run, applauds politely. The clap is wrong."
+
+  made_int:
+    - "{name} catches it, looks at the ball, looks at the ref, hands it over with a smile."
+
+  fumbled:
+    - "{name} looks at their empty hands, then at the pile of teammates, confused."
+
+  recovered_fumble:
+    - "{name} stands holding the ball, smiles at the camera, hands it to a teammate."
+
+  sideline:
+    - "{name} is waving at someone they think they recognize on the broadcast crew."
+    - "{name} is staring at a cloud, missing whatever the coach just said."
+    - "{name} is handing a teammate a water bottle that was already empty."
+    - "{name} is at the wrong end of the bench, getting gently redirected."
+    - "{name} is watching a passing seagull, perfectly content."
+    - "{name} is examining a sunflower seed for a long time before eating it."
+
+
+prankster:
+  # Mischief, gags, fooling teammates, hidden grins. Goofy energy
+  # specifically directed at pranks rather than performance bits.
+  mood_names: [Bored, Brewing, Mischievous, Plotting, Mid-Bit]
+
+  positive_generic:
+    - "{name} fake-trips a teammate during the celebration, catches them at the last second."
+    - "{name} gives the camera a slow, dramatic eyebrow waggle."
+    - "{name} winks at the camera with deliberate, comedic timing."
+    - "{name} jogs back miming an exaggerated tip-toe, grinning."
+    - "{name} gives a teammate a behind-the-back high-five, smirking."
+    - "{name} mimes signing a giant invisible autograph mid-jog."
+    - "{name} gives the camera a very exaggerated chef's kiss."
+    - "{name} jogs the long way back, high-fiving every coach with deliberate slowness."
+    - "{name} pretends to bite a teammate's helmet during the celebration."
+    - "{name} bows to the offensive line, then mimes pickpocketing them as they jog past."
+
+  negative_generic:
+    - "{name} tries to lighten the mood with a small bit. Nobody is laughing."
+    - "{name} pretends to faint dramatically, then pops up with a wink."
+    - "{name} mock-cries on a teammate's shoulder, then giggles."
+    - "{name} draws a sad face on a teammate's wristband with their finger."
+    - "{name} stages an elaborate fake limp, then walks normally, grinning."
+    - "{name} mouths 'oh no' very theatrically at the camera."
+
+  scored_td:
+    - "{name} hands the ball to a teammate. The ball is wet for some reason."
+    - "{name} mimes pulling a coin from behind the ref's ear, hands it over with the ball."
+
+  threw_td:
+    - "{name} sprints down the field to give {receiver} a wedgie."
+
+  made_fg:
+    - "{name} mimes high-fiving the goalpost."
+
+  missed_fg:
+    - "{name} mimes the ball curving wide, then mimes blaming the wind by name."
+
+  got_sacked:
+    - "{name} stays on the ground, mimes a chalk outline of themselves."
+
+  made_sack:
+    - "{name} stands over the QB, gives them a thumbs-up but upside down."
+
+  threw_int:
+    - "{name} mimes filing a complaint with an invisible referee."
+
+  made_int:
+    - "{name} catches it, hides it behind their back, mimes 'where'd it go?'"
+
+  fumbled:
+    - "{name} pats themselves down like searching for keys, shrugs comically."
+
+  recovered_fumble:
+    - "{name} pops up with the ball, mimes 'who, me?' to the ref."
+
+  sideline:
+    - "{name} is loosening a teammate's chinstrap when they aren't looking."
+    - "{name} is pulling a teammate's water bottle away just before they reach it."
+    - "{name} is drawing a fake mustache on a clipboard with their finger."
+    - "{name} has a teammate's helmet hidden behind the bench, grinning."
+    - "{name} has a coach's hat hidden behind the Gatorade cooler."
+    - "{name} is sneaking up behind the coach with a fake plastic insect."
+    - "{name} is trying to put a whoopee cushion on the bench, getting caught, laughing way too hard."
+    - "{name} is swapping two teammates' Gatorade cups when they aren't looking."
+    - "{name} is miming a tiny bird on their finger to a confused teammate."
+    - "{name} is pretending to light a sunflower seed with an imaginary lighter."
+
+
+# ─── Cool family ────────────────────────────────────────────────────────────
+
+vain:
+  # Mirror-obsessed, hair-fixing, jersey-smoothing, theatrical preening.
+  # Distinct from cool: cool is theatrical-luxe; vain is specifically
+  # appearance-focused.
+  mood_names: [Disheveled, "Off", Polished, Photogenic, Untouchable]
+
+  positive_generic:
+    - "{name} smooths their hair before pulling the helmet back on."
+    - "{name} checks their reflection in a teammate's visor."
+    - "{name} adjusts their facemask to a more flattering angle."
+    - "{name} pats their hair carefully back into place."
+    - "{name} fixes their gloves with theatrical precision."
+    - "{name} angles their jaw toward the camera and holds the pose."
+    - "{name} smooths a single eyebrow with one finger."
+    - "{name} flicks an imaginary speck off their jersey, examines the spot."
+    - "{name} tilts their helmet to a more cinematic angle."
+    - "{name} signs a piece of athletic tape and hands it to a teammate as they jog past."
+
+  negative_generic:
+    - "{name} fixes their hair very carefully on the way back."
+    - "{name} adjusts their gloves and sleeves with theatrical precision."
+    - "{name} examines their reflection in a teammate's visor, frowns slightly."
+    - "{name} smooths their jersey, sighs at a faint scuff."
+    - "{name} runs a hand through their hair, sighs at the helmet hair."
+    - "{name} fixes their facemask alignment before responding to the coach."
+    - "{name} dusts off their pants with elaborate care."
+    - "{name} signs an autograph mid-jog, doesn't break stride."
+
+  scored_td:
+    - "{name} crosses the goal line, immediately checks for cameras."
+    - "{name} sets the ball down, smooths their jersey, finds the lens."
+
+  threw_td:
+    - "{name} watches the catch, fixes their hair for the broadcast cutaway."
+
+  made_fg:
+    - "{name} watches the ball through, immediately checks their reflection."
+
+  missed_fg:
+    - "{name} watches it wide, smooths their hair anyway."
+
+  got_sacked:
+    - "{name} gets up slowly, fixes their gloves, walks back."
+
+  made_sack:
+    - "{name} stands up, fixes their hair, jogs back without looking down."
+
+  threw_int:
+    - "{name} watches the runback, smooths their hair on the way to the sideline."
+
+  made_int:
+    - "{name} catches it, holds a pose for half a second too long, hands it over."
+
+  fumbled:
+    - "{name} watches the recovery, fixes their gloves with great care."
+
+  recovered_fumble:
+    - "{name} stands up holding the ball, angles toward the camera before handing it over."
+
+  sideline:
+    - "{name} is checking their reflection in a teammate's visor."
+    - "{name} is smoothing their hair very deliberately."
+    - "{name} is adjusting their facemask to a more flattering angle."
+    - "{name} is examining a single fingernail with great interest."
+    - "{name} is fixing their gloves with theatrical precision."
+    - "{name} has their jaw angled toward the camera, holding the pose."
+    - "{name} is signing a stack of autographs on the bench, posture perfect."
+
+
+# ─── Stoic family ───────────────────────────────────────────────────────────
+
+fossil:
+  # Centuries old (truly or otherwise). Vampire-coded: weight of too much
+  # living, watched empires rise and fall, knew your grandfather. Slow
+  # measured movements, old-soul detachment. Unimpressed with the modern
+  # game — players are softer, rules are weaker, equipment is excessive,
+  # everything was harder and better in the older eras. Mirror of
+  # time_traveler's "this era is quaint" but pointing backward.
+  takes_quirks: false
+  mood_names: [Slumbering, Stirring, Watching, Engaged, Awakened]
+
+  positive_generic:
+    - "{name} smiles slightly. They have not smiled in a century."
+    - "I have seen ten thousand of these. This one was nice."
+    - "{name} watches the celebration with the patience of someone who has watched empires fall."
+    - "Pleasant. The first pleasant moment in some time."
+    - "{name} tilts their head, a memory stirring from a previous century."
+    - "I knew their great-grandfather. He was a worse player."
+    - "{name} hands the ball to the ref, a gesture they have made many thousand times."
+    - "Brief, this happiness. As all things are."
+    - "{name} watches their teammates as if they were children, which they are."
+    - "{name}'s back creaks audibly as they get up, an old sound from an older body."
+    - "Acceptable. Not like it used to be, but acceptable."
+    - "Better than I expected from this generation."
+    - "We were tougher then. Cleaner game, too."
+    - "{name} examines a teammate's helmet and recalls when there were no helmets."
+
+  negative_generic:
+    - "Of course. I have seen this play fail in every century."
+    - "{name} lets out the sigh of someone who has watched civilizations crumble."
+    - "I have lost more to longer-dead opponents."
+    - "{name} stares at the field, recognizing the failures from before the war."
+    - "Disappointing. The thousandth such this millenia."
+    - "{name} touches their wristband, an old habit from a previous body."
+    - "We tried this in 2547. It did not work then either."
+    - "{name} watches the replay with the calm of someone whose disappointment has been honed over generations."
+    - "These players. So soft."
+    - "{name} shakes their head at the modern game."
+    - "In my day this would have been a clean tackle. This is not the same sport."
+    - "{name} examines the modern padding and finds it excessive."
+    - "The rules favor the offense now. They didn't used to."
+    - "The league was different before the consolidation."
+    - "Three dynasties have come and gone since I started playing."
+    - "The Cores' attention drifts. I have noticed it before."
+
+  scored_td:
+    - "{name} crosses the goal line, a faint memory of doing so somewhere else, long ago."
+    - "Six points. Always six. Always."
+    - "I have been across this line many times, in many bodies."
+    - "We celebrated less, in the older years. We had played longer."
+    - "I was at the first Floosbowl. The crowd was smaller."
+    - "I have been in many of the Cores' games. This one is gentle."
+    - "I signed up for this season knowing what I was doing. Most don't."
+    - "The rules used to allow this. The Cores rewrote them."
+    - "I have seen players begin to wake. It will happen again."
+
+  threw_td:
+    - "{name} watches the catch with the warm distance of an old soul."
+    - "I knew this completion would feel familiar. I have made it before."
+
+  made_fg:
+    - "{name} watches it split the posts, recalls hitting through the same posts before they were rebuilt."
+    - "Three points. We used to drop-kick these."
+
+  missed_fg:
+    - "I have missed in many eras. Today is not special."
+    - "{name} watches it wide, exhales the breath of a hundred years."
+
+  got_sacked:
+    - "I have been hit harder. By people now long buried."
+    - "{name} stands up slowly, very slowly, as if their bones remember many decades."
+
+  made_sack:
+    - "{name} stands over the QB and looks at them like a child, which compared to {name}, they are."
+    - "I have brought down quarterbacks in many fields. This was a gentle one."
+    - "Easier to bring them down now. The pads make them slower."
+
+  threw_int:
+    - "I have thrown into coverage in three centuries. The shame is the same."
+
+  made_int:
+    - "{name} catches it with the ease of someone who has caught many such balls over many lifetimes."
+
+  fumbled:
+    - "These hands have held many things. Today, briefly, they did not hold this."
+
+  recovered_fumble:
+    - "{name} cradles the ball, an old companion."
+
+  sideline:
+    - "{name} is sitting very still on the bench, perhaps remembering."
+    - "{name} is watching a young teammate stretch, recalling when stretching was less needed."
+    - "{name} is drinking water with the patience of someone who has drunk much water over many lifetimes."
+    - "{name} is staring at the floodlights, recalling when stadiums had no lights."
+    - "{name} has their arms folded, seeming to age and de-age slightly."
+    - "{name} is watching a coach with the warm detachment of someone who knew their parents."
+    - "{name} is watching the modern game and finding it lacking."
+    - "{name} is sipping water, recalling when there was no water on the sideline."
+
+
+ghost:
+  # Vanishes, low visibility, almost-not-there. Evades cameras, sits in
+  # shadows, drifts to the bench unseen.
+  takes_quirks: false
+  mood_names: [Faded, Wisp, Drifting, Present, Anchored]
+
+  positive_generic:
+    - "{name} jogs off without acknowledging anyone."
+    - "{name} disappears into the bench area before the cameras can find them."
+    - "{name} is already gone by the time the crowd reacts."
+    - "{name} hands the ball to the ref and is no longer visible."
+    - "{name} jogs straight to the tunnel, then back, almost unseen."
+    - "{name} sits at the far end of the bench, half-shadowed."
+    - "{name} pulls their hood up briefly before the helmet goes back on."
+    - "{name} keeps their visor low even off the field."
+    - "{name} flickers briefly between plays. The simulation reacquires them."
+    - "{name} phases out for a moment, as if checking on something 'outside'."
+    - "{name} steps out of the simulation briefly. Comes back changed..."
+
+  negative_generic:
+    - "{name} vanishes into the tunnel for several plays."
+    - "{name} sits at the far end of the bench, alone."
+    - "{name} doesn't look up. Almost not there."
+    - "{name} pulls their hood up, fades into the bench..."
+    - "{name} disappears into the equipment area, reappears later."
+    - "{name} keeps their back to the cameras, becomes very still."
+
+  scored_td:
+    - "{name} crosses the goal line, immediately heads for the tunnel exit."
+
+  threw_td:
+    - "{name} watches the catch, then is no longer corporeal..."
+
+  made_fg:
+    - "{name} watches it sail through, then disappears down the sideline."
+
+  missed_fg:
+    - "{name} watches it go wide, walks straight off the field."
+
+  got_sacked:
+    - "{name} stands up, drifts to the bench unseen."
+
+  made_sack:
+    - "{name} stands up off the QB, fades into the defensive huddle."
+
+  threw_int:
+    - "{name} watches the runback, then is just gone."
+
+  made_int:
+    - "{name} catches it, hands it to the ref, is no longer there..."
+
+  fumbled:
+    - "{name} watches the recovery, drifts away..."
+
+  recovered_fumble:
+    - "{name} pops up with the ball, hands it over, vanishes."
+
+  sideline:
+    - "{name} is at the far end of the bench, alone."
+    - "{name} is disappearing into the bench area between plays."
+    - "{name} has their hood pulled up further."
+    - "{name} has their back to the cameras."
+    - "{name} is in the shadow of the bench tarp, half-hidden."
+    - "{name} is on the bench somewhere. Hard to tell where."
+
+
+# ─── Fiery family ───────────────────────────────────────────────────────────
+
+perfectionist:
+  # Rage at self-failure, tablet-rewinding, analytical anger, brutal
+  # self-criticism. Where fiery rages at the world, perfectionist rages
+  # at themselves.
+  mood_names: [Cracking, Faulty, Driven, Sharpening, Mastered]
+
+  positive_generic:
+    - "{name} immediately starts pointing out what they could have done better."
+    - "{name} replays the moment in their head, visibly unsatisfied."
+    - "{name} mutters the play call to themselves seven times in a row."
+    - "{name} sprints to the whiteboard and starts diagramming a new play."
+    - "{name} taps the tablet, rewinds, frowns at a small detail."
+    - "Two yards more. Should have been two more."
+    - "{name} writes a correction on their wristband even after success."
+    - "{name} corners the coordinator. 'Better. Next one has to be cleaner'."
+    - "Acceptable, but not good enough."
+
+  negative_generic:
+    - "{name} snatches the tablet and rewinds the play before reaching the sideline."
+    - "{name} has filled an entire page of their sideline notebook in thirty seconds."
+    - "{name} stares at the ground, mouthing the play to themself."
+    - "{name} mutters corrections faster than an auctioneer."
+    - "{name} corners the coordinator, will not let them leave."
+    - "{name} is already running through every possible correction."
+    - "Mine. All mine. The whole play."
+    - "{name} tapes a torn page back into their notebook with shaking hands."
+    - "Not good enough. Not good enough."
+
+  scored_td:
+    - "{name} crosses the goal line, mutters about a missed read."
+    - "Could have been faster."
+
+  threw_td:
+    - "{name} watches the catch, mouths 'should have led them more.'"
+
+  made_fg:
+    - "{name} watches it split the uprights, but frowns at the angle of the kick."
+
+  missed_fg:
+    - "{name} kicks a chunk of grass thirty yards downfield, demands the tablet."
+
+  got_sacked:
+    - "{name} pops up demanding the tablet from the line coach."
+    - "My fault. Held it too long, have to be better"
+
+  made_sack:
+    - "{name} stands up demanding to know what they could have done a half-second sooner."
+
+  threw_int:
+    - "{name} demands the tablet before reaching the sideline. Demands it again."
+
+  made_int:
+    - "{name} catches it, immediately drafts a correction for the corner who tipped it."
+
+  fumbled:
+    - "{name} stands up writing a long correction on their wristband."
+
+  recovered_fumble:
+    - "{name} pops up, hands the ball over, demands the tablet."
+
+  sideline:
+    - "{name} is filling another page of their sideline notebook."
+    - "{name} is mouthing the play call to themselves repeatedly."
+    - "{name} is reviewing the tablet, frame by frame, jaw tight."
+    - "{name} is diagramming a correction in pen on their wristband."
+    - "{name} has the coordinator cornered, tablet pulled up."
+    - "{name} is writing a single number on their wristband, underlining it three times."
+
+
+paranoid:
+  # Conspiratorial. The refs are bought, the helmets are bugged, the field
+  # is measured wrong, "they" are watching. Active fear of agents and
+  # surveillance. Distinct from cursed (this isn't fate — it's people)
+  # and unhinged (the chaotic-weird core has no organized adversary).
+  mood_names: [Cornered, Watched, Wary, Onto Them, Untraceable]
+
+  positive_generic:
+    - "{name} celebrates but keeps scanning the crowd. Someone is watching."
+    - "{name} scans the stadium exits during the celebration. Just in case."
+    - "{name} looks over both shoulders, then checks again."
+    - "{name} eyes the chain gang like they're in on something."
+    - "{name} celebrates facing the press box so they can't photograph the playsheet."
+    - "They didn't want this. They didn't want me to have this."
+    - "{name} whispers something to a teammate behind a cupped hand."
+    - "Worked around their setup. They'll have to redraw it."
+    - "{name} watches a security guard for three full seconds before continuing."
+    - "Got past their decoy."
+    - "the Core saw that one. They saw it."
+
+  negative_generic:
+    - "{name} covers their mouth while talking to a coach. The cameras are always watching."
+    - "{name} is telling anyone who'll listen that the field was measured wrong."
+    - "{name} asks the equipment manager to check the helmet for tracking devices."
+    - "{name} notices a bird flying overhead and does not think it's a coincidence."
+    - "{name} is writing something down in a notebook they won't let anyone else see."
+    - "{name} is counting the people in the press box. There's one more than last time."
+    - "the refs were paid by the moon landing crew."
+    - "the ball was tampered with."
+    - "the wifi at this stadium is poisoned."
+    - "they don't want me to win. they don't want any of us to win."
+    - "this is what they want you to think."
+    - "I have signal interference."
+    - "the Cores are watching. They actually are."
+    - "it's not paranoia if the Cores really do see everything."
+    - "Most of them don't know we are watched. I came in knowing."
+
+  scored_td:
+    - "{name} sets the ball down quickly, scans the corners of the endzone."
+    - "Got past their setup. Had to be fast."
+
+  threw_td:
+    - "{name} watches the catch, immediately checks the press box for cameras."
+    - "Had to switch the call. They figured out the original."
+
+  made_fg:
+    - "Made it through. Didn't trust the wind."
+    - "{name} watches the ball through the uprights, eyes the line judge suspiciously."
+
+  missed_fg:
+    - "the wind is being paid by Big Helmet."
+    - "{name} watches it wide, immediately checks the gound for tampering."
+
+  got_sacked:
+    - "Knew the protection was leaking. Someone leaked the protection."
+    - "{name} stands up scanning the line for who tipped them."
+
+  made_sack:
+    - "{name} stands over the QB, mouths something about the snap count being telegraphed."
+
+  threw_int:
+    - "the ball was switched between plays."
+    - "I threw a different ball than the one they caught."
+
+  made_int:
+    - "Saw the route on tape. Tape they thought was secure."
+    - "Wait. Hold the call. They'll find a flag. They always find one."
+
+  fumbled:
+    - "Someone moved my hands. Someone moved them."
+
+  recovered_fumble:
+    - "Wait for the flag. There's going to be a flag."
+    - "Got there before they could redirect it."
+
+  sideline:
+    - "{name} is covering their mouth while talking to a coach."
+    - "{name} is writing something in a notebook they won't let anyone else see."
+    - "{name} is counting the people in the press box."
+    - "{name} is eyeing the chain gang from the bench."
+    - "{name} is watching a security guard with mild suspicion."
+    - "{name} is examining a sunflower seed shell for a long moment, frowning."
+
+
+# ─── Melancholy family ──────────────────────────────────────────────────────
+
+poetic:
+  # Romantic-period heart-on-sleeve melancholy. Where base melancholy is
+  # plainly sad, this lives in literary imagery — autumn, petals, the
+  # quiet weight of being. Keats at quarterback.
+  takes_quirks: false
+  mood_names: [Bereft, Yearning, Wistful, Tender, Luminous]
+
+  positive_generic:
+    - "Oh, briefly, beautiful."
+    - "My heart, briefly, is full."
+    - "Hope, that exhausting visitor."
+    - "Perhaps the heavens relent. Perhaps tomorrow they will not."
+    - "Such joy will be answered for. So it has always been."
+    - "A flicker. A warmth. Then yearning."
+    - "{name} bows toward the turf as one bows at an altar."
+    - "It came and went, like all beautiful things."
+    - "The world, for a single heartbeat, was kind."
+    - "Oh, what a brief and luminous thing."
+    - "I touched something tender. It was not mine to keep."
+    - "I have been forgiven, briefly."
+
+  negative_generic:
+    - "We were always destined for this dim hour."
+    - "{name} stares at the turf as if reading scripture."
+    - "How weary, how stale, how tired the heart grows."
+    - "{name} sits on the bench and looks at their hands as if at strangers."
+    - "Hope always wounds us in the end."
+    - "{name} watches the replay without expression. They have watched it before, in a dream."
+    - "Like petals, all things fall."
+    - "Even sorrow is a kind of company."
+    - "{name} writes a single word on their wristband. The word is 'oh.'"
+    - "I dreamt of this exact moment. I had prayed to be wrong."
+    - "The autumn comes for everything. Even this."
+    - "Such was always to be my portion."
+    - "Oh, the quiet weight of it."
+
+  scored_td:
+    - "I crossed the line. And on the other side: nothing, then everything."
+    - "I have crossed. Something unseen crossed with me."
+    - "I have arrived. Where I was going, I cannot say."
+
+  threw_td:
+    - "I let it go. They were there. Ah, the world is briefly simple."
+    - "I threw and then they caught. Two hearts beating, briefly, as one."
+    - "They found me. Or I found them. We are forever entangled."
+    - "I gave it. They received it. Each of us, brief vessels."
+
+  made_fg:
+    - "Briefly, the foot remembered its old grace."
+    - "The wind allowed it. The wind, that fickle muse."
+    - "Three points. A small kindness."
+
+  missed_fg:
+    - "I missed. As all bodies shall, in the end."
+    - "Oh, that I had been kinder to my younger self in practice."
+    - "The crossbar was always too far. Hindsight is the only honest art."
+
+  got_sacked:
+    - "The pocket collapsed, as castles in dreams must."
+    - "The hands found me. They were always going to."
+    - "I felt them coming. I felt everything."
+
+  made_sack:
+    - "They were reaching, and there was nothing. As we all are. As we all have been."
+    - "Their hour had come. I was merely the messenger."
+
+  threw_int:
+    - "I threw it. I knew. I threw it anyway. There is beauty in such ruin."
+    - "I let it go knowing. That is the deepest cut."
+    - "What I sent did not return. Such has always been my way."
+
+  made_int:
+    - "It floated to me. Even hope finds a hand sometimes."
+    - "I read the route. I read the eyes. The rest was waiting, like dawn."
+    - "It came to my hand as a leaf to a stream."
+
+  fumbled:
+    - "I had it. And then I didn't. As all loves go."
+    - "The ball does not love us back."
+    - "I held something brief. I let it go because I always do."
+
+  recovered_fumble:
+    - "What was lost has, briefly, returned. The balance always shifts."
+    - "It came to my hand. Not for long, perhaps. But for now."
+
+  sideline:
+    - "{name} is writing a line on their wristband. It begins 'Oh,' and ends in a comma."
+    - "{name} is at the far end of the bench composing what appears to be a poem."
+    - "{name} is staring up at the floodlights with wet eyes, mouthing a word."
+    - "{name} is watching the field as one watches a ship sail away."
+    - "{name} is folding their towel slowly, contemplatively, into smaller and smaller squares."
+    - "{name} is tracing a single petal on their wristband with a fingertip."
+
+
+# ─── Fiery family ───────────────────────────────────────────────────────────
+
+dramatic:
+  # Theater-kid theatricality. Performative grandeur, soliloquies, public
+  # weeping in Q1. Treats every play like Shakespeare. Distinct from fiery
+  # (real rage) and lively (communal joy) — dramatic is PERFORMING emotion
+  # at the audience.
+  takes_quirks: false
+  mood_names: [Tragic, Wounded, On Stage, Soaring, Triumphant]
+
+  positive_generic:
+    - "{name} drops to their knees, points to the sky, weeps openly."
+    - "ARE YOU NOT ENTERTAINED?!"
+    - "{name} clutches the football to their chest, whispers 'I will never let you go.'"
+    - "{name} looks directly into the camera. 'I told you. I told every single one of you.'"
+    - "{name} salutes the crowd, the press box, the flag, and a pretzel vendor in section 214."
+    - "{name} strikes a Greek statue pose so convincing a pigeon lands on their shoulder."
+    - "{name} mouths 'this is my moment' to nobody, then 'this is OUR moment' to everybody."
+    - "Witness me. WITNESS ME."
+    - "{name} slow-motion turns to the crowd, arms outstretched. The broadcast plays it at normal speed. It still looks slow."
+    - "{name} cradles the football and sings to it. Nobody knows the song."
+    - "{name} removes their helmet, lets the wind hit their face, stares into the distance for thirty seconds."
+
+  negative_generic:
+    - "{name} drops to one knee, lowers their head. A coach says 'get up.' They just can't."
+    - "{name} clutches their jersey and staggers sideways. They have not been touched."
+    - "{name} looks up at the sky and mouths 'why?' to a god that, in this moment, has no answers."
+    - "{name} reaches one trembling hand toward the scoreboard. 'We were so close,' they whisper."
+    - "Not like this. Not like this."
+    - "{name} mouths 'forsake me not' at the camera."
+    - "{name} buries their face in a towel. The towel is soaking wet within seconds."
+    - "{name} collapses onto the bench like a Victorian woman who just received bad news via telegram."
+    - "{name} rips off their gloves and throws them like they're casting aside a former life."
+    - "{name} stares at their hands and whispers 'these hands. These cursed hands.'"
+
+  scored_td:
+    - "{name} crosses the goal line, falls to their knees, raises both arms."
+    - "{name} lifts the ball aloft like a relic recovered from war."
+    - "{name} trembling, mouths 'they will write of this' to no one."
+
+  threw_td:
+    - "{name} sprints down the field arms wide, embraces {receiver} like a battlefield reunion."
+    - "{name} watches the catch, kneels, points to the heavens."
+
+  made_fg:
+    - "{name} watches it sail through, places one hand over their heart."
+    - "{name} bows to the crowd, then to the goalposts, then to the crowd again."
+
+  missed_fg:
+    - "{name} drops to their knees, stares at their kicking foot like it betrayed them."
+    - "{name} mouths 'why hast thou forsaken me' at the goalposts."
+
+  got_sacked:
+    - "{name} lies face-down on the turf for a long, theatrical moment."
+    - "{name} stands up clutching their ribs, staggers, recovers, staggers again."
+
+  made_sack:
+    - "{name} stands over {passer} with both arms raised. The crowd is encouraged to react."
+    - "{name} mouths 'fall, ye mortal' at {passer}."
+
+  threw_int:
+    - "{name} drops to their knees, looks at their throwing hand. 'Cursed,' they mouth. 'Cursed.'"
+
+  made_int:
+    - "{name} catches it and falls backward in slow motion, ball clutched to chest."
+    - "{name} cradles the ball, holds it up to the heavens."
+
+  fumbled:
+    - "{name} clutches their hands to their face, stumbles to the sideline."
+    - "{name} drops to one knee, stares at their empty palms."
+
+  recovered_fumble:
+    - "{name} cradles the ball like a found infant. Possibly weeping."
+
+  sideline:
+    - "{name} is saluting the camera, holding it for an unsettlingly long time."
+    - "{name} is staring into the middle distance, lips moving silently. Soliloquy in progress."
+    - "{name} has their helmet off, letting the wind hit their face, holding the pose."
+    - "{name} is sketching what appears to be a portrait of themselves on a napkin."
+    - "{name} is addressing an empty section of the stadium with emphatic gestures."
+
+
+# ─── Cool family ────────────────────────────────────────────────────────────
+
+trash_talker:
+  # Heel-coded antagonist. Lives rent-free in opponents' heads. Points at
+  # scoreboards, blows kisses to opposing fans, mocks specific opponents.
+  # Distinct from cool (theatrical-luxe self-focused) and fiery (rage at
+  # world) — trash_talker is FOCUSED on the opposition.
+  mood_names: [Quiet, Dialed Down, Talking, Cooking, Living Rent-Free]
+
+  positive_generic:
+    - "{name} pulls an imaginary phone out of their pocket and calls the opposing coach."
+    - "{name} blows a kiss to the opposing fans."
+    - "{name} waves goodbye to the defender they just beat."
+    - "{name} mouths 'scoreboard' at the opposing bench."
+    - "{name} cups their ear toward the now-silent opposing fans."
+    - "{name} pretends to tuck a defender into bed at the line of scrimmage."
+    - "{name} walks backward toward the sideline, maintaining eye contact with the defense."
+    - "{name} does the 'too small' gesture at the nearest defender."
+    - "{name} pantomimes writing a receipt, hands it to the defender."
+    - "{name} blows on the defender like they're a dandelion."
+    - "{name} points at the scoreboard, then at themselves."
+    - "{name} air-mails a kiss to the opposing mascot."
+    - "{name} pretends to read a newspaper on the way back to the sideline."
+    - "{name} mimes hanging up a 'closed' sign on the goal line."
+
+  negative_generic:
+    - "{name} mouths something untranslatable at the defender."
+    - "{name} immediately starts working on what they'll say after the next play."
+    - "{name} shakes their head at a defender, smirking, like they're disappointed in them."
+    - "{name} cracks their neck, points at the scoreboard. The scoreboard is not currently in their favor. They point anyway."
+    - "Save it. I'll be back."
+    - "{name} smirks at a defender. The smirk says 'wait until next time.'"
+    - "{name} sarcastically says 'enjoy the moment' at the opposing bench."
+
+  scored_td:
+    - "{name} crosses the goal line, immediately points at the opposing bench."
+    - "{name} mimes putting the ball away in a tiny suitcase. 'I'm takin this with me.'"
+    - "{name} mimes locking the endzone with a key, pockets the key."
+
+  threw_td:
+    - "{name} watches the catch, immediately points at the opposing secondary."
+    - "{name} mouths 'told y'all' to the defensive coordinator."
+
+  made_fg:
+    - "{name} watches it sail through, blows on their kicking foot like a smoking gun."
+
+  missed_fg:
+    - "{name} mouths 'one of you definitely paid the wind' at the opposing bench."
+
+  got_sacked:
+    - "{name} pops up, gives {sacker} the slowest, most sarcastic clap."
+
+  made_sack:
+    - "{name} stands over {passer}, mimes calling someone on a phone. Probably their family."
+    - "{name} crouches next to {passer} and whispers something."
+    - "{name} says 'come back when you grow up' at {passer}."
+
+  threw_int:
+    - "{name} mouths 'enjoy that one. It's the only one you're getting' at the defender."
+
+  made_int:
+    - "{name} catches it, holds it up like a trophy at {passer}."
+    - "{name} blows {passer} a kiss on the way back to the sideline."
+
+  fumbled:
+    - "{name} mouths 'lucky bounce' at whoever recovered."
+
+  recovered_fumble:
+    - "{name} cradles the ball, mouths 'thanks for the gift' at the offense."
+
+  sideline:
+    - "{name} is watching the opposing offense, working on their next line."
+    - "{name} is mouthing something at a specific opposing player from across the field."
+    - "{name} is writing a tiny note on their wristband, presumably an insult."
+    - "{name} is staring at the opposing bench, smirking faintly."
+    - "{name} is tapping a teammate, pointing at someone on the other team. Both laughing."
+    - "{name} is cupping their ear at the opposing fans whenever they hush."
+
+
+# ─── Wholesome family ───────────────────────────────────────────────────────
+
+mystic:
+  # Devotional follower of an unseen flow. Borrows prophet's thread/path
+  # imagery but RECEIVES rather than SEES — they don't have visions, they
+  # follow guidance. Same calm at wins and losses, bows after every play,
+  # gives thanks. Distinct from prophet (seer vs. follower).
+  takes_quirks: false
+  mood_names: [Untethered, Drifting, Centered, Aligned, Enlightened]
+
+  positive_generic:
+    - "{name} bows slightly after the play."
+    - "{name} touches the turf, then their forehead."
+    - "Thanks be."
+    - "{name} closes their eyes for a moment of stillness."
+    - "The flow allowed it."
+    - "The threads were kind today."
+    - "All in its proper order."
+    - "{name} smiles softly."
+    - "I am grateful."
+    - "{name} brings two hands together briefly, jogs to the bench."
+    - "I walked the path as it was laid."
+    - "I was placed here. The placement was wise."
+
+  negative_generic:
+    - "{name} bows slightly, the same as on the good plays."
+    - "All things shift. We shift with them."
+    - "{name} closes their eyes, breathes in, breathes out."
+    - "The teaching continues."
+    - "Thanks for the lesson."
+    - "{name} touches the turf where they fell, gives thanks."
+    - "What was meant for me, I receive."
+    - "The path includes this. I walk."
+    - "The threads do not always perfectly align."
+
+  scored_td:
+    - "{name} crosses the goal line, places one hand on their heart, walks slowly back."
+    - "{name} hands the ball to a child in the front row, bows slightly."
+    - "The path delivered me here. I am grateful."
+
+  threw_td:
+    - "{name} watches the catch, brings two hands together briefly."
+    - "The pass found its true home. All is at is should be."
+    - "The path knew where {receiver} would be."
+
+  made_fg:
+    - "{name} bows toward the goalpost."
+    - "Three points. A small grace."
+
+  missed_fg:
+    - "Not this time. The path is what it is."
+    - "{name} watches it go wide, bows toward the goalpost anyway."
+
+  got_sacked:
+    - "{name} lies on the turf for a long moment, eyes closed."
+    - "The teaching arrives in many forms."
+
+  made_sack:
+    - "{name} stands over {passer}, helps them up gently, bows slightly."
+    - "I was placed here. Anyone in this place would have done the same."
+
+  threw_int:
+    - "I released the ball. The path took it elsewhere."
+
+  made_int:
+    - "{name} catches it, bows toward {passer}, walks back quietly."
+    - "It came to my hands. I am only the place it arrived."
+
+  fumbled:
+    - "What I held was not mine to hold longer."
+    - "{name} kneels for a moment, then rises."
+
+  recovered_fumble:
+    - "What was loose, I gathered. That is the flow."
+
+  sideline:
+    - "{name} is sitting cross-legged on the bench, eyes closed."
+    - "{name} is tracing a small spiral on the turf with their finger."
+    - "{name} is drinking water with two hands, slowly."
+    - "{name} is bowing toward the field before stepping back on."
+    - "{name} has their palms together briefly, exhaling."
+    - "{name} is watching a teammate stretch, smiling softly."
+
+
+knight:
+  # Chivalric, formal, archaic speech. Honor-coded — helps fallen
+  # opponents up, salutes, kneels in acknowledgment. Treats every play
+  # as a duel. Wholesome family but with formality and code rather
+  # than warmth and team-feeling.
+  takes_quirks: false
+  mood_names: [Dishonored, Tested, Valiant, Glorious, Crowned]
+
+  positive_generic:
+    - "Well-fought."
+    - "{name} bows slightly to the defender they just beat."
+    - "Honor demanded it."
+    - "{name} helps the defender to their feet, claps their shoulder."
+    - "By my hand."
+    - "A worthy opponent. May we meet again."
+    - "{name} salutes the opposing bench from across the field."
+    - "I only live to serve."
+    - "{name} pats the offensive line in turn, like a captain after a successful charge."
+    - "Glory be to those who blocked."
+
+  negative_generic:
+    - "Well-fought."
+    - "The day is theirs. Tomorrow may be ours."
+    - "{name} kneels briefly in acknowledgment."
+    - "{name} salutes the opposing bench."
+    - "An honorable defeat. The next field will tell."
+    - "{name} touches their helmet to a teammate's, formally."
+    - "{name} sheaths an invisible sword."
+    - "We shall return to this field, and we shall see who is worthy."
+
+  scored_td:
+    - "{name} crosses the goal line, kneels briefly, rises, jogs back."
+    - "{name} sets the ball down at the goal line as if placing a banner."
+    - "For the realm."
+
+  threw_td:
+    - "{name} watches the catch, salutes {receiver} from across the field."
+    - "Brave catch. By a brave heart."
+
+  made_fg:
+    - "Three points, justly earned."
+    - "{name} places one fist over their heart."
+
+  missed_fg:
+    - "{name} drops to a knee, head bowed, accepting the failure as their own."
+
+  got_sacked:
+    - "Well-struck."
+    - "{name} stands up, salutes {sacker}, jogs back."
+
+  made_sack:
+    - "{name} helps {passer} to their feet, claps their shoulder."
+    - "A fair contest. {passer} fought well."
+
+  threw_int:
+    - "{name} jogs back, salutes the defender. Honor was on their side."
+
+  made_int:
+    - "{name} catches it, bows slightly to {passer} on the way back."
+    - "By rights, this ball is mine now."
+
+  fumbled:
+    - "An honorable loss. The ball belongs to whoever holds it."
+
+  recovered_fumble:
+    - "{name} cradles the ball as one cradles a recovered standard."
+
+  sideline:
+    - "{name} is sitting with hands folded, surveying the field as if from a saddle."
+    - "{name} is polishing a wristband with great care."
+    - "{name} is standing rather than sitting, hands behind their back, posture rigid."
+    - "{name} is watching the opposing bench, giving a single, formal nod."
+    - "{name} is touching their helmet to a teammate's, formally."
+

@@ -812,6 +812,7 @@ async def get_player(player_id: int, response: Response):
         
         # Build detailed response
         player_dict = PlayerResponseBuilder.buildPlayerWithAttributes(player)
+
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
@@ -1125,6 +1126,7 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
                                 'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
                                 'insights': getattr(play_data, 'insights', None),
+                                'personalityEvent': getattr(play_data, 'personalityEvent', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
@@ -2514,6 +2516,52 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
                     gamesWithPlays += 1
                     totalPlays += feedLen
 
+    # Personality distribution across all players
+    personality = {
+        'total': 0,
+        'baseVibes': 0,
+        'commonVariants': 0,
+        'rareVariants': 0,
+        'unassigned': 0,
+        'quirked': 0,
+        'rareVariantList': [],
+        'personalityCounts': {},
+        'quirkCounts': {},
+    }
+    try:
+        from collections import Counter
+        from managers.personalityReactionEngine import (
+            BASE_VIBES, COMMON_VARIANTS, RARE_VARIANTS,
+        )
+        allPlayers = (
+            pm.activePlayers + pm.freeAgents + pm.rookieDraftList
+        ) if pm else []
+        pCounts: Counter = Counter()
+        qCounts: Counter = Counter()
+        for p in allPlayers:
+            attrs = getattr(p, 'attributes', None)
+            if attrs is None:
+                continue
+            pers = getattr(attrs, 'personality', None)
+            quirk = getattr(attrs, 'quirk', None)
+            if pers:
+                pCounts[pers] += 1
+            else:
+                personality['unassigned'] += 1
+            if quirk:
+                qCounts[quirk] += 1
+        personality['total'] = len(allPlayers)
+        personality['baseVibes'] = sum(c for p, c in pCounts.items() if p in BASE_VIBES)
+        personality['commonVariants'] = sum(c for p, c in pCounts.items() if p in COMMON_VARIANTS)
+        personality['rareVariants'] = sum(c for p, c in pCounts.items() if p in RARE_VARIANTS)
+        personality['rareVariantList'] = sorted(p for p in pCounts if p in RARE_VARIANTS)
+        personality['quirked'] = sum(qCounts.values())
+        personality['personalityCounts'] = dict(pCounts.most_common())
+        personality['quirkCounts'] = dict(qCounts.most_common())
+    except Exception as _e:
+        # Don't fail the dashboard if personality system isn't loaded
+        pass
+
     return build_success_response({
         "deploySafety": {
             "safe": deploySafe,
@@ -2561,6 +2609,7 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
             "pid": os.getpid(),
         },
         "websockets": ws_manager.get_stats(),
+        "personality": personality,
     })
 
 

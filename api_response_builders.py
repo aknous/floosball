@@ -241,13 +241,13 @@ class PlayerResponseBuilder(ResponseBuilder):
         # Add fatigue (0-100 percentage)
         attr_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
 
-        # Mood + demeanor
-        demeanor = getattr(player.attributes, 'demeanor', None)
-        if demeanor:
+        # Personality + mood + quirk (new system)
+        personalityName = getattr(player.attributes, 'personality', None)
+        if personalityName:
             mood, moodTier = player.attributes.getMood()
+            attr_dict['personality'] = personalityName
             attr_dict['mood'] = mood
             attr_dict['moodTier'] = moodTier
-            attr_dict['demeanor'] = demeanor.capitalize()
 
         # Defensive attributes (position-specific)
         defAttrs = player.attributes.getDefensiveAttributes(player.position)
@@ -256,6 +256,10 @@ class PlayerResponseBuilder(ResponseBuilder):
                 k: {'value': v, 'stars': PlayerResponseBuilder.calculateStarRating(v)}
                 for k, v in defAttrs.items()
             }
+
+        quirk = getattr(player.attributes, 'quirk', None)
+        if quirk:
+            attr_dict['quirk'] = quirk
 
         player_dict['attributes'] = attr_dict
         return player_dict
