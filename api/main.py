@@ -1644,6 +1644,23 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
     return {"added": len(names), "total": len(pm.unusedNames)}
 
 
+@app.post("/api/admin/personality/reload")
+async def admin_reload_personality_templates(_auth: None = Depends(_checkAdminAuth)):
+    """Hot-reload vibe_reactions.yaml + quirk_reactions.yaml from disk.
+    Use after uploading new template files (e.g. via `fly ssh sftp`) to apply
+    changes without restarting the app. Clears the shuffled-deck cache so
+    the next reaction draw uses the updated pools."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    floosball_app.personalityManager.reloadTemplates()
+    eng = floosball_app.personalityManager.engine
+    return {
+        "ok": True,
+        "personalities": len(eng.personalities),
+        "quirks": len(eng.quirks),
+    }
+
+
 @app.post("/api/admin/players")
 async def admin_create_player(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
     """Create a player and add them to the free agent pool for next season"""

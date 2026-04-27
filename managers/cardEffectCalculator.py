@@ -749,7 +749,7 @@ def calculateWeekCardBonuses(
 
 
 def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
-    """Mutate breakdowns in-place for tradeoff effects like Double Down and Feast or Famine."""
+    """Mutate breakdowns in-place for tradeoff effects like Lemons and Feast or Famine."""
     tradeoffNames = {b.effectName for b in breakdowns if b.effectName in _TRADEOFF_EFFECTS}
     if not tradeoffNames:
         return
@@ -758,7 +758,7 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     normalBreakdowns = [b for b in breakdowns if b.effectName not in _TRADEOFF_EFFECTS]
 
     if "double_down" in tradeoffNames and normalBreakdowns:
-        # Double the lowest non-zero card's FP payout. Pure upside at diamond tier.
+        # Multiply the lowest non-zero card's FP payout. Pure upside at diamond tier.
         ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
         multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
         nonZeroFP = [b for b in normalBreakdowns if b.totalFP > 0]
@@ -768,7 +768,7 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
             bonusFP = round(originalFP * (multValue - 1), 1)
             lowest.primaryFP = round(lowest.primaryFP + bonusFP, 1)
             lowest.totalFP = round(lowest.totalFP + bonusFP, 1)
-            lowest.equation = f"{lowest.equation} × {multValue} (Double Down)"
+            lowest.equation = f"{lowest.equation} × {multValue} (Lemons)"
         # Clear the marker mult so it doesn't stack on the global FPx aggregation
         if ddBreakdown:
             ddBreakdown.primaryMult = 0

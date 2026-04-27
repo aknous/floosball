@@ -194,10 +194,36 @@ class FloosballApplication:
         
         # Register state update callback with season manager
         self.seasonManager.setStateUpdateCallback(self._onSeasonStateUpdate)
-        
+
+        # If card_reset wiped templates mid-season, regenerate them now so
+        # the season can resume with the new card-effects code. Without this,
+        # templates wouldn't regenerate until the next season start.
+        try:
+            currentSeason = (
+                self.seasonManager.currentSeason.seasonNumber
+                if self.seasonManager.currentSeason else None
+            )
+            if currentSeason:
+                from database.connection import get_session
+                from database.models import CardTemplate
+                session = get_session()
+                try:
+                    count = session.query(CardTemplate).filter_by(
+                        season_created=currentSeason).count()
+                finally:
+                    session.close()
+                if count == 0:
+                    logger.info(
+                        f"No card templates for season {currentSeason} — regenerating "
+                        f"(post card-reset recovery)"
+                    )
+                    self.seasonManager._generateCardTemplates(currentSeason)
+        except Exception as e:
+            logger.error(f"Card template regeneration check failed: {e}")
+
         # Save initial state
         await self._saveInitialState()
-        
+
         logger.info("League initialization complete")
     
     def _loadConfiguration(self, config: Dict[str, Any]) -> None:

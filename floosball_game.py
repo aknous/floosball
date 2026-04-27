@@ -3735,7 +3735,13 @@ class Game:
         # added to gameFeed inside the loop. Non-scoring plays (kneels, normal runs/passes
         # at clock expiration) are normally formatted at the TOP of the next loop iteration,
         # which never runs when the game ends. Handle all cases here.
-        alreadyInFeed = (self.gameFeed and self.gameFeed[0].get('play') is self.play)
+        # Scan the whole feed: a sideline cutaway inserted by the prior broadcast can
+        # push the play off index 0 even when it was already added inside the loop.
+        alreadyInFeed = any(
+            entry.get('play') is self.play
+            for entry in self.gameFeed
+            if isinstance(entry, dict)
+        )
         if self.totalPlays > 0 and self.play:
             playActuallyRan = getattr(self.play, 'playResult', None) is not None
             if playActuallyRan and not alreadyInFeed:

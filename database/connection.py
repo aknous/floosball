@@ -354,6 +354,49 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Refresh detail/tooltip on existing double_down (Lemons) card templates
+        # so they pick up the {rewardValue}x scaling text. Templates bake those
+        # strings at creation time, so a wording change won't reach mid-season
+        # cards without an explicit re-render.
+        try:
+            import json as _json
+            from managers.cardEffects import EFFECT_DETAIL_TEMPLATES, EFFECT_TOOLTIPS
+            rows = conn.execute(text(
+                "SELECT id, effect_config FROM card_templates WHERE effect_config LIKE '%double_down%'"
+            )).fetchall()
+            updated = 0
+            for row in rows:
+                try:
+                    cfg = _json.loads(row.effect_config) if row.effect_config else {}
+                except Exception:
+                    continue
+                if cfg.get('effectName') != 'double_down':
+                    continue
+                primary = cfg.get('primary', {}) or {}
+                detail = EFFECT_DETAIL_TEMPLATES.get('double_down', '')
+                tooltip = EFFECT_TOOLTIPS.get('double_down', '')
+                for k, v in primary.items():
+                    placeholder = '{' + k + '}'
+                    detail = detail.replace(placeholder, str(v))
+                    tooltip = tooltip.replace(placeholder, str(v))
+                if detail == cfg.get('detail') and tooltip == cfg.get('tooltip'):
+                    continue
+                cfg['detail'] = detail
+                cfg['tooltip'] = tooltip
+                conn.execute(
+                    text("UPDATE card_templates SET effect_config = :cfg WHERE id = :id"),
+                    {"cfg": _json.dumps(cfg), "id": row.id},
+                )
+                updated += 1
+            if updated > 0:
+                conn.commit()
+                logger.info(f"  Migration: refreshed Lemons detail/tooltip on {updated} card_templates")
+            else:
+                conn.rollback()
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: Lemons template refresh skipped: {e}")
+
         # Coach scouting attribute (feature/prospects-pipeline Phase 7)
         try:
             conn.execute(text("ALTER TABLE coaches ADD COLUMN scouting INTEGER DEFAULT 80"))

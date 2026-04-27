@@ -2921,8 +2921,12 @@ class SeasonManager:
                     lowSeed = len(teamsInRound) - 1
 
                     while lowSeed > hiSeed:
-                        newGame = FloosGame.Game(teamsInRound[hiSeed], teamsInRound[lowSeed], timingManager=self.timingManager)
-                        
+                        newGame = FloosGame.Game(
+                            teamsInRound[hiSeed], teamsInRound[lowSeed],
+                            timingManager=self.timingManager,
+                            personalityManager=self.serviceContainer.getService('personality_manager'),
+                        )
+
                         # Assign unique integer ID and metadata
                         self._gameIdCounter += 1
                         newGame.id = self._gameIdCounter
@@ -2958,7 +2962,11 @@ class SeasonManager:
                 for team in floosbowlTeams:
                     team.leagueChampion = True
                 list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-                newGame = FloosGame.Game(floosbowlTeams[0], floosbowlTeams[1], timingManager=self.timingManager)
+                newGame = FloosGame.Game(
+                    floosbowlTeams[0], floosbowlTeams[1],
+                    timingManager=self.timingManager,
+                    personalityManager=self.serviceContainer.getService('personality_manager'),
+                )
 
                 # Assign unique integer ID and metadata
                 self._gameIdCounter += 1

@@ -530,7 +530,7 @@ EFFECT_TOOLTIPS = {
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
     "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
-    "double_down": "With the lemons. Multiplies the FP output of your lowest-earning card this week.",
+    "double_down": "With the lemons. Multiplies your lowest-earning card's FP this week.",
     "last_resort": "When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more of your other cards fail to produce a bonus.",
     "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
     "fortitude": "Are you feeling the heat? FPx that scales with how many of your streak cards have active streaks.",
@@ -651,7 +651,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "{perCardXMult} FPx per other card that produced a bonus",
     "bonus_round": "+{rewardValue} FP when 4+ of your other cards triggered",
-    "double_down": "{rewardValue}x FP on your lowest-earning card this week",
+    "double_down": "Multiplies your lowest-earning card's FP this week",
     "last_resort": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 15% per card that didn't trigger, up to 70%",
     "high_roller": "{perCardMult} FPx per chance card that hits",
     "fortitude": "{perCardMult} FPx per active streak card in your hand",
@@ -900,7 +900,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
                 "rewardValue": round((6 + rn * 0.22) * editionScale, 1),
                 "stat": "recYards", "threshold": 125}
     if effectName == "possession":
-        return {"perReceptionFP": round((0.8 + rn * 0.04) * editionScale, 1)}
+        return {"perReceptionFP": round((0.4 + rn * 0.012) * editionScale, 2)}
     if effectName == "slippery":
         return {"perYacFP": round((0.15 + rn * 0.008) * editionScale, 2)}
     if effectName == "jailbreak":
@@ -3032,11 +3032,11 @@ def _computeIronWill(primary, ctx, cardPlayerId, eqId):
 
 
 # -- Tradeoff/Sacrifice (second pass) --
-# Note: Double Down and Feast or Famine are handled by _applyTradeoffEffects
+# Note: Lemons and Feast or Famine are handled by _applyTradeoffEffects
 # in cardEffectCalculator.py. Their compute functions just return their FPx
 # value as a marker — the actual tradeoff logic modifies other breakdowns.
 
-def _computeDoubleDown(primary, ctx, cardPlayerId, eqId):
+def _computeLemons(primary, ctx, cardPlayerId, eqId):
     """Multiplies the lowest non-zero card's FP. Amplification applied post-calculation."""
     rewardValue = primary.get("rewardValue", 2.5)
     breakdowns = ctx._firstPassBreakdowns or []
@@ -3414,7 +3414,7 @@ EFFECT_REGISTRY = {
     "copycat": _computeCopycat,
     "chain_reaction": _computeChainReaction,
     "bonus_round": _computeBonusRound,
-    "double_down": _computeDoubleDown,
+    "double_down": _computeLemons,
     "last_resort": _computeLastResort,
     "high_roller": _computeHighRoller,
     "fortitude": _computeIronWill,

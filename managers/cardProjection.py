@@ -9,7 +9,7 @@ Two flavors of projection payload:
     to the most-likely path) and return its per-card breakdown.
 
   • Amplifier cards (Bonus Round, Providence, Catalyst, Advantage,
-    Cascade, Double Down, Chain Reaction, Copycat) — these don't
+    Cascade, Lemons, Chain Reaction, Copycat) — these don't
     produce meaningful output in isolation; their value comes from
     what OTHER equipped cards do. For these we emit a descriptive
     status that checks whether the required companion cards are
@@ -96,34 +96,69 @@ _AMPLIFIER_DEPENDS = {
 }
 
 
-def _amplifierDescription(effectName: str, primary: dict, active: bool) -> str:
+def _lemonsBoostFP(primary: dict, breakdowns) -> float:
+    """Compute the actual FP boost Lemons added this week. The calculator's
+    second pass marks the mutated card by appending '(Lemons)' to its
+    equation, so we identify it by that marker (the original-lowest card may
+    no longer be the post-mutation lowest)."""
+    if not breakdowns:
+        return 0.0
+    multValue = float(primary.get("rewardValue", 0) or 0)
+    if multValue <= 1:
+        return 0.0
+    target = next(
+        (b for b in breakdowns
+         if getattr(b, 'effectName', '') != 'double_down'
+         and '(Lemons)' in (getattr(b, 'equation', '') or '')),
+        None,
+    )
+    if target is None:
+        return 0.0
+    postFP = float(target.totalFP)
+    # postFP = originalFP × multValue → bonus = postFP × (multValue-1)/multValue
+    return round(postFP * (multValue - 1) / multValue, 1)
+
+
+def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdowns=None) -> str:
     """Short status string for amplifier pills. When active, describes
     what the card is doing right now given the hand. When inactive,
     names the missing companion type so the user knows how to fix it.
     """
     if effectName == "bonus_round":
         reward = primary.get("rewardValue", 0)
-        return f"+{reward} FP if 4+ other cards trigger" if active else "No effect — needs other cards triggering"
+        return f"+{reward} FP at 4+ triggers" if active else "Needs 4+ triggers"
     if effectName == "copycat":
-        return "Copies best triggering card" if active else "No effect — no other cards to copy"
+        return "Copies best card" if active else "Nothing to copy"
     if effectName == "chain_reaction":
-        return "Chains bonuses from triggered cards" if active else "No effect — no other cards triggering"
+        return "Chains triggered cards" if active else "Needs triggers"
     if effectName == "double_down":
-        return "Zeros top card · boosts lowest" if active else "No effect — needs 2+ equipped"
+        if not active:
+            return "Needs another card"
+        boost = _lemonsBoostFP(primary, breakdowns)
+        if boost > 0:
+            return f"+{boost} FP on lowest card"
+        # Fallback when we can't compute a boost (no breakdowns yet)
+        reward = primary.get("rewardValue", 0)
+        return f"{reward}x lowest-earning card"
     if effectName == "providence":
         bonus = int(round((primary.get("chanceBonus", 0) or 0) * 100))
-        return f"Boosts chance cards +{bonus}%" if active else "No effect — no chance cards equipped"
+        return f"+{bonus}% to chance cards" if active else "Needs chance card"
     if effectName == "catalyst":
-        return "Boosts chance cards by roster FP" if active else "No effect — no chance cards equipped"
+        return "Roster-FP chance boost" if active else "Needs chance card"
     if effectName == "advantage":
-        return "Chance cards roll twice" if active else "No effect — no chance cards equipped"
+        return "Chance rolls twice" if active else "Needs chance card"
     if effectName == "cascade":
-        return "Stacks with other FPx cards" if active else "No effect — no FPx cards equipped"
+        return "Stacks with FPx cards" if active else "Needs FPx card"
     return ""
 
 
-def _amplifierStatus(eq, hand) -> Optional[Dict[str, Any]]:
-    """If this card is an amplifier, return its descriptive status. Otherwise None."""
+def _amplifierStatus(eq, hand, breakdowns=None) -> Optional[Dict[str, Any]]:
+    """If this card is an amplifier, return its descriptive status. Otherwise None.
+
+    Pass `breakdowns` (list of CardBreakdown) to let amplifiers like Lemons
+    compute their actual FP impact based on the equipped hand's projected
+    output, rather than just showing the static multiplier.
+    """
     effectName = _effectName(eq)
     check = _AMPLIFIER_DEPENDS.get(effectName)
     if not check:
@@ -131,7 +166,7 @@ def _amplifierStatus(eq, hand) -> Optional[Dict[str, Any]]:
     primary = (_effectConfig(eq).get("primary", {}) or {})
     active = bool(check(hand, eq))
     return {
-        "description": _amplifierDescription(effectName, primary, active),
+        "description": _amplifierDescription(effectName, primary, active, breakdowns),
         "active": active,
     }
 
@@ -654,7 +689,7 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
     cards = []
     for b in result.cardBreakdowns:
         eq = eqBySlot.get(b.slotNumber)
-        amplifier = _amplifierStatus(eq, equipped) if eq else None
+        amplifier = _amplifierStatus(eq, equipped, result.cardBreakdowns) if eq else None
         cards.append(_shapeCardPayload(
             b, amplifier,
             _effectConfig(eq) if eq else None,
@@ -740,7 +775,7 @@ def computeCandidateProjection(userCard, session, userId, season, week,
                     b.effectName == _effectName(wrapped)),
                    None)
 
-    amplifier = _amplifierStatus(wrapped, postSwap)
+    amplifier = _amplifierStatus(wrapped, postSwap, result.cardBreakdowns)
     payload = _shapeCardPayload(
         own, amplifier, userCard.card_template.effect_config or {}, peakOwn,
     )

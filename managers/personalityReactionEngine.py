@@ -96,6 +96,11 @@ class PersonalityReactionEngine:
     def __init__(self):
         self.personalities: Dict[str, Any] = {}
         self.quirks: Dict[str, Any] = {}
+        # Shuffled-deck cache: keyed by (deckKey, frozenPool) so each unique
+        # pool composition gets its own draw order. Drawn lines pop off until
+        # the deck empties, at which point it reshuffles. Prevents the
+        # uniform-random-with-replacement repetition.
+        self._decks: Dict[tuple, list] = {}
         self._load()
 
     # ------------------------------------------------------------------
@@ -115,6 +120,9 @@ class PersonalityReactionEngine:
     def reload(self) -> None:
         """Force-reload templates from disk (for hot editing)."""
         self._load()
+        # Pool contents may have changed; flush any cached decks so the next
+        # draw rebuilds with the new lines.
+        self._decks.clear()
 
     # ------------------------------------------------------------------
     # Lookup helpers
@@ -199,6 +207,21 @@ class PersonalityReactionEngine:
             return None
         return random.choice(pool)
 
+    def _drawFromDeck(self, deckKey: str, pool: list) -> Optional[str]:
+        """Draw a line via shuffled-deck (no-replacement) so every line in the
+        pool appears once before any repeats. Each unique pool composition
+        gets its own deck — if the pool list changes (e.g. switched modes),
+        a new deck is started."""
+        if not pool:
+            return None
+        cacheKey = (deckKey, tuple(pool))
+        deck = self._decks.get(cacheKey)
+        if not deck:
+            deck = list(pool)
+            random.shuffle(deck)
+            self._decks[cacheKey] = deck
+        return deck.pop()
+
     def pickPersonalityLine(self, personality: str, eventKey: str,
                              polarity: str, ctx: Optional[Dict] = None) -> Optional[str]:
         """Pick a reaction line.
@@ -221,10 +244,13 @@ class PersonalityReactionEngine:
 
         if eventKey in CONTEXT_STRICT_EVENT_KEYS and eventLines:
             pool = eventLines
+            mode = 'strict'
         else:
             pool = eventLines + genericLines
+            mode = 'combined'
 
-        line = self._pickFromPool(pool)
+        deckKey = f'reaction:{personality}:{eventKey}:{polarity}:{mode}'
+        line = self._drawFromDeck(deckKey, pool)
         if not line:
             return None
         return self._format(line, ctx)
@@ -237,7 +263,8 @@ class PersonalityReactionEngine:
         q = self.quirks.get(quirk)
         if not q:
             return None
-        line = self._pickFromPool(q.get(pool, []))
+        deckKey = f'quirk:{quirk}:{pool}'
+        line = self._drawFromDeck(deckKey, q.get(pool, []))
         if not line:
             return None
         return self._format(line, ctx)
@@ -275,7 +302,8 @@ class PersonalityReactionEngine:
         p = self.personalities.get(personality)
         if not p:
             return None
-        line = self._pickFromPool(p.get('sideline', []))
+        deckKey = f'sideline:{personality}'
+        line = self._drawFromDeck(deckKey, p.get('sideline', []))
         if not line:
             return None
         line = self._format(line, ctx)
