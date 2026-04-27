@@ -405,6 +405,32 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # app_settings table — admin-editable runtime config (feedback URL,
+        # survey URL, button visibility, etc). Created via SQLAlchemy below;
+        # this seed step inserts default rows when missing.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key VARCHAR(60) PRIMARY KEY,
+                    value TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            defaults = [
+                ('feedback_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
+                ('feedback_visible', 'true'),
+                ('survey_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
+            ]
+            for k, v in defaults:
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO app_settings (key, value) VALUES (:k, :v)"
+                ), {"k": k, "v": v})
+            conn.commit()
+            logger.info("  Migration: app_settings table ensured with default rows")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: app_settings setup skipped: {e}")
+
         # GmVote.details for structured payloads like ranked ballots (Phase 7)
         try:
             conn.execute(text("ALTER TABLE gm_votes ADD COLUMN details TEXT"))
@@ -1280,13 +1306,22 @@ def _seedBetaAllowlist():
         session.close()
 
 
-def clear_card_data():
-    """Clear all card-related data while preserving everything else.
+def clear_card_data(currentSeasonOnly: bool = False):
+    """Clear card-related data while preserving everything else.
 
-    Used when deploying card system changes that require regeneration
-    of templates (e.g., new drop rates, classification rules).
-    Preserves players, teams, seasons, games, users, fantasy rosters, etc.
+    By default this nukes EVERY card-related row across all seasons —
+    historical card collections, equip records, weekly bonuses, the works.
+    Used for full system rebuilds where every template must regenerate.
+
+    Pass currentSeasonOnly=True to limit the wipe to the latest season's
+    data only. Prior seasons' templates, user_cards, equip records, weekly
+    bonuses, modifiers, and shop entries remain intact. The latest season is
+    determined from MAX(card_templates.season_created); if no templates
+    exist, the function no-ops. CardUpgradeLog and PackOpening (audit logs)
+    are skipped in scoped mode — their rows can keep references to deleted
+    user_cards/templates without breaking anything (no FK enforcement).
     """
+    from sqlalchemy import func
     from .models import (
         CardTemplate, UserCard, EquippedCard, WeeklyCardBonus,
         CardUpgradeLog, PackOpening, FeaturedShopCard,
@@ -1295,18 +1330,61 @@ def clear_card_data():
 
     session = SessionLocal()
     try:
-        # Delete in reverse dependency order
-        session.query(WeeklyCardBonus).delete()
-        session.query(CardUpgradeLog).delete()
-        session.query(PackOpening).delete()
-        session.query(FeaturedShopCard).delete()
-        session.query(UserModifierOverride).delete()
-        session.query(WeeklyModifier).delete()
-        session.query(EquippedCard).delete()
-        session.query(UserCard).delete()
-        session.query(CardTemplate).delete()
-        session.commit()
-        logger.info("Card data cleared — templates will regenerate on season start")
+        if currentSeasonOnly:
+            currentSeason = session.query(func.max(CardTemplate.season_created)).scalar()
+            if currentSeason is None:
+                logger.info("Card data scoped-clear: no templates exist; nothing to delete")
+                return
+
+            templateIdsSubquery = session.query(CardTemplate.id).filter(
+                CardTemplate.season_created == currentSeason
+            ).subquery()
+            userCardIdsSubquery = session.query(UserCard.id).filter(
+                UserCard.card_template_id.in_(session.query(templateIdsSubquery))
+            ).subquery()
+
+            # Delete in reverse dependency order, scoped to currentSeason
+            session.query(WeeklyCardBonus).filter(
+                WeeklyCardBonus.season == currentSeason
+            ).delete(synchronize_session=False)
+            session.query(FeaturedShopCard).filter(
+                FeaturedShopCard.season == currentSeason
+            ).delete(synchronize_session=False)
+            session.query(UserModifierOverride).filter(
+                UserModifierOverride.season == currentSeason
+            ).delete(synchronize_session=False)
+            session.query(WeeklyModifier).filter(
+                WeeklyModifier.season == currentSeason
+            ).delete(synchronize_session=False)
+            session.query(EquippedCard).filter(
+                EquippedCard.season == currentSeason
+            ).delete(synchronize_session=False)
+            # UserCard has no season column — filter via the template subquery
+            session.query(UserCard).filter(
+                UserCard.id.in_(session.query(userCardIdsSubquery))
+            ).delete(synchronize_session=False)
+            session.query(CardTemplate).filter(
+                CardTemplate.season_created == currentSeason
+            ).delete(synchronize_session=False)
+            # CardUpgradeLog + PackOpening intentionally skipped — audit logs
+            # with no FK constraint, fine to keep with orphan references
+            session.commit()
+            logger.info(
+                f"Card data cleared for season {currentSeason} — templates will regenerate"
+            )
+        else:
+            # Delete in reverse dependency order — full wipe
+            session.query(WeeklyCardBonus).delete()
+            session.query(CardUpgradeLog).delete()
+            session.query(PackOpening).delete()
+            session.query(FeaturedShopCard).delete()
+            session.query(UserModifierOverride).delete()
+            session.query(WeeklyModifier).delete()
+            session.query(EquippedCard).delete()
+            session.query(UserCard).delete()
+            session.query(CardTemplate).delete()
+            session.commit()
+            logger.info("Card data cleared (all seasons) — templates will regenerate on season start")
     except Exception as e:
         session.rollback()
         logger.info(f"Error clearing card data: {e}")

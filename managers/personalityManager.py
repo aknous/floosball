@@ -40,6 +40,8 @@ EVENT_MAP: Dict[str, tuple] = {
     'big_gain':               ('', 'positive'),
     'third_down_conversion':  ('', 'positive'),
     'turnover_on_downs':      ('', 'negative'),
+    'safety_taken':           ('', 'negative'),
+    'safety_made':            ('', 'positive'),
     'choke_play':             ('', 'negative'),
     'clutch_play':            ('', 'positive'),
 }

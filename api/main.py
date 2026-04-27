@@ -1644,6 +1644,60 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
     return {"added": len(names), "total": len(pm.unusedNames)}
 
 
+@app.get("/api/app-settings")
+async def get_app_settings():
+    """Public — returns runtime-editable settings (feedback URL/visibility,
+    survey URL). Frontend fetches on mount to render the footer + survey
+    modal correctly without a redeploy."""
+    from database.connection import get_session
+    from database.models import AppSetting
+    session = get_session()
+    try:
+        rows = session.query(AppSetting).all()
+        settings = {row.key: row.value for row in rows}
+        # Coerce booleans for keys we know are boolean
+        if 'feedback_visible' in settings:
+            settings['feedback_visible'] = str(settings['feedback_visible']).lower() == 'true'
+        return settings
+    finally:
+        session.close()
+
+
+@app.put("/api/admin/app-settings")
+async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
+    """Admin — bulk update app settings. Pass any subset of keys; only those
+    keys are updated. Booleans are coerced to lowercase strings on the way in."""
+    from database.connection import get_session
+    from database.models import AppSetting
+    if not isinstance(payload, dict) or not payload:
+        raise HTTPException(status_code=400, detail="payload must be a non-empty object")
+    allowed = {'feedback_url', 'feedback_visible', 'survey_url'}
+    session = get_session()
+    try:
+        updated = []
+        for key, value in payload.items():
+            if key not in allowed:
+                continue
+            if isinstance(value, bool):
+                value = 'true' if value else 'false'
+            elif value is None:
+                value = ''
+            else:
+                value = str(value)
+            row = session.query(AppSetting).filter_by(key=key).first()
+            if row is None:
+                row = AppSetting(key=key, value=value)
+                session.add(row)
+            else:
+                row.value = value
+                row.updated_at = datetime.utcnow()
+            updated.append(key)
+        session.commit()
+        return {"updated": updated}
+    finally:
+        session.close()
+
+
 @app.post("/api/admin/personality/reload")
 async def admin_reload_personality_templates(_auth: None = Depends(_checkAdminAuth)):
     """Hot-reload vibe_reactions.yaml + quirk_reactions.yaml from disk.

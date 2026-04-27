@@ -1407,3 +1407,17 @@ class PendingReward(Base):
 
     def __repr__(self):
         return f"<PendingReward(user={self.user_id}, {self.kind}={self.slug}, claimed={self.claimed_at is not None})>"
+
+
+class AppSetting(Base):
+    """Key-value app settings editable by admins at runtime.
+    Used for things like the feedback button URL/visibility and the active
+    survey link — anything we want to flip without a redeploy."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<AppSetting({self.key}={self.value!r})>"

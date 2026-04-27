@@ -65,13 +65,16 @@ VARIANT_TIER_TABLE = [
 DEFAULT_REACTION_QUIRK_CHANCE = 0.0
 DEFAULT_SIDELINE_QUIRK_CHANCE = 0.0
 
-# Events whose context is too specific for a generic positive/negative line to
-# fit (turnovers, sacks). For these, the engine uses the event-specific pool
-# only and falls back to the generic pool only if the event pool is empty.
+# Events whose context is too specific for a generic positive line to fit.
+# Defensive successes (sacks made, interceptions, fumble recoveries) stay
+# strict so reactions read like real defensive moments, not generic positivity.
+# Negative plays (got sacked, fumbled, threw an INT) now COMBINE event-specific
+# + negative_generic for variety — small event pools were repeating too much,
+# and a generic negative line ("I'll get there.") reads fine over those plays.
 CONTEXT_STRICT_EVENT_KEYS = frozenset({
-    'made_sack', 'got_sacked',
-    'made_int', 'threw_int',
-    'fumbled', 'recovered_fumble',
+    'made_sack',
+    'made_int',
+    'recovered_fumble',
 })
 
 # Default rate of getting any quirk at all (for personalities that take quirks)

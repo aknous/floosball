@@ -103,19 +103,29 @@ def parse_args():
         os.remove(freshFlagPath)
         logger.info("Flag file removed — next restart will boot normally")
 
-    # Card reset flag — clears card data only, preserves everything else
+    # Card reset flag — clears ALL card data (every season), preserves everything else
     cardResetPath = os.path.join(os.environ.get('DATABASE_DIR', 'data'), '.card_reset')
     envCardReset = False
     if os.path.exists(cardResetPath):
-        logger.info(f"Card reset flag file found at {cardResetPath} — will clear card data")
+        logger.info(f"Card reset flag file found at {cardResetPath} — will clear ALL card data (all seasons)")
         envCardReset = True
         os.remove(cardResetPath)
         logger.info("Card reset flag removed — next restart will boot normally")
+
+    # Scoped card reset flag — clears only the current (latest) season's card data
+    cardResetCurrentPath = os.path.join(os.environ.get('DATABASE_DIR', 'data'), '.card_reset_current_season')
+    envCardResetCurrent = False
+    if os.path.exists(cardResetCurrentPath):
+        logger.info(f"Card reset (current season) flag found at {cardResetCurrentPath} — will clear current season card data only")
+        envCardResetCurrent = True
+        os.remove(cardResetCurrentPath)
+        logger.info("Scoped card reset flag removed — next restart will boot normally")
 
     args = {
         'timing_mode': _resolveTimingMode(envTiming),
         'fresh_start': envFresh,
         'card_reset': envCardReset,
+        'card_reset_current_season': envCardResetCurrent,
         'schedule_gap': envGap,
     }
 
@@ -151,13 +161,15 @@ def parse_args():
             args['fresh_start'] = True
         elif arg == '--card-reset':
             args['card_reset'] = True
+        elif arg == '--card-reset-current-season':
+            args['card_reset_current_season'] = True
         elif arg.startswith('--schedule-gap='):
             args['schedule_gap'] = int(arg.split('=')[1])
 
     return args
 
 
-async def initialize_application(timing_mode: TimingMode, fresh_start: bool, schedule_gap: int = 60, card_reset: bool = False):
+async def initialize_application(timing_mode: TimingMode, fresh_start: bool, schedule_gap: int = 60, card_reset: bool = False, card_reset_current_season: bool = False):
     """Initialize the Floosball application"""
     logger.info("Initializing Floosball Application...")
 
@@ -170,8 +182,12 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
         # Card reset: wipe card data so templates regenerate with new rules
         if card_reset:
             from database.connection import clear_card_data
-            logger.info("Card reset requested — clearing all card data")
+            logger.info("Card reset requested — clearing all card data (all seasons)")
             clear_card_data()
+        elif card_reset_current_season:
+            from database.connection import clear_card_data
+            logger.info("Scoped card reset requested — clearing current season card data only")
+            clear_card_data(currentSeasonOnly=True)
     
     # Use global service container (has game_state and config_manager registered)
     from service_container import container as service_container
@@ -227,6 +243,7 @@ async def run_server():
     logger.info(f"Timing Mode: {args['timing_mode'].name}")
     logger.info(f"Fresh Start: {args['fresh_start']}")
     logger.info(f"Card Reset: {args['card_reset']}")
+    logger.info(f"Card Reset (current season only): {args['card_reset_current_season']}")
     logger.info("="*60)
 
     # Initialize application
@@ -235,6 +252,7 @@ async def run_server():
         args['fresh_start'],
         args['schedule_gap'],
         card_reset=args['card_reset'],
+        card_reset_current_season=args['card_reset_current_season'],
     )
     
     # Configure uvicorn

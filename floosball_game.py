@@ -4291,6 +4291,17 @@ class Game:
                 return (play.runner, 'td_scored')
             return None
 
+        # Safety — 50/50 between offense (safety_taken) and defender (safety_made).
+        # Checked before sack/run because a sack-safety has both flags set.
+        if getattr(play, 'isSafety', False):
+            sacker = getattr(play, 'sackedBy', None)
+            if sacker is not None and batched_random() < 0.50:
+                return (sacker, 'safety_made')
+            if play.passer is not None:
+                return (play.passer, 'safety_taken')
+            if play.runner is not None:
+                return (play.runner, 'safety_taken')
+
         # Interception — 50/50 between QB (int_thrown) and defender (int_made)
         if getattr(play, 'isInterception', False):
             interceptor = getattr(play, 'interceptedBy', None)
@@ -4392,7 +4403,7 @@ class Game:
             'td_scored', 'int_thrown', 'int_made', 'fumble_lost',
             'fumble_recovered', 'fg_made', 'fg_missed',
             'sack_taken', 'sack_made', 'big_gain', 'clutch_play',
-            'turnover_on_downs',
+            'turnover_on_downs', 'safety_taken', 'safety_made',
         )
         if not alwaysFire:
             # third_down_conversion
@@ -4484,11 +4495,11 @@ class Game:
         """
         if self.personalityManager is None:
             return None
-        # Per-game cap to keep cutaways rare/special
-        if self._sidelineCutawaysFired >= 12:
+        # Per-game cap — keeps an upper bound but allows ~2x the prior rate.
+        if self._sidelineCutawaysFired >= 24:
             return None
-        # Probabilistic gate — fire roughly half the time on eligible broadcasts
-        if batched_random() > 0.50:
+        # Probabilistic gate — fires on most eligible downtime broadcasts.
+        if batched_random() > 0.80:
             return None
 
         # Pool candidate players from both teams. Only include those whose
@@ -5261,8 +5272,12 @@ class Game:
                     # Next score wins outright — scoring prob maps directly to WP
                     offenseWp = max(52, scoringProb)
                 else:
-                    # First/second possession — other team gets a turn, dampen
-                    offenseWp = 50 + (scoringProb - 50) * 0.5
+                    # First/second possession — both teams will get a drive, so
+                    # the current offense's drive position alone shouldn't swing
+                    # WP much. Keep the swing tight (~±8% off 50) so the first
+                    # OT play doesn't create a massive discontinuous jump from
+                    # end-of-regulation 50/50.
+                    offenseWp = 50 + (scoringProb - 50) * 0.15
 
                 if homeHasBall:
                     homeWinProb = offenseWp
