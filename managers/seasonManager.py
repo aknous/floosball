@@ -1005,18 +1005,15 @@ class SeasonManager:
         if not in_playoffs:
             self._checkWeekEndSecrets(self.currentSeason.seasonNumber, week)
 
-        # Run weekly personality drift check across all active players
+        # Recompute mood (1-5) for all active players based on confidence/determination.
+        # Personalities are static (assigned at creation); only mood updates over time.
         try:
             personalityManager = self.serviceContainer.getService('personality_manager')
             if personalityManager:
-                personalityManager.checkWeeklyDrift(
-                    self.playerManager.activePlayers,
-                    self.currentSeason.seasonNumber,
-                    week,
-                    dbSession=self.playerManager.db_session,
-                )
+                for player in self.playerManager.activePlayers:
+                    personalityManager.updateMood(player)
         except Exception as e:
-            logger.error(f"Personality drift check failed: {e}")
+            logger.error(f"Mood update failed: {e}")
 
         # Unlock equipped cards now that week is over
         try:

@@ -109,22 +109,6 @@ class FloosballApplication:
         self.playerManager.generatePlayers(config, force_fresh=force_fresh)
         self.playerManager.sortPlayersByPosition()
 
-        # Assign personality (archetype / demeanor / quirk) to the full player pool.
-        # Runs after generation so Unique/Common caps are applied league-wide in a
-        # single pass. Existing players with archetype already set are left alone
-        # unless they came from a pre-personality schema (nullable archetype).
-        logger.info("Assigning personality traits...")
-        allPlayers = (
-            self.playerManager.activePlayers
-            + self.playerManager.freeAgents
-            + self.playerManager.rookieDraftList
-        )
-        summary = self.personalityManager.assignToPlayerPool(allPlayers)
-        logger.info(
-            f"Personality assigned: {summary['quirked']}/{summary['total']} quirked, "
-            f"{len(summary['activeUniques'])} active uniques"
-        )
-        
         # Generate teams (but don't initialize yet - need players first)
         logger.info("Setting up teams...")
         self.teamManager.generateTeams(config)
@@ -155,7 +139,51 @@ class FloosballApplication:
         #   - Subsequent boots (prospects exist → no-op per team)
         logger.info("Seeding initial prospect pipelines (idempotent)...")
         self.playerManager.seedInitialProspects(prospectsPerTeam=3)
-        
+
+        # Assign personality + quirk + mood to the full player pool.
+        # Runs AFTER seedInitialProspects so prospects are included. Idempotent:
+        # players who already have a personality keep theirs. Catches any new
+        # players added by upstream steps (initial draft, prospect seeding,
+        # legacy DB rows with NULL personality).
+        logger.info("Assigning personality traits...")
+        allPlayers = (
+            self.playerManager.activePlayers
+            + self.playerManager.freeAgents
+            + self.playerManager.rookieDraftList
+        )
+        unassignedBefore = sum(
+            1 for p in allPlayers
+            if getattr(getattr(p, 'attributes', None), 'personality', None) is None
+        )
+        summary = self.personalityManager.assignToPlayerPool(allPlayers)
+
+        from managers.personalityReactionEngine import (
+            BASE_VIBES, COMMON_VARIANTS, RARE_VARIANTS,
+        )
+        personalityCounts = summary.get('personalities', {})
+        baseCount = sum(c for p, c in personalityCounts.items() if p in BASE_VIBES)
+        commonVariantCount = sum(c for p, c in personalityCounts.items() if p in COMMON_VARIANTS)
+        rareVariantCount = sum(c for p, c in personalityCounts.items() if p in RARE_VARIANTS)
+        rareVariantsActive = sorted(p for p in personalityCounts if p in RARE_VARIANTS)
+        quirkedCount = sum(summary.get('quirks', {}).values())
+
+        logger.info(
+            f"Personality assigned: {summary['total']} players "
+            f"({baseCount} base, {commonVariantCount} common variants, "
+            f"{rareVariantCount} rare variants), {quirkedCount} quirked"
+        )
+        if unassignedBefore > 0:
+            logger.info(f"  → {unassignedBefore} backfilled this run")
+        if rareVariantsActive:
+            logger.info(f"  → rare variants in league: {', '.join(rareVariantsActive)}")
+
+        if unassignedBefore > 0:
+            try:
+                logger.info(f"Persisting {unassignedBefore} backfilled personalities to DB...")
+                self.playerManager.savePlayerData()
+            except Exception as e:
+                logger.error(f"Failed to persist backfilled personalities: {e}")
+
         # Now initialize teams after players are assigned
         logger.info("Initializing teams with rosters...")
         self.teamManager.initializeTeams()

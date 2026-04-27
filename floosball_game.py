@@ -704,7 +704,7 @@ class Game:
         self.winningTeam: FloosTeam.Team = None
         self.losingTeam: FloosTeam.Team = None
         self.play: Play = None
-        self._personalityEventsFired = 0  # Per-game counter for frequency gating
+        self._sidelineCutawaysFired = 0   # Per-game counter for sideline-cutaway gating
         self.gameDict = {}
         self.gameFeed = []
         self.highlights = []
@@ -3828,6 +3828,11 @@ class Game:
                 break
         # Player postgame processing: sync stats, update confidence/determination, compute derived stats
         self._processPlayerPostgame()
+
+        # Postgame personality reactions — winners go positive, losers go negative.
+        # Inserted into gameFeed as cutaway-style entries so they render alongside
+        # plays in the modal feed and survive page reloads via /api/games/{id}.
+        self._buildPostgameReactions()
         
         # Broadcast final game state with the "Final" event message so the play feed updates live.
         # Include the last play alongside the event so the frontend always gets the final play
@@ -4255,8 +4260,8 @@ class Game:
         """
         Inspect self.play and decide which (player, eventKey) should fire a
         Layer 1 personality line, if any. Returns (player, eventKey) or None.
-        Only offensive-attributable events are resolved (we don't track
-        individual defenders on defensive plays).
+        Defensive players are eligible on turnovers/sacks: half the time the
+        reaction comes from the defender who made the play.
         """
         play = self.play
         if play is None:
@@ -4280,20 +4285,31 @@ class Game:
                 return (play.runner, 'td_scored')
             return None
 
-        # Interception thrown (offensive attribution — QB)
-        if getattr(play, 'isInterception', False) and play.passer is not None:
-            return (play.passer, 'int_thrown')
+        # Interception — 50/50 between QB (int_thrown) and defender (int_made)
+        if getattr(play, 'isInterception', False):
+            interceptor = getattr(play, 'interceptedBy', None)
+            if interceptor is not None and batched_random() < 0.50:
+                return (interceptor, 'int_made')
+            if play.passer is not None:
+                return (play.passer, 'int_thrown')
 
-        # Fumble lost — runner or passer
+        # Fumble lost — 50/50 between fumbler (offense) and forcer (defense, if any)
         if getattr(play, 'isFumbleLost', False):
+            forcer = getattr(play, 'forcedFumbleBy', None)
+            if forcer is not None and batched_random() < 0.50:
+                return (forcer, 'fumble_recovered')
             if play.runner is not None:
                 return (play.runner, 'fumble_lost')
             if play.passer is not None:
                 return (play.passer, 'fumble_lost')
 
-        # Sack taken — passer
-        if getattr(play, 'isSack', False) and play.passer is not None:
-            return (play.passer, 'sack_taken')
+        # Sack — 50/50 between QB (sack_taken) and defender (sack_made)
+        if getattr(play, 'isSack', False):
+            sacker = getattr(play, 'sackedBy', None)
+            if sacker is not None and batched_random() < 0.50:
+                return (sacker, 'sack_made')
+            if play.passer is not None:
+                return (play.passer, 'sack_taken')
 
         # Field goal made/missed
         if getattr(play, 'fgDistance', 0) and play.kicker is not None:
@@ -4301,10 +4317,39 @@ class Game:
                 return (play.kicker, 'fg_made')
             return (play.kicker, 'fg_missed')
 
-        # Third down conversion
+        # Turnover on downs — failed 4th-down attempt (run/pass, not FG)
+        playResult = getattr(play, 'playResult', None)
+        if getattr(playResult, 'value', None) == 'Turnover On Downs':
+            if getattr(play, 'isPassCompletion', False) or play.passer is not None:
+                featured = _pickPassSkill()
+                if featured is not None:
+                    return (featured, 'turnover_on_downs')
+            if play.runner is not None:
+                return (play.runner, 'turnover_on_downs')
+
         preDown = getattr(play, 'down', 0)
         yardage = getattr(play, 'yardage', 0)
         yardsTo1st = getattr(play, 'yardsTo1st', None)
+
+        # Clutch play — high-leverage moment that flipped the win prob
+        if getattr(play, 'isClutchPlay', False) and not getattr(play, 'isTd', False):
+            if getattr(play, 'isPassCompletion', False):
+                featured = _pickPassSkill()
+                if featured is not None:
+                    return (featured, 'clutch_play')
+            if play.runner is not None:
+                return (play.runner, 'clutch_play')
+
+        # Big play — flagged by WPA swing (>=10), not just raw yardage
+        if getattr(play, 'isBigPlay', False) and not getattr(play, 'isTd', False):
+            if getattr(play, 'isPassCompletion', False):
+                featured = _pickPassSkill()
+                if featured is not None:
+                    return (featured, 'big_gain')
+            if play.runner is not None:
+                return (play.runner, 'big_gain')
+
+        # Third down conversion (lower priority than big/clutch above)
         if preDown == 3 and isinstance(yardsTo1st, (int, float)) and yardage >= yardsTo1st and yardage > 0:
             if getattr(play, 'isPassCompletion', False):
                 featured = _pickPassSkill()
@@ -4313,27 +4358,15 @@ class Game:
             if play.runner is not None:
                 return (play.runner, 'third_down_conversion')
 
-        # Big gain (25+ yards, non-scoring, non-turnover)
-        if yardage >= 25 and not getattr(play, 'isTd', False):
-            if getattr(play, 'isPassCompletion', False):
-                featured = _pickPassSkill()
-                if featured is not None:
-                    return (featured, 'big_gain')
-            if play.runner is not None:
-                return (play.runner, 'big_gain')
-
         return None
 
     def _buildPersonalityEvent(self):
         """
-        Layer 1 firing hook. Called from broadcastGameState. Returns a dict
-        shaped for the WebSocket game feed, or None if no line fires this play.
-        Frequency-gated to target ~3-5 events per game.
+        Personality reaction firing hook. Called from broadcastGameState.
+        Returns a dict shaped for the WebSocket game feed, or None if no
+        line fires this play. Frequency-gated to target ~3-5 per game.
         """
         if self.personalityManager is None:
-            return None
-        # Hard cap on events per game to avoid runaway spam in extreme games
-        if self._personalityEventsFired >= 30:
             return None
 
         trigger = self._resolvePersonalityTrigger()
@@ -4344,33 +4377,23 @@ class Game:
             return None
 
         attrs = getattr(player, 'attributes', None)
-        archetype = getattr(attrs, 'archetype', None) if attrs else None
-        demeanor = getattr(attrs, 'demeanor', None) if attrs else None
-        if not archetype:
+        if not attrs or not getattr(attrs, 'personality', None):
             return None
 
         # Gating — scoring plays, turnovers, sacks, and big plays ALWAYS fire.
         # Third-down conversions are frequent so they fire at a lower rate.
         alwaysFire = eventKey in (
-            'td_scored', 'int_thrown', 'fumble_lost',
-            'fg_made', 'fg_missed', 'sack_taken', 'big_gain',
+            'td_scored', 'int_thrown', 'int_made', 'fumble_lost',
+            'fumble_recovered', 'fg_made', 'fg_missed',
+            'sack_taken', 'sack_made', 'big_gain', 'clutch_play',
+            'turnover_on_downs',
         )
         if not alwaysFire:
             # third_down_conversion
             if batched_random() > 0.20:
                 return None
 
-        playerKey = f"{self.id}-{getattr(player, 'id', id(player))}"
-        entry = self.personalityManager.selectArchetypeLine(
-            archetype=archetype,
-            demeanor=demeanor,
-            event=eventKey,
-            playerKey=playerKey,
-        )
-        if entry is None:
-            return None
-
-        # Opponent team for token context
+        # Token context for {name}, {receiver}, {passer} etc. placeholders
         try:
             playerTeam = getattr(player, 'team', None)
             oppTeam = self.awayTeam if playerTeam is self.homeTeam else self.homeTeam
@@ -4383,30 +4406,117 @@ class Game:
             'oppTeam': oppAbbr,
             'yards': getattr(self.play, 'yardage', 0),
             'quarter': self.currentQuarter,
-            'teammate': 'a teammate',
-            'defender': 'the defender',
             'score': f"{self.homeScore}-{self.awayScore}",
         }
-        text = self.personalityManager.renderTemplate(entry, tokens)
-        if not text:
+
+        eventDict = self.personalityManager.composeReaction(player, eventKey, tokens)
+        if eventDict is None:
             return None
 
-        self._personalityEventsFired += 1
-        eventDict = {
-            'layer': 'archetype',
-            'text': text,
-            'playerId': getattr(player, 'id', None),
-            'playerName': getattr(player, 'name', ''),
-            'archetype': archetype,
-            'demeanor': demeanor,
-            'quirk': getattr(attrs, 'quirk', None) if attrs else None,
-            'event': eventKey,
-        }
         # Attach to the play object so it persists in gameFeed references too
         try:
             self.play.personalityEvent = eventDict
         except Exception:
             pass
+        return eventDict
+
+    def _buildPostgameReactions(self):
+        """Pick a few players from each team and fire polarity-flavored
+        postgame reactions: positive for the winner, negative for the loser.
+        Inserted into gameFeed as cutaway-style entries (top of feed, since
+        they happen at the very end of the game)."""
+        if self.personalityManager is None:
+            return
+        if self.winningTeam is None or self.losingTeam is None:
+            return  # tie or unresolved — skip
+
+        from random import sample as _sample
+
+        def _eligible(team):
+            roster = getattr(team, 'rosterDict', None) or {}
+            out = []
+            for p in roster.values():
+                if not p:
+                    continue
+                attrs = getattr(p, 'attributes', None)
+                if attrs and getattr(attrs, 'personality', None):
+                    out.append(p)
+            return out
+
+        for team, polarity in ((self.winningTeam, 'positive'), (self.losingTeam, 'negative')):
+            pool = _eligible(team)
+            if not pool:
+                continue
+            picks = _sample(pool, min(3, len(pool)))
+            for player in picks:
+                eventDict = self.personalityManager.composePolarityReaction(
+                    player, polarity,
+                    ctx={'score': f"{self.homeScore}-{self.awayScore}"},
+                )
+                if eventDict is None:
+                    continue
+                eventDict['trigger'] = 'postgame'
+                # Use cutaway-shaped feed entry so the existing renderer picks
+                # it up and shows the team avatar + accent border.
+                self.gameFeed.insert(0, {'play': {
+                    'isSidelineCutaway': True,
+                    'sidelineCutaway': eventDict,
+                    'playNumber': self.totalPlays + 0.9,
+                    'quarter': self.currentQuarter,
+                    'timeRemaining': '0:00',
+                }})
+
+    def _buildSidelineCutaway(self, triggerType: str = 'downtime'):
+        """
+        Build a sideline-cutaway event for downtime moments — possession
+        changes, quarter starts, halftime, two-minute warning. Picks a random
+        eligible player from either team and asks the personality manager
+        to render their sideline pool (variant) or generic pool (base).
+
+        Returns a dict shaped like personalityEvent (with text/playerId/etc.)
+        or None if no cutaway fires this broadcast.
+        """
+        if self.personalityManager is None:
+            return None
+        # Per-game cap to keep cutaways rare/special
+        if self._sidelineCutawaysFired >= 12:
+            return None
+        # Probabilistic gate — fire roughly half the time on eligible broadcasts
+        if batched_random() > 0.50:
+            return None
+
+        # Pool candidate players from both teams. Only include those whose
+        # personality has a `sideline:` pool — base vibes that fall back to
+        # play-reaction generics are excluded so cutaways stay distinctive.
+        engine = getattr(self.personalityManager, 'engine', None)
+        candidates = []
+        for team in (self.homeTeam, self.awayTeam):
+            roster = getattr(team, 'rosterDict', None) or {}
+            for p in roster.values():
+                if not p:
+                    continue
+                attrs = getattr(p, 'attributes', None)
+                personality = attrs and getattr(attrs, 'personality', None)
+                if not personality:
+                    continue
+                if engine and not engine.hasSidelinePool(personality):
+                    continue
+                candidates.append(p)
+        if not candidates:
+            return None
+
+        from random import choice as _choice
+        player = _choice(candidates)
+        ctx = {
+            'name': getattr(player, 'name', ''),
+            'quarter': self.currentQuarter,
+            'score': f"{self.homeScore}-{self.awayScore}",
+        }
+        eventDict = self.personalityManager.pickSidelineCutaway(player, ctx)
+        if eventDict is None:
+            return None
+        eventDict['trigger'] = triggerType
+        self._sidelineCutawaysFired += 1
         return eventDict
 
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
@@ -4615,7 +4725,28 @@ class Game:
                              else None) if hasattr(self, 'momentum') else None,
             'gameStats': self._buildGameStatsSnapshot()
         }
-        
+
+        # Sideline cutaway — fire on downtime moments (possession changes,
+        # halftime, quarter starts, two-minute warning). Probabilistic so
+        # not every transition produces one.
+        isDowntime = isPossessionChange or eventMessage is not None or getattr(self, 'isHalftime', False)
+        if isDowntime and not isFinalBroadcast:
+            triggerType = 'possession_change' if isPossessionChange else (
+                'event' if eventMessage else 'halftime'
+            )
+            cutaway = self._buildSidelineCutaway(triggerType)
+            if cutaway:
+                gameStateData['sidelineCutaway'] = cutaway
+                # Also persist to gameFeed so /api/games/{id} returns cutaways
+                # for users who weren't watching live (game modal open).
+                self.gameFeed.insert(0, {'play': {
+                    'isSidelineCutaway': True,
+                    'sidelineCutaway': cutaway,
+                    'playNumber': self.totalPlays + 0.5,
+                    'quarter': self.currentQuarter,
+                    'timeRemaining': self.formatTime(self.gameClockSeconds),
+                }})
+
         # Create and broadcast event
         event = GameEvent.gameState(gameId=self.id, gameState=gameStateData)
         broadcaster.broadcast_sync(self.id, event)

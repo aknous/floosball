@@ -404,21 +404,8 @@ class Player:
         self.stat_tracker.add_fantasy_points(-3)
 
 
-# Demeanor spectrum — 6 emotional states from Composed to Volatile.
-# Drift moves at most one step per shift along this order.
-DEMEANOR_TYPES = [
-    'stoic', 'cool', 'intense', 'melancholy', 'fiery', 'dramatic',
-]
-
-MOOD_LABELS = {
-    'stoic':      {5: 'Immovable',    4: 'Composed',    3: 'Measured',     2: 'Distant',      1: 'Hollow'},
-    'cool':       {5: 'Untouchable',  4: 'Smooth',      3: 'Unbothered',   2: 'Detached',     1: 'Cracked'},
-    'intense':    {5: 'Locked In',    4: 'Focused',     3: 'Calculating',  2: 'Overthinking', 1: 'Unraveling'},
-    'melancholy': {5: 'Wistful',      4: 'Reflective',  3: 'Pensive',      2: 'Heavy',        1: 'Haunted'},
-    'fiery':      {5: 'Blazing',      4: 'Fired Up',    3: 'Simmering',    2: 'Fuming',       1: 'Volcanic'},
-    'dramatic':   {5: 'Euphoric',     4: 'Inspired',    3: 'Brooding',     2: 'Anguished',    1: 'Shattered'},
-}
-
+# Mood tier names (1-5). Used by getMood() to return a coarse-grained tier
+# label alongside the personality-flavored mood name.
 MOOD_TIER_NAMES = {5: 'electric', 4: 'confident', 3: 'steady', 2: 'frustrated', 1: 'miserable'}
 
 
@@ -482,29 +469,40 @@ class PlayerAttributes:
         # Fatigue (0.0 = fresh, accumulates over the season)
         self.fatigue = 0.0
 
-        # Personality (three-layer: archetype permanent, demeanor drifts, quirk optional)
-        self.archetype = None
-        self.demeanor = None
+        # Personality (single layer + mood, plus optional quirk)
+        # Personality is one of 28 personalities (9 base vibes + 19 variants).
+        # Quirk is optional sideline-flavor trait. Mood is 1-5, recomputed
+        # from confidence + determination, surfaced on UI as a personality-
+        # flavored label via PersonalityReactionEngine.getMoodName().
+        self.personality = None
         self.quirk = None
+        self.mood = 3  # neutral start
 
-        
-    def getMood(self):
-        """Compute mood label and tier from confidence + determination modifiers."""
+    def computeMoodTier(self):
+        """Compute the 1-5 mood tier from confidence + determination."""
         combined = self.confidenceModifier + self.determinationModifier
         if combined >= 6:
-            tier = 5
+            return 5
         elif combined >= 3:
-            tier = 4
+            return 4
         elif combined >= -2:
-            tier = 3
+            return 3
         elif combined >= -5:
-            tier = 2
+            return 2
         else:
-            tier = 1
-        demeanor = self.demeanor or 'stoic'
-        label = MOOD_LABELS.get(demeanor, MOOD_LABELS['stoic']).get(tier, 'Measured')
+            return 1
+
+    def getMood(self):
+        """Return (mood label, tier name) using personality + computed tier."""
+        tier = self.computeMoodTier()
         tierName = MOOD_TIER_NAMES[tier]
-        return label, tierName
+        # Mood label is personality-flavored; engine looks it up.
+        try:
+            from managers.personalityReactionEngine import getEngine
+            label = getEngine().getMoodName(self.personality, tier) if self.personality else None
+        except Exception:
+            label = None
+        return (label or 'Measured', tierName)
 
     def calculateIntangibles(self):
         self.playMakingAbility = round((self.instinct+self.creativity)/2)
@@ -662,9 +660,9 @@ class PlayerAttributes:
                 generated = int(np.clip(np.random.normal(physicalSeed, stdDev), 60, 100))
                 setattr(self, attr, generated)
 
-        # Personality (archetype/demeanor/quirk) is assigned by personalityManager
-        # via playerManager after this method returns, because quirk assignment
-        # requires league-wide context (Unique tier caps, Common tier soft caps).
+        # Personality (personality + quirk + mood) is assigned by personalityManager
+        # via playerManager after this method returns, since OVR-tiered variant
+        # gating depends on the final overall rating.
 
     # ── Defensive attribute calculations ─────────────────────────────────
     # Derived from the same base athletics using different formulas per

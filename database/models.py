@@ -233,9 +233,12 @@ class PlayerAttributes(Base):
     fatigue: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Personality
-    demeanor: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    archetype: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # personality: name of the assigned vibe or variant (1 of 28)
+    # quirk: optional sideline-flavor trait (1 of ~20, may be null)
+    # mood: 1-5, recomputed periodically from confidence + determination
+    personality: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     quirk: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    mood: Mapped[int] = mapped_column(Integer, default=3)
 
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="attributes")
@@ -245,14 +248,19 @@ class PlayerAttributes(Base):
 
 
 class PlayerPersonalityHistory(Base):
-    """Tracks demeanor drift and quirk swaps over a player's career."""
+    """Tracks personality changes and quirk reassignments over a career.
+
+    With the new system, personality is assigned at creation and rarely
+    changes. This table is retained for any future awakening events or
+    admin overrides.
+    """
     __tablename__ = "player_personality_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     week: Mapped[int] = mapped_column(Integer, nullable=False)
-    change_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'demeanor' | 'quirk'
+    change_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'personality' | 'quirk' | 'mood'
     from_value: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     to_value: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

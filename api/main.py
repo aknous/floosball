@@ -813,33 +813,6 @@ async def get_player(player_id: int, response: Response):
         # Build detailed response
         player_dict = PlayerResponseBuilder.buildPlayerWithAttributes(player)
 
-        # Demeanor drift direction — look at the most recent demeanor change
-        # in PlayerPersonalityHistory and compare spectrum index.
-        try:
-            from database.connection import get_session as _getSession
-            from database.models import PlayerPersonalityHistory as _PPH
-            from managers.personalityData import DEMEANOR_INDEX as _DI
-            _sess = _getSession()
-            lastDemeanorChange = _sess.query(_PPH).filter(
-                _PPH.player_id == player.id,
-                _PPH.change_type == 'demeanor'
-            ).order_by(_PPH.created_at.desc()).first()
-            _sess.close()
-            if lastDemeanorChange and lastDemeanorChange.from_value and lastDemeanorChange.to_value:
-                fromIdx = _DI.get(lastDemeanorChange.from_value)
-                toIdx = _DI.get(lastDemeanorChange.to_value)
-                if fromIdx is not None and toIdx is not None and 'attributes' in player_dict:
-                    direction = 'volatile' if toIdx > fromIdx else ('composed' if toIdx < fromIdx else None)
-                    if direction:
-                        player_dict['attributes']['demeanorDrift'] = {
-                            'direction': direction,
-                            'from': lastDemeanorChange.from_value,
-                            'season': lastDemeanorChange.season,
-                            'week': lastDemeanorChange.week,
-                        }
-        except Exception:
-            pass
-
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
@@ -2543,6 +2516,52 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
                     gamesWithPlays += 1
                     totalPlays += feedLen
 
+    # Personality distribution across all players
+    personality = {
+        'total': 0,
+        'baseVibes': 0,
+        'commonVariants': 0,
+        'rareVariants': 0,
+        'unassigned': 0,
+        'quirked': 0,
+        'rareVariantList': [],
+        'personalityCounts': {},
+        'quirkCounts': {},
+    }
+    try:
+        from collections import Counter
+        from managers.personalityReactionEngine import (
+            BASE_VIBES, COMMON_VARIANTS, RARE_VARIANTS,
+        )
+        allPlayers = (
+            pm.activePlayers + pm.freeAgents + pm.rookieDraftList
+        ) if pm else []
+        pCounts: Counter = Counter()
+        qCounts: Counter = Counter()
+        for p in allPlayers:
+            attrs = getattr(p, 'attributes', None)
+            if attrs is None:
+                continue
+            pers = getattr(attrs, 'personality', None)
+            quirk = getattr(attrs, 'quirk', None)
+            if pers:
+                pCounts[pers] += 1
+            else:
+                personality['unassigned'] += 1
+            if quirk:
+                qCounts[quirk] += 1
+        personality['total'] = len(allPlayers)
+        personality['baseVibes'] = sum(c for p, c in pCounts.items() if p in BASE_VIBES)
+        personality['commonVariants'] = sum(c for p, c in pCounts.items() if p in COMMON_VARIANTS)
+        personality['rareVariants'] = sum(c for p, c in pCounts.items() if p in RARE_VARIANTS)
+        personality['rareVariantList'] = sorted(p for p in pCounts if p in RARE_VARIANTS)
+        personality['quirked'] = sum(qCounts.values())
+        personality['personalityCounts'] = dict(pCounts.most_common())
+        personality['quirkCounts'] = dict(qCounts.most_common())
+    except Exception as _e:
+        # Don't fail the dashboard if personality system isn't loaded
+        pass
+
     return build_success_response({
         "deploySafety": {
             "safe": deploySafe,
@@ -2590,6 +2609,7 @@ async def admin_monitor(_auth: None = Depends(_checkAdminAuth)):
             "pid": os.getpid(),
         },
         "websockets": ws_manager.get_stats(),
+        "personality": personality,
     })
 
 

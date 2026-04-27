@@ -330,6 +330,30 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # New personality system: replace archetype/demeanor with personality + mood.
+        # Old columns (archetype, demeanor) stay nullable in the schema for back-compat
+        # on existing DBs but are unused; the new fields are personality + mood.
+        for col, colDef in [('personality', 'VARCHAR(30)'), ('mood', 'INTEGER DEFAULT 3')]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Rename 'easy' personality to 'chill'. Idempotent — UPDATE no-ops once done.
+        try:
+            result = conn.execute(text(
+                "UPDATE player_attributes SET personality = 'chill' WHERE personality = 'easy'"
+            ))
+            if result.rowcount > 0:
+                conn.commit()
+                logger.info(f"  Migration: renamed 'easy' → 'chill' on {result.rowcount} player_attributes rows")
+            else:
+                conn.rollback()
+        except Exception:
+            conn.rollback()
+
         # Coach scouting attribute (feature/prospects-pipeline Phase 7)
         try:
             conn.execute(text("ALTER TABLE coaches ADD COLUMN scouting INTEGER DEFAULT 80"))
