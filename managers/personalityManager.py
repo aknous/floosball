@@ -60,16 +60,20 @@ class PersonalityManager:
     # ------------------------------------------------------------------
 
     def assignPersonality(self, player, forceRefresh: bool = False) -> None:
-        """Assign personality + quirk + mood to a player.
+        """Assign personality + quirk + mood + flavor to a player.
 
         Idempotent unless forceRefresh=True. OVR-tiered: low-rated players
         get base vibes only, high-rated players have a chance at variants.
+        Flavor (hometown, favorite, motto) is rolled once and never changes.
         """
         attrs = getattr(player, 'attributes', None)
         if attrs is None:
             return
 
         if not forceRefresh and getattr(attrs, 'personality', None):
+            # Personality already set — still backfill flavor if missing,
+            # since flavor was added later and existing players need it.
+            self.assignFlavor(player, forceRefresh=False)
             return
 
         ovr = getattr(attrs, 'overallRating', 0) or 70
@@ -77,6 +81,24 @@ class PersonalityManager:
         attrs.quirk = self.engine.assignQuirk(attrs.personality)
         if getattr(attrs, 'mood', None) is None:
             attrs.mood = 3
+        # Roll flavor alongside personality. Idempotent — only fills if NULL.
+        self.assignFlavor(player, forceRefresh=forceRefresh)
+
+    def assignFlavor(self, player, forceRefresh: bool = False) -> None:
+        """Assign hometown, favorite, and motto. Idempotent: skips if any
+        flavor field is already set unless forceRefresh=True."""
+        attrs = getattr(player, 'attributes', None)
+        if attrs is None:
+            return
+        # Skip if any flavor field is already set (treat as a unit)
+        if not forceRefresh and getattr(attrs, 'hometown', None):
+            return
+        personality = getattr(attrs, 'personality', None) or 'chill'
+        flavor = self.engine.assignFlavor(personality)
+        attrs.hometown = flavor.get('hometown')
+        attrs.favorite_category = flavor.get('favorite_category')
+        attrs.favorite_item = flavor.get('favorite_item')
+        attrs.motto = flavor.get('motto')
 
     def assignToPlayerPool(self, players: List, forceRefresh: bool = False) -> dict:
         """Bulk assignment with summary stats."""

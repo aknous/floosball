@@ -478,6 +478,13 @@ class PlayerAttributes:
         self.quirk = None
         self.mood = 3  # neutral start
 
+        # Flavor (hometown, favorite, motto) — rolled once at creation,
+        # never changes. Pure character flavor for the player detail page.
+        self.hometown = None
+        self.favorite_category = None
+        self.favorite_item = None
+        self.motto = None
+
     def computeMoodTier(self):
         """Compute the 1-5 mood tier from confidence + determination."""
         combined = self.confidenceModifier + self.determinationModifier

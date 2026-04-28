@@ -261,6 +261,12 @@ class PlayerResponseBuilder(ResponseBuilder):
         if quirk:
             attr_dict['quirk'] = quirk
 
+        # Flavor fields — pure character flavor for the player detail page
+        for flavorKey in ('hometown', 'favorite_category', 'favorite_item', 'motto'):
+            v = getattr(player.attributes, flavorKey, None)
+            if v:
+                attr_dict[flavorKey] = v
+
         player_dict['attributes'] = attr_dict
         return player_dict
     
