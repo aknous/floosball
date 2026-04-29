@@ -11,6 +11,9 @@ The engine owns the templates and core logic; this manager handles the
 integration with player attributes and game-event keys.
 """
 
+from collections import deque
+from datetime import datetime
+from threading import Lock
 from typing import List, Optional, Dict, Any
 
 from logger_config import get_logger
@@ -18,6 +21,12 @@ from logger_config import get_logger
 from managers.personalityReactionEngine import PersonalityReactionEngine
 
 logger = get_logger("floosball.personalityManager")
+
+# How many recent personality quotes to retain per player. These power the
+# Recent Quotes box on the player profile page and the latest-quote line
+# on the player hover tooltip. In-memory only; lost on server restart,
+# which is fine since these are flavor, not authoritative data.
+MAX_QUOTES_PER_PLAYER = 10
 
 
 # Maps in-game event keys to (yaml_event_key, polarity). The engine pulls
@@ -53,18 +62,63 @@ class PersonalityManager:
     def __init__(self, serviceContainer):
         self.serviceContainer = serviceContainer
         self.engine = PersonalityReactionEngine()
+        # Recent quotes per player. Map: playerId -> deque of {text, event,
+        # personality, timestamp}. Most recent is at the LEFT (index 0).
+        self._recentQuotes: Dict[int, deque] = {}
+        self._quotesLock = Lock()
         logger.info("PersonalityManager initialized")
+
+    # ------------------------------------------------------------------
+    # Recent quotes (in-memory ring buffer per player)
+    # ------------------------------------------------------------------
+
+    def _recordQuote(self, player, payload: Optional[Dict]) -> None:
+        """Record a composed quote for the given player. Stores up to
+        MAX_QUOTES_PER_PLAYER, most recent first."""
+        if not payload or not payload.get('text'):
+            return
+        playerId = getattr(player, 'id', None)
+        if playerId is None:
+            return
+        entry = {
+            'text': payload.get('text'),
+            'event': payload.get('event'),
+            'personality': payload.get('personality'),
+            'timestamp': datetime.now().isoformat(),
+        }
+        with self._quotesLock:
+            buf = self._recentQuotes.get(playerId)
+            if buf is None:
+                buf = deque(maxlen=MAX_QUOTES_PER_PLAYER)
+                self._recentQuotes[playerId] = buf
+            buf.appendleft(entry)
+
+    def getRecentQuotes(self, playerId: int, limit: int = MAX_QUOTES_PER_PLAYER) -> List[Dict]:
+        """Return the player's most recent quotes (newest first)."""
+        with self._quotesLock:
+            buf = self._recentQuotes.get(playerId)
+            if not buf:
+                return []
+            return list(buf)[:limit]
+
+    def getLatestQuote(self, playerId: int) -> Optional[Dict]:
+        """Return the player's most recent single quote, or None."""
+        quotes = self.getRecentQuotes(playerId, limit=1)
+        return quotes[0] if quotes else None
 
     # ------------------------------------------------------------------
     # Assignment
     # ------------------------------------------------------------------
 
     def assignPersonality(self, player, forceRefresh: bool = False) -> None:
-        """Assign personality + quirk + mood + flavor to a player.
+        """Assign personality + mood + flavor to a player.
 
         Idempotent unless forceRefresh=True. OVR-tiered: low-rated players
         get base vibes only, high-rated players have a chance at variants.
         Flavor (hometown, favorite, motto) is rolled once and never changes.
+
+        Note: quirks were rolled into personality sideline pools and the
+        separate quirk system is no longer assigned. attrs.quirk stays None.
         """
         attrs = getattr(player, 'attributes', None)
         if attrs is None:
@@ -78,7 +132,7 @@ class PersonalityManager:
 
         ovr = getattr(attrs, 'overallRating', 0) or 70
         attrs.personality = self.engine.assignPersonality(ovr)
-        attrs.quirk = self.engine.assignQuirk(attrs.personality)
+        attrs.quirk = None
         if getattr(attrs, 'mood', None) is None:
             attrs.mood = 3
         # Roll flavor alongside personality. Idempotent — only fills if NULL.
@@ -180,7 +234,7 @@ class PersonalityManager:
         if not text:
             return None
 
-        return {
+        payload = {
             'text': text,
             'playerId': getattr(player, 'id', None),
             'playerName': getattr(player, 'name', ''),
@@ -188,6 +242,8 @@ class PersonalityManager:
             'quirk': quirk,
             'event': gameEventKey,
         }
+        self._recordQuote(player, payload)
+        return payload
 
     def composePolarityReaction(self, player, polarity: str,
                                 ctx: Optional[Dict] = None) -> Optional[Dict]:
@@ -210,7 +266,7 @@ class PersonalityManager:
             return None
 
         team = getattr(player, 'team', None)
-        return {
+        payload = {
             'text': text,
             'playerId': getattr(player, 'id', None),
             'playerName': getattr(player, 'name', ''),
@@ -220,6 +276,44 @@ class PersonalityManager:
             'quirk': quirk,
             'event': 'postgame',
         }
+        self._recordQuote(player, payload)
+        return payload
+
+    def composeOffDay(self, player, ctx: Optional[Dict] = None) -> Optional[Dict]:
+        """Pick a between-games off-day line for a player. These populate the
+        highlights feed when no games are live, surfacing personality outside
+        the game modal. Returns the same shape as personality reactions."""
+        attrs = getattr(player, 'attributes', None)
+        if attrs is None:
+            return None
+        personality = getattr(attrs, 'personality', None)
+        if not personality:
+            return None
+        quirk = getattr(attrs, 'quirk', None)
+
+        renderCtx = dict(ctx or {})
+        renderCtx.setdefault('name', getattr(player, 'name', ''))
+
+        text = self.engine.pickOffDayLine(personality, renderCtx)
+        if not text:
+            return None
+
+        team = getattr(player, 'team', None)
+        teamId = getattr(team, 'id', None) if team else None
+        teamAbbr = getattr(team, 'abbr', None) if team else None
+
+        payload = {
+            'text': text,
+            'playerId': getattr(player, 'id', None),
+            'playerName': getattr(player, 'name', ''),
+            'teamId': teamId,
+            'teamAbbr': teamAbbr,
+            'personality': personality,
+            'quirk': quirk,
+            'event': 'off_day',
+        }
+        self._recordQuote(player, payload)
+        return payload
 
     def pickSidelineCutaway(self, player, ctx: Optional[Dict] = None) -> Optional[Dict]:
         """Pick a downtime sideline cutaway for a player."""
@@ -242,7 +336,7 @@ class PersonalityManager:
         teamId = getattr(team, 'id', None) if team else None
         teamAbbr = getattr(team, 'abbr', None) if team else None
 
-        return {
+        payload = {
             'text': text,
             'playerId': getattr(player, 'id', None),
             'playerName': getattr(player, 'name', ''),
@@ -252,6 +346,8 @@ class PersonalityManager:
             'quirk': quirk,
             'event': 'sideline',
         }
+        self._recordQuote(player, payload)
+        return payload
 
     # ------------------------------------------------------------------
     # Hot-reload (development helper)

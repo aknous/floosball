@@ -150,57 +150,32 @@ snacker:
     - "{name} is plating a small dish and handing it to a teammate."
   incompatible: []
 
-ear_buds:
-  # Always listening to something. Often oblivious to what's happening.
+transistor:
+  # Always has a transistor radio in a pocket, earpiece in. Tuned to the
+  # broadcast, or to music, or to whoever's calling the game across town.
+  # Often oblivious to what's happening on the bench around them.
   positive:
-    - "{name} pops a headphone back in on the way to the bench."
+    - "{name} tucks the earpiece back in on the way to the bench."
     - "{name} air-conducts whatever they are listening to as they jog back."
     - "{name} bobs their head to a rhythm only they can hear."
-    - "{name} doesn't notice a teammate trying to high-five them, lost in their music."
-    - "{name} celebrates a beat after everyone else, in time with their music."
-    - "{name} dances briefly to whatever is playing in their headphones."
+    - "{name} doesn't notice a teammate trying to high-five them, lost in the broadcast."
+    - "{name} celebrates a beat after everyone else, in time with the music in their ear."
+    - "{name} dances briefly to whatever's playing through the transistor."
   negative:
-    - "{name} turns up the volume on their headphones."
-    - "{name} doesn't hear the coach through their headphones. The coach calls them again."
-    - "{name} doesn't notice the play has ended. They are still in their music."
+    - "{name} turns the volume knob up on the transistor."
+    - "{name} doesn't hear the coach through the earpiece. The coach calls them again."
+    - "{name} doesn't notice the play has ended. They are still listening to the broadcast."
     - "{name} mouths along to a lyric only they can hear."
-    - "{name} jogs the wrong direction briefly, headphones in, course-corrects without looking up."
-    - "{name} pulls a headphone out only to hear what just happened, then puts it back."
+    - "{name} jogs the wrong direction briefly, earpiece in, course-corrects without looking up."
+    - "{name} pulls the earpiece out only to hear what just happened, then puts it right back."
   sideline:
-    - "{name} is air-conducting a song nobody else can hear."
+    - "{name} is air-conducting a tune nobody else can hear."
     - "{name} is bobbing their head to a rhythm only they know."
-    - "{name} is on the bench, eyes closed, lost in the music."
+    - "{name} is on the bench, eyes closed, lost in the broadcast."
     - "{name} is mouthing along to a song, eyes closed."
-    - "{name} isn't hearing a coach calling their name. Headphones in."
-    - "{name} is dancing briefly on the bench to whatever's playing in their ears, oblivious."
+    - "{name} isn't hearing a coach calling their name. Earpiece in."
+    - "{name} is dancing briefly on the bench to whatever's coming through the transistor, oblivious."
   incompatible: [paranoid]
-
-phone_addict:
-  # Always checking social media. Has to see the reactions. Plays mobile
-  # games between snaps.
-  positive:
-    - "{name} pulls out their phone the moment they hit the sideline."
-    - "{name} checks how their last play is performing online."
-    - "{name} laughs at a meme about themselves on their phone."
-    - "{name} screenshots a reaction post about themselves."
-    - "{name} jogs back already typing on their phone."
-    - "{name} grins at a funny comment someone posted."
-  negative:
-    - "{name} pulls out their phone, stares at it, sighs."
-    - "{name} reads a hot take about themselves on the way to the bench, sighs."
-    - "{name} screenshots a post, types a long response, deletes it."
-    - "{name} mutes all notification on their phone."
-    - "{name} scrolls past their own name in a feed without reacting."
-    - "{name} jogs back already typing furiously into their phone."
-  sideline:
-    - "{name} is thumbing through one of three phones on the bench, one for each social network."
-    - "{name} is laughing at something on their feed."
-    - "{name} is screenshotting a post about themselves."
-    - "{name} is on the bench playing a level of a brick breaker."
-    - "{name} is replying to a notification, then another, then another."
-    - "{name} is intensely reading comments about their performance."
-    - "{name} is typing furiously into their phone."
-  incompatible: [trash_talker]
 
 hydrated:
   # Obsessed with water. Evangelical — makes sure everyone else drinks too.
@@ -275,29 +250,6 @@ reader:
     - "{name} is reading slower, as if comforted by the prose."
   incompatible: [lively, fiery, goofy, trash_talker, prankster]
 
-gamer:
-  # Has a handheld gaming console. Plays between plays on the sideline.
-  positive:
-    - "{name} pulls a handheld gaming console from somewhere in their pads."
-    - "{name} mimes pressing buttons on an invisible controller."
-    - "{name} grins at their game console. Just hit a high score."
-    - "{name} does a tiny boss-defeated celebration."
-    - "{name} hands their console to a teammate, who plays it for them on the field."
-    - "{name} jogs back already pulling out their handheld."
-  negative:
-    - "{name} pretends to rage-quit, then sits back down."
-    - "{name} dies in their game on the way back."
-    - "{name} pulls their handheld out, sees Game Over, sighs."
-    - "{name} mutters about hitboxes on the way to the bench."
-  sideline:
-    - "{name} is on the sideline at a full gaming setup that wasn't there before."
-    - "{name} is staring at a Game Over screen on the bench."
-    - "{name} is muttering something about boss patterns at a confused teammate."
-    - "{name} is pausing their game with a sigh, stuffing the console back in their pads."
-    - "{name} is grinning at their handheld. Just hit a milestone."
-    - "{name} is miming buttons on an imaginary controller while watching the field."
-  incompatible: [stoic, melancholy, cool, fiery, cursed]
-
 whistler:
   # Always whistling. Often loud, often annoying. Will not stop when asked.
   positive:
@@ -370,31 +322,6 @@ singer:
     - "{name} is performing what appears to be a full operatic aria, loud enough to be heard several rows up."
     - "{name} stops singing for three seconds, then starts again in a different key."
   incompatible: [paranoid]
-
-streamer:
-  # Has a selfie stick somehow on the field. Streams every play. Talks
-  # to chat constantly.
-  positive:
-    - "{name} produces a selfie stick from somewhere in their pads, goes live mid-celebration."
-    - "{name} films their own celebration on the live stream, narrating to chat the whole way."
-    - "{name} winks at the live camera. 'And THAT is how you do it, chat.'"
-    - "{name} says 'don't forget to like and subscribe' on the way back, loud enough for the crowd to hear."
-    - "{name} thrusts the camera in a teammate's face. 'Say hi to chat!'"
-    - "{name} reads a chat message aloud, laughs into the live stream."
-  negative:
-    - "{name} groans into the live stream. 'Chat, are you SEEING this?'"
-    - "{name} gives the camera an exaggerated 'can you believe this' look. The viewer count climbs."
-    - "{name} says 'donations would help right now, chat' on the way to the bench. The crowd hears."
-    - "{name} reads a hostile chat message aloud, sighs into the stream, jogs off."
-    - "{name} narrates the play loudly to their live audience as they jog off."
-  sideline:
-    - "{name} is live-streaming the timeout from the bench, narrating to chat the whole time."
-    - "{name} is reading a live chat message, laughing, typing a reply."
-    - "{name} is saying 'don't forget to like and subscribe' to the camera, for the third time this drive."
-    - "{name} is panning the stream slowly across the bench for chat."
-    - "{name} is muting the stream briefly. 'Sorry chat, water.' Unmuting."
-    - "{name} is reading a subscribers comment aloud and thanking them by name."
-  incompatible: [stoic, melancholy, paranoid, cursed]
 
 trinket:
   # Fidgets obsessively with a small object — Rubik's cube, fidget spinner,

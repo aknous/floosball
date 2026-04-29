@@ -361,6 +361,24 @@ class PersonalityReactionEngine:
         p = self.personalities.get(personality)
         return bool(p and p.get('sideline'))
 
+    def hasOffDayPool(self, personality: str) -> bool:
+        p = self.personalities.get(personality)
+        return bool(p and p.get('off_day'))
+
+    def pickOffDayLine(self, personality: str,
+                        ctx: Optional[Dict] = None) -> Optional[str]:
+        """Pick a between-games off-day line. These populate the highlights
+        feed when no games are live, surfacing personality outside the game
+        modal. Strictly uses the personality's `off_day:` pool."""
+        p = self.personalities.get(personality)
+        if not p:
+            return None
+        deckKey = f'off_day:{personality}'
+        line = self._drawFromDeck(deckKey, p.get('off_day', []))
+        if not line:
+            return None
+        return self._format(line, ctx)
+
     def pickSidelineCutaway(self, personality: str, quirk: Optional[str],
                              ctx: Optional[Dict] = None,
                              quirkAppendChance: float = DEFAULT_SIDELINE_QUIRK_CHANCE) -> Optional[str]:

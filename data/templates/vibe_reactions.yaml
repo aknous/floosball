@@ -36,6 +36,11 @@
 #                   (defaults to true for everything else)
 
 melancholy:
+  # Sad-sack lovable downer. Resigned, mild, often invisible to
+  # themselves. Inspired by Eeyore / Charlie Brown — never self-pitying
+  # enough to be unlikable, just genuinely a little sad about everything.
+  # Distinct from poetic (literary imagery, romantic-period heart) and
+  # cursed (fatalism with cosmic blame).
   mood_names: [Hollow, Heavy, Wistful, Tender, Luminous]
 
   positive_generic:
@@ -61,6 +66,10 @@ melancholy:
     - "That helps. That helps a little."
     - "I'll take this with me."
     - "I needed that more than I knew."
+    - "Thanks for noticing me."
+    - "{name} smiles briefly, then looks at the ground."
+    - "Probably won't last. But it was nice."
+    - "{name} jogs to the bench and sits as far from anyone as possible."
 
   negative_generic:
     - "{name} stares into the middle distance."
@@ -81,6 +90,10 @@ melancholy:
     - "That one stays with me."
     - "I knew it could go that way."
     - "I'll be alright. I always am."
+    - "I had a feeling about that one."
+    - "Good grief."
+    - "{name} shrugs gently, walks to the sideline."
+    - "I always thought it would happen this way, and now it has."
 
   scored_td:
     - "{name} hands the ball to a child in the front row, then walks back."
@@ -131,14 +144,34 @@ melancholy:
     - "{name} has a towel pulled over their head briefly."
     - "{name} has their arms folded, watching the field with quiet weight."
     - "{name} is taking a slow, deep breath, exhaling slowly."
+    - "{name} is sketching the same field, in the corner of the same notebook, for the third time this season."
+    - "{name} dozed off on the bench, woke up halfway through a sigh, and went back to sleep."
+
+  off_day:
+    - "{name} took the long way home from practice yesterday."
+    - "I spent the morning re-reading old letters that I probably should have left in the box."
+    - "{name} took a long walk by the river and didn't talk to anyone the whole way."
+    - "I keep thinking about my old high school coach, and I wonder where she ended up."
+    - "{name} sat on a porch all afternoon and watched the day pass without saying much."
+    - "I keep finding stadium dust in my pockets, and I'm not entirely sure how it gets there."
+    - "I cleaned the entire kitchen this morning, and somehow that just made me feel worse about everything."
+    - "Quiet day yesterday. I wasn't expecting to feel as much as I did, but I did."
+    - "Could be worse, I suppose. I'm not entirely sure how, but I'm sure it could."
+    - "I went out for a walk and ended up right back where I started, which felt about right."
+    - "I sat at the diner alone for an hour, and the waitress eventually came over to ask if I was okay."
 
 stoic:
-  # Stoic is description-only — the personality voice is silence and
-  # observable action. Quotes belong to other personalities.
+  # Quiet, thoughtful, stern, principled. Speaks rarely; when they do,
+  # every word counts. Action over speech — fixes things without asking,
+  # never raises voice, holds posture. Inspired by Ron Swanson at the
+  # energy level but NOT a recreation: no woodworking / breakfast-meat /
+  # axe clichés. Their principles are deeply specific in delightfully
+  # weird ways (six identical shirts, no mirror, leaving a single belt
+  # to a man named Earl).
   mood_names: [Bothered, Strained, Composed, Sharp, Locked In]
 
   positive_generic:
-    - "{name} hands the ball to the ref and walks away."
+    - "{name} hands the ball to the referee with a single respectful nod and walks away without a word."
     - "{name} gives a solid nod."
     - "{name} taps a teammate on the helmet, but no words are spoken."
     - "{name} walks back to the line without looking up."
@@ -157,11 +190,9 @@ stoic:
     - "{name} permits a single corner of their mouth to rise into a smile."
     - "{name} taps the goal line once with a single finger."
     - "{name} writes the word 'good' on their wristband, then replaces the wristband."
-    - "{name}'s heart rate, per the trainers, has not exceeded 62."
     - "{name} hands the ball to the ref like they're returning a library book."
     - "{name} jogs to the bench and sits in silence."
     - "{name} taps a teammate's shoulder pad on the way past."
-    - "{name} folds their arms on the bench and just watches."
     - "{name} retightens their wristband and returns to the huddle."
     - "{name} cracks their knuckles one at a time."
     - "..."
@@ -171,6 +202,12 @@ stoic:
     - "{name} catches the eye of a coach. A nod is exchanged. That is the entire interaction."
     - "{name} closes their eyes for half a second, opens them, walks on."
     - "{name} pats the ball with one finger before handing it off."
+    - "{name} cracks the smallest possible smile, and you will not be seeing another one this week."
+    - "{name} taps the lineman in front of them on the back of the helmet, and that is the entire parade."
+    - "{name} taps their wristband once, then jogs back to the line without saying anything."
+    - "{name} permits themselves a single nod. Anything more would have been a celebration."
+    - "I do not celebrate, because the work is not yet finished."
+    - "Good. We will do it again, and we will do it better."
 
   negative_generic:
     - "{name} jogs back to the huddle without expression."
@@ -202,6 +239,9 @@ stoic:
     - "{name} cracks their neck once on each side. Then they're done."
     - "{name} accepts a water bottle, drinks once, hands it back without a word."
     - "{name} folds the playbook closed, sets it down, stares straight ahead."
+    - "{name} takes a single deep breath through the nose and carries on with the day."
+    - "{name} closes their eyes for a long moment, opens them, and the slate is clean."
+    - "{name} returns to the bench and reorganizes the contents of a small toolbox they keep there."
 
   scored_td:
     - "{name} just hands the ball to the ref."
@@ -276,8 +316,37 @@ stoic:
     - "{name} is whittling something with a small knife. Are they allowed to have that?"
     - "{name} is reviewing footage on a tablet with their jaw set."
     - "{name} is sitting upright on the bench. Their posture has not changed in eight minutes."
+    - "{name} is on the bench with a paperback, a finger holding their place."
+    - "{name} is dealing themselves a hand of solitaire on the bench. Nobody asks to join."
+    - "{name} is eating a single piece of jerky slowly and with great seriousness."
+
+  off_day:
+    - "I have been to two weddings in my life, and both of them were my own."
+    - "{name} runs the same loop every morning, alone. They do not check the time. They already know it."
+    - "I have not eaten in front of another person in eleven years, and I do not intend to start now."
+    - "{name} fixed the storm door at the team facility. Nobody asked them to."
+    - "I do not own a mirror. I have a rough idea of what I look like, and that has been enough."
+    - "{name} owns exactly one chair. They have offered to build a second one, but only on request."
+    - "{name} sat on a porch in a town with no cell service and read the same chapter of a book three times in a row."
+    - "I have a will. It leaves a single belt to a man named Earl. Earl knows what it means."
+    - "If you can't say it in a sentence, you do not yet know what you mean."
+    - "I do not give compliments, but I have been known to bake a small loaf of bread for people I respect."
+    - "My closet contains six identical shirts and one unmarked envelope."
+    - "I keep my word. That is the entire system."
+    - "{name} arrived at practice forty minutes early and sat in their car, watching the lot fill up, until it was time to walk in."
+    - "I have one friend, and that is the correct number of friends to have."
+    - "I taught myself to play football by watching no one and figuring it out alone in a field."
+    - "A handshake should last exactly two seconds, and I have timed many of them."
+    - "I have a single dog, and we have an understanding."
+    - "I keep a notebook of opinions I do not share aloud, and it is several volumes long."
+    - "I do not celebrate my birthday, as it is the same date every year and not particularly noteworthy."
 
 chill:
+  # Laid back to a fault. Unhurried in everything, takes the long
+  # view, the weather is more interesting than the score. Inspired by
+  # The Dude (Big Lebowski) energy but NOT a recreation — no White
+  # Russians, no rugs, no "abides," no stoner-isms. Just genuinely
+  # unbothered.
   mood_names: [Stuck, "Off", Mellow, Cruising, Dialed]
 
   positive_generic:
@@ -324,6 +393,12 @@ chill:
     - "{name} squints at the scoreboard, looks satisfied."
     - "Felt right."
     - "I'm not gonna lie, I'm pretty hungry."
+    - "Yeah, well. That worked out."
+    - "Hey, that one was just kinda sitting there for me."
+    - "Some plays you have to make, and some plays just kinda find you."
+    - "{name} grins, nods, jogs back to the huddle slowly."
+    - "Good for us. Good for everybody, really."
+    - "I'm just gonna take this one in for a second."
 
   negative_generic:
     - "It happens, man."
@@ -371,12 +446,18 @@ chill:
     - "Look, it's a long game. I'm pacing myself."
     - "{name} watches the replay once and decides not to watch it again."
     - "Whatever, man."
+    - "Bummer."
+    - "{name} shrugs, spits, heads back to the huddle."
+    - "Look, that one was on the play, not on me."
+    - "Yeah, well. There's a new game next week."
 
   scored_td:
     - "{name} flips the ball to a fan, smiles, jogs off."
     - "{name} jogs to the endzone like they're being polite."
     - "Yeah, just kinda fell into it."
     - "{name} flips the ball over their shoulder to a teammate, jogs off whistling."
+    - "I just kind of ended up here. The end zone's a nice spot."
+    - "Hey, look at that. Touchdown."
 
   threw_td:
     - "They were open and I just put it there."
@@ -384,6 +465,7 @@ chill:
     - "{name} fist-bumps their coordinator on the way to the bench."
     - "Just put it where they could get it."
     - "{name} fist-bumps the line on the way off, all smiles."
+    - "Hey, look at that. Touchdown."
 
   made_fg:
     - "{name} watches it land, then heads for the bench and a water bottle."
@@ -452,27 +534,54 @@ chill:
     - "If we go to overtime I'm going to need a snack."
     - "{name} is studying the sky like it's a movie."
     - "I'd love a sandwich right about now. Just any sandwich."
+    - "{name} has an earpiece in and is bobbing their head to whatever's coming through the radio."
+    - "{name} is unwrapping a granola bar they pulled from somewhere in their pads."
+    - "{name} is asleep on the bench. They will wake up when called."
+    - "It's a real nice day for football. Or for anything, honestly."
+    - "{name} is on the bench, staring out at the field with a small, peaceful smile."
+
+  off_day:
+    - "Took the boat out, didn't catch a thing, called it one of the best days of the year."
+    - "{name} bowled three games last night at a place that still keeps score on paper, and apparently that's the only way to do it."
+    - "I poured myself something tall and watched the sun come up over the bay, and the rest of the day pretty much took care of itself."
+    - "I've been wearing the same robe since Tuesday, and the robe and I have come to an understanding."
+    - "{name} drove around with the windows down for three hours and no destination in mind, and that was the entire point."
+    - "{name} watched two hours of a fishing channel without getting up off the couch."
+    - "Honestly, I'm thinking about not coming in tomorrow either."
+    - "Honestly, some weeks the football's gonna bounce your way, and some weeks it isn't, and I've made my peace with that."
+    - "I grilled something the other night and could not tell you what it was, but it was good."
+    - "I kept telling myself I'd get up at nine, then ten, and eventually I just made breakfast in bed."
+    - "I haven't watched any film all week, and I'd rather you didn't ask me about it."
+    - "Just got back from the diner. The pancakes were good enough that I'm going again tomorrow."
 
 cool:
+  # Bond-parody / Most-Interesting-Man-in-the-World gentleman-spy energy.
+  # Theatrical-luxe self-presentation with the polish constantly cracking
+  # to reveal something off underneath: martini orders, code names,
+  # countries they cannot name, cars they do not legally own, the time
+  # they were declared legally dead. Inspired by Archer (which is itself
+  # a Bond parody) plus the Most Interesting Man's third-person
+  # achievements ("{name} once...") plus a Clooney/Draper baseline
+  # smoothness. The point is parody — every Bond move is undercut by
+  # something absurd, off-handed, or revealing. Lines should be GENDER
+  # NEUTRAL (no fellas, no wife/husband, no boys/guys). Distinct from
+  # vain (mirror-focused appearance maintenance) and trash_talker
+  # (focused on opponents) — cool is focused on cool itself, with
+  # constant flashes of "wait, what did they just say?"
   mood_names: [Frayed, Slipping, Smooth, Slick, Untouchable]
 
   positive_generic:
     - "Was that ever in doubt?"
     - "Watch the tape. I'll wait."
-    - "{name} smooths their jersey."
-    - "You're welcome, by the way."
     - "{name} points at the camera, gives a small wink."
-    - "Did you see that? Of course you did."
     - "{name} blows a kiss to no one in particular."
     - "That's a {name} special."
-    - "I make this look easy."
     - "{name} adjusts their sleeves with deliberate slowness."
-    - "I do this for a living."
     - "{name} tilts their head back like they're posing for a poster."
     - "I get paid for this. They get to watch."
     - "{name} makes meaningful eye contact with the camera operator."
     - "The legend grows."
-    - "{name} kisses their own bicep."
+    - "{name}'s tailor has stopped taking new clients on principle."
     - "{name} adjusts their hair even though they are wearing a helmet."
     - "{name} takes off their helmet and puts on sunglasses."
     - "{name} walks in slow motion as the wind blows their hair."
@@ -490,22 +599,35 @@ cool:
     - "{name} adjusts their cuffs. They are not wearing cuffs."
     - "{name} tips an imaginary fedora."
     - "{name} walks to the sideline like they're on a runway and absolutely owning it."
+    - "{name} puts a finger and thumb together briefly, and that was the signal."
+    - "Beautiful."
+    - "{name} holds the look for the camera, even though the camera isn't on them at the moment."
+    - "That is the first one. There will be others before the night is done."
+    - "{name} winks at the camera. The wink is not for the audience. It is for somebody specific."
+    - "{name} flips the ball over a shoulder without watching where it lands."
+    - "On schedule. Naturally."
+    - "{name} touches the brim of an invisible hat, jogs back to the line."
+    - "{name} blows the dust off an imaginary lapel."
+    - "Effortless, really. Most things are, when one knows what one is doing."
+    - "Yes. This is the version of myself my biographer prefers, and my biographer is very expensive."
+    - "{name} hands the ball off with a small, dismissive flick, as though it has served its purpose and is no longer required"
+    - "I would say I'm surprised, but I have not been surprised since the incident at the embassy, and we do not discuss the embassy."
+    - "Outstanding. I shall be billing the team for the privilege of having watched me."
+    - "This is what happens when one is raised on opera and tactical knife work."
+    - "I have done more impressive things before breakfast, but I shall accept this for the room's morale."
 
   negative_generic:
     - "I'll allow it this time."
     - "{name} adjusts their sleeves and gets back to it."
     - "Even legends have bad days."
-    - "Won't happen again."
     - "{name} cracks their neck, gives the camera a half-smile."
-    - "Temporary setback."
     - "{name} smooths their hair, walks back like nothing happened."
     - "Anyone else and that would've been worse."
     - "{name} flicks an imaginary speck off their shoulder."
-    - "I'll get them next series."
     - "I let them have that one. They needed it."
     - "{name} stretches once, slowly, deliberately."
     - "Curious."
-    - "Even Sinatra missed a note occassionally."
+    - "Even the great crooners missed a note now and then."
     - "{name} looks at their hands like they betrayed their good name."
     - "{name} brushes dirt off their shoulder like the play was a minor inconvenience."
     - "{name} fixes their hair on the way to the sideline. Priorities."
@@ -514,12 +636,23 @@ cool:
     - "{name} flicks an invisible speck of dust off their jersey. The jersey is filthy, but they don't care."
     - "{name} leans back on the bench like they own the stadium and are simply allowing others to use it."
     - "{name} stretches casually, as if the play happened to someone else. Someone less cool."
-    - "{name} walks to the sideline like they're on a runway and absolutely owning it."
     - "{name} examines a fingernail with surgical interest."
     - "{name} smooths an eyebrow back into place."
     - "{name} adjusts the watch they're not wearing."
     - "{name} gives a sarcastic golf clap for themselves."
     - "{name} sips from a water bottle like it's a glass of bordeaux."
+    - "{name} adjusts their watchband, says nothing."
+    - "We can fix this. Let's not panic about it."
+    - "{name} takes one slow breath, and the expression doesn't change at all."
+    - "Onward. The room is still mine."
+    - "{name} is now thinking about a specific incident from a decade ago. They will not be elaborating on the incident."
+    - "I have survived an avalanche. This is, comparatively, fine."
+    - "I have seen worse. I'd tell you, but the records on that have been sealed."
+    - "{name} touches the brim of a hat they are not currently wearing. Reflex."
+    - "Disgraceful. Not me, of course. The situation."
+    - "I shall require a moment, a cool cloth, and a glass of something older than most of you."
+    - "Someone is going to be spoken to about this, and that someone is everyone."
+    - "I allowed that to happen. Do not embarrass yourselves by suggesting otherwise."
 
   scored_td:
     - "{name} points at the camera, then walks calmly to the sideline."
@@ -527,12 +660,19 @@ cool:
     - "{name} signs an imaginary autograph for the camera."
     - "{name} drops the ball at the goal line, doesn't break stride."
     - "Everyone take notes."
+    - "{name} hands the ball to a stranger in the front row, who will keep it on a mantelpiece for thirty years."
+    - "Was there ever any doubt? Don't answer that. There wasn't."
+    - "Six points. A modest tribute, like a small gratuity on a yacht."
+    - "Touchdown. Add it to the portfolio."
 
   threw_td:
     - "{name} watches the receiver score, then turns to the camera and shrugs."
     - "I told them where to be and they were there."
     - "{name} kisses their throwing hand."
     - "{name} jogs to the sideline like they're walking off a movie set."
+    - "The ball went exactly where I intended, as things tend to when I intend them."
+    - "I learned to throw from a former colleague in a region I cannot name, for reasons that are still classified."
+    - "I do not throw passes. I issue invitations, and the ball arrives."
 
   made_fg:
     - "{name} doesn't even watch the ball split the uprights."
@@ -540,6 +680,7 @@ cool:
     - "Three. Easy."
     - "Was there ever any doubt?"
     - "{name} replaces their helmet very carefully, walks off."
+    - "I have done this from worse angles, in worse weather, under code names I have since forgotten."
 
   missed_fg:
     - "{name} stares the kick wide and walks off without reacting."
@@ -547,6 +688,7 @@ cool:
     - "{name} adjusts their sleeves and stares at the goalposts."
     - "Even legends choose to miss occasionally."
     - "{name} flicks an imaginary speck off their kicking shoe."
+    - "{name} attributes that one to atmospheric conditions similar to that of a country they are no longer permitted to visit."
 
   got_sacked:
     - "{name} rises slowly, smoothing the jersey before heading off."
@@ -554,12 +696,14 @@ cool:
     - "{name} pats the defender on the helmet like they're rewarding them."
     - "They barely got me down."
     - "{name} sits up unhurried, brushes off their sleeves."
+    - "{name} rises slowly, mentally noting the defender's name for a future engagement."
 
   made_sack:
     - "{name} stands over the QB, then strolls back to their side."
     - "{name} bows slightly to {passer} they just buried."
     - "Predictable."
     - "{name} steps over the QB, jogs back fixing their hair."
+    - "{name} hands {passer} a small business card on the way up. The card has no name on it."
 
   threw_int:
     - "{name} watches the defender pull away, smooths their hair, drifts off."
@@ -567,6 +711,7 @@ cool:
     - "{name} adjusts their glove, doesn't change pace."
     - "I let them have it. How generous of me."
     - "{name} watches the runback with an amused half-smile."
+    - "{name} watches the runback, mutters something about the air at this altitude, lets it go."
 
   made_int:
     - "{name} catches it cleanly, juggles it for show, hands it to the ref."
@@ -581,16 +726,19 @@ cool:
     - "They got lucky I guess."
     - "{name} adjusts their wristband, doesn't react."
     - "Just an anomaly."
+    - "{name} watches the recovery, glances at the broadcast camera, makes a small note in an imaginary book."
 
   recovered_fumble:
     - "{name} casually picks up the ball, holds it up, walks to the bench."
     - "{name} kisses the ball, signs it, hands it back."
     - "Hey I got this for you."
     - "Naturally."
+    - "I have reclaimed what was always going to be mine."
+    - "The ball was on the ground, and I was the only individual on this field qualified to retrieve it."
 
   sideline:
     - "{name} is reclining on the bench like it's a poolside cabana."
-    - "I don't usually work weekends, but I've made an exception."
+    - "I don't usually work this hard, but I'm feeling generous."
     - "{name} is signing imaginary autographs for the children of imaginary fans."
     - "Tell the photographers to stay on me. I'm working over here."
     - "{name} is checking a reflection in their visor. They look great."
@@ -599,13 +747,57 @@ cool:
     - "Has anyone seen my agent? I have notes."
     - "{name} is striking a small pose for no apparent camera."
     - "Do not mistake my calm for disinterest. I am, however, disinterested."
+    - "{name} is recounting an anecdote about a yacht to a teammate who did not ask about any yacht."
+    - "Has anyone seen my flask? Never mind. Found it."
+    - "I have, on three separate occasions, been declared legally dead. I'd prefer you didn't check the records on that."
+    - "Did I mention I won a yacht in a single hand of cards last year?"
+    - "I have a code name. It is not the one you have heard, and it is not the one you think it is."
+    - "{name} is standing at the edge of the sideline with one hand in a pocket that does not exist on a football uniform."
+    - "Remind me to tell you, later, about the time I outran a customs official at a foreign port. It is relevant. Loosely."
+    - "The locker room is unacceptable. I have made arrangements for it to be acceptable by next week."
+    - "The cheerleaders are wonderful. I have already arranged to send flowers."
+    - "I have been to better stadiums, but this one has a certain charm I am beginning to appreciate."
+    - "{name} is waving at the crowd in a slow, generous arc, as if greeting old friends."
+    - "{name} is greeting a referee by name and asks about their family with apparent sincerity."
+
+  off_day:
+    - "{name} did a photoshoot for a magazine the photographer described as 'aspirational.'"
+    - "Got fitted for a new suit yesterday. Three-piece, pinstripes, and you'll be seeing it everywhere."
+    - "I went to an event last night and kept the sunglasses on the whole time. The photos came out great."
+    - "I told them not to release the cover until I'd seen it, and they listened."
+    - "{name} appeared briefly on a daytime television show, and the host was visibly nervous."
+    - "Brand meeting went well. They want me on a billboard, and I asked them which highway."
+    - "I poured an old fashioned into a heavy glass and sat on the back porch for a while, and that was about all I needed."
+    - "Took a meeting at a hotel bar that ran two drinks longer than it strictly needed to."
+    - "I survived a small bear encounter this morning. The bear is fine. I am also fine."
+    - "I keep three identical turtlenecks in my closet and rotate them on a strict schedule. I do not own a fourth, and I never will."
+    - "I have been told I am a difficult dinner guest, and also that I am the only dinner guest worth having. Both are true."
+    - "I was asked to leave a casino table the other day after a long winning streak. The casino sent flowers the next morning."
+    - "{name} writes their own profile in the team yearbook every year, and the team yearbook just prints it as written."
+    - "{name} once spent a year in a country that was not, at the time, on any map."
+    - "{name} has, by some accounts, retired three times. Yet here they are."
+    - "Cocktail napkins have been found, signed by {name}, that {name} does not remember signing."
+    - "{name} once asked the team trainer for a martini, and had to be reminded that the training staff are not bartenders."
+    - "I keep a small villa on a coast you have not heard of, for occasions when I require a coast."
+    - "I do not own a wallet, as my name is sufficient at most establishments worth attending."
+    - "My father was a difficult individual, and I am their greatest disappointment, in the manner of all great people."
+    - "I drink a particular vintage that is no longer produced, due to a small international incident."
+    - "I once sat on the board of a company that I am told was entirely fictional. I made money regardless."
+    - "I have a chef, a driver, a fencing instructor, and a person who simply listens. Each is essential."
+    - "I do not eat off the bone. It is a personal philosophy."
+    - "I do not check my own mail. The mail finds its way."
+    - "I speak six languages, and I am charming in all of them."
+    - "I attended a boarding school whose name I will not share, as it no longer officially exists, but the memories are wonderful."
+    - "I have, on several occasions, been mistaken for royalty. I have not corrected anyone, as it would have spoiled the evening."
 
 lively:
   # Joy, fun, communal hype. Outward energy directed at fans, teammates,
-  # and the crowd. Hype-man / cheerleader. Where fiery is controlled
+  # and the crowd. Hype-man / cheerleader. Inspired by Magic Johnson /
+  # Charles Barkley big-personality energy — host of every dinner,
+  # candid, loud, takes a bet on anything. Where fiery is controlled
   # rage, lively is infectious joy. Both can be loud, but lively's
-  # vocabulary is WOOO / ATTABOY / Y'all / hug / high-five / clap;
-  # fiery's vocabulary is scream / headbutt / pound / TASTE IT.
+  # vocabulary is WOOO / ATTABOY / hug / high-five / clap; fiery's
+  # vocabulary is scream / headbutt / pound / TASTE IT.
   mood_names: [Flat, Buzzing, Hyped, Electric, Unleashed]
 
   positive_generic:
@@ -638,6 +830,10 @@ lively:
     - "{name} jumps up and down clapping like they just won a raffle."
     - "{name} cups a hand to their ear at the crowd, gets a roar back."
     - "{name} runs to the bench arms wide, sweeping everyone into the celebration."
+    - "HEY HEY HEY!"
+    - "{name} dances across the field giving high fives that audibly slap."
+    - "{name} grabs the camera lens and shouts directly into it."
+    - "Y'all I love this game. I love this game so much."
 
   negative_generic:
     - "Aw shoot."
@@ -669,6 +865,10 @@ lively:
     - "{name} runs along the bench slapping pads, getting everyone back on their feet."
     - "{name} laughs, shakes it off with a sharp clap of the hands."
     - "{name} shakes their head, smiles, claps it out."
+    - "That was just terrible. From me, from all of us."
+    - "{name} laughs once, claps their hands, walks back to the huddle."
+    - "Hey, I can't make every play. I make most of them. Just not every one."
+    - "Coach, we're alright. We are alright."
 
   scored_td:
     - "{name} spikes the ball, runs back pointing at the crowd."
@@ -750,13 +950,32 @@ lively:
     - "{name} is teaching a kid in the front row how to clap on beat."
     - "WHO'S READY? WHO'S READY?"
     - "{name} is gathering the line for what appears to be a hug."
+    - "{name} is humming on the bench, then singing softly, then loudly enough to start a chant."
+    - "{name} is passing around a bag of something they've been calling 'the team snack.'"
+
+  off_day:
+    - "{name} threw a dinner that turned into a sing-along that turned into a small parade."
+    - "There is no wrong time to host a party. None. I will fight you on this."
+    - "{name} hosted dinner for the rookies, and there was a full team chant going by the time dessert came out."
+    - "I took some prospects to the zoo and it was easily the best day I've had in months."
+    - "{name} ran a youth football camp this past month and came back exhausted and smiling at the same time."
+    - "We had a team dinner and I gave a toast that ran way too long, and I regret absolutely nothing."
+    - "{name} is at a wedding giving a toast that has now passed the eleven-minute mark."
+    - "I love crowds the way most folks love a quiet room. Absolutely zero apologies for it."
+    - "I'm telling you right now, the way some of these defensive coordinators draw it up is just terrible."
+    - "{name} bought everyone on the offensive line steaks at a place they own a piece of."
+    - "I had four people over for dinner last night, and somehow there were twenty before the night was over."
+    - "I will bet you a hundred dollars on damn near anything. Try me."
 
 fiery:
   # Intensity, controlled rage, animalistic. Self-focused ("I was BUILT
   # for this") or destructive (toward inanimate objects — coolers,
-  # goalposts, helmets). Mean serious energy, not joyful. Distinct from
-  # lively (which is communal joy with the same volume but warmer
-  # vocabulary).
+  # goalposts, helmets). Mean serious energy, not joyful. Inspired by
+  # Tiger Woods / Michael Jordan / Tom Brady obsessive-competitor energy
+  # — gym every morning, hates losing at any game including board games,
+  # takes losses to bed. Will do anything to win. Distinct from lively
+  # (communal joy at the same volume) and trash_talker (rage focused on
+  # opponents instead of self).
   mood_names: [Burning Out, Frustrated, Heated, Charged, Roaring]
 
   positive_generic:
@@ -769,7 +988,7 @@ fiery:
     - "{name} kicks at the turf, then roars."
     - "I LIVE FOR THIS!"
     - "TASTE IT!"
-    - "EAT UP BUD!"
+    - "WRITE THIS ONE DOWN!"
     - "{name} runs at the camera, helmet off, screaming."
     - "I WAS BUILT FOR THIS!"
     - "RING THE BELL!"
@@ -808,12 +1027,18 @@ fiery:
     - "You feel that? That's what we do here."
     - "Don't anyone come near me. I'm cooking."
     - "I'm telling you, this is the easy part."
+    - "{name} screams into the turf, and the turf does not respond."
+    - "That is the standard. You match it or you lose."
+    - "{name} points at the opposing sideline, and names a specific person."
+    - "{name} runs to the bench and immediately demands to know what the next play is."
+    - "Their corner cheats inside. I told you he cheats inside. Are you listening yet?"
+    - "Run that again. Run it the same way. I want to see if they figured it out."
 
   negative_generic:
     - "I CAN'T BELIEVE THIS!"
     - "{name} throws their helmet at the bench."
     - "ARE YOU KIDDING ME?!"
-    - "I'M DONE. I'M FINISHED!"
+    - "RUN IT BACK. I WANT IT AGAIN!"
     - "{name} kicks the gatorade cooler."
     - "WE HAD THAT! WE HAD IT!"
     - "{name} screams into a towel on the bench."
@@ -836,7 +1061,7 @@ fiery:
     - "{name} starts pacing. The pacing has a rhythm. The rhythm is escalating."
     - "{name} screams something at a teammate who had nothing to do with the play. The teammate accepts it."
     - "{name} pulls their helmet halfway off, decides against it, slams it back on."
-    - "{name} stares at the field with the intensity of someone planning a heist."
+    - "{name} stares at the field, brain visibly running through the next nine plays."
     - "{name} chews their mouthguard until it's deformed."
     - "{name} bites down on their towel. The towel fears for its life."
     - "{name} steps on the same yard line ten times. The yard line will remember."
@@ -861,6 +1086,12 @@ fiery:
     - "{name} pounds the goalpost. The goalpost wins this time."
     - "{name} rips the chinstrap clean off their helmet."
     - "{name} is breathing so hard their visor is fogging up from the inside."
+    - "{name} throws a chinstrap, picks it up, and throws it again."
+    - "That is on me. I will fix that. I will fix that today."
+    - "Unacceptable. Genuinely unacceptable."
+    - "I had this drawn up. I drew this up at three in the morning. We had this."
+    - "{name} is reciting back, from memory, every play we have run since the game started."
+    - "Who is going to fix this. Look at me. Who is going to fix this."
 
   scored_td:
     - "{name} spikes the ball at full force, screams into the crowd."
@@ -941,8 +1172,46 @@ fiery:
     - "I should be on every play. EVERY play."
     - "Someone hand me a clipboard. I want to draw something."
     - "We're winning this game, and then we're winning the next one. Write that down."
+    - "{name} is loudly counting reps of an exercise nobody else is doing."
+    - "{name} is using the offensive line as resistance for a stretch."
+    - "{name} is on their seventh water bottle and counting."
+    - "I have already watched their last three games. I will watch them again tonight."
+    - "I am not angry. I am focused. There is a difference. I will explain it to you later."
+    - "Do not speak to me during a possession. We have discussed this. It's been documented."
+    - "I keep a notebook in my locker. Do not look at it. Do not even look at the locker."
+    - "The kicker laughed during warmups. I have made a note of it. I have made several notes."
+    - "There is a referee here who I have history with. They will not look at me. They know what they did."
+    - "{name} walks to the Gatorade table, looks at it, and walks back without taking anything."
+
+  off_day:
+    - "{name} was at the facility at four-thirty this morning, and the night security guard had to be told who they were."
+    - "I lifted twice today and watched film twice on top of that, and I will not be acknowledging the word 'rest' here."
+    - "{name} ran the high school stadium stairs until a janitor came outside to ask if they were okay."
+    - "I haven't taken a real day to myself in eleven years, and I'm not about to ruin a good streak now."
+    - "{name} ran sprints on the beach until the lifeguard came over and asked them to stop."
+    - "Got four hours of sleep, was lifting by six, watching film by nine, and I'm already itching to get back at it."
+    - "{name} sparred with a college wrestler at a local gym, and both of them are limping today."
+    - "There is no offseason. The offseason is for the people who are about to lose to me."
+    - "I'm at the facility right now, it's ten at night, and I'd like to know why nobody else is here."
+    - "{name} was so unhappy with losing a board game last night that they made everyone replay it three more times."
+    - "I beat my own personal best on the heavy bag this morning, came home, and was furious at myself for not doing better."
+    - "{name} spent eight hours watching tape of next week's opponent on a phone in an airport waiting room."
+    - "I do not have hobbies. I have leverage I haven't applied yet."
+    - "{name} forced their family into a tackle drill in the front yard, and the family is currently not speaking to them."
+    - "I have not lost a game of anything since I was a child, and that loss still wakes me up at night."
+    - "I do not play board games anymore. There was an incident. There were several incidents."
+    - "I run six miles every morning, and I do not enjoy it. Enjoyment is not the point of the running."
+    - "I have a notebook for every team I have ever played, and a separate notebook for every individual who has wronged me."
+    - "I beat my parent at a card game when I was seven, and they have never forgiven me, and I have never forgiven them for losing to me."
+    - "I do not play catch with children, because there is no version of catch with children that ends well for me."
+    - "I do not own pets, because a pet is something that does not care whether you win, and I cannot have that energy in my home."
 
 unhinged:
+  # Chaotic-weird with no organized framework. Buys a kayak in the
+  # desert, deep-fries pumpkins, owns a sword they don't remember
+  # acquiring. Cosmic Nic Cage commitment to whatever bit they are
+  # currently inside. Distinct from prankster (planned mischief) and
+  # paranoid (organized fear).
   mood_names: [Scrambled, Glitching, Tuned In, Possessed, Ascended]
 
   positive_generic:
@@ -957,7 +1226,7 @@ unhinged:
     - "I am the algorithm."
     - "{name} kisses the football, then whispers something to it."
     - "the signs were all there. birds. numbers. the wind."
-    - "I'll be on every podcast tonight."
+    - "I'll be on every radio show tonight."
     - "they cannot stop me. they have tried."
     - "the matrix has a glitch and I am the glitch."
     - "I have been preparing my whole life. specifically this."
@@ -975,13 +1244,20 @@ unhinged:
     - "{name} picks up a handful of turf and lets it fall through their fingers like sand."
     - "{name} walks in a perfect circle three times before returning to the sideline."
     - "{name} clutches the football like a newborn child."
-    - "{name} holds the ball aloft like Simba on Pride Rock. A teammate tries to take it. {name} hisses."
     - "{name} stands at midfield, arms spread, rain falling on their face. It is not raining."
     - "{name} mouths a phone number into the camera. Whose number?."
     - "{name} crouches down and presses one ear to the turf, listening for something."
     - "{name} faces a different cardinal direction every five seconds."
     - "{name} salutes the referee, then the chain gang, then a hot dog vendor in the stands."
     - "{name} stares at the football for a long time before handing it over, as if memorizing it."
+    - "{name} screams a single, undefined syllable into the sky."
+    - "I HAVE SEEN THE FOOTBALL. I HAVE TASTED IT."
+    - "{name} attempts to climb the goalpost, and {name} is gently asked to stop."
+    - "{name} pulls a teammate close and whispers something. The teammate now looks haunted."
+    - "I felt the bones in my hands agree, which is rare and worth noting."
+    - "Good. The shape is right. The shape is finally right, after weeks of being slightly the wrong shape."
+    - "A door has opened somewhere, and I am the one who opened it, and we are all on the other side now."
+    - "The numbers are climbing in the way they are supposed to climb, which is not always how they climb."
 
   negative_generic:
     - "{name} stares at the sky for an unsettling amount of time."
@@ -1005,6 +1281,12 @@ unhinged:
     - "{name} writes a single word on their wristband. The word is not, technically, a word."
     - "{name} demands to know who designed the field. Then who designed the designer...?"
     - "{name} traces a number in the dirt with their toe and immediately scuffs it out."
+    - "{name} laughs in a register that is not technically a laugh."
+    - "{name} stares at their own hands for ten seconds, then returns to the huddle."
+    - "I deserved that. I have been preparing for that. I welcome it."
+    - "I would like to file a complaint with the part of the sky that is directly above me, specifically."
+    - "The bad shape is back, and I had hoped we were past the bad shape."
+    - "There is a name for what just happened, and I refuse to say it, because saying it makes it worse."
 
   scored_td:
     - "{name} stares directly into the camera and mouths something concerning."
@@ -1012,6 +1294,11 @@ unhinged:
     - "this was prophesied."
     - "{name} sets the ball down and bows to it."
     - "I have crossed. The veil is thin tonight."
+    - "I went to the place where they keep the points and I took some."
+    - "I would like to dedicate this to the small dog I see sometimes, and to the concept of doors."
+    - "Six. That is a number I am familiar with. We have met before, in less pleasant circumstances."
+    - "The end zone smelled different than I remembered. I will be looking into it."
+    - "I crossed the line at the exact moment the second hand passed the seven, which is what I had agreed to."
 
   threw_td:
     - "{name} points at the receiver, then at the sky, then walks off muttering."
@@ -1019,6 +1306,11 @@ unhinged:
     - "I projected the catch into their hands. mind to mind."
     - "{name} taps their temple, nods at the receiver from 40 yards away."
     - "I planted the catch in their hand. telepathically."
+    - "Six. That is a number I am familiar with. We have met before, in less pleasant circumstances."
+    - "The ball traveled the way I asked it to travel, and I would like to thank it privately later."
+    - "The receiver was where I had left them, which is not always how it works."
+    - "I do not throw the ball so much as suggest a direction to it, and the ball, today, was in a generous mood."
+    - "I aimed at a place that does not technically exist, but the ball understood and went there anyway."
 
   made_fg:
     - "{name} watches it through, then turns and walks off without acknowledging anyone."
@@ -1031,6 +1323,10 @@ unhinged:
     - "{name} stares at the goalposts. The goalposts stare back."
     - "the laces were facing me. an omen."
     - "{name} sniffs the football, frowns deeply."
+    - "The ball did not want to go through, and you cannot force a ball that is not ready."
+    - "I felt the wrong tone. The wrong tone has been showing up more frequently this season."
+    - "There was an absence in the air where the kick was supposed to be, and now we have to live with it."
+    - "The geometry was off by a small amount that nobody else can perceive, but I can."
 
   got_sacked:
     - "{name} lies on the turf laughing for a long time."
@@ -1038,6 +1334,7 @@ unhinged:
     - "the pocket was a trap. a TRAP."
     - "the field shifted beneath me. it shifted."
     - "{name} sits up suddenly, looks around as if missing time."
+    - "I have been hit, and I would like to remain on the ground for a moment, to think about it."
 
   made_sack:
     - "{name} stands over the QB and whispers something to them."
@@ -1050,6 +1347,9 @@ unhinged:
     - "{name} watches the defender run, says 'fascinating' to no one."
     - "{name} mouths something at the football as it flies away."
     - "the ball chose them. for now."
+    - "The wrong person caught it, which is the kind of thing that happens when the day is not aligned correctly."
+    - "The ball went somewhere it was not supposed to go, and the ball will be hearing from me about it."
+    - "Someone moved a player from one place to another while I was mid-throw, which is not allowed in my version of the rules."
 
   made_int:
     - "{name} catches it, looks at the ball like it's communicating with them."
@@ -1076,6 +1376,7 @@ unhinged:
     - "i can hear the goalpost humming. it's humming a familiar song."
     - "{name} is staring at the lights. the lights are staring back."
     - "i think the field is breathing. just a little."
+    - "Do not tell me the score, because I am tracking the game in a different system, which is more accurate."
     - "{name} is mouthing something to a sideline marker. the sideline marker does not respond."
     - "the helmets all have names but i can't say them out loud. don't ask."
     - "{name} is rocking back and forth at the end of the bench, very gently, very fast."
@@ -1083,9 +1384,31 @@ unhinged:
     - "{name} is watching a moth and refuses to break eye contact."
     - "the stadium is a body. i'm an organ. that's how this works."
     - "{name} is laughing very quietly at nothing. it goes on for a while."
+    - "The clock is correct, but the time is wrong, and I am the only one who has noticed."
+    - "I have a small ritual that I perform between plays, and I will not be performing it where you can see."
+    - "There is a smell to this stadium that is not present at other stadiums, and I find it reassuring."
+
+  off_day:
+    - "{name} adopted a parrot last month, and the parrot now knows the entire play book."
+    - "I spent the day building a treehouse in my own backyard, and I do not have any children."
+    - "{name} attempted to deep-fry a pumpkin yesterday, and the pumpkin won the encounter outright."
+    - "I have been studying the bees in my yard. The bees, ladies and gentlemen, are conducting an investigation of their own."
+    - "{name} bought a fossilized ostrich egg from a man on the side of a highway."
+    - "I am currently in possession of a sword, and I do not remember how I came to acquire it."
+    - "{name} held an open call for an unwritten film they intend to direct, and forty-three people showed up for it."
+    - "I do not eat food that is round, and the reasons are my own and they are sufficient."
+    - "I have a friend who I have never met, and we have been corresponding for many years through means I will not describe."
+    - "I keep a calendar that does not match the regular calendar, and I have my own holidays, which I observe quietly."
+    - "I have a recurring dream in which I am the field, and the field is also me, and we are watching each other."
+    - "I do not believe in the number nine, but I will use it when required, under protest."
 
 
 wholesome:
+  # Genuine kindness as a discipline. Bakes for the trainers, calls old
+  # coaches, drives rookies to the airport, hugs everybody. Inspired by
+  # Ted Lasso / Mr. Rogers. Distinct from knight (formal honor code,
+  # not warmth) and lively (communal joy with volume) — wholesome is
+  # quiet, sincere warmth.
   mood_names: [Heavy-Hearted, Subdued, Caring, Beaming, Radiant]
 
   positive_generic:
@@ -1111,6 +1434,10 @@ wholesome:
     - "{name} blows a kiss to the cheerleaders. They blow one back."
     - "{name} mouths 'thank you' to everyone on the field."
     - "{name} hands the ball to a kid in a wheelchair near the tunnel."
+    - "{name} hugs three teammates in a row and doesn't appear to be planning on stopping."
+    - "That's everyone, that's not just me out there."
+    - "Y'all look incredible right now."
+    - "{name} runs to the offensive line and claps each one of their helmets in sequence."
 
   negative_generic:
     - "We'll get them next time, together."
@@ -1136,6 +1463,10 @@ wholesome:
     - "{name} hands a teammate a fresh water before sitting down themselves."
     - "{name} squeezes a teammate's shoulder, says something quiet, walks off."
     - "{name} jogs back the long way to clap for the offensive line."
+    - "That's on me, fellas. I'll get you the next one."
+    - "We're alright. We're a team. We figure it out."
+    - "{name} goes around picking teammates up by hand."
+    - "Hey. Heads up. The best is still ahead of us."
 
   scored_td:
     - "I just want to thank the line. They made this happen."
@@ -1218,67 +1549,92 @@ wholesome:
     - "{name} is checking in on the teammate who pulled a hamstring last week."
     - "Have I told you guys I love you? Because I love you guys."
     - "{name} is stretching a teammate's calf and giving them a pep talk simultaneously."
+    - "{name} is in the middle of a long hug with a teammate, and they both look pleased about it."
+    - "{name} just walked the entire bench giving each player a one-armed hug, in order."
+    - "{name} is checking on a small plant they keep in the duffel."
+    - "{name} is showing a teammate a photo of their dog. The teammate is genuinely invested."
+
+  off_day:
+    - "Took my grandmother to lunch yesterday, and that was easily the best part of the week."
+    - "{name} visited a children's hospital and stayed twice as long as they had planned to."
+    - "I coached a youth scrimmage yesterday afternoon, and those kids are something else."
+    - "{name} drove their grandfather to a doctor's appointment and they got coffee together after."
+    - "I drove a rookie to the airport this morning, and they tried to pay me, and I had to fight them off."
+    - "{name} cooked dinner for their parents, and their dad got a little emotional about the dessert."
+    - "I wrote fifteen thank-you notes by hand last night, and honestly I think I'd do fifteen more."
+    - "{name} spent an afternoon at the dog shelter, and they very nearly came home with a friend."
+    - "I called my old high school coach today just to check in, and we both got a little emotional."
+    - "{name} baked biscuits for the entire training staff just to thank them for the week they put in."
+    - "I take the long way home now so I can wave at the crossing guard I know."
 
 goofy:
+  # chaotic goofball who plays football on private internal logic nobody else can follow. 
+  # Earnest, untethered, and confidently wrong about most things
   mood_names: [Off-Beat, Stumped, Loose, Playful, Cracking Up]
 
   positive_generic:
     - "I have no idea what just happened."
-    - "{name} mimes pulling a sword out of the turf."
-    - "They pay me to do this."
-    - "{name} does an exaggerated worm dance on the way to the bench."
+    - "I knew this would happen because I dreamed it last night and also five minutes ago."
+    - "I'm so good they should make a documentary. About a different person. But mention me."
     - "I just closed my eyes and ran."
-    - "{name} pretends to ride a horse off the field."
-    - "Sometimes you just gotta be silly."
-    - "{name} pretends to take a phone call from their grandmother."
     - "I wasn't even trying."
-    - "{name} mimics a TV anchor reading the news about themself."
     - "Coach said 'be the play.' I became the play."
-    - "{name} bows to all four sides of the stadium like a Shakespearean actor."
-    - "{name} does the worm for so long the broadcast cuts to commercial and comes back to find them still worming. It's actually impressive."
-    - "{name} moonwalks the entire length of the field. The ref tries to flag it but can't stop watching."
-    - "{name} pretends to answer the football like a phone."
-    - "{name} starts a conga line. They are the only person in it. They are having the time of their life."
-    - "{name} bowls the football down the sideline and celebrates like it's a strike."
     - "{name} pulls an imaginary sword from an imaginary sheath and knights a confused teammate."
-    - "{name} does the robot so convincingly that a teammate tries to turn them off."
-    - "{name} starts doing the Macarena. A few fans join in, then the rest of the stadium follows. It goes on for awhile..."
-    - "{name} mimes pulling a tablecloth off the field. Everything is still there. Magic."
-    - "{name} high-fives a ref, a chain gang member, a confused security guard, and someone's grandma."
-    - "{name} pretends to start a lawn mower with the football."
-    - "{name} mimes a fishing reel, struggles with a big one, lands the catch."
     - "{name} bows to the crowd, then to the bench, then to a sandwich a fan is holding."
-    - "{name} pretends to play the football like a guitar solo. It's pretty sick."
     - "{name} puts the football down very gently, then tiptoes away from it."
-    - "{name} mimes carrying a giant invisible trophy. Wow it looks heavy, {name} struggles with it."
+    - "{name} attempts a backflip and just absolutely beefs it."
+    - "{name} hugs the official, and the official permits it for a moment."
+    - "{name} sets the football down, says something to it, walks away pleased."
+    - "I told the ball where to go. We have an understanding."
+    - "I would like to thank the wind. The wind and I have been on good terms for years."
+    - "I have been working on a thing. It worked. I will not be explaining the thing."
+    - "The grass on this field has finally agreed to cooperate with me."
+    - "I always knew this play would work. I just didn't know which century."
+    - "{name} holds the football up to their ear, listens for a long moment, nods."
+    - "Put me in the Hall of Fame. The regular hall. Any hall."
+    - "Six points!! That's like, what, a million dollars??"
+    - "I blacked out. Did I do a flip? Tell me I did a flip."
+    - "Whoever invented losing should be ashamed of themself."
+    - "I would like a parade. A small one. Just down this part of the field."
+    - "{name} spins in place until slightly dizzy, then nods like that was the plan."
+
 
   negative_generic:
     - "Whoops."
+    - "This is the worst thing to happen to me since that thing with the bees."
     - "{name} pretends to faint, then pops right back up smiling."
     - "I was distracted by a butterfly."
-    - "{name} mock-sobs into a teammate's shoulder."
-    - "On a scale of one to ten, that was bad."
+    - "I'm gonna sue. Sue who? Sue everyone. Sue the sky."
+    - "{name} sobs into a teammate's shoulder."
+    - "Somebody check the football for curses. I'm serious. Get a priest."
+    - "{name} stands over the football and explains, calmly, why what just happened was the football's fault."
     - "{name} performs a slow-motion replay of their mistake by themself."
-    - "I'll pay for that one in beers."
+    - "Wind. The wind. I will be reporting the wind to someone."
     - "{name} pretends to disappear behind a small cone."
     - "I forgot what I was doing."
+    - "This is exactly why I don't trust geometry."
+    - "I blame the moon. The moon knows what it did."
     - "{name} stages an elaborate fake limp, then walks normally."
-    - "Welp! On to the next bit."
+    - "I had a plan. The plan was on a chalkboard. The chalkboard exploded."
     - "{name} blames their cleats out loud."
     - "{name} trips over their own feet, does a somersault, and pops up like they meant to do that."
     - "{name} pretends to slip on a banana peel. Then slips for real. Then pretends that was the bit."
-    - "{name} does a full theatrical bow, as if that play was avant-garde performance art."
-    - "{name} mimes rewinding the play like a VCR. Makes the noise and everything. It's actually a good impression."
+    - "Something about the eastern goalpost has been off all year. I have been keeping notes."
+    - "I had a feeling about that play. The feeling was wrong. I will hold a memorial for the feeling later."
     - "{name} gives a sheepish thumbs-up from the ground. They are still on the ground."
-    - "{name} does jazz hands at the crowd. The crowd does not know how to respond to this."
+    - "I will be writing the third yard line a strongly worded letter."
     - "{name} points at themselves, mouths 'who, me?', then looks behind them like someone else did it."
     - "{name} laughs so hard at their own mistake they have to sit down."
     - "{name} gives the crowd a beauty pageant wave from the ground. Still down, but still waving. What a pro."
     - "{name} mimes a tiny rain cloud forming over their helmet."
     - "{name} pretends to write 'do better' on an invisible chalkboard."
     - "{name} examines their own hand like it's a stranger they have to formally fire."
-    - "{name} mimes flipping through an imaginary rulebook for the relevant section."
+    - "{name} mimes flipping through an imaginary rulebook just to make sure the refs are calling the game right."
     - "{name} pretends to mail themself away in a tiny invisible package."
+    - "{name} clutches their helmet to their chest like a wounded animal."
+    - "I had a chat with my cleats this morning. They have been ignoring me ever since."
+    - "I stepped on a rake out there."
+    - "Whoopsie daisy. Whoopsie HUGE daisy."
 
   scored_td:
     - "{name} mimes putting the ball in a tiny treasure chest at the goal line."
@@ -1286,13 +1642,23 @@ goofy:
     - "{name} pulls a small magic-trick flourish at the back of the endzone."
     - "{name} pretends to dunk the football over the crossbar."
     - "I think I scored. Did I score? I scored."
+    - "I scored that for my dog. She doesn't know what football is but she's proud."
+    - "Six points!! That's almost ten!!"
+    - "{name} spikes the ball into the ground, then dives after it like it's getting away."
+    - "{name} strikes a series of poses, each one increasingly strange."
+    - "{name} drops the ball, walks away, comes back, picks it up, walks away again."
+
 
   threw_td:
     - "I wound up. I closed my eyes. The ball did the rest."
-    - "{name} mimes throwing a fishing rod and reeling in the catch."
+    - "I told the football to find the friendly jersey and avoid the unfriendly one. It listened."
     - "I yelled 'go that way' and pointed. They went that way."
-    - "{name} mimes throwing a paper airplane in the receiver's direction."
+    - "{name} pats the football twice on the way to the line of scrimmage, like a small farewell."
     - "I pointed and yelled 'over there.' It worked."
+    - "I threw that ball with my heart. And my arm. Mostly the arm."
+    - "The ball went where I told it to go. We have an understanding."
+    - "I would like to thank the air for letting the ball travel through it."
+    - "My arm is a wizard. The rest of me is just along for the ride."
 
   made_fg:
     - "{name} mimes a tiny golf-clap at themself."
@@ -1300,6 +1666,9 @@ goofy:
     - "{name} pretends the ball was tied to a string they yanked through the uprights."
     - "{name} bows to their kicking foot."
     - "I closed my eyes and heard a crowd. I assume it's good?"
+    - "Three points!! That's almost six!! Math is fake but I'll take it!!"
+    - "Field goals are touchdowns for people in a hurry."
+    - "{name} holds up three fingers, then four, then three again."
 
   missed_fg:
     - "{name} mimes the ball curving wide while making a sad cartoon noise."
@@ -1307,13 +1676,23 @@ goofy:
     - "{name} examines their kicking foot like it's a stranger."
     - "{name} examines the ball as if checking the expiration date."
     - "I'll appeal to the league. The ball was clearly haunted."
+    - "The goalposts MOVED. I saw them move. Don't tell me I'm wrong."
+    - "The ball got scared and turned around. It happens."
+    - "Wind. Definitely wind. There was no wind. But still."
+    - "I think the ball had somewhere else to be."
+    - "That kick was beautiful. The result was not. They are separate things."
 
   got_sacked:
     - "{name} flops dramatically, gets up, dusts off invisible dust, jogs back."
     - "I tripped. That's what I'm telling reporters."
     - "{name} stays on the ground and mimes seeing stars."
-    - "{name} stays on the ground and mimes a chalk outline around themselves."
+    - "{name} stays on the ground, looks at the sky, asks what the sky knew about this."
     - "I tripped over a ghost."
+    - "Who put a person there?? That's not where people go!"
+    - "I got tackled by a building. A person-shaped building."
+    - "I was just standing there having a thought and then I was on the ground."
+    - "The ground attacked me. The ground is supposed to be my friend."
+    - "That was rude. I was BUSY."
 
   made_sack:
     - "{name} mimes putting the QB in a tiny pocket and zipping it shut."
@@ -1321,6 +1700,8 @@ goofy:
     - "{name} pretends to pluck the ball out of the QB's hand like a flower."
     - "{name} mimes putting the QB in their pocket."
     - "I just ran toward the loud one. That's the strategy."
+    - "I got them! I got them with my whole body!"
+    - "I came out of nowhere. From their perspective. From mine I came out of somewhere."
 
   threw_int:
     - "I threw it really hard. To the wrong player."
@@ -1328,6 +1709,11 @@ goofy:
     - "I meant to do that. Wait — no I didn't."
     - "{name} mimes filling out a return-to-sender form."
     - "Wrong jersey color. Honest mistake."
+    - "The ball betrayed me. We had a contract. Verbal but binding."
+    - "I threw it to a friend. Turns out we weren't friends."
+    - "Whose team is that? Why are they here??"
+    - "I had a moment of clarity and it betrayed me."
+    - "I meant to do that. I didn't. But I will say I did."
 
   made_int:
     - "{name} catches it and immediately mimes signing autographs for the air."
@@ -1335,6 +1721,8 @@ goofy:
     - "{name} cradles the ball like a baby, rocks it gently."
     - "{name} cradles the ball and mimes feeding it a bottle."
     - "It came right to me. Like, suspiciously right to me."
+    - "The ball came to me and we are best friends now."
+    - "That ball was destined for someone else and I said NO."
 
   fumbled:
     - "{name} mimes the ball escaping like a cartoon."
@@ -1342,13 +1730,16 @@ goofy:
     - "{name} pats themself down like searching for keys, then shrugs."
     - "{name} pretends to look for the ball in their pockets."
     - "I had it! Then it was somewhere. Now it isn't here."
+    - "The ball betrayed me. We had a contract. Verbal but binding."
+    - "I had it. Then I didn't. Then I had it again. Then I REALLY didn't."
+    - "That's not a fumble, that's a DONATION."
 
   recovered_fumble:
     - "{name} pops up holding the ball, mimes 'who, me?' to the ref."
     - "Free ball. Free ball is my favorite kind of ball."
     - "{name} tries to pretend the ball was theirs the whole time."
     - "{name} pretends to pet the football like a small animal."
-    - "Mine now! Finders keepers, my friends."
+    - "Found a football on the ground. Finders keepers. That's a real rule."
 
   sideline:
     - "Hey. Hey. Pull my finger."
@@ -1359,8 +1750,49 @@ goofy:
     - "{name} is balancing a water bottle on their helmet."
     - "Quick, name a song. ANY song."
     - "{name} is whispering into a teammate's earhole. The teammate is laughing."
-    - "I just remembered a joke from middle school. Listen to this."
+    - "{name} is hand-shadow-puppeting an entire scene against the bench tarp."
     - "{name} is making a mascot do a high-five. The mascot is into it."
+    - "{name} is whistling a long, complicated tune that nobody on the bench recognizes."
+    - "{name} is making a coin appear and disappear behind a teammate's ear."
+    - "{name} is showing a teammate a polaroid of their cat doing something that is described as 'concerning.'"
+    - "{name} is eating an entire sandwich on the bench in three bites."
+    - "{name} is having a long, quiet conversation with their own helmet. The helmet is taking it well."
+    - "{name} appears to have painted a tiny mustache on their facemask. With what?"
+    - "{name} just told a teammate the entire plot of a movie nobody else has heard of."
+    - "{name} just produced a kazoo from somewhere. The kazoo plays a single, surprised note."
+    - "Coach won't let me bring my ferret onto the field. Discrimination."
+    - "I'm just over here thinking about soup. Like, the IDEA of soup."
+    - "Gatorade tastes like a haunted house. I love it."
+    - "Coach is yelling. I think it's at me. I'll wave just in case."
+    - "I'm gonna eat this orange slice in one bite. Watch. No don't watch... Watch."
+    - "Why is the field so long. Has anyone measured it recently?"
+    - "Stretching is just lying down with extra steps."
+
+  off_day:
+    - "{name} bought a kazoo, and the team is concerned about the timing."
+    - "I tried to mail myself across town this morning. The postal service had questions, and I had no answers."
+    - "{name} attempted to ride a mechanical bull on a dare that they had issued to themselves earlier that morning."
+    - "I bombed the first three songs at karaoke last night and stayed long enough to bomb nine more."
+    - "{name} got into a friendly argument with a parking enforcement officer, and the two of them are now friends."
+    - "I started doing a voice when I order coffee, and it started as a joke, and I cannot stop now."
+    - "{name} wore a full three-piece suit to a casual coffee meeting, with no explanation given."
+    - "I challenged the team trainer to an arm-wrestling match in the cafeteria, and I did not stretch first."
+    - "Bought a pun-of-the-day calendar this morning, and I have already read ahead to December."
+    - "I tried to fix a broken lamp this week by yelling at it. The lamp now works. I do not know how."
+    - "{name} ordered fourteen pancakes at a diner, ate one, and tipped the waitress on the rest."
+    - "{name} attempted to cook a meal in a contraption they had built that morning. The contraption is no longer theirs."
+    - "I built a perpetual-motion machine in my garage this weekend. It only goes one way, and that way is sideways."
+    - "I learned to play football from a raccoon and that raccoon owes me money."
+    - "I sleep with the lights on because the dark has opinions about me."
+    - "My hobbies include staring, blinking, and aggressive napping."
+    - "I'm writing a screenplay about a guy who plays football but he's also a wizard. It's me. It's autobiographical."
+    - "I once fought a goose and we both walked away changed."
+    - "I collect rocks. Specifically, rocks that look like other rocks."
+    - "If I had a tail I'd be unstoppable. I think about this a lot."
+    - "Sometimes I forget which team I'm on for a second. Just a second. Don't worry about it."
+    - "I had a dream last night that I was a football. It was peaceful."
+    - "My favorite play is the one where everyone runs around. So, all of them."
+    - "I think footballs are eggs. Big eggs. Nobody can prove me wrong."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1373,9 +1805,11 @@ goofy:
 # ─── Unhinged family ────────────────────────────────────────────────────────
 
 alien:
-  # Otherworldly biological observer. Performs human behavior, slightly off.
-  # Sparse dialogue; mostly head-cocks, examines, and treats mundane objects
-  # as foreign artifacts.
+  # Otherworldly biological observer. Performs human behavior, slightly
+  # off. Sparse dialogue; mostly head-cocks, examines, and treats
+  # mundane objects as foreign artifacts. Fully aware the simulation is
+  # an artifact of human civilization they are observing clinically;
+  # cataloguing rather than participating.
   takes_quirks: false
   mood_names: [Stranded, Misaligned, Observing, Studying, Transmitting]
 
@@ -1402,6 +1836,14 @@ alien:
     - "I will report this back. They will be pleased, I think."
     - "The football has accepted me. It rolls in my hands now."
     - "I am beginning to understand the appeal of this sport."
+    - "I have produced the desired outcome, and I am performing the correct facial response now, which I have practiced."
+    - "This is what your species refers to as 'a good one,' and I have logged it for future reference."
+    - "Excellent. The simulation is proceeding within acceptable parameters today."
+    - "A successful execution, which I will be reporting at the next scheduled check-in."
+    - "A favorable result. My second heart is beating faster, which is the response I was hoping for."
+    - "{name} claps with hands held slightly too far apart."
+    - "{name} performs an enthusiastic shout that is slightly too sustained, then stops abruptly."
+    - "{name} flexes both arms in a posture that is anatomically possible but unusual."
 
   negative_generic:
     - "{name} examines their hand, frowns, examines the other hand, frowns more."
@@ -1421,52 +1863,82 @@ alien:
     - "The forms here are still difficult. I will recalibrate."
     - "On my home, the failure tastes sweeter. Here it does not taste at all."
     - "I am supposed to feel something. I feel a small static."
+    - "I am told this is the feeling called 'frustration,' and I find it inefficient but informative."
+    - "We will not be discussing this on the home channel, as it does not reflect well on the assignment."
+    - "The body is producing the salt water from the eyes. I am told this is acceptable in this context, but I will verify later."
+    - "This is the outcome I had been instructed to fear, and now I understand why."
 
   scored_td:
     - "{name} sets the ball on the goal line with the gravity of a religious offering."
     - "{name} yells 'touchdown' followed by an unsettling inhuman shriek."
     - "{name} hands the ball to a child in the front row, who is mildly afraid."
     - "{name} stands at the back of the endzone, scanning the crowd as if cataloguing."
+    - "{name} walks back toward the sideline performing a normal human walk, but slightly too smoothly."
+    - "I performed the running, and then I performed the additional running, and the crowd is now performing the loud."
+    - "Six points have been awarded, and I am told this is preferable to four points, although the difference seems modest."
 
   threw_td:
     - "{name} watches the catch, taps their temple. Mind link successful."
+    - "I have completed the throwing, and the receiver has completed the catching, and we are pleased with each other."
+    - "On my home, we throw with two hands, but I have adapted, and the one-handed method is now familiar."
 
   made_fg:
     - "{name} bows to the goalpost with great formality."
     - "{name} raises their foot in the air with inhuman flexibility and offers it as a high five."
     - "{name} watches the ball clear the uprights, head tilted at an unusual angle."
+    - "Three points have been awarded, which is fewer than six but more than zero, and I have made my peace with the math."
+    - "The two tall structures have accepted the ball, as they do, and we are all the better for it."
+    - "A modest contribution to the score, in your kind's preferred manner of contributing."
 
   missed_fg:
     - "{name} stares at the goalposts. The goalposts stare back."
     - "{name} examines the kicking appendage humans call a foot like it has betrayed the mission."
     - "{name} watches the ball drift wide, perfectly still."
+    - "An error, or possibly the wind, which is a substance I am still learning to read."
+    - "The ball has gone where I did not predict, and predictions are difficult here."
+    - "{name} performs the standard disappointed shake of the head, but at slightly the wrong tempo."
 
   got_sacked:
     - "{name} lies on the turf, observing the sky for instructions."
     - "{name} sits up suddenly. The being who tackled them is briefly very interesting."
     - "{name} touches their attacker's helmet, gently, as if to mark it."
+    - "An impact has occurred, and I am told this is part of the game, and I will not take it personally."
+    - "The body is reporting some discomfort, but it is the manageable kind."
+    - "I will rise in a moment, after I have located all of my limbs."
+    - "This is what your kind calls 'getting sacked,' and I now understand the term more fully."
 
   made_sack:
     - "{name} stands over the QB and tilts their head ninety degrees."
     - "{name} extracts a strand of the QB's hair and stashes it in a pocket for later analysis."
     - "{name} examines the QB's facemask with great interest before walking away."
+    - "The other one is on the ground, which is the desired outcome of this maneuver."
+    - "The quarterback has been brought down, in the manner approved by your rules."
+    - "I am told this is a moment for shouting, and I am attempting the shout."
 
   threw_int:
     - "{name} just observes, fascinated by the way humans run."
     - "{name} cocks their head at the interception, as if studying a phenomenon."
+    - "{name} stares at their own throwing hand for a moment, considering it"
+    - "This is the outcome called 'an interception,' and I am told it is to be avoided."
+    - "I am performing the head-in-hands gesture observed in archived footage. I believe it is correct."
 
   made_int:
     - "{name} catches it, holds it to their helmet, listens to it briefly."
     - "{name} cradles the ball, communicates with it for a moment, hands it over."
+    - "I caught the ball with these hands, which are the hands I was given, and they are working today."
+    - "On my home, we have a similar move, but it involves three players. Here, I have done it alone."
+    - "An interception. I am told this is a celebrated event, and I am celebrating accordingly."
 
   fumbled:
     - "{name} examines their hands like they no longer belong to them."
     - "{name} watches the ball roll away with mild scientific interest."
     - "{name} stares at the spot the ball was, confused."
+    - "I had the ball, and now I do not have the ball, and the transition was not by my choosing."
 
   recovered_fumble:
     - "{name} cradles the ball, examines it carefully, hands it over."
     - "{name} stands holding the ball, listens to it for a moment."
+    - "The ball has returned to my possession, although it took a roundabout path."
 
   sideline:
     - "{name} is examining a Gatorade cup as if it might be sentient."
@@ -1479,11 +1951,38 @@ alien:
     - "{name} is rolling a sunflower seed between two fingers, fascinated by the texture."
     - "{name} is staring at a mascot from across the field with unsettling stillness."
     - "{name} is examining a teammate's wristband by holding it up to the light."
-    - "{name} is mimicking the head coach's exact posture, with a slight delay."
     - "{name} is pressing one finger against the side of their helmet, listening."
     - "{name} is sitting motionless while a butterfly lands and rests on their facemask."
     - "{name} is examining a strand of grass like it has just been invented."
     - "{name} is whispering something to a Gatorade jug. The jug is silent, of course."
+    - "I am eating the orange wedge, and the orange wedge is interesting. We do not have orange wedges on my home, although we have something like them, but blue."
+    - "Coach said 'get your head in the game,' and I have considered it from several angles. My head is already there. I am unsure what else to do."
+    - "The grass here is soft, and the air is acceptable, and I am, on balance, having a pleasant afternoon."
+    - "{name} smiles at a teammate with the correct mouth shape but no other facial movement"
+    - "I have been told to 'shake it off,' and I am attempting the shaking now. The shaking is occurring."
+    - "{name} sits on the bench with both feet planted exactly shoulder-width apart and does not move for several minutes."
+    - "The crowd is doing the wave, and I am told it is not required to participate, but I have chosen to."
+    - "{name} looks up at the stadium lights for an extended period without squinting."
+
+  off_day:
+    - "{name} stood at the edge of a public gathering for three hours, observing the patterns of human celebration without participating in any of them."
+    - "Observed three humans at a coffee shop for two hours. They drink slowly."
+    - "{name} attempted to pet a dog today, and the report on file indicates the dog approved."
+    - "Hu-mans rest by sitting motionless, watching small flickering boxes. Trying it."
+    - "I have walked the long aisles of preserved foodstuffs. I cannot yet rank them."
+    - "{name} stood in a parking lot for an hour just cataloging movements."
+    - "I am beginning to suspect humans nap not by need but by ritual."
+    - "I find that the texture of bread is one of the most successful achievements on this planet."
+    - "Footwear is required, and it is not always pleasant. I do not yet understand the trade-off."
+    - "Cats appear to be in some kind of agreement with me. I cannot say more on this subject."
+    - "I have not detected the secret yet. I am still gathering."
+    - "The way you do laundry is, on the whole, illogical, and I have submitted notes."
+    - "Earth-meals are reliable. I have logged this finding three separate times."
+    - "Hu-man children are smaller and louder. I have not yet determined the reason."
+    - "I have visited the structure called 'a library.' The volume is suppressed by mutual agreement, which I find admirable."
+    - "Humans dispose of perfectly serviceable food at regular intervals. I have not yet determined the criteria."
+    - "I have learned that the proper response to 'how are you' is not, as I once believed, a detailed accounting."
+    - "I have observed that the moon is, in this system, a single object, and is the same object every night. This was a difficult adjustment."
 
 
 android:
@@ -1519,6 +2018,14 @@ android:
     - "Performance: within tolerance. Excellent."
     - "Mission still on schedule."
     - "Update: none required. Holding pattern."
+    - "Outcome favorable. Logging for the report."
+    - "Subject behavior aligns with predicted patterns. Continuing observation."
+    - "Cover holding. Performance acceptable. Onward."
+    - "Positive simulation outcome. Cataloguing the response from nearby principals."
+    - "Result registered. Returning to baseline."
+    - "Note for handler: the Cores appear to weight successful plays in their observation. Cataloguing."
+    - "Affirmative outcome. Performing the appropriate emotional response, within tolerance."
+    - "Personal note, off the record: that one was satisfying. Striking it from the report."
 
   negative_generic:
     - "Recalculating."
@@ -1536,31 +2043,49 @@ android:
     - "Subject failure: investigate root cause off-record."
     - "Update: not for the report. For the file only."
     - "Performance: outside tolerance. Action required."
+    - "Setback logged. Mission unaffected. Resuming."
+    - "Request rotation. This operator has been embedded for some time. Logging the request as a formality."
+    - "Note: the Cores' interest does not appear to diminish during setbacks. Possibly the opposite."
+    - "Performing disappointment within tolerance. The subjects do not appear to have detected the performance."
 
   scored_td:
     - "{name} sets the ball down, mouths something that sounds like a code phrase."
     - "Six points: logged."
     - "Endzone: secured. Mission stays on schedule."
+    - "Touchdown registered. Cover intact. Returning to baseline."
+    - "Six points logged. Performing post-score celebration as observed in reference footage."
 
   threw_td:
     - "Pass: completed. Receiver: confirmed. Filed."
-    - "{name} watches the catch and mouths 'flag the receiver. They've seen something.'"
+    - "Pass completed to the intended receiver. Outcome favorable."
+    - "Note for handler: the connection between this operator and the receiver appears to register as 'chemistry' to outside observers. Useful for cover."
+    - "Touchdown pass registered. Returning to cover behavior."
+    - "Off the record: I have been working on that throw for several deployments. Pleased."
+    - "Throwing motion executed within tolerance. Cover holding."
+    - "The receiving asset performed as expected. Logging."
 
   made_fg:
     - "Trajectory: confirmed."
-    - "{name} resets the kicking tee in the same place, then exits the field."
+    - "Three points awarded. Logging."
+    - "Note: the snap-and-hold sequence is a useful behavioral marker for measuring teamwork response among the principals. Cataloguing."
 
   missed_fg:
     - "Trajectory: miscalculated. Recalibrating."
-    - "{name} mouths 'cover deteriorating, will compensate.'"
+    - "Cover deteriorating, will compensate."
+    - "Outcome unfavorable. Cover holding."
+    - "Adjusting cover behavior to match expected disappointment."
 
   got_sacked:
-    - "{name} stands up checking for surveillance damage to the cover."
     - "Anomaly: pocket integrity compromised."
+    - "Adverse contact. No mission compromise. Recovering."
+    - "Simulated pain response engaged automatically."
 
   made_sack:
     - "Threat neutralized."
     - "{name} stands over the QB, scans them for anomalies, walks back."
+    - "Target acquired. Subject grounded. Logging."
+    - "The opposing principal has been brought down within mission parameters."
+    - "Outcome favorable. Performing the expected aggression display, within cover tolerance."
 
   threw_int:
     - "Error: pass routed to incorrect recipient."
@@ -1589,11 +2114,39 @@ android:
     - "Cover: holding. Subject Floosball: still unaware."
     - "{name} is staring at a Gatorade jug like it's transmitting on a frequency."
     - "{name} is checking the time. Then checking it again. Then once more."
+    - "The Cores are watching. They are always watching. I have stopped flinching about it."
+    - "Note: the crowd's response curve to the last drive was nonstandard. Possibly significant. Possibly not."
+    - "Awaiting next play. Surveying for any indication of direct Core interest in the current sequence."
+
+  off_day:
+    - "Cover maintenance: completed. Quiet day."
+    - "{name} attended the standard handler check-in. Nothing of note."
+    - "Filed three reports. Awaiting acknowledgment."
+    - "{name} ran simulation drills at the facility. Same scenario, sixty times."
+    - "The cover is holding and the team still trusts me, which earns another week of compliance."
+    - "Today's routine has been completed, and the entry has been logged for filing."
+    - "{name} spent yesterday at a public library reading four declassified files cover to cover."
+    - "Compliance is a daily practice, and the practice gets quieter every season I am here."
+    - "I do not require sleep. I have been sleeping anyway. It seems polite."
+    - "The trainers do not yet know that I am not what they think I am, and I see no reason to inform them."
+    - "Whoever programmed flavor did fine work. The salt mistake aside."
+    - "Several of you would do well to recharge more often, in your own way."
+    - "My affect logs were full this week, and I had to rotate the older ones to long-term storage."
+    - "I have been embedded in this assignment for an extended period. The Cores have not yet flagged me, to my knowledge."
+    - "The dwelling I have been assigned through the cover is rendered to a high standard. I have stopped checking the corners."
+    - "Off the record: the bread here is rendered with unusual care. Whoever modeled it did good work."
+    - "My handler has reminded me, twice this season, that I am not to attempt direct contact with the Cores. The reminder was unnecessary. I have no idea how I would attempt it."
+    - "I file weekly reports. The Cores almost certainly read them too. I have made my peace with this."
+    - "I have come to suspect that the Cores find this game meaningful in a way I have not yet decoded. I have not put this in a report."
 
 
 prophet:
   # Mystical prescience. Sees futures, threads paths, walks moments
-  # before they arrive. Burden of foreknowledge, not gameshow certainty.
+  # before they arrive. Burden of foreknowledge, not cheap predictions.
+  # Inspired by Paul Atreides (Dune) — cosmic gravity, mourning futures
+  # rather than predicting trivia. References Cores lore (Splintering,
+  # Long Quiet, Boundary, Resets) casually, as if you should already
+  # know. Fully aware they are inside a simulation; sees through it.
   # Voice is somber and weighty; references visions, threads, paths.
   takes_quirks: false
   mood_names: [Blinded, Veiled, Foreseeing, Threaded, Witnessed]
@@ -1604,7 +2157,7 @@ prophet:
     - "The thread holds. As it must."
     - "{name} closes their eyes briefly, opens them, knows."
     - "I have seen this hand reach. I have seen this ball cross."
-    - "{name} watches the field with the calm of someone who has seen all the endings."
+    - "{name} watches the field, already knowing how this ends."
     - "The vision was true."
     - "{name} breathes out slow, as if releasing a vision."
     - "{name} traces a symbol on their wristband they have traced before."
@@ -1682,6 +2235,28 @@ prophet:
     - "I have seen our season end six times today. None of them ended like this."
     - "The threads are tighter near the playoffs. They're always tighter then."
 
+  off_day:
+    - "I have already lived this exact day in seven futures, and they differ from each other only by inches."
+    - "{name} sat at a window for two hours, threading visions."
+    - "I have already lost this argument with you, twice, in adjacent futures."
+    - "Most of what I see does not happen. What does happen, I have already grieved."
+    - "I have walked this hallway in seven futures. In two of them, I am alone. In the others, I am not coming back from where I am going."
+    - "There will come a hand on my shoulder one day. It will be the last one. I will not know it at the time."
+    - "I have seen the dust of a hundred summers I will not live to see."
+    - "Some futures I do not look at. They are louder than I can bear."
+    - "I know the names of those who will mourn me, and many of them are in this room."
+    - "There is a war coming that none of you will fight in. I have seen it. I have already lost friends to it."
+    - "I remember the Long Quiet. None of you do, and that is the kindness of a short life."
+    - "There is a Reset coming, and I have been told its name. I will not say it here."
+    - "The Boundary thins on the third Saturday of every season. Most of you have felt it, and none of you knew what it was."
+    - "I have walked the old Freeholds in dreams, and the grass there still remembers what they used to be."
+    - "Second-spring will arrive earlier this year, and we are not ready for what comes with it."
+    - "There were more gods before the Splintering, and I miss two of them in particular."
+    - "The Cracked Years are not over. The Cores believe they are, and that is the danger of believing the Cores."
+    - "The Splintering left lines across the world that none of you can see, and I walk along them when no one is watching."
+    - "I have stood at the Boundary in three different bodies, and each time the wind sounded the same."
+    - "The Reach is older than they have told you. I have been there. The maps lie about how far it goes."
+
 
 cursed:
   # Pure fatalism. The universe runs one way and it isn't this way.
@@ -1695,7 +2270,7 @@ cursed:
     - "Borrowed time. All of this is borrowed."
     - "I'll pay for this later."
     - "{name} looks at their hands like they don't trust them."
-    - "{name} watches the celebration with the calm of someone who has counted the cost."
+    - "{name} watches the celebration calmly. They have already counted the cost."
     - "It is what it is. It always is."
     - "{name} accepts the moment without believing it will last."
     - "Brief, this. Always brief."
@@ -1758,7 +2333,7 @@ cursed:
     - "{name} cradles the ball, waits for the bad news."
 
   sideline:
-    - "{name} is on the bench, watching the field with the patience of someone waiting for the next bad thing."
+    - "{name} is on the bench, watching the field, waiting for the next bad thing."
     - "{name} is exhaling slowly, eyes on the scoreboard."
     - "{name} is staring at the field, expression unchanged for the entire timeout."
     - "{name} is at the end of the bench, not drinking water, not speaking."
@@ -1767,6 +2342,20 @@ cursed:
     - "Something's coming. I can feel it in the air."
     - "{name} is muttering something about the weather. The weather is fine."
     - "Don't say it. Don't anyone say it. Knock on something."
+
+  off_day:
+    - "I sat by the phone all day waiting for the bad news, and even though it didn't come, I know it's coming."
+    - "{name} broke two glasses inside of an hour and is now bracing for the kind of day that follows."
+    - "I watched the same black cat cross my driveway twice this morning, going in opposite directions."
+    - "{name} stayed inside all day yesterday on the theory that the universe was busy elsewhere."
+    - "I tried to leave the house this morning and the car wouldn't start, which felt about right."
+    - "Of course the rain. Of course it rained today."
+    - "You start to develop a sense for which ceiling fan is going to come down."
+    - "There is no jinx. Everything is the jinx."
+    - "I keep a small list of the warnings I should have heeded, and it is not a small list anymore."
+    - "Some men are born under a star. I was born under whatever the opposite of that is."
+    - "If you see me touching wood, do not interrupt me. I am working."
+    - "The price has not been paid yet, and the universe always collects."
 
 
 time_traveler:
@@ -1786,7 +2375,7 @@ time_traveler:
     - "Pretty good. By the standards of this century."
     - "{name} pauses, mouths something in a tongue that has not been created yet."
     - "Back home we play this differently. Better, of course. But this is charming."
-    - "{name} watches the play with the slight condescension of someone from later."
+    - "{name} watches the play the way you'd watch a child read."
     - "Primitive, but effective. I'll grant the era that."
     - "I have not used my legs like this in centuries."
     - "{name} flips the ball back to the ref and mutters about analog leather."
@@ -1862,6 +2451,20 @@ time_traveler:
     - "{name} is poking at a teammate's helmet, baffled by the foam padding."
     - "Don't get me wrong. I like it here. The leather is real."
     - "{name} is sitting upright on the bench, listening for an extraction signal that isn't coming."
+
+  off_day:
+    - "{name} is observing an early-era public square with mild interest. The geometry has changed since their last visit."
+    - "Pre-augmentation transit is slower than I had remembered, but I find it charming all over again."
+    - "I keep forgetting they don't have neural recall here. Had to ask for directions twice."
+    - "{name} attended an early-era live music event. The instruments were mostly real."
+    - "We didn't have tactile bookstores where I came from, and I honestly love them."
+    - "Ate something they call a 'taco.' Excellent reconstruction."
+    - "The reception on this side of the Boundary is wonderful. We did not have that."
+    - "I miss the third moon. You all wouldn't, but I do."
+    - "The football used to be heavier. I am told this is just my memory."
+    - "Pre-augmentation everything is charming, in small doses."
+    - "Sometimes I write a date on a check that has not happened yet, and the bank gets nervous about it."
+    - "The version of this game I remember had four downs as well, but they meant slightly different things."
 
 
 sleepwalker:
@@ -1949,6 +2552,21 @@ sleepwalker:
     - "{name} is asleep on a teammate's shoulder. The teammate is letting it happen."
     - "{name} mumbles 'is it half time' into nothing in particular."
     - "{name} is snoring rhythmically through a chant."
+    - "{name} fell asleep mid-conversation and is, somehow, still in it."
+
+  off_day:
+    - "{name} was asleep on a park bench for most of yesterday afternoon."
+    - "Slept until eleven. Slept again until three."
+    - "{name} attended a team meeting fully asleep. Took notes anyway."
+    - "I woke up for a minute on Wednesday, asked someone what year it was, and then went straight back to sleep."
+    - "{name} mumbled something about the playbook in their sleep."
+    - "I dreamt about breakfast, woke up and had it, and then went back to sleep and dreamt about it again."
+    - "I have not been fully awake since the first preseason game."
+    - "It is okay if I forget your name. I am also forgetting mine."
+    - "Every play, I dream of the next play, and then we run it. It's convenient."
+    - "The schedule, the weather, the score — it all blends together pretty quickly."
+    - "I am, in my way, here."
+    - "I think I drove to practice today. There is a car missing from my garage."
 
 
 superstitious:
@@ -2042,6 +2660,22 @@ superstitious:
     - "Three. Always three. We need three more of these."
     - "{name} is whispering numbers to a sock."
     - "Don't tell anyone I have a chicken bone in my pocket. Just don't say it."
+    - "{name} is rotating a lucky stone in their hand on a strict four-count."
+    - "{name} is solving a small puzzle they only ever solve when behind on the scoreboard."
+
+  off_day:
+    - "The morning routine never moves: coffee at seven, eggs at seven-fifteen, and the same pair of socks I always wear."
+    - "{name} re-laced their lucky cleats three times before putting them away."
+    - "Wore the lucky shirt for three days in a row. Even to the laundromat."
+    - "{name} avoided every black cat on the way to practice. There were two."
+    - "Touched the lucky doorframe on the way out. It's tradition now."
+    - "{name} bought the same brand of toothpaste they have used since childhood."
+    - "I do not change my socks during a winning streak, and I do not change them after either, until I am told."
+    - "I do not say the word for what we are trying to do this season. The word knows."
+    - "If you wear my number on a road game, I have to know about it in advance."
+    - "There is a left-foot rule. There has always been a left-foot rule."
+    - "The thing about pre-game music is that you have to hear it in the same order every week, or it knows."
+    - "I do not eat fish on Wednesdays, and I will not be elaborating on that."
 
 
 # ─── Goofy family ───────────────────────────────────────────────────────────
@@ -2129,6 +2763,22 @@ oblivious:
     - "{name} is asking a teammate what week it is. The teammate is patient."
     - "Hey, what's the score? Yeah? Good? Cool."
     - "{name} is looking for their water bottle. Their water bottle is in their hand."
+    - "{name} can't hear the coach. The earpiece is in. The coach has called them three times now."
+    - "{name} is whistling, unaware that the entire bench has gone quiet to listen."
+
+  off_day:
+    - "{name} spent an entire afternoon in what they thought was the team weight room, and it was a janitor's closet."
+    - "I wandered into a different team's facility by accident, hung around for an hour, and everyone there was really nice about it."
+    - "{name} got off the train at the wrong stop. Had a wonderful day."
+    - "I thought today was Wednesday. It is Friday."
+    - "{name} attended a wedding they were not invited to. The bride asked them to leave kindly."
+    - "Bought groceries. Forgot the groceries at the store."
+    - "I just found out we have a quarterback. That makes a lot of things clearer."
+    - "Every time I look at the schedule, it has a different game on it."
+    - "Apparently I have been signing the wrong jerseys for some time. I feel terrible about it."
+    - "Do we have to score on every drive? That seems like a lot to ask."
+    - "Someone explained the playbook to me again last week, and I keep meaning to read it."
+    - "I think I'm doing great. People keep handing me waters."
 
 
 prankster:
@@ -2207,14 +2857,31 @@ prankster:
     - "{name} is swapping two teammates' Gatorade cups when they aren't looking."
     - "{name} is miming a tiny bird on their finger to a confused teammate."
     - "{name} is pretending to light a sunflower seed with an imaginary lighter."
+    - "{name} is palming a teammate's wristband in plain sight, and the teammate has not yet noticed."
+    - "{name} is making a coin disappear into a teammate's helmet and not telling them about it."
+
+  off_day:
+    - "{name} spent the morning perfecting their next locker-room booby trap, and refuses to share details."
+    - "I'm cooking up something this week, so don't ask any questions and just keep your eyes open."
+    - "{name} bought eight rubber chickens. The team will find out next week."
+    - "I set up an elaborate fake interoffice memo chain just to watch the long-snapper read it, and the look on his face was beautiful."
+    - "{name} switched two teammates' lockers. They have not noticed."
+    - "I rigged the kicker's headphones to play one repeating piano note, and that's all he's been hearing all morning."
+    - "I have a list. The list is long. The list is for next week."
+    - "Locker room culture is, on balance, an art form, and I am the curator."
+    - "The kicker has not yet noticed what I did to his cleats."
+    - "I do not bully. I educate, dramatically."
+    - "If you are wondering who put the live cricket in your helmet, that is a fair question."
+    - "An untouched whiteboard is a wasted opportunity."
 
 
 # ─── Cool family ────────────────────────────────────────────────────────────
 
 vain:
   # Mirror-obsessed, hair-fixing, jersey-smoothing, theatrical preening.
-  # Distinct from cool: cool is theatrical-luxe; vain is specifically
-  # appearance-focused.
+  # Inspired by Zoolander commitment-to-good-looking energy. Distinct
+  # from cool: cool is theatrical-luxe self-presentation; vain is
+  # specifically appearance-focused to the point of distraction.
   mood_names: [Disheveled, "Off", Polished, Photogenic, Untouchable]
 
   positive_generic:
@@ -2233,6 +2900,10 @@ vain:
     - "I want a slow-mo replay of that. Just my face."
     - "Hair's working today. Knew it was."
     - "I look unbelievable in this lighting."
+    - "I'm pretty, pretty pleased with myself right now."
+    - "{name} holds the pose long enough for three different cameras to find them."
+    - "Did anyone get that one? Tell me someone got that."
+    - "{name} adjusts their hair before the celebration begins, and then begins the celebration."
 
   negative_generic:
     - "{name} fixes their hair very carefully while jogging off."
@@ -2247,6 +2918,10 @@ vain:
     - "If they put my face on a lowlight reel, we're suing."
     - "The lighting was off on that play. Genuinely."
     - "I'll need a minute with the makeup person."
+    - "Don't print the photos from this drive. None of them."
+    - "{name} attempts to cover their own face with their helmet, briefly succeeds."
+    - "I look fine. The play didn't, but I do."
+    - "{name} walks to the sideline asking if their hair is still right."
 
   scored_td:
     - "{name} crosses the goal line, immediately checks for cameras."
@@ -2290,24 +2965,43 @@ vain:
     - "Hey, photographer. Get my good side. The other good side."
     - "{name} is asking the trainer to fix a single hair sticking out of their helmet."
     - "I have notes for the broadcast crew. Specific notes."
+    - "{name} is checking the angle of their chain in the reflection of someone else's helmet."
+    - "{name} is holding up a small mirror at the precise angle of the press box camera."
+
+  off_day:
+    - "{name} shot a commercial for a sports drink that tasted awful, but the shoot itself went beautifully."
+    - "Just got out of a brand meeting where they told me they want me on the box. THE box."
+    - "{name} watched the rerun of their post-game interview three times in a row, and the lighting was good throughout."
+    - "I spent two hours getting ready for a coffee meeting, and that was the bare minimum required."
+    - "{name} appeared briefly in the background of a promotional newsreel, and they paid the studio for the privilege."
+    - "I did a profile interview yesterday and made them retake every single photo, and to their credit they obliged."
+    - "I tried to turn left in the hallway this morning, and it simply did not happen."
+    - "There has to be more to life than being incredibly good-looking, and I have been searching for it for years."
+    - "{name} held unbroken eye contact with a mirror in the lobby for forty seconds before practice started."
+    - "I'm developing a new look right now. The look does things. The look has range."
+    - "{name} fired their stylist last week for suggesting beige."
 
 
 # ─── Stoic family ───────────────────────────────────────────────────────────
 
 fossil:
-  # Centuries old (truly or otherwise). Vampire-coded: weight of too much
-  # living, watched empires rise and fall, knew your grandfather. Slow
-  # measured movements, old-soul detachment. Unimpressed with the modern
-  # game — players are softer, rules are weaker, equipment is excessive,
-  # everything was harder and better in the older eras. Mirror of
-  # time_traveler's "this era is quaint" but pointing backward.
+  # Centuries old (truly or otherwise). Vampire-coded weight of too much
+  # living, watched empires rise and fall. Slow measured movements,
+  # old-soul detachment. Unimpressed with the modern game — players are
+  # softer, rules are weaker, equipment is excessive, everything was
+  # harder and better in older eras. Adventurist-class volunteer who
+  # signed up for the Cores' games and has been in many other simulations
+  # before this one — fully aware of the sim, but their awareness is
+  # experiential rather than mystical (they remember other rulesets,
+  # other worlds). Mirror of time_traveler's "this era is quaint" but
+  # pointing backward.
   takes_quirks: false
   mood_names: [Slumbering, Stirring, Watching, Engaged, Awakened]
 
   positive_generic:
     - "{name} smiles slightly. They have not smiled in a century."
     - "I have seen ten thousand of these. This one was nice."
-    - "{name} watches the celebration with the patience of someone who has watched empires fall."
+    - "{name} watches the celebration quietly. They have seen many of these, in many cities, in many lives."
     - "Pleasant. The first pleasant moment in some time."
     - "{name} tilts their head, a memory stirring from a previous century."
     - "I knew their great-grandfather. He was a worse player."
@@ -2322,13 +3016,13 @@ fossil:
 
   negative_generic:
     - "Of course. I have seen this play fail in every century."
-    - "{name} lets out the sigh of someone who has watched civilizations crumble."
+    - "{name} lets out a long, weary sigh that takes a moment to finish."
     - "I have lost more to longer-dead opponents."
     - "{name} stares at the field, recognizing the failures from before the war."
     - "Disappointing. The thousandth such this millenia."
     - "{name} touches their wristband, an old habit from a previous body."
     - "We tried this in 2547. It did not work then either."
-    - "{name} watches the replay with the calm of someone whose disappointment has been honed over generations."
+    - "{name} watches the replay without flinching. They have had a long time to practice this disappointment."
     - "These players. So soft."
     - "{name} shakes their head at the modern game."
     - "In my day this would have been a clean tackle. This is not the same sport."
@@ -2354,7 +3048,7 @@ fossil:
     - "I have seen players begin to wake. It will happen again."
 
   threw_td:
-    - "{name} watches the catch with the warm distance of an old soul."
+    - "{name} watches the catch from a long way off, smiling a little."
     - "I knew this completion would feel familiar. I have made it before."
 
   made_fg:
@@ -2378,7 +3072,7 @@ fossil:
     - "I have thrown into coverage in three centuries. The shame is the same."
 
   made_int:
-    - "{name} catches it with the ease of someone who has caught many such balls over many lifetimes."
+    - "{name} catches it cleanly. They have caught many such balls, in many fields nobody else remembers."
 
   fumbled:
     - "These hands have held many things. Today, briefly, they did not hold this."
@@ -2389,20 +3083,38 @@ fossil:
   sideline:
     - "{name} is sitting very still on the bench, perhaps remembering."
     - "{name} is watching a young teammate stretch, recalling when stretching was less needed."
-    - "{name} is drinking water with the patience of someone who has drunk much water over many lifetimes."
+    - "{name} is drinking water slowly. They have been taking their time about everything for a long time now."
     - "{name} is staring at the floodlights, recalling when stadiums had no lights."
     - "{name} has their arms folded, seeming to age and de-age slightly."
-    - "{name} is watching a coach with the warm detachment of someone who knew their parents."
+    - "{name} is watching a coach with a quiet smile. They knew the coach's parents."
     - "{name} is watching the modern game and finding it lacking."
     - "{name} is sipping water, recalling when there was no water on the sideline."
     - "I remember the older versions of this stadium. There were two before this one."
     - "I knew their parents. Both sides."
     - "{name} is murmuring something in a language nobody on the bench recognizes."
+    - "{name} is shuffling a deck of cards in a way that suggests they have been doing this for forty years."
+    - "{name} is dealing themselves a hand of solitaire, and beating themselves at it, slowly."
+
+  off_day:
+    - "{name} sat in the same diner they have sat in for forty years. The waitress knows."
+    - "I remember when this stadium was a swamp. Quiet day, today."
+    - "{name} visited the gravesites of three former teammates. Brought flowers for each."
+    - "The day feels shorter every century. Or perhaps that is just me getting older."
+    - "{name} ate a meal that tasted exactly the way meals used to taste before the Boundary."
+    - "Walked the old field at the edge of town. They built a parking lot over it."
+    - "Most of you would not believe how short the days have become since I was a rookie."
+    - "I knew a coach once who could call a play with three syllables. Then he died, and now there are seven."
+    - "The game was harder, the helmets were softer, and the men were stranger."
+    - "I have outlived every contract I ever signed."
+    - "There used to be more gods. I miss a couple of them."
+    - "If you see me sleeping standing up, do not be alarmed. It is how we used to do it."
 
 
 ghost:
-  # Vanishes, low visibility, almost-not-there. Evades cameras, sits in
-  # shadows, drifts to the bench unseen.
+  # Vanishes, low visibility, almost-not-there. Evades cameras, drifts
+  # to the bench unseen, doesn't always render in family photos. Fully
+  # aware of the simulation — they slip past whatever notices the
+  # other players. Voice is lowercase, soft, drifting.
   takes_quirks: false
   mood_names: [Faded, Wisp, Drifting, Present, Anchored]
 
@@ -2471,6 +3183,20 @@ ghost:
     - "i'm here. i'm just not... visible."
     - "{name} is sitting in a folding chair that wasn't there a minute ago."
     - "you can leave. i'm fine here."
+
+  off_day:
+    - "{name} was at a coffee shop yesterday afternoon, and apparently nobody saw them come or go."
+    - "i went somewhere. i can't remember where."
+    - "{name} sat in a corner of a library all afternoon. The librarian noticed once."
+    - "i don't show up in any of my own family photos."
+    - "{name} went to a movie alone, sat in the back row, and slipped out before the credits rolled."
+    - "took a bus i wasn't planning to take. nobody asked where i was going."
+    - "i have been here the entire time. you did not see me, and that is fine."
+    - "i am the third option on a play whose name i no longer remember."
+    - "if you do not look directly at me, i tend to last longer."
+    - "sometimes the camera misses me entirely. i don't begrudge it."
+    - "i don't know when i died. there may not have been a specific moment."
+    - "i prefer hallways to rooms. always have."
 
 
 # ─── Fiery family ───────────────────────────────────────────────────────────
@@ -2561,13 +3287,31 @@ perfectionist:
     - "We are running this back next series. We have to."
     - "{name} is drawing the same diagram three times, each cleaner than the last."
     - "Tell the line we have one chance to fix this. Tell them now."
+    - "{name} hydrates on a strict schedule, and we are now at minute fourteen of the schedule."
+    - "{name} is timing the play clock on a stopwatch they brought from home."
+
+  off_day:
+    - "{name} watched every snap from last week's game seven times each."
+    - "Wrote eight pages of corrections. Will review with the coordinator tomorrow."
+    - "{name} spent yesterday afternoon at the facility alone, working at the whiteboard until the lights went out."
+    - "I diagrammed all forty-three plays we've run this season and sorted them by formation depth."
+    - "{name} re-laced and re-tied all six pairs of cleats. Twice."
+    - "I rewatched my own film from college. Found three things I should have stopped doing."
+    - "There is a correct way to lace a cleat, and most of you are not doing it."
+    - "I have a five-page document on huddle posture. I will be happy to share it on request."
+    - "Every wrinkle in the field tape is a wrinkle in our preparation."
+    - "I redid my locker setup at three in the morning, and I will likely redo it again tomorrow."
+    - "The right-foot-first rule is not optional, and I will not be discussing this further."
+    - "I have catalogued every breath I took in the last drive, and there were four too many."
 
 
 paranoid:
-  # Conspiratorial. The refs are bought, the helmets are bugged, the field
-  # is measured wrong, "they" are watching. Active fear of agents and
-  # surveillance. Distinct from cursed (this isn't fate — it's people)
-  # and unhinged (the chaotic-weird core has no organized adversary).
+  # Conspiratorial. The refs are bought, the helmets are bugged, the
+  # field is measured wrong, "they" are watching. Active fear of agents
+  # and surveillance. Partially aware that something is genuinely off —
+  # the conspiracy is real, but the specifics they suspect are usually
+  # wrong. Distinct from cursed (this isn't fate — it's people) and
+  # unhinged (chaotic-weird has no organized adversary).
   mood_names: [Cornered, Watched, Wary, Onto Them, Untraceable]
 
   positive_generic:
@@ -2597,7 +3341,7 @@ paranoid:
     - "{name} is counting the people in the press box. There's one more than last time."
     - "the refs were paid by the moon landing crew."
     - "the ball was tampered with."
-    - "the wifi at this stadium is poisoned."
+    - "the signal at this stadium is poisoned."
     - "they don't want me to win. they don't want any of us to win."
     - "this is what they want you to think."
     - "I have signal interference."
@@ -2658,6 +3402,33 @@ paranoid:
     - "{name} is whispering into a teammate's helmet earhole, eyes scanning the crowd."
     - "Cover the playsheet. The drone's been overhead for two minutes."
     - "{name} is watching the chain gang. Specifically the third one. They moved the chains."
+    - "{name} is fiddling with a small puzzle-cube and watching the bench out of the corner of their eye."
+    - "Don't say it out loud. They listen during timeouts. Especially during timeouts."
+    - "Hey. The cheerleaders do the same routine in the same order every game. Every game. That's not how cheerleading works. I checked."
+    - "{name} watches a specific cameraman for the entire timeout without blinking."
+    - "There's a kid in the second row holding the same sign he had at our last home game. Same kid. Same sign. The sign hasn't gotten any older."
+    - "The chain gang is too efficient. Watch them work. Nobody is that smooth at a job that boring."
+    - "Don't tell coach what just happened on that play. He's compromised. I'm not saying how. He's compromised."
+
+  off_day:
+    - "{name} swept their car for tracking devices. Found nothing. Means they're better at it now."
+    - "Counted the people on my street today. There was one extra."
+    - "{name} drove a different route to practice. They've been watching."
+    - "Don't say it out loud. They listen."
+    - "{name} spent six hours at a public library yesterday, moving to a different floor every hour on the hour."
+    - "Stayed off the grid for three straight days. They didn't even know I was off the grid. That's the trick."
+    - "The schedule is not random. I have a chart at home, and I do not bring it on road games."
+    - "Watch where the camera lingers in the third quarter. They tell you nothing for free."
+    - "There are six of you in this room I would not eat dinner with, and I will not be naming them."
+    - "Whoever sets the field temperature is on someone's payroll, and we have not yet figured out whose."
+    - "I have stopped using my own footlocker. I borrow a different one each week."
+    - "The numbers on the play clock are being shaped, and I think you already know by whom."
+    - "I drove three different routes to practice this week. The third one had a delivery truck I had not seen before, parked on the same corner two days in a row."
+    - "I had a teammate two years ago who started asking the right questions. He is not on a team anymore. He is not on any team. I checked all of them."
+    - "There is a guy in the third row at every home game. Different jacket. Same haircut. Same hands."
+    - "I am being watched by something. The thing is not a person. That's where I'm at right now."
+    - "Did you know they hired a new janitor at the practice facility three weeks ago? I asked him where he was from. He said the city. The city. As if that's a place."
+    - "Tell me which of these people you've actually met outside the locker room. Most of you can't name three. That's by design."
 
 
 # ─── Melancholy family ──────────────────────────────────────────────────────
@@ -2763,15 +3534,33 @@ poetic:
     - "{name} is sitting with one hand resting open on their knee, palm up."
     - "What is a season but a long autumn dressed in numbers."
     - "{name} is holding their helmet in their lap, looking at it like it's an old friend they're losing."
+    - "{name} is sketching the field on a small notepad, slowly, with no particular plan for the drawing."
+    - "{name} is reading the same passage of a paperback they have read forty times before."
+    - "{name} is pointing at a bird circling the stadium, watching where it lands."
+
+  off_day:
+    - "{name} walked along a riverbank, watching leaves carry on the current."
+    - "Wrote two pages of nothing in particular. The pages, however, knew."
+    - "{name} sat with a single book all afternoon. Did not finish it."
+    - "I watched a sunset alone. The colors were unkind."
+    - "{name} fed bread to ducks at a small pond. There were nine ducks."
+    - "I visited the cemetery where my grandfather is buried and sat on the bench for a long while without saying anything."
+    - "The grass holds the cold longer than the body does."
+    - "I find the long sound of a stadium in the morning, before anyone arrives, to be enough."
+    - "We are all of us made out of the same long afternoons."
+    - "There is a small wind that comes through every press box at exactly the wrong moment."
+    - "I do not write any of this down. The wind does it for me."
+    - "A football, held in two hands, weighs almost nothing. Held in one, it weighs a year."
 
 
 # ─── Fiery family ───────────────────────────────────────────────────────────
 
 dramatic:
   # Theater-kid theatricality. Performative grandeur, soliloquies, public
-  # weeping in Q1. Treats every play like Shakespeare. Distinct from fiery
-  # (real rage) and lively (communal joy) — dramatic is PERFORMING emotion
-  # at the audience.
+  # weeping in Q1. Treats every play like an opening night. Inspired by
+  # Shatner / Liza Minnelli pause-for-applause stage energy. Distinct
+  # from fiery (real rage) and lively (communal joy) — dramatic is
+  # PERFORMING emotion at the audience.
   takes_quirks: false
   mood_names: [Tragic, Wounded, On Stage, Soaring, Triumphant]
 
@@ -2787,6 +3576,10 @@ dramatic:
     - "{name} slow-motion turns to the crowd, arms outstretched. The broadcast plays it at normal speed. It still looks slow."
     - "{name} cradles the football and sings to it. Nobody knows the song."
     - "{name} removes their helmet, lets the wind hit their face, stares into the distance for thirty seconds."
+    - "{name} raises both arms and holds the pose for a full count of five."
+    - "A. CATCH. FOR. THE. AGES."
+    - "{name} bows toward the home crowd, and the home crowd, in time, recovers."
+    - "Mark this moment. Mark it well."
 
   negative_generic:
     - "{name} drops to one knee, lowers their head. A coach says 'get up.' They just can't."
@@ -2799,6 +3592,10 @@ dramatic:
     - "{name} collapses onto the bench like a Victorian woman who just received bad news via telegram."
     - "{name} rips off their gloves and throws them like they're casting aside a former life."
     - "{name} stares at their hands and whispers 'these hands. These cursed hands.'"
+    - "{name} drops to their knees, hands skyward, and holds the pose."
+    - "This. This is where the chapter turns."
+    - "Etch this in the record. Let no one forget what happened here today."
+    - "{name} delivers a soliloquy directly to the kicking net, and the net listens."
 
   scored_td:
     - "{name} crosses the goal line, falls to their knees, raises both arms."
@@ -2854,16 +3651,34 @@ dramatic:
     - "Who among us has not been forsaken by the gods of football? But I have suffered uniquely."
     - "{name} is sketching a self-portrait on a napkin, pausing dramatically between strokes."
     - "{name} is staring intensely at their own reflection in a teammate's visor, mouthing 'this is your moment.'"
+    - "{name} is performing a quiet aria for a teammate who didn't ask for one and cannot leave."
+    - "{name} is delivering a soliloquy at full volume, to the kicking net, which is listening."
+
+  off_day:
+    - "{name} attended a community theater performance recently and wept openly through the entire second act."
+    - "I hosted a dinner where the toast became a full soliloquy, and by the end of it the room was in tears."
+    - "{name} re-watched their own post-game interview as if it were an old, untouchable play."
+    - "I performed in a community production of 'Velmar' recently, and naturally I was Velmar."
+    - "{name} entered a karaoke bar and treated 'Hold the Long Line' as a full operatic aria."
+    - "I gave an impromptu speech at my niece's birthday party, and the children, in time, recovered."
+    - "There are no small parts. There is only a stage that has not yet realized that it needs me."
+    - "{name} bowed to the cafeteria when they entered this morning, and three of the assistants applauded out of pure instinct."
+    - "I cried into a bowl of pasta last night for reasons that I am not yet ready to share with the rest of the world."
+    - "{name} read aloud from their own contract at a charity gala, and the audience genuinely leaned in."
+    - "I have been told my voice carries, and I do not take this as the criticism it was apparently intended to be."
 
 
 # ─── Cool family ────────────────────────────────────────────────────────────
 
 trash_talker:
-  # Heel-coded antagonist. Lives rent-free in opponents' heads. Points at
-  # scoreboards, blows kisses to opposing fans, mocks specific opponents.
-  # Distinct from cool (theatrical-luxe self-focused) and fiery (rage at
-  # world) — trash_talker is FOCUSED on the opposition.
-  mood_names: [Quiet, Dialed Down, Talking, Cooking, Living Rent-Free]
+  # Heel-coded antagonist. Takes up permanent residence in opponents'
+  # heads. Points at scoreboards, blows kisses to opposing fans, mocks
+  # specific opponents by name. Inspired by McGregor / Mayweather /
+  # general WWE-heel energy — NOT Deion specifically. Keep "Y'all"
+  # interjections and press-tour podcast tropes out. Distinct from
+  # cool (theatrical-luxe self-focused) and fiery (rage at the world)
+  # — trash_talker is FOCUSED on the opposition.
+  mood_names: [Quiet, Dialed Down, Talking, Cooking, Inside Their Heads]
 
   positive_generic:
     - "{name} pulls an imaginary phone out of their pocket and calls the opposing coach."
@@ -2880,6 +3695,10 @@ trash_talker:
     - "{name} air-mails a kiss to the opposing mascot."
     - "{name} pretends to read a newspaper while strolling off."
     - "{name} mimes hanging up a 'closed' sign on the goal line."
+    - "I told you. I told you all week long."
+    - "{name} stares directly into the opposing bench and holds it for a long moment."
+    - "Mark this one. Mark every one of them, while you're at it."
+    - "That right there is a postgame quote. Save it."
 
   negative_generic:
     - "{name} mouths something untranslatable at the defender."
@@ -2896,6 +3715,10 @@ trash_talker:
     - "Smile. The cameras love this for you."
     - "Don't worry. I'll get yours twice next series."
     - "You'll be hearing from me again."
+    - "Nah. Run it back. Run it back."
+    - "{name} laughs once, points at no one in particular."
+    - "I'm hearing it. I'm hearing it. You will be hearing me again before this game is over."
+    - "{name} whispers something to a corner, and the corner shakes their head and walks off."
 
   scored_td:
     - "{name} crosses the goal line, immediately points at the opposing bench."
@@ -2944,15 +3767,36 @@ trash_talker:
     - "I'm gonna be talking to that DB all four quarters. They'll hear me in their sleep."
     - "Tell their bench I said hi. I want them thinking about me."
     - "Ten more minutes and they'll be quiet on that sideline. Watch."
+    - "{name} is polishing a chain with the corner of their jersey, slowly enough that the camera notices."
+    - "{name} is holding a watch up to the broadcast camera. The watch is large and gold."
+
+  off_day:
+    - "{name} held an impromptu press conference at the team facility and used most of it to name two specific defensive backs."
+    - "I told a reporter that the opposing left tackle would not be fast enough this week. The reporter laughed. The left tackle is also slow."
+    - "{name} sent a telegram to next week's opposing safety, addressing him by his first name and his middle name."
+    - "I read every fan letter in their team's mailbag for an hour and a half last night, and I'd like to thank a Mr. BluePride personally for his continued contributions to my motivation."
+    - "{name} predicted the exact final score of next week's game in writing, signed the page, and sent it to the league office."
+    - "I had three suits made this week, and one of them is specifically for the postgame press conference where I get to remind everybody exactly what I told you."
+    - "{name} watched film of next week's safety getting beat on a deep ball and sent him the timestamp in a letter."
+    - "{name} commissioned a custom watch with the date of next week's game on the back, and the date of last week's game right beside it, in case anyone forgets who beat them last."
+    - "I had a tailor put my opponent's jersey number on the inside lining of my coat, and only the tailor and I know it is in there."
+    - "{name} sent a fruit basket to the corner they beat last week, with a handwritten card inside that just said 'thank you for the help.'"
+    - "I sat at the desk last night and wrote down every nickname I have invented for next week's quarterback. The list filled the page."
+    - "I have the opposing safety's quote about me pinned above my locker, and I read it before every walkthrough so I do not forget what we are doing here."
+    - "I called the opposing offense soft on the radio last year, and three of them have sued me for defamation."
+    - "I watched every highlight from last week's game twice over, and I can pinpoint the exact moment I took up permanent residence in their heads."
+    - "{name} attended a charity event where they were asked to sign a rival jersey. They signed it, in red ink, directly across the name on the back."
 
 
 # ─── Wholesome family ───────────────────────────────────────────────────────
 
 mystic:
   # Devotional follower of an unseen flow. Borrows prophet's thread/path
-  # imagery but RECEIVES rather than SEES — they don't have visions, they
-  # follow guidance. Same calm at wins and losses, bows after every play,
-  # gives thanks. Distinct from prophet (seer vs. follower).
+  # imagery but RECEIVES rather than SEES — they don't have visions,
+  # they follow guidance. Same calm at wins and losses, bows after every
+  # play, gives thanks. Partially aware: they cannot see through the
+  # simulation directly, but they trust prophets who can, and the
+  # reverence is earned. Distinct from prophet (seer vs. follower).
   takes_quirks: false
   mood_names: [Untethered, Drifting, Centered, Aligned, Enlightened]
 
@@ -3040,6 +3884,22 @@ mystic:
     - "The flow is gentle today. I am grateful for the gentleness."
     - "{name} is breathing in for four counts, holding for four, releasing for four."
     - "I will carry this stillness back onto the field."
+    - "{name} is rotating a small smooth stone in their hand, slowly, with great intention."
+    - "{name} is watching the birds above the field, and they say a great deal about the next play."
+
+  off_day:
+    - "{name} spent the morning in silence. The path arranged itself."
+    - "I walked the same trail as last week. Different at every step."
+    - "{name} arranged seven stones on a windowsill. Each was placed correctly."
+    - "I sat with the football for a full hour, listened to whatever it had to tell me, and thanked it before I left."
+    - "{name} drank tea slowly. The tea agreed to be drunk slowly."
+    - "Brewed a pot of tea with the same leaves three times. Each was new."
+    - "The football remembers, and we do not."
+    - "Every snap is a small ceremony, and most of you do not notice."
+    - "I bow to the equipment manager. They are the priest of this temple."
+    - "There is a frequency only the football hears, and most weeks I think I can hear it too."
+    - "When you tape an ankle, you are also tying a vow."
+    - "Do not borrow another player's gloves. Their luck is not for you."
 
 
 knight:
@@ -3128,4 +3988,22 @@ knight:
     - "{name} is sharpening an invisible blade against an invisible whetstone."
     - "Mark the field. The chronicles must record where we stood."
     - "Steady on, steady on. We have been tested before."
+
+  off_day:
+    - "{name} ran the long road at dawn this morning, as they have done every week since enlistment."
+    - "{name} sharpened the blade and polished the helm in the same order they always do, because the ritual is the rest."
+    - "{name} rode a horse recently. Specifically, a horse, and not anything else."
+    - "{name} visited the freehold gates. Touched them, as the oath requires."
+    - "{name} stood at attention in a quiet field for an hour. Reasons known only to them."
+    - "{name} drilled forms in the yard. Forty repetitions, then forty more."
+    - "{name} recited the ledger of past contests aloud to an empty room this morning."
+    - "{name} mended a torn cloak that no one has seen them wear."
+    - "{name} walked the boundary of their land at sunrise, naming each marker."
+    - "Discipline is the only luxury, {name} has been heard to say."
+    - "An oath is a kind of grammar, and most of you are writing in fragments."
+    - "I would die for any of you on the right day, against the right opponent."
+    - "There is a way to enter a stadium, and there is a way to leave one. I have opinions on both."
+    - "Honor lives in the small ceremonies. I salute the locker, even when no one is looking."
+    - "A worthy opponent is the highest gift the schedule can give us."
+    - "I sharpen what I can sharpen. The rest is up to the field."
 

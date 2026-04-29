@@ -613,34 +613,6 @@ favorites:
     - "stockpiling supplies for the next Reset"
     - "mapping the route through the cracked years"
 
-  saying:
-    - "'Probably.' (overused)"
-    - "'Yeah, no.' (when meaning either)"
-    - "'It is what it is.'"
-    - "'That'll do.'"
-    - "'Couldn't tell ya.'"
-    - "'Different strokes.'"
-    - "'You don't say.'"
-    - "'Beats me.'"
-    - "'Not for nothin', but...'"
-    - "'I'll allow it.'"
-    - "'Fair enough.'"
-    - "'Reckon so.'"
-    - "'Suit yourself.'"
-    - "'No way to know.'"
-    - "'Could be worse.'"
-    - "'Such is life.'"
-    # Surreal
-    - "'Time will tell. It usually does.'"
-    - "'Stranger things have walked.'"
-    - "'It rhymes if you read it backwards.'"
-    - "'Ask the moon.'"
-    # Cores-leaked lore
-    - "'As they used to say, before the Splintering.'"
-    - "'Trust the second-spring.'"
-    - "'Long Quiet, longer memory.'"
-    - "'Reset and remember.'"
-
   childhood_pet:
     - "a cat named after a dead president"
     - "a turtle named Speedy"
@@ -746,11 +718,6 @@ personality_favorites:
       - "training footage they were assigned to memorize"
       - "the orientation films from before deployment"
       - "any film classified at clearance level four"
-    saying:
-      - "'Cover holds.'"
-      - "'Within parameters.'"
-      - "'Logged.'"
-      - "'Acknowledged. Continuing.'"
     weird_skill:
       - "can recall any document by file number"
       - "can identify any person by gait at fifty meters"
@@ -865,11 +832,6 @@ personality_favorites:
       - "whatever someone else recommended"
       - "the special, every time"
       - "food they keep forgetting they don't like"
-    saying:
-      - "'Wait, what?'"
-      - "'Was that today?'"
-      - "'I thought we did that already.'"
-      - "'Hm. Weird.'"
     weird_skill:
       - "always finds the way out, eventually"
       - "remembers people's pets but never their names"
@@ -999,11 +961,6 @@ personality_favorites:
       - "the post-touchdown sash"
 
   trash_talker:
-    saying:
-      - "'Living rent-free.'"
-      - "'Tell your kids.'"
-      - "'Save it. I'll be back.'"
-      - "'Smile. You'll be on the highlights.'"
     target:
       - "the third-string corner of every team in the league"
       - "any opponent who shushed the crowd once"
@@ -1037,11 +994,6 @@ personality_favorites:
     drink:
       - "ale from the freehold inns"
       - "water from a stream they have crossed before"
-    saying:
-      - "'Well-fought.'"
-      - "'By my hand.'"
-      - "'Onward.'"
-      - "'Honor demanded it.'"
     oath:
       - "the oath sworn before their first game"
       - "the vow they keep to the line"
