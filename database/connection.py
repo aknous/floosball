@@ -942,8 +942,11 @@ def clear_db():
     """
     DB_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Tables to preserve across fresh starts
-    preserveTables = {"users", "beta_allowlist"}
+    # Tables to preserve across fresh starts. app_settings holds
+    # admin-editable runtime config (feedback URL, survey toggles, etc.) —
+    # those are operator settings, not season data, and should survive
+    # a DB wipe.
+    preserveTables = {"users", "beta_allowlist", "app_settings"}
 
     # Drop all non-preserved tables (reverse dependency order), then recreate
     tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
