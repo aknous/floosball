@@ -1656,8 +1656,9 @@ async def get_app_settings():
         rows = session.query(AppSetting).all()
         settings = {row.key: row.value for row in rows}
         # Coerce booleans for keys we know are boolean
-        if 'feedback_visible' in settings:
-            settings['feedback_visible'] = str(settings['feedback_visible']).lower() == 'true'
+        for boolKey in ('feedback_visible', 'survey_visible'):
+            if boolKey in settings:
+                settings[boolKey] = str(settings[boolKey]).lower() == 'true'
         return settings
     finally:
         session.close()
@@ -1671,7 +1672,7 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     from database.models import AppSetting
     if not isinstance(payload, dict) or not payload:
         raise HTTPException(status_code=400, detail="payload must be a non-empty object")
-    allowed = {'feedback_url', 'feedback_visible', 'survey_url'}
+    allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text'}
     session = get_session()
     try:
         updated = []
