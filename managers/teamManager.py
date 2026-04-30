@@ -1279,8 +1279,29 @@ class TeamManager:
         team.coach = coach
 
     def fireCoach(self, team: FloosTeam.Team) -> None:
-        """Remove a team's coach (leaves them coachless until next hire)."""
+        """Remove a team's coach (leaves them coachless until next hire).
+
+        Persists the change so a fired coach actually stays fired across
+        sessions: the Coach row's team_id is cleared, returning them to
+        the unassigned pool. Without this, _loadCoachFromDatabase would
+        re-link the same coach via team_id on the next boot and the GM
+        fire vote would silently undo itself.
+        """
+        oldCoach = team.coach
         team.coach = None
+        if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
+                and oldCoach is not None and getattr(oldCoach, 'id', None)):
+            try:
+                from database.models import Coach as DBCoach
+                dbCoach = self.db_session.get(DBCoach, oldCoach.id)
+                if dbCoach is not None:
+                    dbCoach.team_id = None
+                    self.db_session.flush()
+            except Exception as e:
+                self.logger.warning(
+                    f"fireCoach: failed to clear DB team_id for "
+                    f"{getattr(oldCoach, 'name', '?')}: {e}"
+                )
 
     def handleCoachRetirement(self, season: int) -> None:
         """Increment seasonsCoached, then check each coach for retirement."""
