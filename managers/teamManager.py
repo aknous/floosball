@@ -1304,14 +1304,39 @@ class TeamManager:
                 )
 
     def handleCoachRetirement(self, season: int) -> None:
-        """Increment seasonsCoached, then check each coach for retirement."""
+        """Increment seasonsCoached, then check each coach for retirement.
+
+        On retirement, the old Coach DB row is deleted before the new
+        coach is generated and saved. Without this, the retired coach's
+        row keeps team_id = team.id, _saveCoachToDatabase inserts a
+        second row with the same team_id, and _loadCoachFromDatabase's
+        .first() query can resurrect the retired coach on the next boot.
+        """
         for team in self.teams:
             if team.coach:
                 team.coach.seasonsCoached += 1
             if team.coach and team.coach.shouldRetire():
+                retiringName = team.coach.name
+                retiringSeasons = team.coach.seasonsCoached
+                retiringId = getattr(team.coach, 'id', None)
                 self.logger.info(
-                    f"{team.coach.name} retires after {team.coach.seasonsCoached} seasons with {team.name}"
+                    f"{retiringName} retires after {retiringSeasons} seasons with {team.name}"
                 )
+                # Drop the retired coach's DB row so it can't be re-linked
+                # via team_id and can't pollute the unassigned coach pool.
+                if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
+                        and retiringId is not None):
+                    try:
+                        from database.models import Coach as DBCoach
+                        dbCoach = self.db_session.get(DBCoach, retiringId)
+                        if dbCoach is not None:
+                            self.db_session.delete(dbCoach)
+                            self.db_session.flush()
+                    except Exception as e:
+                        self.logger.warning(
+                            f"handleCoachRetirement: failed to delete retired "
+                            f"coach {retiringName} (id={retiringId}): {e}"
+                        )
                 team.coach = self.generateCoach()
                 self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
