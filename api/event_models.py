@@ -420,17 +420,20 @@ class OffseasonEvent:
     @staticmethod
     def pick(teamName: str, teamAbbr: str, playerName: str,
              position: str, rating: float, tier: str,
-             isPromotion: bool = False) -> Dict[str, Any]:
+             isPromotion: bool = False, playerId: Optional[int] = None,
+             slot: Optional[str] = None) -> Dict[str, Any]:
         return {
             'event': EventType.OFFSEASON_PICK.value,
             'timestamp': datetime.now().isoformat(),
             'teamName': teamName,
             'teamAbbr': teamAbbr,
             'playerName': playerName,
+            'playerId': playerId,
             'position': position,
             'rating': rating,
             'tier': tier,
             'isPromotion': isPromotion,
+            'slot': slot,
         }
 
     @staticmethod
@@ -474,11 +477,12 @@ class OffseasonEvent:
         }
 
     @staticmethod
-    def fa_draft_order_update(draftOrder: list) -> Dict[str, Any]:
+    def fa_draft_order_update(draftOrder: list, faPool: Optional[list] = None) -> Dict[str, Any]:
         return {
             'event': EventType.FA_DRAFT_ORDER_UPDATE.value,
             'timestamp': datetime.now().isoformat(),
             'draftOrder': draftOrder,
+            'faPool': faPool,
         }
 
     @staticmethod

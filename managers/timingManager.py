@@ -140,9 +140,9 @@ class TimingManager:
     def _getScheduledDelays(self) -> Dict[str, float]:
         """Scheduled-mode overrides: longer offseason delay and visible pick pacing for real users"""
         return {
-            'post_championship': 3600.0, # 1 hour — let users see Floos Bowl results
-            'offseason': 300.0,        # 5 minutes — breathing room before FA draft
-            'offseason_pick': 5.0,     # 5s per pick so users can follow the draft
+            'post_championship': 3600.0, # 1 hour — front-office decisions land 1h after the bowl
+            'offseason': 60.0,           # 1 minute breath after front-office, before noon-ET wait
+            'offseason_pick': 12.0,      # 12s per pick — slow enough that the draft feels deliberate
         }
 
     def _getTestScheduledDelays(self) -> Dict[str, float]:
@@ -162,10 +162,18 @@ class TimingManager:
         }
 
     def _getOffseasonTestDelays(self) -> Dict[str, float]:
-        """Offseason-test overrides: fast games, but visible offseason picks"""
+        """Offseason-test overrides: fast games, but visible offseason picks.
+        Mimics the phased SCHEDULED flow with compressed waits so the rookie
+        draft / FA draft gates can be exercised without sitting through the
+        real wall-clock targets (noon ET, top of hour). Each wait is 1 minute
+        so there's room to verify UI state (countdowns, FO page, ballot
+        endpoints staying open) before each phase transitions."""
         return {
-            'offseason_pick': 5.0,     # 5s per pick (same as SCHEDULED)
-            'offseason': 10.0,         # Short offseason wait before FA window
+            'post_championship': 60.0, # Stand-in for the real 1h post-bowl quiet
+            'offseason': 30.0,         # Pause after front-office decisions
+            'rookie_draft_wait': 60.0, # Stand-in for "wait until next noon ET"
+            'fa_draft_wait': 60.0,     # Stand-in for "wait until top of next hour"
+            'offseason_pick': 5.0,     # Visible per-pick pacing
             'season_transition': 10.0,
         }
 
@@ -361,6 +369,54 @@ class TimingManager:
             # Test-scheduled: shorter delay
             await asyncio.sleep(self.delays['offseason'] / 2)
 
+    async def waitUntilNoonEt(self) -> None:
+        """Wait until the next noon Eastern. Used to schedule the rookie draft
+        for the day after the Floos Bowl so users have a predictable kickoff.
+
+        SCHEDULED mode polls until the wall-clock target. OFFSEASON_TEST mimics
+        the phased flow with a short fixed delay (set via 'rookie_draft_wait'
+        in delays). All other modes flow through instantly — they don't have
+        the real-time pacing this gate is designed for.
+        """
+        if self._isFastCatchingUp:
+            return
+        if self.mode == TimingMode.SCHEDULED:
+            target = self._nextNoonEasternUtc()
+            pollInterval = self.delays.get('daily_check', 30.0)
+            logger.info(f"SCHEDULED mode: waiting for rookie draft kickoff at {target.isoformat()} ET-noon (polling every {pollInterval}s)")
+            while datetime.datetime.utcnow() < target:
+                await asyncio.sleep(pollInterval)
+        elif self.mode == TimingMode.OFFSEASON_TEST:
+            delay = self.delays.get('rookie_draft_wait', 30.0)
+            logger.info(f"{self.mode.value} mode: rookie-draft pre-wait {delay}s")
+            await asyncio.sleep(delay)
+        elif self.mode == TimingMode.TEST_SCHEDULED:
+            delay = self.delays.get('rookie_draft_wait', 15.0)
+            await asyncio.sleep(delay)
+
+    async def waitUntilTopOfHour(self) -> None:
+        """Wait until the top of the next UTC hour. Used to gate the FA draft
+        so it kicks off on a clean hour boundary after the rookie draft ends.
+
+        SCHEDULED mode polls until the boundary. OFFSEASON_TEST / TEST_SCHEDULED
+        substitute a short fixed delay. All others flow through.
+        """
+        if self._isFastCatchingUp:
+            return
+        if self.mode == TimingMode.SCHEDULED:
+            target = self._nextTopOfHourUtc()
+            pollInterval = self.delays.get('daily_check', 30.0)
+            logger.info(f"SCHEDULED mode: waiting for FA draft kickoff at {target.isoformat()} (top of hour)")
+            while datetime.datetime.utcnow() < target:
+                await asyncio.sleep(pollInterval)
+        elif self.mode == TimingMode.OFFSEASON_TEST:
+            delay = self.delays.get('fa_draft_wait', 30.0)
+            logger.info(f"{self.mode.value} mode: FA-draft pre-wait {delay}s")
+            await asyncio.sleep(delay)
+        elif self.mode == TimingMode.TEST_SCHEDULED:
+            delay = self.delays.get('fa_draft_wait', 15.0)
+            await asyncio.sleep(delay)
+
     async def waitBetweenSeasons(self) -> None:
         """Wait between seasons.
 
@@ -382,6 +438,29 @@ class TimingManager:
             await asyncio.sleep(self.delays['season_transition'])
         elif self.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
             logger.info(f"{self.mode.value} mode: starting season immediately (backdated to last Monday)")
+
+    @staticmethod
+    def _nextNoonEasternUtc() -> datetime.datetime:
+        """Next 12:00 PM Eastern after now, as naive UTC.
+
+        If it's already past noon ET today, returns tomorrow's noon. Used to
+        gate the rookie draft so it always kicks off at a known wall-clock
+        time rather than a vague "X minutes after the bowl".
+        """
+        nowEt = _nowEastern()
+        targetEt = nowEt.replace(hour=12, minute=0, second=0, microsecond=0)
+        if nowEt >= targetEt:
+            targetEt = targetEt + datetime.timedelta(days=1)
+        offset = 4 if _isEdtDate(targetEt) else 5
+        return targetEt + datetime.timedelta(hours=offset)
+
+    @staticmethod
+    def _nextTopOfHourUtc() -> datetime.datetime:
+        """Next top-of-the-hour boundary in UTC. Always strictly in the future
+        (if we're already at :00, returns +1 hour).
+        """
+        now = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+        return now + datetime.timedelta(hours=1)
 
     @staticmethod
     def _nextMondayUtc(hour: int = 4) -> datetime.datetime:

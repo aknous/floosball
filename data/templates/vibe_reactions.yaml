@@ -2417,7 +2417,7 @@ ghost:
     - "{name} keeps their visor low even off the field."
     - "{name} flickers briefly between plays. The simulation reacquires them."
     - "{name} phases out for a moment, as if checking on something 'outside'."
-    - "{name} steps out of the simulation briefly. Comes back changed..."
+    - "{name} steps out of the simulation briefly and comes back somewhat changed..."
 
   negative_generic:
     - "{name} vanishes into the tunnel for several plays."

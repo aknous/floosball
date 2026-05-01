@@ -138,8 +138,33 @@ class SeasonManager:
         # Offseason transaction history (persists for page refresh)
         self._offseasonTransactions: list = []
 
+        # Per-team aggregated fan rankings for the rookie draft (Borda count).
+        # Populated when ballots are collected at rookie draft time; surfaced
+        # via /api/offseason so the Front Office page can show the team's
+        # tallied rookie rankings (parallel to FA fan vote tallies).
+        self._offseasonRookieBallotResults: dict = {}
+
         # Cached next-game-start timestamp (set once, survives page refreshes)
         self._cachedNextGameStart: Optional[datetime.datetime] = None
+
+        # Phased offseason state — drives UI labels and countdowns.
+        #   _offseasonFlowPhase: top-level flow stage:
+        #     'post_bowl'   — Floos Bowl ended, waiting to open front office
+        #     'frontoffice' — GM votes resolved, FA pool populated, waiting on
+        #                     noon-ET kickoff for the rookie draft
+        #     'rookie_draft' — rookie picks streaming live (predraft + picks)
+        #     'pre_fa'      — rookie draft done, waiting on top-of-hour for FA
+        #     'fa_draft'    — FA picks streaming live
+        #     'training'    — sequential silent calculations after FA
+        #     None          — no offseason active
+        #   _offseasonFlowTarget: ISO target time for the *next* phase, set
+        #     during wait gates (post_bowl/frontoffice/pre_fa) and cleared
+        #     during active phases. Frontend renders a countdown when present.
+        # NOTE: _offseasonPhase (separate attribute) tracks the OffseasonPanel
+        # sub-phase render state ('predraft', 'rookie_draft', 'free_agency')
+        # and is owned by the draft generators, not this flow controller.
+        self._offseasonFlowPhase: Optional[str] = None
+        self._offseasonFlowTarget: Optional[datetime.datetime] = None
 
         logger.info("SeasonManager initialized")
 
@@ -3278,8 +3303,21 @@ class SeasonManager:
         """Handle season completion tasks"""
         if not self.currentSeason:
             return
-            
+
         logger.info("Completing season simulation")
+
+        # OFFSEASON_TEST runs the entire regular season + playoffs silently
+        # to keep the sim fast — but the offseason portion needs broadcasts
+        # enabled so users can actually watch what's happening. Flip it on
+        # here (right when the bowl ends) so season_end + the post_bowl
+        # phase change fire correctly. _handleOffseason will keep it on
+        # through the offseason flow and disable at the very end.
+        if self.timingManager.mode == TimingMode.OFFSEASON_TEST and BROADCASTING_AVAILABLE:
+            from api.game_broadcaster import broadcaster as bc
+            from api.websocket_manager import manager as wsMgr
+            if not bc.is_enabled():
+                bc.enable(wsMgr)
+                logger.info("offseason-test: broadcasting enabled for season-end + offseason")
         
         # Mark season as complete
         self.currentSeason.isComplete = True
@@ -3311,6 +3349,20 @@ class SeasonManager:
         seasonNumber = self.currentSeason.seasonNumber
         self.serviceContainer.getService('game_state').setState('seasonsPlayed', seasonNumber)
 
+        # Enter the post-bowl phase: Floos Bowl is over, we'll open the front
+        # office in `post_championship` seconds. Surface this so the UI can
+        # render a "Offseason in 1h" countdown during the otherwise-quiet gap.
+        # Skip during fast catch-up — the delays are bypassed entirely there.
+        delays = self.timingManager.delays
+        postBowlWait = delays.get('post_championship', 0.0)
+        if postBowlWait > 0 and not self.timingManager._isFastCatchingUp:
+            await self._setOffseasonFlow(
+                'post_bowl',
+                datetime.datetime.utcnow() + datetime.timedelta(seconds=postBowlWait),
+            )
+        else:
+            await self._setOffseasonFlow(None, None)
+
         # Broadcast season_end so connected frontends know the season is over
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             championData = {}
@@ -3333,17 +3385,47 @@ class SeasonManager:
         await self._handleOffseason()
     
     async def _handleOffseason(self) -> None:
-        """Handle offseason activities"""
+        """Handle offseason activities — phased flow.
+
+        Phase model (set on self._offseasonFlowPhase, target on self._offseasonFlowTarget):
+          post_bowl   → set in _completeSeasonSimulation; waitPostChampionship runs here.
+          frontoffice → resolve GM votes + contracts + populate FA pool, then wait until next noon ET.
+          rookie_draft→ predraft setup + live rookie picks.
+          pre_fa      → wait until top of next hour.
+          fa_draft    → live FA picks.
+          training    → silent player development calculations.
+        """
         logger.info("Processing offseason activities")
 
-        # Wait after Floos Bowl so users can see championship results
+        # OFFSEASON_TEST runs the season silently and only broadcasts during
+        # the offseason. Enable the broadcaster as the very first step so
+        # phase-change events for post_bowl + frontoffice (set before / inside
+        # waitPostChampionship and the front-office decisions) actually reach
+        # connected clients. Without this the navbar countdown stays blank
+        # for the whole post-bowl + front-office stretch.
+        offseasonTestBroadcastEnabled = False
+        if self.timingManager.mode == TimingMode.OFFSEASON_TEST and BROADCASTING_AVAILABLE:
+            from api.game_broadcaster import broadcaster as bc
+            from api.websocket_manager import manager as wsMgr
+            bc.enable(wsMgr)
+            offseasonTestBroadcastEnabled = True
+            logger.info(f"{self.timingManager.mode.value}: broadcasting enabled for offseason")
+
+        # Re-broadcast the post_bowl phase NOW that broadcasting is enabled.
+        # _completeSeasonSimulation set the state but its broadcast was lost
+        # (broadcaster disabled at that point in OFFSEASON_TEST).
+        if self._offseasonFlowPhase == 'post_bowl' and self._offseasonFlowTarget:
+            await self._setOffseasonFlow(self._offseasonFlowPhase, self._offseasonFlowTarget)
+
+        # ── PHASE: post_bowl ───────────────────────────────────
+        # _completeSeasonSimulation sets the phase + target before this runs;
+        # we just honor the configured wait. In SCHEDULED that's 1h.
         await self.timingManager.waitPostChampionship()
 
         # Clear stale state from previous season's offseason
         self._offseasonTransactions = []
         self._offseasonGmResults = []
         self._offseasonFaVoteResults = {}
-        self._offseasonPhase = None
         self.playerManager._gmFaDirectives = {}
         # Reset freeAgencyComplete on every team — last season's FA draft
         # left it True, which would make this season's panel boot with every
@@ -3362,8 +3444,10 @@ class SeasonManager:
         # Process user season transitions (All-Pro grants, etc.)
         self._processUserSeasonTransitions()
 
-        # Wait for offseason timing (5 min in scheduled mode)
-        await self.timingManager.waitForOffseason()
+        # ── PHASE: frontoffice ─────────────────────────────────
+        # Front-office decisions all resolve here, then we wait until the
+        # rookie draft kickoff target (noon ET in SCHEDULED).
+        await self._setOffseasonFlow('frontoffice', self._computeRookieDraftTarget())
 
         # STEP 1: Increment free agent years for existing free agents
         logger.info("Step 1: Increment free agent years")
@@ -3398,20 +3482,11 @@ class SeasonManager:
         logger.info("Step 3.5: Resolve GM cut player votes")
         await self._resolveGmCutVotes(gmResults)
 
-        # Fire offseason_start before the rookie draft so the frontend
-        # transitions into OffseasonPanel before rookie events start streaming.
-        # OFFSEASON_TEST needs the broadcaster temporarily enabled for the
-        # offseason window (it runs silent during the season). FAST_WEEKLY
-        # keeps broadcasting on the whole time with game-event suppression,
-        # so no enable/disable is needed.
-        offseasonTestBroadcastEnabled = False
+        # Fire offseason_start so the frontend transitions into OffseasonPanel
+        # before rookie events start streaming. Broadcaster was already
+        # enabled at the top of this method for OFFSEASON_TEST. FAST_WEEKLY
+        # keeps broadcasting on the whole time with game-event suppression.
         needOffseasonStart = self.timingManager.mode in (TimingMode.OFFSEASON_TEST, TimingMode.FAST_WEEKLY) and BROADCASTING_AVAILABLE
-        if self.timingManager.mode == TimingMode.OFFSEASON_TEST and BROADCASTING_AVAILABLE:
-            from api.game_broadcaster import broadcaster as bc
-            from api.websocket_manager import manager as wsMgr
-            bc.enable(wsMgr)
-            offseasonTestBroadcastEnabled = True
-            logger.info(f"{self.timingManager.mode.value}: broadcasting enabled for offseason")
         if needOffseasonStart:
             # Broadcast offseason_start with draft order + roster snapshots.
             # Rookie draft uses the worst-first order from playoffs. The FA
@@ -3479,42 +3554,36 @@ class SeasonManager:
                 except Exception as e:
                     logger.warning(f"Could not broadcast gm vote resolution: {e}")
 
-        # STEP 3.70: FA Voting Window close + ballot resolution.
-        # Moved ahead of predraft so we know each team's #1 ranked choice —
-        # if a team's top pick is a prospect, the predraft pass promotes them
-        # immediately (clearing a slot before the rookie draft). Ballots that
-        # rank an FA #1 are consumed during the FA draft instead.
-        logger.info("Step 3.70: FA voting window + ballot resolution")
-        await self._runFaVotingWindow()
+        # STEP 3.70: FA voting RESOLUTION (snapshot only — window stays open).
+        # Resolves ballots so the predraft pass has each team's #1 ranked
+        # choice for fan-directed prospect promotions. The window itself
+        # stays open so users watching the rookie draft / pre-FA wait can
+        # still revise their ballots — the final resolution + close happens
+        # right before the FA draft kicks off (see Step 5.5 below).
+        logger.info("Step 3.70: FA ballot resolution (window stays open)")
+        await self._runFaVotingWindow(closeWindow=False)
 
-        # STEP 3.75: Pre-draft team setup pass
-        # Rolls through teams worst→best and reports each team's resigns,
-        # cuts, and prospect promotions. Fan-directed prospect promotions
-        # run here (ballot #1 is a prospect). FA-first ballots defer to
-        # the FA draft (Rule 2), and un-ranked prospects are considered
-        # during the FA auto-fallback (Rule 3).
-        logger.info("Step 3.75: Pre-draft team setup pass")
+        # STEP 3.75: Pre-draft team setup (resigns / cuts / prospect promotions).
+        # Computed and persisted instantly here so the FA pool is fully
+        # resolved by the time the front-office phase ends — there's no
+        # team-by-team roll-through later. The OffseasonPanel + Front Office
+        # page render whatever has been persisted, so users browsing during
+        # the noon-ET wait see the complete picture.
+        logger.info("Step 3.75: Pre-draft team setup (instant)")
         faOrderForPredraft = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
         if faOrderForPredraft:
             await self._runPreDraftPass(faOrderForPredraft, gmResults)
 
-        # STEP 4: FA retirements + rookie draft
-        # (Rookie class was generated at season start — fans have been scouting/
-        # voting all season. This step consumes the class via the worst-first
-        # draft, optionally guided by fan ballots.)
-        logger.info("Step 4: Free agent retirements and rookie draft")
+        # STEP 3.80: Process FA retirements + harvest rookie pool, broadcast
+        # the rookie pool BEFORE the noon-ET wait. This populates the right-
+        # panel rookie list during the wait so users can browse prospects in
+        # advance instead of seeing an empty board until picks start.
+        logger.info("Step 3.80: FA retirements + rookie pool preview broadcast")
         seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
         self.playerManager._processFreeAgentRetirements(seasonNum, [])
 
-        leagueHighlights = []
-        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
-            leagueHighlights = self.currentSeason.leagueHighlights
-
-        # Harvest this season's rookies that haven't been drafted yet
         rookies = [p for p in self.playerManager.activePlayers
                    if getattr(p, 'is_upcoming_rookie', False)]
-        # Safety: if no rookies exist (upgrade path from pre-Phase-7 DB), fall
-        # back to generating them on the fly
         if not rookies:
             logger.warning(f"No upcoming rookies found for season {seasonNum} — generating now as fallback")
             rookies = self.playerManager._generateRookieClass(seasonNum)
@@ -3522,26 +3591,18 @@ class SeasonManager:
                 if r not in self.playerManager.activePlayers:
                     self.playerManager.activePlayers.append(r)
                 self.playerManager.addToPositionList(r)
+        # Stash so the rookie_draft phase block can reuse without re-harvesting.
+        self._pendingRookiePool = rookies
 
-        # Pull fan-vote preference lists per team from the gm_votes table
-        fanPreferences = self._collectRookieDraftBallots(seasonNum)
-        freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
-
-        # Live pick-by-pick rookie draft — drives the same WS events the FA
-        # draft uses, so the OffseasonPanel can render the rookie phase too.
-        # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
-        # rookie draft from FA draft.
-        pickGen = self.playerManager.rookieDraftPickGenerator(
-            rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
-        )
-
-        self._offseasonPhase = 'rookie_draft'
-        # Broadcast a phase-start marker so the frontend knows to show the
-        # "Rookie Draft" header before picks start streaming. Includes the full
-        # rookie pool so the UI can show prospects coming off the board as they
-        # are drafted.
-        if BROADCASTING_AVAILABLE and broadcaster:
+        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
             try:
+                # Brief gap so the predraft_complete event (just fired inside
+                # _runPreDraftPass) lands on its own React render tick before
+                # rookie_draft_start arrives — without this the two events can
+                # coalesce and rookie_draft_start's rookies array gets dropped
+                # from state alongside predraft_complete's phase reset.
+                await asyncio.sleep(0.2)
+
                 rookiePool = [
                     {
                         'id': getattr(r, 'id', 0),
@@ -3558,8 +3619,51 @@ class SeasonManager:
                     'totalRookies': len(rookies),
                     'rookies': rookiePool,
                 })
+                # Mark sub-phase as 'rookie_draft' here too so a refresh
+                # during the noon-ET wait restores the rookie tab — without
+                # this, _offseasonPhase stays None until picks start, and
+                # /api/offseason returns phase=None on refresh, leaving the
+                # right panel on the FA tab during the entire wait.
+                self._offseasonPhase = 'rookie_draft'
             except Exception as e:
-                logger.warning(f"Could not broadcast rookie_draft_start: {e}")
+                logger.warning(f"Could not broadcast rookie_draft_start preview: {e}")
+
+        # ── End of front-office phase ────────────────────────
+        # Brief breather, then wait until the rookie-draft kickoff target
+        # (noon ET in SCHEDULED mode, configurable in test modes). UI shows
+        # "Rookie Draft in Xh Ym" sourced from _offseasonFlowTarget.
+        await self.timingManager.waitForOffseason()
+        await self.timingManager.waitUntilNoonEt()
+
+        # ── PHASE: rookie_draft ─────────────────────────────
+        await self._setOffseasonFlow('rookie_draft', None)
+
+        # STEP 4: rookie draft picks (rookies + retirements were prepared at
+        # the end of the front-office phase so the pool was visible during
+        # the wait). Ballots are collected NOW so any edits made during the
+        # wait — fans were free to revise — get picked up.
+        logger.info("Step 4: Rookie draft picks streaming")
+        rookies = self._pendingRookiePool or []
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+
+        fanPreferences = self._collectRookieDraftBallots(seasonNum)
+        self._offseasonRookieBallotResults = dict(fanPreferences)
+        freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+
+        # Live pick-by-pick rookie draft — drives the same WS events the FA
+        # draft uses, so the OffseasonPanel can render the rookie phase too.
+        # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
+        # rookie draft from FA draft.
+        pickGen = self.playerManager.rookieDraftPickGenerator(
+            rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
+        )
+
+        self._offseasonPhase = 'rookie_draft'
+        # rookie_draft_start was broadcast above (during front-office phase
+        # end) to populate the rookie pool during the wait — don't re-fire
+        # it here, that would reset state on the panel.
 
         draftSummary = None
         try:
@@ -3577,6 +3681,7 @@ class SeasonManager:
                         await broadcaster.broadcast_season_event({
                             'event': 'rookie_draft_pick',
                             'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                            'playerId': entry.get('playerId'),
                             'player': entry['playerName'], 'position': entry['position'],
                             'rating': entry['rating'], 'tier': entry['tier'],
                             'source': entry.get('source', 'ai_best'),
@@ -3585,6 +3690,7 @@ class SeasonManager:
                     self._offseasonTransactions.append({
                         'type': 'rookie_pick',
                         'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                        'playerId': entry.get('playerId'),
                         'player': entry['playerName'], 'position': entry['position'],
                         'rating': entry['rating'], 'tier': entry['tier'],
                     })
@@ -3606,7 +3712,6 @@ class SeasonManager:
                     })
                 elif kind == 'complete':
                     draftSummary = entry
-                    self._offseasonPhase = None
                     if BROADCASTING_AVAILABLE and broadcaster:
                         await broadcaster.broadcast_season_event({
                             'event': 'rookie_draft_complete',
@@ -3633,6 +3738,65 @@ class SeasonManager:
         # "already rostered" picks until every offender is weeded out.
         self._validateRosterIntegrity()
 
+        # ── PHASE: pre_fa ────────────────────────────────────
+        # Two-stage wait: first leave the rookie-draft results on screen
+        # for a beat (post-rookie viewing), then fire the FA preview so
+        # the team board switches to tier groupings + the FA pool with a
+        # half-hour to spare before the actual draft.
+        await self._setOffseasonFlow('pre_fa', self._computeFaDraftTarget())
+
+        # Stage 1 — keep rookie results visible until 30 min before FA draft.
+        # SCHEDULED: poll until (top-of-hour − 30 min). Test modes split the
+        # configured fa_draft_wait in half (post-rookie / FA-preview).
+        mode = self.timingManager.mode
+        from managers.timingManager import TimingMode as _TM
+        if not self.timingManager._isFastCatchingUp:
+            if mode == _TM.SCHEDULED:
+                faTarget = type(self.timingManager)._nextTopOfHourUtc()
+                previewTime = faTarget - datetime.timedelta(minutes=30)
+                pollInterval = self.timingManager.delays.get('daily_check', 30.0)
+                while datetime.datetime.utcnow() < previewTime:
+                    await asyncio.sleep(pollInterval)
+            elif mode in (_TM.OFFSEASON_TEST, _TM.TEST_SCHEDULED):
+                halfWait = self.timingManager.delays.get('fa_draft_wait', 60.0) / 2
+                if halfWait > 0:
+                    await asyncio.sleep(halfWait)
+
+        # Stage 2 — broadcast the FA preview (tier-grouped team board + FA
+        # pool) so users have ~30 min to study the order before picks fire.
+        await self._broadcastFaDraftPreview()
+
+        # Stage 3 — wait the remainder until the FA draft kicks off.
+        # SCHEDULED: poll until top-of-hour (already past stage-1 target).
+        # Test modes: sleep the second half of fa_draft_wait.
+        if not self.timingManager._isFastCatchingUp:
+            if mode == _TM.SCHEDULED:
+                faTarget = type(self.timingManager)._nextTopOfHourUtc()
+                pollInterval = self.timingManager.delays.get('daily_check', 30.0)
+                while datetime.datetime.utcnow() < faTarget:
+                    await asyncio.sleep(pollInterval)
+            elif mode in (_TM.OFFSEASON_TEST, _TM.TEST_SCHEDULED):
+                halfWait = self.timingManager.delays.get('fa_draft_wait', 60.0) / 2
+                if halfWait > 0:
+                    await asyncio.sleep(halfWait)
+
+        # ── PHASE: fa_draft ──────────────────────────────────
+        await self._setOffseasonFlow('fa_draft', None)
+
+        # STEP 5.5: Final FA ballot resolution + window close.
+        # Re-runs RCV with whatever ballots have been submitted up to this
+        # exact moment, then officially closes the window. Users watching
+        # the post-rookie wait can revise ballots until this fires.
+        logger.info("Step 5.5: Final FA ballot resolution + window close")
+        await self._runFaVotingWindow(closeWindow=True)
+
+        # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
+        # *final* ballot directives (just resolved above), so any post-cuts
+        # ballot revisions are honored. Runs before the round-robin so
+        # promoted prospects fill their slots first.
+        logger.info("Step 5.75: Apply fan-voted prospect promotions")
+        await self._applyFanVotedPromotions()
+
         # STEP 6: FA Draft
         logger.info("Step 6: Free agency draft")
         await self._processFreeAgency()
@@ -3641,11 +3805,10 @@ class SeasonManager:
         # in case new mismatches were introduced during picks.
         self._validateRosterIntegrity()
 
-        # Disable broadcasting after draft for the silent-during-season modes
-        if offseasonTestBroadcastEnabled:
-            from api.game_broadcaster import broadcaster as bc
-            bc.disable()
-            logger.info(f"{self.timingManager.mode.value}: broadcasting disabled after draft")
+        # ── PHASE: training ──────────────────────────────────
+        # Players just signed by FA are now under their new team's coach +
+        # market tier — training runs with that context.
+        await self._setOffseasonFlow('training', None)
 
         # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
         # Prospects train through their drafting team's coach/funding too, so coaches
@@ -3709,6 +3872,19 @@ class SeasonManager:
 
         # STEP 12: Save unused names
         self.playerManager.saveUnusedNames()
+
+        # ── Offseason flow complete ──────────────────────────
+        # Clear phase + target so the UI falls back to the plain "Offseason"
+        # label (until the next-season transition kicks in via /api/season's
+        # next_season_start_time).
+        await self._setOffseasonFlow(None, None)
+
+        # Disable broadcasting now that the offseason is fully resolved —
+        # OFFSEASON_TEST keeps games silent until the next bowl ends.
+        if offseasonTestBroadcastEnabled:
+            from api.game_broadcaster import broadcaster as bc
+            bc.disable()
+            logger.info(f"{self.timingManager.mode.value}: broadcasting disabled after offseason")
 
         logger.info("Offseason activities complete")
     
@@ -3962,12 +4138,16 @@ class SeasonManager:
                 continue
             cutsByTeamName.setdefault(prev, []).append(p)
 
+        # Predraft is no longer a visible roll-through — front-office decisions
+        # land in one shot. Compute resigns/cuts/promotions per team, persist
+        # them, broadcast each team_setup event so subscribed UIs render the
+        # data, then fire predraft_complete. No per-team delays, no on_clock
+        # highlight (there's no "current team" anymore — they all happen at once).
         self._offseasonPhase = 'predraft'
         try:
             await broadcaster.broadcast_season_event(
                 OffseasonEvent.predraft_start(len(teamsWorstFirst))
             )
-            await asyncio.sleep(1)
         except Exception as e:
             logger.warning(f"Could not broadcast predraft start: {e}")
 
@@ -3982,6 +4162,7 @@ class SeasonManager:
                 for slot, p in team.rosterDict.items():
                     if p and p.name in resignNames:
                         resignList.append({
+                            'id': getattr(p, 'id', None),
                             'name': p.name,
                             'position': p.position.name,
                             'rating': round(p.playerRating, 1),
@@ -3995,6 +4176,7 @@ class SeasonManager:
             for p in cutsByTeamName.get(team.name, []):
                 reason = 'gm_vote' if p.name in gmCutPlayerNames else 'expired'
                 cutList.append({
+                    'id': getattr(p, 'id', None),
                     'name': p.name,
                     'position': p.position.name,
                     'rating': round(p.playerRating, 1),
@@ -4002,29 +4184,32 @@ class SeasonManager:
                     'reason': reason,
                 })
 
-            # Fan-voted promotion: only promote if the team's #1 fan ballot
-            # directive is one of this team's prospects. Other promotions
-            # (ballot fall-through or auto-fallback) happen in the FA draft.
-            promotionList = self._promoteFanVotedProspect(team)
+            # Promotions used to fire here, but they're now deferred to the
+            # FA draft kickoff (see _applyFanVotedPromotions). That gives
+            # users time to revise their FA ballots once the cuts/resigns
+            # in this pass shake out the FA pool — a player they didn't
+            # rank pre-bowl might be available now.
+            promotionList: list = []
 
-            # Highlight + broadcast
             try:
-                await broadcaster.broadcast_season_event(
-                    OffseasonEvent.on_clock(team.name, teamAbbr)
-                )
                 await broadcaster.broadcast_season_event(
                     OffseasonEvent.team_setup(
                         team.name, teamAbbr, teamId,
                         resigns=resignList, cuts=cutList, promotions=promotionList,
                     )
                 )
-                # Persist for /api/offseason replay on refresh
+                # Persist for /api/offseason replay on refresh + Front Office
                 self._offseasonTransactions.append({
                     'type': 'team_setup',
                     'team': team.name, 'teamAbbr': teamAbbr, 'teamId': teamId,
                     'resigns': resignList, 'cuts': cutList, 'promotions': promotionList,
                 })
-                await self.timingManager.waitBetweenOffseasonPicks()
+                # Tiny yield so the frontend's WS layer + React state can land
+                # each event individually. Without this, a 32-team burst in the
+                # same event-loop tick collapses to a single render and the
+                # intermediate setups get lost. ~50ms per team = ~1.6s total —
+                # imperceptible, but every event lands.
+                await asyncio.sleep(0.05)
             except Exception as e:
                 logger.warning(f"Predraft broadcast error for {team.name}: {e}")
 
@@ -4033,9 +4218,60 @@ class SeasonManager:
             await broadcaster.broadcast_season_event(
                 OffseasonEvent.predraft_complete()
             )
-            await asyncio.sleep(1)
         except Exception as e:
             logger.warning(f"Could not broadcast predraft complete: {e}")
+
+    async def _applyFanVotedPromotions(self) -> None:
+        """Apply fan-voted prospect promotions across all teams at the moment
+        the FA draft kicks off.
+
+        Used to happen during the predraft pass (front-office phase), but
+        users couldn't revise FA ballots between cuts and the promotion —
+        if a cut opened a new option they wanted to rank #1, the promotion
+        had already locked in the prospect. Deferring to here means the
+        user's *final* ballot drives the promotion decision.
+
+        Each promotion is broadcast as a pick event (isPromotion=True) and
+        appended to the offseason transactions log, so the OffseasonPanel +
+        Front Office page see them as part of the FA draft phase.
+        """
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager or not self.currentSeason:
+            return
+        faOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) or []
+        if not faOrder:
+            return
+
+        for team in faOrder:
+            promotions = self._promoteFanVotedProspect(team)
+            for promo in promotions:
+                teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+                entry = {
+                    'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                    'playerId': promo.get('id'),
+                    'player': promo['name'], 'position': promo['position'],
+                    'rating': promo['rating'], 'tier': promo['tier'],
+                    'isPromotion': True,
+                    'slot': promo.get('slot'),
+                }
+                self._offseasonTransactions.append(entry)
+                if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
+                    try:
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.pick(
+                                team.name, teamAbbr,
+                                promo['name'], promo['position'],
+                                promo['rating'], promo['tier'],
+                                isPromotion=True,
+                                playerId=promo.get('id'),
+                                slot=promo.get('slot'),
+                            )
+                        )
+                        # Same 100ms breath as FA picks — keeps each
+                        # promotion as its own React render tick.
+                        await asyncio.sleep(0.1)
+                    except Exception as e:
+                        logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
 
     def _promoteFanVotedProspect(self, team) -> list:
         """Promote this team's prospect if fans ranked them #1 on the FA ballot.
@@ -4087,6 +4323,7 @@ class SeasonManager:
         directives.pop(0)
 
         return [{
+            'id': getattr(prospectTarget, 'id', None),
             'name': prospectTarget.name,
             'position': prospectTarget.position.name,
             'rating': round(prospectTarget.playerRating, 1),
@@ -4110,88 +4347,22 @@ class SeasonManager:
 
         # Rookie draft uses the worst-first freeAgencyOrder from playoffs (rebuild
         # path). FA draft, however, gives MEGA-market teams priority so funding
-        # tier actually determines signing power. Bad teams get their ceiling
-        # raised through the rookie-draft + prospect pipeline instead.
-        #
-        # Sort: primary by fundingTierRank ascending (MEGA=1 first, SMALL=4 last).
-        # Secondary by effective_funding DESCENDING — within a tier, the team
-        # with the biggest fan-backed pool picks first. With share-of-league
-        # tiers, most teams can cluster in MID; sorting the bucket by raw
-        # funding (not by record) means fans see their contributions actually
-        # moving them up the draft queue rather than just win-loss.
-        # Pull tier_rank and effective_funding fresh from the DB. Reading
-        # directly sidesteps a bug where runtime team.fundingTierRank would
-        # reset to the default (3) after a server restart mid-season, even
-        # though the locked tier in the DB was still correct. This ensures
-        # the FA draft always respects the tier each team earned at season
-        # start, regardless of runtime state.
-        tierRankByTeam: dict = {}
-        effectiveByTeam: dict = {}
-        try:
-            from database.connection import get_session as _gs
-            from database.models import TeamFunding
-            _s = _gs()
-            try:
-                seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
-                rows = _s.query(TeamFunding).filter_by(season=seasonNum).all()
-                for r in rows:
-                    tierRankByTeam[r.team_id] = r.tier_rank or 3
-                    effectiveByTeam[r.team_id] = r.effective_funding or 0
-            finally:
-                _s.close()
-        except Exception as _e:
-            logger.warning(f"Could not load funding for FA draft sort: {_e}")
-
-        def _rank(t) -> int:
-            return tierRankByTeam.get(getattr(t, 'id', -1),
-                                      getattr(t, 'fundingTierRank', 3) or 3)
-
-        def _effective(t) -> int:
-            return effectiveByTeam.get(getattr(t, 'id', -1),
-                                       getattr(t, 'effectiveFunding', 0) or 0)
-
-        rookieDraftOrder = self.currentSeason.freeAgencyOrder
-        freeAgencyOrder = sorted(
-            rookieDraftOrder,
-            key=lambda t: (_rank(t), -_effective(t)),
-        )
-        # Log the resulting order so the FA draft pattern is verifiable from
-        # server logs (helps catch any case where tier ranks aren't populated).
-        orderSummary = [
-            f"{getattr(t, 'abbr', t.name[:3])}(T{_rank(t)}/${_effective(t)})"
-            for t in freeAgencyOrder
-        ]
-        logger.info(f"FA draft order (locked-tier-first, best-funded-within-tier): {' → '.join(orderSummary)}")
+        # Reuse the tier-sorted draft order computed during pre_fa preview,
+        # so picks fire against the same order users saw during the wait.
+        # Fallback to rookie order if preview wasn't computed (e.g., offline
+        # mode). The fa_draft_order_update event was also broadcast during
+        # the preview — don't re-fire it here.
+        freeAgencyOrder = getattr(self, '_pendingFaDraftOrder', None)
+        if not freeAgencyOrder:
+            freeAgencyOrder = self.currentSeason.freeAgencyOrder
+        orderSummary = [getattr(t, 'abbr', t.name[:3]) for t in freeAgencyOrder]
+        logger.info(f"FA draft order (from preview): {' → '.join(orderSummary)}")
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
             leagueHighlights = self.currentSeason.leagueHighlights
 
-        # Broadcast the tier-sorted FA draft order via a lighter update event.
-        # We do NOT re-fire offseason_start here — that event already fired
-        # before the rookie draft, and re-firing would reset transactions the
-        # panel accumulated during the rookie phase. Including tier info so
-        # the frontend can render tier badges and make the MEGA-first sort
-        # order visually obvious.
-        if BROADCASTING_AVAILABLE and broadcaster:
-            try:
-                draftOrderList = [
-                    {
-                        'name': t.name,
-                        'city': getattr(t, 'city', ''),
-                        'abbr': getattr(t, 'abbr', t.name[:3].upper()),
-                        'id': getattr(t, 'id', None),
-                        'color': getattr(t, 'color', None),
-                        'fundingTier': getattr(t, 'fundingTier', 'MID_MARKET'),
-                        'fundingTierRank': getattr(t, 'fundingTierRank', 3),
-                    }
-                    for t in freeAgencyOrder
-                ]
-                await broadcaster.broadcast_season_event(
-                    OffseasonEvent.fa_draft_order_update(draftOrderList)
-                )
-                self._offseasonPhase = 'free_agency'
-            except Exception as e:
-                logger.warning(f"Could not broadcast FA draft order update: {e}")
+        # Mark the panel sub-phase so the OffseasonPanel renders FA grouping.
+        self._offseasonPhase = 'free_agency'
 
         # Live pick-by-pick iteration. Do NOT clear _offseasonTransactions
         # here — the rookie draft already appended its picks/skips to the
@@ -4222,13 +4393,22 @@ class SeasonManager:
                                 entry['player'], entry['position'],
                                 entry['rating'], entry['tier'],
                                 isPromotion=entry.get('isPromotion', False),
+                                playerId=entry.get('playerId'),
+                                slot=entry.get('slot'),
                             )
                         )
                         self._offseasonTransactions.append(entry)
+                        # Small yield so the pick lands as its own React render
+                        # tick before the next team's on_clock fires. Without
+                        # this, pick → on_clock can collapse into one update
+                        # and the pick visually disappears (or worse, attaches
+                        # to the wrong team in the UI). Imperceptible to users.
+                        await asyncio.sleep(0.1)
                     elif entry['type'] == 'team_complete':
                         await broadcaster.broadcast_season_event(
                             OffseasonEvent.team_complete(entry['team'], entry['teamAbbr'])
                         )
+                        await asyncio.sleep(0.05)
                 self._offseasonPhase = None
                 await broadcaster.broadcast_season_event(
                     OffseasonEvent.complete(len(self.playerManager.freeAgents))
@@ -4550,34 +4730,175 @@ class SeasonManager:
                 logger.warning(f"Could not broadcast FA window open (mid-season): {e}")
         logger.info("FA voting window opened mid-season — stays open through end of regular season")
 
-    async def _runFaVotingWindow(self) -> None:
-        """Close the FA voting window (if still open from mid-season) and
-        resolve sign_fa votes via RCV.
+    async def _broadcastFaDraftPreview(self) -> None:
+        """Compute the tier-sorted FA draft order + current FA pool and
+        broadcast them so the OffseasonPanel renders the team board with
+        tier groupings and the FA pool list during the pre-FA wait.
 
-        Historically this method also OPENED the window with a countdown, but
-        the window now opens earlier — at Front Office activation mid-season —
-        so fans have the full Week 22 → end-of-season to cast ballots. This
-        method just finalizes: closes the window, resolves ballots.
+        Stores the order on `self._pendingFaDraftOrder` so `_processFreeAgency`
+        reuses it instead of recomputing — guarantees the order users saw
+        during the wait is the order picks actually fire against.
+        """
+        if not self.currentSeason:
+            return
+
+        # Pull tier_rank fresh from the DB (sidesteps the runtime-reset bug
+        # documented in _initializeTeamFunding). Rookie-draft position is the
+        # within-tier tiebreaker (worst record first).
+        tierRankByTeam: dict = {}
+        try:
+            from database.connection import get_session as _gs
+            from database.models import TeamFunding
+            _s = _gs()
+            try:
+                seasonNum = self.currentSeason.seasonNumber
+                rows = _s.query(TeamFunding).filter_by(season=seasonNum).all()
+                for r in rows:
+                    tierRankByTeam[r.team_id] = r.tier_rank or 3
+            finally:
+                _s.close()
+        except Exception as e:
+            logger.warning(f"Could not load funding for FA draft preview: {e}")
+
+        rookieDraftOrder = self.currentSeason.freeAgencyOrder
+        rookieOrderIdx = {
+            getattr(t, 'id', None): idx for idx, t in enumerate(rookieDraftOrder)
+        }
+        def _rank(t):
+            return tierRankByTeam.get(getattr(t, 'id', -1),
+                                      getattr(t, 'fundingTierRank', 3) or 3)
+        freeAgencyOrder = sorted(
+            rookieDraftOrder,
+            key=lambda t: (_rank(t), rookieOrderIdx.get(getattr(t, 'id', None), 999)),
+        )
+        self._pendingFaDraftOrder = freeAgencyOrder
+
+        if not (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()):
+            return
+
+        try:
+            draftOrderList = [
+                {
+                    'name': t.name,
+                    'city': getattr(t, 'city', ''),
+                    'abbr': getattr(t, 'abbr', t.name[:3].upper()),
+                    'id': getattr(t, 'id', None),
+                    'color': getattr(t, 'color', None),
+                    'fundingTier': getattr(t, 'fundingTier', 'MID_MARKET'),
+                    'fundingTierRank': getattr(t, 'fundingTierRank', 3),
+                }
+                for t in freeAgencyOrder
+            ]
+            faPool = [
+                {'id': p.id, 'name': p.name, 'position': p.position.name,
+                 'rating': round(p.playerRating, 1), 'tier': p.playerTier.name}
+                for p in sorted(self.playerManager.freeAgents, key=lambda p: -p.playerRating)
+                if isinstance(getattr(p, 'team', None), str)
+            ]
+            await broadcaster.broadcast_season_event(
+                OffseasonEvent.fa_draft_order_update(draftOrderList, faPool=faPool)
+            )
+        except Exception as e:
+            logger.warning(f"Could not broadcast FA draft preview: {e}")
+
+    async def _setOffseasonFlow(self, phase: Optional[str], target: Optional[datetime.datetime]) -> None:
+        """Set flow phase + target and broadcast a phase-change event so any
+        connected client can update its countdown without re-fetching.
+
+        Using this helper everywhere keeps WS state and REST state in sync —
+        without it, transitions like rookie_draft → pre_fa stay invisible
+        until the user manually refreshes the page.
+        """
+        self._offseasonFlowPhase = phase
+        self._offseasonFlowTarget = target
+        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
+            try:
+                await broadcaster.broadcast_season_event({
+                    'event': 'offseason_phase_change',
+                    'phase': phase,
+                    'targetTime': target.isoformat() + 'Z' if target else None,
+                })
+            except Exception as e:
+                logger.warning(f"Could not broadcast offseason_phase_change: {e}")
+
+    def _computeRookieDraftTarget(self) -> Optional[datetime.datetime]:
+        """Compute the wall-clock target for when the rookie draft will begin.
+
+        Returns:
+            SCHEDULED → next noon ET (UTC datetime).
+            OFFSEASON_TEST / TEST_SCHEDULED → now + configured 'rookie_draft_wait'
+                + 'offseason' so the countdown reflects the test-mode pre-rookie pause.
+            All other modes → None (no countdown shown — they flow through instantly).
+        """
+        from managers.timingManager import TimingManager, TimingMode
+        mode = self.timingManager.mode
+        if self.timingManager._isFastCatchingUp:
+            return None
+        if mode == TimingMode.SCHEDULED:
+            return TimingManager._nextNoonEasternUtc()
+        if mode in (TimingMode.OFFSEASON_TEST, TimingMode.TEST_SCHEDULED):
+            seconds = (self.timingManager.delays.get('offseason', 0.0)
+                       + self.timingManager.delays.get('rookie_draft_wait', 0.0))
+            if seconds <= 0:
+                return None
+            return datetime.datetime.utcnow() + datetime.timedelta(seconds=seconds)
+        return None
+
+    def _computeFaDraftTarget(self) -> Optional[datetime.datetime]:
+        """Compute the wall-clock target for when the FA draft will begin.
+
+        Returns:
+            SCHEDULED → next top-of-hour (UTC datetime).
+            OFFSEASON_TEST / TEST_SCHEDULED → now + configured 'fa_draft_wait'.
+            All other modes → None.
+        """
+        from managers.timingManager import TimingManager, TimingMode
+        mode = self.timingManager.mode
+        if self.timingManager._isFastCatchingUp:
+            return None
+        if mode == TimingMode.SCHEDULED:
+            return TimingManager._nextTopOfHourUtc()
+        if mode in (TimingMode.OFFSEASON_TEST, TimingMode.TEST_SCHEDULED):
+            seconds = self.timingManager.delays.get('fa_draft_wait', 0.0)
+            if seconds <= 0:
+                return None
+            return datetime.datetime.utcnow() + datetime.timedelta(seconds=seconds)
+        return None
+
+    async def _runFaVotingWindow(self, closeWindow: bool = True) -> None:
+        """Resolve sign_fa votes via RCV and (optionally) close the window.
+
+        Historically this method always closed the window. With the phased
+        offseason, we resolve ballots TWICE:
+          1. During the front-office phase (closeWindow=False) so the predraft
+             pass has up-to-date directives for fan-voted prospect promotions.
+          2. Right before the FA draft (closeWindow=True) so any ballots cast
+             or revised during the rookie-draft / pre-FA wait window are
+             reflected in the final FA-draft directives.
+
+        Setting closeWindow=False keeps `_faWindowOpen=True` so the API
+        endpoint keeps accepting submissions until the second call.
         """
         # Ensure window is open — edge case: if currentWeek never passed
         # GM_ACTIVE_WEEK (short test mode), open it briefly so any late ballots
         # can still be resolved
         if not getattr(self, '_faWindowOpen', False):
             self._faWindowOpen = True
-        self._faWindowOpen = False
-        self._faWindowEnd = None
+        if closeWindow:
+            self._faWindowOpen = False
+            self._faWindowEnd = None
 
-        # Broadcast FA window close
-        if BROADCASTING_AVAILABLE and broadcaster:
-            try:
-                from api.event_models import GmEvent
-                await broadcaster.broadcast_season_event(
-                    GmEvent.faWindowClose(
-                        self.currentSeason.seasonNumber if self.currentSeason else 0,
+            # Broadcast FA window close
+            if BROADCASTING_AVAILABLE and broadcaster:
+                try:
+                    from api.event_models import GmEvent
+                    await broadcaster.broadcast_season_event(
+                        GmEvent.faWindowClose(
+                            self.currentSeason.seasonNumber if self.currentSeason else 0,
+                        )
                     )
-                )
-            except Exception as e:
-                logger.warning(f"Could not broadcast FA window close: {e}")
+                except Exception as e:
+                    logger.warning(f"Could not broadcast FA window close: {e}")
 
         # Resolve sign_fa ballots via RCV and set directives on playerManager
         from database.connection import get_session
