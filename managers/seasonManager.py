@@ -3478,6 +3478,21 @@ class SeasonManager:
             await self._resolveGmFireCoachVotes(gmResults)
             await self._resolveGmResignVotes(gmResults)
 
+            # Safety net: any team without a coach after fire/hire resolution
+            # gets one auto-generated + persisted. Catches edge cases like a
+            # passed fire vote with no quorum-meeting hire vote where every
+            # candidate failed its roll. assignCoachesToTeams is a no-op for
+            # teams that already have one, so this is cheap to call here.
+            teamManager_safety = self.serviceContainer.getService('team_manager')
+            if teamManager_safety:
+                coachlessBefore = [t.name for t in teamManager_safety.teams if t.coach is None]
+                if coachlessBefore:
+                    logger.warning(
+                        f"Coach safety net engaging for {len(coachlessBefore)} "
+                        f"team(s) without a coach: {coachlessBefore}"
+                    )
+                    teamManager_safety.assignCoachesToTeams()
+
             # STEP 2.5: Increment coach seasons and handle retirements
             logger.info("Step 2.5: Coach season increments and retirements")
             teamManager = self.serviceContainer.getService('team_manager')
@@ -3500,6 +3515,21 @@ class SeasonManager:
             self._markOffseasonStepComplete('frontoffice_decisions')
         else:
             logger.info("Frontoffice decisions already completed (resumed) — skipping STEP 1-3.5")
+
+        # Final coach assertion before any draft phase fires. handleCoachRetirement
+        # (STEP 2.5 above) replaces retiring coaches, and the fire-vote safety net
+        # catches anyone whose hire vote fell through. This last sweep is paranoia
+        # for any remaining hole — every team must have a coach once we leave the
+        # frontoffice phase, since training, draft AI, and game sim all assume one.
+        teamManager_final = self.serviceContainer.getService('team_manager')
+        if teamManager_final:
+            stillCoachless = [t.name for t in teamManager_final.teams if t.coach is None]
+            if stillCoachless:
+                logger.error(
+                    f"Coach assertion failed entering rookie draft: {stillCoachless} "
+                    f"— forcing assignCoachesToTeams"
+                )
+                teamManager_final.assignCoachesToTeams()
 
         # Fire offseason_start so the frontend transitions into OffseasonPanel
         # before rookie events start streaming. Broadcaster was already
