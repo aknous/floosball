@@ -26,7 +26,7 @@ engine = create_engine(
     max_overflow=20,
     pool_timeout=60,
     connect_args={
-        "timeout": 5,  # Timeout for busy database
+        "timeout": 30,  # Driver-level timeout for waiting on a busy DB (was 5s — too short under contention)
         "check_same_thread": False  # Allow multiple threads (needed for async)
     }
 )
@@ -37,7 +37,10 @@ from sqlalchemy import event
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+    # 30s busy_timeout gives plenty of headroom during bursty offseason
+    # writes (GM vote resolutions, predraft setup, draft picks all happen
+    # in rapid succession). The previous 5s was tripping under load.
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 # Session factory

@@ -2547,12 +2547,17 @@ class PlayerManager:
         for player in sorted(self.freeAgents, key=lambda p: (p.position.value, -p.attributes.skillRating)):
             logFa(f"  {player.position.name:3} - {player.name:30} (Skill: {player.attributes.skillRating:3})")
 
-        # Prepare position-sorted FA lists
-        freeAgentQbList = sorted([p for p in self.freeAgents if p.position.value == 1], key=lambda p: p.attributes.skillRating, reverse=True)
-        freeAgentRbList = sorted([p for p in self.freeAgents if p.position.value == 2], key=lambda p: p.attributes.skillRating, reverse=True)
-        freeAgentWrList = sorted([p for p in self.freeAgents if p.position.value == 3], key=lambda p: p.attributes.skillRating, reverse=True)
-        freeAgentTeList = sorted([p for p in self.freeAgents if p.position.value == 4], key=lambda p: p.attributes.skillRating, reverse=True)
-        freeAgentKList = sorted([p for p in self.freeAgents if p.position.value == 5], key=lambda p: p.attributes.skillRating, reverse=True)
+        # Prepare position-sorted FA lists. Sort by overall playerRating (the
+        # rating users see in the FA pool stars) — sorting by skillRating
+        # alone would pick offensively-strong players over higher-overall
+        # two-way ones, mismatching the "best player available" expectation.
+        def _faSort(plist):
+            return sorted(plist, key=lambda p: getattr(p, 'playerRating', p.attributes.skillRating), reverse=True)
+        freeAgentQbList = _faSort([p for p in self.freeAgents if p.position.value == 1])
+        freeAgentRbList = _faSort([p for p in self.freeAgents if p.position.value == 2])
+        freeAgentWrList = _faSort([p for p in self.freeAgents if p.position.value == 3])
+        freeAgentTeList = _faSort([p for p in self.freeAgents if p.position.value == 4])
+        freeAgentKList = _faSort([p for p in self.freeAgents if p.position.value == 5])
 
         if not teams:
             logger.error("No teams available for free agency!")
@@ -2640,9 +2645,11 @@ class PlayerManager:
                         logFa(f"  FAN VOTE PROMOTE (fall-through): {team.name} promotes {prospectTarget.name} at {openSlot}")
                         yield {
                             'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                            'playerId': getattr(prospectTarget, 'id', None),
                             'player': prospectTarget.name, 'position': prospectTarget.position.name,
                             'rating': round(prospectTarget.playerRating, 1), 'tier': prospectTarget.playerTier.name,
                             'isPromotion': True,
+                            'slot': openSlot,
                         }
                         directivePick = True
                         openPositions = [k for k, v in team.rosterDict.items() if v is None
@@ -2674,8 +2681,10 @@ class PlayerManager:
                     logFa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
                     yield {
                         'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
+                        'playerId': getattr(targetPlayer, 'id', None),
                         'player': targetPlayer.name, 'position': targetPlayer.position.name,
                         'rating': round(targetPlayer.playerRating, 1), 'tier': targetPlayer.playerTier.name,
+                        'slot': openSlot,
                     }
                     directivePick = True
                     # Check if roster is now full
@@ -2688,27 +2697,12 @@ class PlayerManager:
                     break  # One pick per turn
 
                 if not directivePick:
-                    # Rule 3 — no fan directive matched, so try the auto-
-                    # fallback: promote a qualifying prospect if one exists
-                    # at rating ≥ threshold; otherwise sign the best FA.
-                    promoted = self._tryPromoteProspect(team, freeAgencyDict, leagueHighlights)
-                    if promoted is not None:
-                        logFa(f"  PROSPECT PROMOTED (auto): {team.name} promotes {promoted['name']} at {promoted['slot']}")
-                        yield {
-                            'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                            'player': promoted['name'], 'position': promoted['position'],
-                            'rating': promoted['rating'], 'tier': promoted['tier'],
-                            'isPromotion': True,
-                        }
-                        openPositions = [k for k, v in team.rosterDict.items() if v is None
-                                         and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
-                        if not openPositions:
-                            teamsComplete += 1
-                            team.freeAgencyComplete = True
-                            yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
-                        continue  # One action per turn
-
-                    # No prospect qualified — sign best available FA
+                    # Rule 3 — no fan directive matched. Sign or promote the
+                    # best player available across FAs and prospects (handled
+                    # inside _attemptRosterFill). Auto-promote no longer
+                    # fires preemptively at a fixed rating floor — a prospect
+                    # only gets the slot if they're literally the highest-
+                    # rated option on the board.
                     pickEvents = []
                     rosterComplete = self._attemptRosterFill(
                         team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
@@ -2717,6 +2711,12 @@ class PlayerManager:
                     )
 
                     for ev in pickEvents:
+                        # Log path mirrors the directive walk so the FA log
+                        # remains a complete record of every roster move.
+                        if ev.get('isPromotion'):
+                            logFa(f"  PROSPECT PROMOTED (best available): {team.name} promotes {ev['player']} at {ev.get('slot', '?')}")
+                        else:
+                            logFa(f"  BEST AVAILABLE: {team.name} signs {ev['player']} at {ev.get('slot', '?')}")
                         yield ev
 
                     if rosterComplete:
@@ -3195,6 +3195,7 @@ class PlayerManager:
             'event': {'text': f"{team.name} promoted prospect {best.name} ({best.position.name}) to starter"}
         })
         return {
+            'id': getattr(best, 'id', None),
             'name': best.name, 'slot': slot,
             'position': best.position.name,
             'rating': round(best.playerRating, 1),
@@ -3368,103 +3369,164 @@ class PlayerManager:
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                           eventLog=None) -> bool:
-        """Attempt to fill ONE random open roster position (matching original logic)
-        
-        Returns True if roster is complete (no open positions), False otherwise
-        """
-        from random import randint, choice
-        
-        # Build list of all open positions
-        openRosterPosList = []
-        for pos in ['qb', 'rb', 'wr1', 'wr2', 'te', 'k']:
-            if team.rosterDict.get(pos) is None:
-                openRosterPosList.append(pos)
-        
-        # If no open positions, roster is complete
-        if len(openRosterPosList) == 0:
-            return True
-        
-        # Randomly choose ONE open position to fill
-        pos = choice(openRosterPosList)
-        
-        # Map position to free agent list
-        freeAgentLists = {
-            'qb': freeAgentQbList, 'rb': freeAgentRbList, 
-            'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
-            'te': freeAgentTeList, 'k': freeAgentKList
-        }
-        
-        freeAgentList = freeAgentLists[pos]
-        
-        # If no free agents available at this position, return False (not complete, try again next round)
-        if not freeAgentList or len(freeAgentList) == 0:
-            return False
-        
-        # Sign the best available player (lists are sorted by skill rating descending)
-        selectedIndex = 0
-        candidate = freeAgentList[selectedIndex]
-        for other_team in [t for t in teams if t != team]:
-            for pos_key, roster_player in other_team.rosterDict.items():
-                if roster_player is not None and roster_player.id == candidate.id:
-                    logger.error(f"BUG: {candidate.name} in free agent list but already on {other_team.name} at {pos_key}! Removing from FA lists.")
-                    # Remove from position-specific list
-                    freeAgentList.pop(selectedIndex)
-                    # Remove from master list
-                    if candidate in self.freeAgents:
-                        self.freeAgents.remove(candidate)
-                    # Try again with a different player
-                    return False
-        
-        # Player is clean, safe to sign
-        selectedPlayer = freeAgentList.pop(selectedIndex)
-        
-        # Remove from main free agents list
-        if selectedPlayer in self.freeAgents:
-            self.freeAgents.remove(selectedPlayer)
-        else:
-            logger.warning(f"Player {selectedPlayer.name} not found in self.freeAgents when signing to {team.name}")
-        
-        # Assign to team
-        selectedPlayer.team = team
-        selectedPlayer.freeAgentYears = 0
-        team.rosterDict[pos] = selectedPlayer
-        team.assignPlayerNumber(selectedPlayer)
-        
-        # Set contract terms
-        selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
-        selectedPlayer.termRemaining = selectedPlayer.term
-        
-        # Record transaction
-        transactionId = f"{team.name}_{selectedPlayer.name}"
-        freeAgencyDict[transactionId] = {
-            'name': selectedPlayer.name,
-            'pos': selectedPlayer.position.name,
-            'rating': selectedPlayer.attributes.skillRating,
-            'tier': selectedPlayer.playerTier.value,
-            'term': selectedPlayer.term,
-            'previousTeam': getattr(selectedPlayer, 'previousTeam', 'Rookie'),
-            'roster': 'Starting'
-        }
-        
-        # Add highlight
-        leagueHighlights.insert(0, {
-            'event': {'text': f'{team.name} signed {selectedPlayer.name} ({selectedPlayer.position.name}) for {selectedPlayer.term} season(s)'}
-        })
+        """Sign or promote the best player available — comparing FAs *and*
+        the team's prospects across all open roster slots.
 
-        # Collect event for WebSocket broadcast
-        if eventLog is not None:
-            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
-            eventLog.append({
-                'type': 'pick',
-                'team': team.name,
-                'teamAbbr': teamAbbr,
-                'player': selectedPlayer.name,
-                'position': selectedPlayer.position.name,
-                'rating': round(selectedPlayer.playerRating, 1),
-                'tier': selectedPlayer.playerTier.name,
+        Old behavior was: pick a random open slot, then sign the best FA at
+        that position. New behavior:
+          1. For each position with an open slot, gather the best FA and
+             the best prospect at that position.
+          2. Pick the highest-rated overall (by playerRating).
+          3. If it's an FA, sign them. If it's a prospect, promote them.
+
+        This makes prospect auto-promotion conditional on actually being the
+        top player on the board rather than firing eagerly above a fixed
+        rating floor — the user's "best player available" intent.
+
+        Returns True if roster is complete after this turn, False otherwise.
+        """
+        # Position value → list of slots, and position value → FA list.
+        POS_TO_SLOTS = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
+        POS_TO_FALIST = {
+            1: freeAgentQbList, 2: freeAgentRbList, 3: freeAgentWrList,
+            4: freeAgentTeList, 5: freeAgentKList,
+        }
+
+        # First open slot per position (None if all slots at that position filled).
+        firstOpenSlotByPos = {}
+        for posVal, slots in POS_TO_SLOTS.items():
+            for s in slots:
+                if team.rosterDict.get(s) is None:
+                    firstOpenSlotByPos[posVal] = s
+                    break
+
+        # No open slots → roster complete.
+        if not firstOpenSlotByPos:
+            return True
+
+        # Build candidates: for each open position, best FA + best prospect.
+        candidates = []  # list of (slot, player, kind) where kind ∈ {'fa', 'prospect'}
+        prospects = getattr(team, 'prospects', []) or []
+        for posVal, slot in firstOpenSlotByPos.items():
+            # Best FA at this position
+            faList = POS_TO_FALIST.get(posVal, [])
+            if faList:
+                candidates.append((slot, faList[0], 'fa'))
+            # Best prospect at this position
+            posProspects = [p for p in prospects if p.position.value == posVal]
+            if posProspects:
+                best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
+                candidates.append((slot, best, 'prospect'))
+
+        if not candidates:
+            return False  # open slots exist but no FAs or prospects to fill them
+
+        # Pick the highest-rated candidate overall.
+        slot, candidate, kind = max(
+            candidates,
+            key=lambda c: getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0)),
+        )
+
+        teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+
+        if kind == 'fa':
+            # Stale-list defense: if the chosen player is already on a
+            # roster (race conditions / promoted prospect leakage), purge.
+            for other_team in [t for t in teams if t != team]:
+                for pos_key, roster_player in other_team.rosterDict.items():
+                    if roster_player is not None and roster_player.id == candidate.id:
+                        logger.error(f"BUG: {candidate.name} in free agent list but already on {other_team.name} at {pos_key}! Removing from FA lists.")
+                        faList = POS_TO_FALIST[candidate.position.value]
+                        if candidate in faList:
+                            faList.remove(candidate)
+                        if candidate in self.freeAgents:
+                            self.freeAgents.remove(candidate)
+                        return False
+
+            selectedPlayer = candidate
+            POS_TO_FALIST[selectedPlayer.position.value].remove(selectedPlayer)
+            if selectedPlayer in self.freeAgents:
+                self.freeAgents.remove(selectedPlayer)
+            else:
+                logger.warning(f"Player {selectedPlayer.name} not found in self.freeAgents when signing to {team.name}")
+
+            selectedPlayer.team = team
+            selectedPlayer.freeAgentYears = 0
+            team.rosterDict[slot] = selectedPlayer
+            team.assignPlayerNumber(selectedPlayer)
+            selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
+            selectedPlayer.termRemaining = selectedPlayer.term
+
+            transactionId = f"{team.name}_{selectedPlayer.name}"
+            freeAgencyDict[transactionId] = {
+                'name': selectedPlayer.name,
+                'pos': selectedPlayer.position.name,
+                'rating': selectedPlayer.attributes.skillRating,
+                'tier': selectedPlayer.playerTier.value,
+                'term': selectedPlayer.term,
+                'previousTeam': getattr(selectedPlayer, 'previousTeam', 'Rookie'),
+                'roster': 'Starting'
+            }
+
+            leagueHighlights.insert(0, {
+                'event': {'text': f'{team.name} signed {selectedPlayer.name} ({selectedPlayer.position.name}) for {selectedPlayer.term} season(s)'}
             })
 
-        logger.debug(f"{team.name} filled {pos} with {selectedPlayer.name}")
+            if eventLog is not None:
+                eventLog.append({
+                    'type': 'pick',
+                    'team': team.name,
+                    'teamAbbr': teamAbbr,
+                    'playerId': getattr(selectedPlayer, 'id', None),
+                    'player': selectedPlayer.name,
+                    'position': selectedPlayer.position.name,
+                    'rating': round(selectedPlayer.playerRating, 1),
+                    'tier': selectedPlayer.playerTier.name,
+                    'slot': slot,
+                })
+
+            logger.debug(f"{team.name} filled {slot} with FA {selectedPlayer.name}")
+        else:
+            # kind == 'prospect' — promote the chosen prospect into the slot.
+            promoted = candidate
+            promoted.is_prospect = False
+            promoted.prospect_seasons = 0
+            promoted.drafting_team_id = None
+            promoted.seasonsPlayed = 0
+            promoted.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
+            promoted.team = team
+            team.rosterDict[slot] = promoted
+            if promoted in team.prospects:
+                team.prospects.remove(promoted)
+            try:
+                promoted.term = self._getPlayerTerm(promoted)
+                promoted.termRemaining = promoted.term
+            except Exception:
+                promoted.termRemaining = 1
+
+            freeAgencyDict.setdefault(team.name, []).append({
+                'action': 'promote', 'player': promoted.name,
+                'position': promoted.position.name, 'slot': slot,
+            })
+            leagueHighlights.insert(0, {
+                'event': {'text': f"{team.name} promoted prospect {promoted.name} ({promoted.position.name}) to starter"}
+            })
+
+            if eventLog is not None:
+                eventLog.append({
+                    'type': 'pick',
+                    'team': team.name,
+                    'teamAbbr': teamAbbr,
+                    'playerId': getattr(promoted, 'id', None),
+                    'player': promoted.name,
+                    'position': promoted.position.name,
+                    'rating': round(promoted.playerRating, 1),
+                    'tier': promoted.playerTier.name,
+                    'isPromotion': True,
+                    'slot': slot,
+                })
+
+            logger.debug(f"{team.name} filled {slot} with promoted prospect {promoted.name}")
         # Check if roster is now complete
         remaining = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k') if team.rosterDict.get(k) is None]
         return len(remaining) == 0

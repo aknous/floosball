@@ -1336,6 +1336,18 @@ async def get_season_info(response: Response):
             nextSeasonStart = TimingManager._nextMondayUtc(hour=4)
             nextSeasonStartTime = nextSeasonStart.isoformat() + 'Z'
 
+        # Phased offseason — current top-level flow phase + ISO target time
+        # for the next phase. Phases: post_bowl, frontoffice, rookie_draft,
+        # pre_fa, fa_draft, training. Target is set during wait gates so the
+        # UI can render "<NextPhase> in Xh Ym" countdowns. Cleared during
+        # active phases. (Distinct from _offseasonPhase, which the draft
+        # generators use for OffseasonPanel sub-phase rendering.)
+        offseasonPhase = getattr(season_mgr, '_offseasonFlowPhase', None)
+        offseasonPhaseTargetTime = None
+        offseasonPhaseTarget = getattr(season_mgr, '_offseasonFlowTarget', None)
+        if offseasonPhaseTarget is not None:
+            offseasonPhaseTargetTime = offseasonPhaseTarget.isoformat() + 'Z'
+
         return build_success_response({
             'season_number': current_season.seasonNumber,
             'current_week': current_season.currentWeek,
@@ -1348,6 +1360,8 @@ async def get_season_info(response: Response):
             'allPro': current_season.allPro if hasattr(current_season, 'allPro') and current_season.allPro else None,
             'next_game_start_time': nextGameStartTime,
             'next_season_start_time': nextSeasonStartTime,
+            'offseason_phase': offseasonPhase,
+            'offseason_phase_target_time': offseasonPhaseTargetTime,
             'regular_season_over': current_season.currentWeek > 28 or (
                 current_season.currentWeek == 28 and current_season.completedWeekGames is not None
             ),
@@ -1406,7 +1420,9 @@ async def get_card_effects(response: Response):
 @app.get("/api/reigning-champion")
 async def get_reigning_champion(response: Response):
     """Return the previous season's Floosbowl champion (for navbar display)."""
-    response.headers["Cache-Control"] = "public, max-age=600"
+    # Short TTL — when the bowl ends and the champion changes, clients need
+    # to see the new value within seconds, not minutes. Was 600s.
+    response.headers["Cache-Control"] = "public, max-age=30"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     try:
@@ -3248,6 +3264,59 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     phase = getattr(sm, '_offseasonPhase', None)
     # Per-team per-position fan vote rankings (after FA ballot resolution).
     faVoteResults = getattr(sm, '_offseasonFaVoteResults', {}) or {}
+
+    # Per-team aggregated fan rookie ballot rankings (Borda-count tally),
+    # keyed by team abbr → list of ranked players with id/name/position/rating
+    # and post-draft drafted-by team info. Mirrors faVoteResults so the FO
+    # page can render the same kind of resolved-rankings panel for rookies.
+    rookieBallotResultsRaw = getattr(sm, '_offseasonRookieBallotResults', {}) or {}
+    rookieBallotResults: Dict[str, List[Dict[str, Any]]] = {}
+    if rookieBallotResultsRaw:
+        playerLookup = {p.id: p for p in pm.activePlayers}
+        teamManager = floosball_app.teamManager if floosball_app else None
+        for teamId, rankedIds in rookieBallotResultsRaw.items():
+            t = teamManager.getTeamById(teamId) if teamManager else None
+            if not t:
+                continue
+            abbr = getattr(t, 'abbr', t.name[:3].upper())
+            ranked = []
+            for pid in rankedIds:
+                pp = playerLookup.get(pid)
+                if not pp:
+                    continue
+                draftingTeamId = getattr(pp, 'drafting_team_id', None)
+                draftingAbbr = None
+                if draftingTeamId and teamManager:
+                    dt = teamManager.getTeamById(draftingTeamId)
+                    if dt:
+                        draftingAbbr = getattr(dt, 'abbr', None)
+                ranked.append({
+                    "id": pp.id, "name": pp.name,
+                    "position": pp.position.name,
+                    "rating": round(getattr(pp, 'playerRating', 0), 1),
+                    "tier": getattr(pp, 'playerTier', None).name if getattr(pp, 'playerTier', None) else None,
+                    "draftedByTeamId": draftingTeamId,
+                    "draftedByTeamAbbr": draftingAbbr,
+                })
+            if ranked:
+                rookieBallotResults[abbr] = ranked
+
+    # Upcoming rookies that haven't yet been consumed by the draft. Surfacing
+    # these on /api/offseason means a mid-draft refresh restores the right-
+    # panel rookie list — without this, refreshing during the rookie draft
+    # leaves rookies=[] and the panel reads "All prospects drafted".
+    upcomingRookies = [
+        {
+            'id': getattr(r, 'id', 0),
+            'name': r.name,
+            'position': r.position.name,
+            'rating': round(getattr(r, 'playerRating', 0), 1),
+            'tier': getattr(r, 'playerTier', None).name if getattr(r, 'playerTier', None) else 'TierC',
+        }
+        for r in pm.activePlayers
+        if getattr(r, 'is_upcoming_rookie', False)
+    ]
+
     return {
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
@@ -3255,6 +3324,8 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         "existingBallot": existingBallot, "faDirectives": faDirectives,
         "gmResolutions": gmResolutions,
         "faVoteResults": faVoteResults,
+        "rookieBallotResults": rookieBallotResults,
+        "rookies": upcomingRookies,
         "phase": phase,
         "draftComplete": draftComplete,
     }
@@ -7268,14 +7339,20 @@ def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCur
     if len(req.rankings) > GM_ROOKIE_DRAFT_MAX_RANKINGS:
         raise HTTPException(400, f"Max {GM_ROOKIE_DRAFT_MAX_RANKINGS} rookies per ballot")
 
-    # Gate on week: Front Office opens at GM_ACTIVE_WEEK. Voting stays open
-    # through playoffs and closes once the offseason actually starts (the
-    # rookie draft consumes the class then, so mid-draft changes don't
-    # apply). currentWeekText == 'Offseason' is the offseason signal.
+    # Gate: Front Office opens at GM_ACTIVE_WEEK. Voting stays open through
+    # playoffs, the post-bowl quiet, the front-office phase, AND the long
+    # noon-ET wait — fans can revise their ballots up until the moment the
+    # rookie draft actually kicks off. The flow phase is the canonical signal:
+    # closed once we hit rookie_draft or any later phase (pre_fa, fa_draft,
+    # training). Pre-flow weeks (regular season Week 22+) are still gated by
+    # week number alone since the flow phase isn't set yet.
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    if not isinstance(currentWeek, int) or currentWeek < GM_ACTIVE_WEEK:
+    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
+    seasonComplete = getattr(sm.currentSeason, 'isComplete', False) if sm and sm.currentSeason else False
+    # Pre-offseason gate: must be ≥ Week 22 unless we're already past playoffs
+    if not seasonComplete and (not isinstance(currentWeek, int) or currentWeek < GM_ACTIVE_WEEK):
         raise HTTPException(400, f"Rookie draft voting opens in Week {GM_ACTIVE_WEEK}")
-    if getattr(sm.currentSeason, 'currentWeekText', '') == 'Offseason':
+    if flowPhase in ('rookie_draft', 'pre_fa', 'fa_draft', 'training'):
         raise HTTPException(400, "Rookie draft voting is closed; the draft is underway")
 
     session = get_session()
@@ -7337,7 +7414,14 @@ def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCur
 
 @app.get("/api/gm/rookie-ballot")
 def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
-    """Return the user's current rookie-draft ballot for this season."""
+    """Return the user's current rookie-draft ballot for this season.
+
+    Includes enriched ranked-player info (name, position, rating, draftedBy)
+    so the Front Office page can show how each ballot pick resolved without
+    extra client-side lookups. After the rookie draft has happened, ranked
+    players have an `is_prospect=True` flag and a `drafting_team_id` —
+    those drive the `draftedByTeamAbbr` field below.
+    """
     import json as _json
     from database.connection import get_session
     from database.models import User, GmVote
@@ -7345,6 +7429,8 @@ def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
     sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    tm = floosball_app.teamManager
 
     session = get_session()
     try:
@@ -7352,7 +7438,7 @@ def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
         teamId = dbUser.favorite_team_id if dbUser else None
         currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
         if not teamId:
-            return build_success_response({"rankings": [], "hasBallot": False})
+            return build_success_response({"rankings": [], "hasBallot": False, "rankedPlayers": []})
 
         existing = session.query(GmVote).filter_by(
             user_id=user.id, team_id=teamId, season=currentSeason,
@@ -7367,9 +7453,37 @@ def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
                     rankings = [int(x) for x in parsed if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
             except Exception:
                 pass
+
+        # Enrich each ranked player with current state (drafted by which team,
+        # rating, position). Pre-draft they're still upcoming rookies; post-
+        # draft they've been promoted to prospects on a team's pipeline.
+        rankedPlayers = []
+        playerLookup = {p.id: p for p in pm.activePlayers}
+        for pid in rankings:
+            p = playerLookup.get(pid)
+            if not p:
+                continue
+            draftingTeamId = getattr(p, 'drafting_team_id', None)
+            draftingAbbr = None
+            if draftingTeamId and tm:
+                t = tm.getTeamById(draftingTeamId)
+                if t:
+                    draftingAbbr = getattr(t, 'abbr', None)
+            rankedPlayers.append({
+                "id": p.id,
+                "name": p.name,
+                "position": p.position.name,
+                "rating": round(getattr(p, 'playerRating', 0), 1),
+                "tier": getattr(p, 'playerTier', None).name if getattr(p, 'playerTier', None) else None,
+                "draftedByTeamId": draftingTeamId,
+                "draftedByTeamAbbr": draftingAbbr,
+                "isStillUpcoming": bool(getattr(p, 'is_upcoming_rookie', False)),
+            })
+
         return build_success_response({
             "rankings": rankings,
             "hasBallot": existing is not None,
+            "rankedPlayers": rankedPlayers,
         })
     finally:
         session.close()

@@ -1572,7 +1572,9 @@ class Game:
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
                 # Leading with little time: burn clock, don't risk a FG miss
-                if self.gameClockSeconds <= 40:
+                # Skip kneel inside own 2 to avoid backing into a safety —
+                # fall through and let the run/punt logic pick something safer.
+                if self.gameClockSeconds <= 40 and self.yardsToSafety > 2:
                     self.play.kneel()
                     return
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
@@ -2079,7 +2081,11 @@ class Game:
         if self.down <= 3:
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
             # Each kneel ~40 sec; opponent timeouts only matter when game is close (≤8 pts)
-            if (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff > 0:
+            # Field-position guard: kneel loses 1 yard, so on own 1 (or goal line) it
+            # would back into the endzone for a self-inflicted safety. Skip and fall
+            # through to the normal play caller — it'll pick a run.
+            if ((self.currentQuarter == 4 or self.currentQuarter >= 5)
+                    and scoreDiff > 0 and self.yardsToSafety > 2):
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = 4 - self.down  # 1st→3, 2nd→2, 3rd→1
                 # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
@@ -3677,9 +3683,17 @@ class Game:
                             self.clockRunning = False  # Clock stops after safety
 
                             self.formatPlayText()
+                            # Kneels and spikes were already inserted into gameFeed
+                            # before falling through to outcome handling — don't
+                            # double-list the same play when it ends in a safety.
+                            playInFeed = any(
+                                isinstance(entry, dict) and entry.get('play') is self.play
+                                for entry in self.gameFeed
+                            )
+                            if not playInFeed:
+                                self.gameFeed.insert(0, {'play': self.play})
                             self.highlights.insert(0, {'play': self.play})
                             self.leagueHighlights.insert(0, {'play': self.play})
-                            self.gameFeed.insert(0, {'play': self.play})
                             self.broadcastGameState(includeLastPlay=True)
 
                             # Broadcast score update

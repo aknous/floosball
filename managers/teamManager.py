@@ -1279,18 +1279,64 @@ class TeamManager:
         team.coach = coach
 
     def fireCoach(self, team: FloosTeam.Team) -> None:
-        """Remove a team's coach (leaves them coachless until next hire)."""
+        """Remove a team's coach (leaves them coachless until next hire).
+
+        Persists the change so a fired coach actually stays fired across
+        sessions: the Coach row's team_id is cleared, returning them to
+        the unassigned pool. Without this, _loadCoachFromDatabase would
+        re-link the same coach via team_id on the next boot and the GM
+        fire vote would silently undo itself.
+        """
+        oldCoach = team.coach
         team.coach = None
+        if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
+                and oldCoach is not None and getattr(oldCoach, 'id', None)):
+            try:
+                from database.models import Coach as DBCoach
+                dbCoach = self.db_session.get(DBCoach, oldCoach.id)
+                if dbCoach is not None:
+                    dbCoach.team_id = None
+                    self.db_session.flush()
+            except Exception as e:
+                self.logger.warning(
+                    f"fireCoach: failed to clear DB team_id for "
+                    f"{getattr(oldCoach, 'name', '?')}: {e}"
+                )
 
     def handleCoachRetirement(self, season: int) -> None:
-        """Increment seasonsCoached, then check each coach for retirement."""
+        """Increment seasonsCoached, then check each coach for retirement.
+
+        On retirement, the old Coach DB row is deleted before the new
+        coach is generated and saved. Without this, the retired coach's
+        row keeps team_id = team.id, _saveCoachToDatabase inserts a
+        second row with the same team_id, and _loadCoachFromDatabase's
+        .first() query can resurrect the retired coach on the next boot.
+        """
         for team in self.teams:
             if team.coach:
                 team.coach.seasonsCoached += 1
             if team.coach and team.coach.shouldRetire():
+                retiringName = team.coach.name
+                retiringSeasons = team.coach.seasonsCoached
+                retiringId = getattr(team.coach, 'id', None)
                 self.logger.info(
-                    f"{team.coach.name} retires after {team.coach.seasonsCoached} seasons with {team.name}"
+                    f"{retiringName} retires after {retiringSeasons} seasons with {team.name}"
                 )
+                # Drop the retired coach's DB row so it can't be re-linked
+                # via team_id and can't pollute the unassigned coach pool.
+                if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
+                        and retiringId is not None):
+                    try:
+                        from database.models import Coach as DBCoach
+                        dbCoach = self.db_session.get(DBCoach, retiringId)
+                        if dbCoach is not None:
+                            self.db_session.delete(dbCoach)
+                            self.db_session.flush()
+                    except Exception as e:
+                        self.logger.warning(
+                            f"handleCoachRetirement: failed to delete retired "
+                            f"coach {retiringName} (id={retiringId}): {e}"
+                        )
                 team.coach = self.generateCoach()
                 self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
