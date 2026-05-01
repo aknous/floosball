@@ -514,8 +514,18 @@ def _runPendingMigrations():
 
 def _recomputeFundingTiers():
     """Recompute funding_tier / tier_rank for every team_funding row using the
-    current FUNDING_TIER_THRESHOLDS. Safe to run repeatedly — deterministic
-    from effective_funding."""
+    SEASON-START funding state (baseline + carried_funding) so re-runs are
+    actually idempotent across the season.
+
+    The previous version used `effective_funding`, which grows during the
+    season as fans contribute (mid-season + season-end tax). Re-running mid-
+    or post-season would shift tiers — production saw this when restarting
+    right after the Floos Bowl: the post-tax `effective_funding` rebalanced
+    the ratios and a team that had been MEGA all season got reassigned to
+    LARGE on restart. Tiers are supposed to be locked at season start —
+    this migration's job is just to refresh stale labels after a threshold
+    constant changes, which is invariant in `baseline + carried`.
+    """
     from sqlalchemy import text
     from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
 
@@ -530,7 +540,7 @@ def _recomputeFundingTiers():
         for season in seasons:
             rows = conn.execute(
                 text(
-                    "SELECT id, effective_funding, funding_tier, tier_rank "
+                    "SELECT id, baseline_funding, carried_funding, funding_tier, tier_rank "
                     "FROM team_funding WHERE season = :s"
                 ),
                 {"s": season},
@@ -538,19 +548,22 @@ def _recomputeFundingTiers():
             if not rows:
                 continue
             teamCount = len(rows)
-            totalFunding = sum((r[1] or 0) for r in rows)
+            # Season-start funding = baseline + carried (does NOT include
+            # in-season fan_contributions, so it stays invariant all season).
+            totalFunding = sum(((r[1] or 0) + (r[2] or 0)) for r in rows)
             fairShare = max(1.0, totalFunding / teamCount) if teamCount else 1.0
 
-            def tierFor(effective):
-                ratio = (effective or 0) / fairShare
+            def tierFor(seasonStart):
+                ratio = (seasonStart or 0) / fairShare
                 for idx, name in enumerate(FUNDING_TIER_NAMES):
                     if ratio >= FUNDING_TIER_THRESHOLDS[name]:
                         return name, idx + 1
                 last = len(FUNDING_TIER_NAMES) - 1
                 return FUNDING_TIER_NAMES[last], last + 1
 
-            for rowId, effective, oldTier, oldRank in rows:
-                newTier, newRank = tierFor(effective)
+            for rowId, baseline, carried, oldTier, oldRank in rows:
+                seasonStart = (baseline or 0) + (carried or 0)
+                newTier, newRank = tierFor(seasonStart)
                 if newTier != oldTier or newRank != oldRank:
                     conn.execute(
                         text(
