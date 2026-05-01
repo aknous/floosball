@@ -6,24 +6,28 @@ through (vote-tied coach already taken, or no votes met threshold and the
 fallback hire ran in-memory only without persisting). This script finds
 those teams in the DB and inserts a freshly-generated Coach row for each.
 
+Names are pulled from the `unused_names` table — the same pool
+teamManager.generateCoach() uses — and removed from that pool so a
+future player generation won't reuse them.
+
 Idempotent: re-running is safe — teams that already have a coach are
 skipped. Self-contained (no project imports) so it runs fine via
 `fly ssh console` against the production /data/floosball.db.
 
 Usage (production):
+    fly ssh sftp shell
+    put scripts/patch_coachless_teams.py /data/patch_coachless_teams.py
+    exit
     fly ssh console
     cd /data
-    # If you want to back up first:
+    # Optional backup:
     python3 -c "import sqlite3; src=sqlite3.connect('/data/floosball.db'); dst=sqlite3.connect('/data/floosball.db.precoachpatch'); src.backup(dst); src.close(); dst.close()"
-    # Paste-and-run this script:
-    python3 < /path/to/patch_coachless_teams.py
-    # Or copy via sftp first then run by path.
+    python3 /data/patch_coachless_teams.py
 
 After running:
 - DB is correct.
 - The running app's in-memory team.coach for affected teams stays None
-  until the next process restart (the API will keep reporting no coach
-  for those teams in the meantime). On next boot, _loadCoachFromDatabase
+  until the next process restart. On next boot, _loadCoachFromDatabase
   picks up the new rows and hydrates team.coach.
 - Training (during offseason) tolerates None coach via getattr defaults.
 """
@@ -32,29 +36,9 @@ import os
 import random
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 DB_PATH = '/data/floosball.db' if os.path.exists('/data/floosball.db') else 'data/floosball.db'
-
-COACH_FIRST_NAMES = [
-    "Bill", "Tom", "Andy", "Mike", "Sean", "Kyle", "Matt", "John", "Dan", "Greg",
-    "Ron", "Pete", "Dave", "Steve", "Frank", "Gary", "Rick", "Joe", "Jim", "Bob",
-    "Ray", "Art", "Lou", "Hank", "Vince", "Wade", "Marty", "Rex", "Norm", "Buddy",
-    "Chuck", "Chip", "Curt", "Dean", "Earl", "Fran", "Glen", "Hal", "Ivan", "Jack",
-    "Karl", "Lane", "Marc", "Nick", "Otto", "Paul", "Quinn", "Rob", "Sam", "Ted",
-    "Vic", "Walt", "Zach", "Alan", "Bret", "Clyde", "Don", "Eric", "Fred", "Gus",
-]
-
-COACH_LAST_NAMES = [
-    "Walsh", "Belichick", "Noll", "Shula", "Halas", "Lombardi", "Landry", "Brown",
-    "Parcells", "Gibbs", "Johnson", "Reid", "Payton", "Carroll", "Rivera", "Taylor",
-    "Smith", "Jones", "Davis", "Wilson", "Moore", "Thomas", "Jackson", "White",
-    "Harris", "Martin", "Thompson", "Garcia", "Martinez", "Anderson", "Robinson",
-    "Clark", "Lewis", "Lee", "Walker", "Hall", "Allen", "Young", "King", "Wright",
-    "Scott", "Green", "Baker", "Adams", "Nelson", "Hill", "Ramirez", "Campbell",
-    "Mitchell", "Roberts", "Carter", "Phillips", "Evans", "Turner", "Torres",
-    "Parker", "Collins", "Edwards", "Stewart", "Flores", "Morris", "Nguyen",
-]
 
 
 def generateAttribute(center: int = 80) -> int:
@@ -91,38 +75,52 @@ def main() -> int:
     for row in coachless:
         print(f"  - team_id={row['id']:>3}  {row['name']}")
 
-    # Snapshot current taken-name set so we don't collide
+    # Pull from the same name pool generateCoach() uses.
+    cur.execute("SELECT id, name FROM unused_names ORDER BY id")
+    namePool = [(r['id'], r['name']) for r in cur.fetchall()]
+    if len(namePool) < len(coachless):
+        print(
+            f"\nERROR: only {len(namePool)} names left in unused_names but "
+            f"{len(coachless)} coaches needed. Aborting — would leave teams "
+            f"unnamed. Refill the pool first.",
+            file=sys.stderr,
+        )
+        conn.close()
+        return 1
+
+    # Don't reuse names already worn by an existing coach (defensive — the
+    # unused_names pool should already be disjoint, but cheap to enforce).
     cur.execute("SELECT name FROM coaches")
     takenNames = {r['name'] for r in cur.fetchall()}
+    namePool = [(nid, n) for (nid, n) in namePool if n not in takenNames]
+    if len(namePool) < len(coachless):
+        print(
+            f"\nERROR: after removing already-taken names, pool is too small "
+            f"({len(namePool)} available, {len(coachless)} needed).",
+            file=sys.stderr,
+        )
+        conn.close()
+        return 1
 
-    print(f"\nGenerating coaches and inserting rows...")
-    nameSeed = random.Random(datetime.utcnow().isoformat())
+    rng = random.Random(datetime.now(timezone.utc).isoformat())
+    rng.shuffle(namePool)
+
+    print(f"\nGenerating coaches from unused_names pool and inserting rows...")
     inserted = []
     for row in coachless:
         teamId = row['id']
         teamName = row['name']
-        # Pick a unique name (try up to 50 times before falling through)
-        name = None
-        for _ in range(50):
-            candidate = (
-                f"{nameSeed.choice(COACH_FIRST_NAMES)} "
-                f"{nameSeed.choice(COACH_LAST_NAMES)}"
-            )
-            if candidate not in takenNames:
-                name = candidate
-                takenNames.add(candidate)
-                break
-        if name is None:
-            name = f"Coach #{teamId}"
+
+        nameId, name = namePool.pop()
 
         attrs = {
-            'offensive_mind':    generateAttribute(),
-            'defensive_mind':    generateAttribute(),
-            'adaptability':      generateAttribute(),
-            'aggressiveness':    generateAttribute(),
-            'clock_management':  generateAttribute(),
+            'offensive_mind':     generateAttribute(),
+            'defensive_mind':     generateAttribute(),
+            'adaptability':       generateAttribute(),
+            'aggressiveness':     generateAttribute(),
+            'clock_management':   generateAttribute(),
             'player_development': generateAttribute(),
-            'scouting':          generateAttribute(),
+            'scouting':           generateAttribute(),
         }
         overall = round(sum(v for k, v in attrs.items() if k != 'scouting') / 6)
 
@@ -142,8 +140,10 @@ def main() -> int:
             name, teamId,
             attrs['offensive_mind'], attrs['defensive_mind'], attrs['adaptability'],
             attrs['aggressiveness'], attrs['clock_management'], attrs['player_development'],
-            attrs['scouting'], overall, datetime.utcnow().isoformat(),
+            attrs['scouting'], overall, datetime.now(timezone.utc).isoformat(),
         ))
+        # Remove the name from the unused pool — same pattern as generateCoach
+        cur.execute("DELETE FROM unused_names WHERE id = ?", (nameId,))
         inserted.append({
             'team': teamName, 'team_id': teamId,
             'coach': name, 'overall': overall, **attrs
