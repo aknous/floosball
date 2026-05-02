@@ -4808,38 +4808,78 @@ class Game:
     def calculatePreSnapTime(self) -> int:
         """
         Calculate time consumed before snap (huddle, line up, snap count).
-        Adjusts based on game situation.
+        Adjusts based on game situation AND the offensive coach's
+        clockManagement attribute. A great clock manager (gameIQ ~1.0) snaps
+        a few seconds faster in hurry-up situations and burns a few extra
+        seconds when bleeding the clock; a poor one (gameIQ ~0.0) leaks time
+        when trying to score and gives seconds back when leading.
         """
-        baseTime = 35  # Default time between plays
-        
-        # Get score differential
+        DEFAULT_BASE = 35  # Default time between plays
+
+        # Get score differential from offense's perspective
         if self.offensiveTeam == self.homeTeam:
             scoreDiff = self.homeScore - self.awayScore
         else:
             scoreDiff = self.awayScore - self.homeScore
-        
-        # Situational adjustments
+
         secs = self.gameClockSeconds
         q = self.currentQuarter
         garbageTime = self._isGarbageTime(scoreDiff)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        gameIQ = self._coachClockIQ(coach)
 
-        # Q4 (or Q2 end-of-half) trailing: hurry-up (skip if garbage time)
-        if q == 4 and secs < TIMEOUT_CLOCK_THRESHOLD and scoreDiff < 0 and not garbageTime:
-            baseTime = 12  # Fast tempo — under 2 min, must score
-        elif q == 2 and secs < TIMEOUT_CLOCK_THRESHOLD and scoreDiff < 0:
-            baseTime = 15  # Q2 end-of-half hurry-up (slightly less desperate)
-        elif (q >= 3) and secs < 300 and scoreDiff < 0 and not garbageTime:
-            if scoreDiff <= -8:  # Down by 2+ scores
-                baseTime = 15  # Hurry-up offense
-            else:
-                baseTime = 25  # Faster pace
-        elif secs < 300 and scoreDiff > 8:  # Winning by 2+ scores
-            baseTime = 40  # Burn clock
-        elif secs < TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:  # Under 2 min, leading
-            baseTime = 38  # Milk clock
-        
-        # Add variance
-        return baseTime + batched_randint(-3, 3)
+        # Classify the situation, then set baseTime per intent. Tied + late
+        # is now hurry-up (was missing); OT is included in the late-game hurry
+        # window since scoring wins. Burn-clock and milk-clock branches stay
+        # unchanged structurally.
+        intent = 'neutral'
+        baseTime = DEFAULT_BASE
+
+        if (q >= 4) and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0 and not garbageTime:
+            # Q4/OT trailing or tied under 2:00 — full hurry-up
+            intent = 'hurryUp'
+            baseTime = 12
+        elif q == 2 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0:
+            # End of half trailing or tied — milder hurry (still want pre-half points)
+            intent = 'hurryUp'
+            baseTime = 15
+        elif q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
+            # Mid-late game with deficit — pace up
+            intent = 'hurryUp'
+            baseTime = 15 if scoreDiff <= -8 else 25
+        elif secs <= 300 and scoreDiff > 8:
+            intent = 'burnClock'
+            baseTime = 40
+        elif secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:
+            intent = 'burnClock'
+            baseTime = 38
+
+        # Coach IQ modifier:
+        #   hurryUp:    high IQ snaps faster (negative offset)
+        #   burnClock:  high IQ uses more of the play clock (positive offset)
+        #   neutral:    coach makes no measurable difference at default tempo
+        # Spread is ±3 sec across the IQ range (0.0 → ±3, 1.0 → ∓3, 0.5 → 0).
+        if intent == 'hurryUp':
+            iqOffset = round(-6 * (gameIQ - 0.5))
+        elif intent == 'burnClock':
+            iqOffset = round(6 * (gameIQ - 0.5))
+        else:
+            iqOffset = 0
+
+        finalTime = max(8, baseTime + iqOffset + batched_randint(-3, 3))
+
+        # Surface tempo reasoning in play insights so the per-play panel can
+        # show why a snap took 12 vs 38 seconds.
+        if hasattr(self, 'play') and self.play is not None:
+            self.play.insights['tempo'] = {
+                'intent': intent,
+                'baseTime': baseTime,
+                'coachClockIQ': round(gameIQ, 2),
+                'iqOffset': iqOffset,
+                'finalSeconds': finalTime,
+            }
+
+        return finalTime
     
     def calculatePlayDuration(self, playType: PlayType, isInBounds: bool = True) -> int:
         """
