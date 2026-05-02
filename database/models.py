@@ -240,6 +240,13 @@ class PlayerAttributes(Base):
     quirk: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     mood: Mapped[int] = mapped_column(Integer, default=3)
 
+    # Flavor fields — assigned once at player creation, never change.
+    # Pure character flavor for the player detail page; no gameplay effect.
+    hometown: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    favorite_category: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    favorite_item: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    motto: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="attributes")
 

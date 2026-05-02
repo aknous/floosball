@@ -48,6 +48,9 @@ class EventType(Enum):
     # Player events
     PLAYER_STAT_UPDATE = "player_stat_update"
     PLAYER_INJURY = "player_injury"
+    # Off-day flavor — fired between games when no games are live to surface
+    # personality outside the game modal. Renders in the highlights feed.
+    PLAYER_OFF_DAY = "player_off_day"
     
     # Offseason events
     OFFSEASON_START             = "offseason_start"
@@ -557,6 +560,25 @@ class PlayerEvent:
             'homeTeamStats': homeTeamStats or {},
             'awayTeamStats': awayTeamStats or {},
             'message': f"Player stats updated for game {gameId}"
+        }
+
+
+class PlayerOffDayEvent:
+    """Factory for between-games off-day flavor events. Fires when no games
+    are live to surface personality in the highlights feed."""
+
+    @staticmethod
+    def offDay(playerId: int, playerName: str, teamId: Optional[int],
+               teamAbbr: Optional[str], personality: str, text: str) -> Dict[str, Any]:
+        return {
+            'event': EventType.PLAYER_OFF_DAY.value,
+            'timestamp': datetime.now().isoformat(),
+            'playerId': playerId,
+            'playerName': playerName,
+            'teamId': teamId,
+            'teamAbbr': teamAbbr,
+            'personality': personality,
+            'text': text,
         }
 
 

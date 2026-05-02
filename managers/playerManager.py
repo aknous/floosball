@@ -435,6 +435,10 @@ class PlayerManager:
                 player.attributes.personality = getattr(attrs, 'personality', None)
                 player.attributes.quirk = getattr(attrs, 'quirk', None)
                 player.attributes.mood = getattr(attrs, 'mood', 3) or 3
+                player.attributes.hometown = getattr(attrs, 'hometown', None)
+                player.attributes.favorite_category = getattr(attrs, 'favorite_category', None)
+                player.attributes.favorite_item = getattr(attrs, 'favorite_item', None)
+                player.attributes.motto = getattr(attrs, 'motto', None)
 
             # Load career stats from related table
             if db_player.career_stats:
@@ -1386,6 +1390,10 @@ class PlayerManager:
                             personality=getattr(attrs, 'personality', None),
                             quirk=getattr(attrs, 'quirk', None),
                             mood=getattr(attrs, 'mood', 3) or 3,
+                            hometown=getattr(attrs, 'hometown', None),
+                            favorite_category=getattr(attrs, 'favorite_category', None),
+                            favorite_item=getattr(attrs, 'favorite_item', None),
+                            motto=getattr(attrs, 'motto', None),
                         )
                         self.db_session.add(db_attrs)
                     else:
@@ -1431,6 +1439,10 @@ class PlayerManager:
                         db_attrs.personality = getattr(attrs, 'personality', None)
                         db_attrs.quirk = getattr(attrs, 'quirk', None)
                         db_attrs.mood = getattr(attrs, 'mood', 3) or 3
+                        db_attrs.hometown = getattr(attrs, 'hometown', None)
+                        db_attrs.favorite_category = getattr(attrs, 'favorite_category', None)
+                        db_attrs.favorite_item = getattr(attrs, 'favorite_item', None)
+                        db_attrs.motto = getattr(attrs, 'motto', None)
 
                 # Save career stats (season 0 = career totals)
                 if hasattr(player, 'careerStatsDict') and player.careerStatsDict:

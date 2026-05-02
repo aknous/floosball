@@ -344,6 +344,21 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # Flavor fields — pure character flavor on the player detail page.
+        # Backfilled at boot for legacy NULL rows, same pattern as personality.
+        for col, colDef in [
+            ('hometown', 'VARCHAR(60)'),
+            ('favorite_category', 'VARCHAR(30)'),
+            ('favorite_item', 'VARCHAR(120)'),
+            ('motto', 'VARCHAR(160)'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
+
         # Rename 'easy' personality to 'chill'. Idempotent — UPDATE no-ops once done.
         try:
             result = conn.execute(text(

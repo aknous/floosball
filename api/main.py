@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import os
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
-from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent
+from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent, PlayerOffDayEvent
 from api_response_builders import (
     TeamResponseBuilder, 
     PlayerResponseBuilder, 
@@ -126,9 +126,130 @@ async def startup_event():
     from api.game_broadcaster import broadcaster as _broadcaster
     _broadcaster.set_main_loop(_asyncio.get_running_loop())
 
+    # Background task: periodic off-day flavor broadcasts. Fires only when
+    # no games are live so it surfaces personality between rounds without
+    # competing with live play feed.
+    _asyncio.create_task(_offDayFlavorLoop())
+
     # The FloosballApplication will be injected by the main entry point
     # For now, log that we're ready
     logger.info("API server ready - waiting for FloosballApplication initialization")
+
+
+# Tunables for between-games personality broadcasts.
+# Env-override for testing: set FLOOSBALL_OFF_DAY_FAST=1 to speed up
+# broadcasts to one every 8s for live debugging. Default cadence (90s,
+# 60% chance) is what we want in production.
+import os as _os
+from collections import deque as _deque
+_OFF_DAY_FAST = _os.environ.get('FLOOSBALL_OFF_DAY_FAST', '').lower() in ('1', 'true', 'yes')
+OFF_DAY_INTERVAL_SECONDS = 8 if _OFF_DAY_FAST else 90  # how often to consider firing
+OFF_DAY_FIRE_CHANCE = 1.0 if _OFF_DAY_FAST else 0.6    # not every tick fires — keeps feed slow
+OFF_DAY_QUIET_AFTER_GAME = 60                          # wait this long after last live play
+
+# Ring buffer of recent off-day events for the highlights-feed backfill.
+# Frontend reads this on page load so the feed isn't empty until the next
+# tick fires. In-memory only — fine since these are flavor.
+RECENT_OFF_DAY_LIMIT = 30
+_recentOffDayEvents: _deque = _deque(maxlen=RECENT_OFF_DAY_LIMIT)
+
+async def _offDayFlavorLoop():
+    """Periodically broadcast a player_off_day event when no games are live.
+    Slow drip — feeds the highlights ticker between rounds with personality.
+
+    Per off-day window:
+    - Tracks recently-quoted player IDs in `_recentlyQuotedPlayers` so the
+      same player doesn't speak twice in a row. The set resets when all
+      eligible players have been picked, OR when games start (new window).
+    - Clears the recent-events ring buffer once at the moment games start,
+      so the next off-day window begins with a fresh feed.
+    """
+    import asyncio as _asyncio
+    import random as _random
+    from api.game_broadcaster import broadcaster as _broadcaster
+
+    recentlyQuoted: set[int] = set()
+    prevGamesActive = False
+
+    while True:
+        try:
+            await _asyncio.sleep(OFF_DAY_INTERVAL_SECONDS)
+            if not _broadcaster.is_enabled():
+                continue
+            gamesActive = _areGamesStarted()
+            # Transition: idle → active. Wipe the off-day feed and recent set
+            # so the next idle window starts fresh.
+            if gamesActive and not prevGamesActive:
+                _recentOffDayEvents.clear()
+                recentlyQuoted.clear()
+            prevGamesActive = gamesActive
+            if gamesActive:
+                continue
+            if not floosball_app:
+                continue
+            if _random.random() > OFF_DAY_FIRE_CHANCE:
+                continue
+            personalityMgr = getattr(floosball_app, 'personalityManager', None)
+            if personalityMgr is None:
+                continue
+            players = getattr(floosball_app.playerManager, 'activePlayers', None) or []
+            # Only rostered players — exclude free agents, prospects, and
+            # upcoming rookies. player.team is a team OBJECT for rostered
+            # players and the STRING markers 'Free Agent' / 'Prospect' /
+            # 'Upcoming Rookie' for everyone else.
+            def _isRostered(p):
+                if getattr(p, 'is_prospect', False):
+                    return False
+                team = getattr(p, 'team', None)
+                return getattr(team, 'id', None) is not None
+            eligible = [p for p in players
+                        if getattr(getattr(p, 'attributes', None), 'personality', None)
+                        and _isRostered(p)]
+            # During playoffs, restrict eligible players to those on teams
+            # actually playing this week (or just played). Eliminated teams
+            # shouldn't speak. Regular season — everyone is eligible.
+            sm = floosball_app.seasonManager if floosball_app else None
+            cs = sm.currentSeason if sm else None
+            weekGames = (getattr(cs, 'activeGames', None)
+                         or getattr(cs, 'completedWeekGames', None) or []) if cs else []
+            inPlayoffs = any(getattr(g, 'gameType', '') == 'playoff' for g in weekGames)
+            if inPlayoffs:
+                playoffTeamIds = set()
+                for g in weekGames:
+                    if getattr(g, 'gameType', '') == 'playoff':
+                        h = getattr(g, 'homeTeam', None)
+                        a = getattr(g, 'awayTeam', None)
+                        if h is not None: playoffTeamIds.add(getattr(h, 'id', None))
+                        if a is not None: playoffTeamIds.add(getattr(a, 'id', None))
+                eligible = [p for p in eligible
+                            if getattr(getattr(p, 'team', None), 'id', None) in playoffTeamIds]
+            if not eligible:
+                continue
+            # Avoid the same player speaking twice in one off-day window.
+            # If everyone has had a turn, recycle.
+            unspoken = [p for p in eligible if p.id not in recentlyQuoted]
+            if not unspoken:
+                recentlyQuoted.clear()
+                unspoken = eligible
+            player = _random.choice(unspoken)
+            payload = personalityMgr.composeOffDay(player)
+            if not payload:
+                continue
+            recentlyQuoted.add(player.id)
+            event = PlayerOffDayEvent.offDay(
+                playerId=payload.get('playerId'),
+                playerName=payload.get('playerName'),
+                teamId=payload.get('teamId'),
+                teamAbbr=payload.get('teamAbbr'),
+                personality=payload.get('personality'),
+                text=payload.get('text'),
+            )
+            # Push into the recent ring buffer so the highlights feed can
+            # backfill on page load. Most recent at the LEFT (index 0).
+            _recentOffDayEvents.appendleft(event)
+            await _broadcaster.broadcast_season_event(event)
+        except Exception as e:
+            logger.warning(f"off-day flavor loop error: {e}")
 
 
 @app.on_event("shutdown")
@@ -881,7 +1002,13 @@ async def get_player(player_id: int, response: Response):
         else:
             player_dict['stats'] = allSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
-        
+
+        # Personality quotes — latest one for the hover tooltip,
+        # full list shown on the player profile page via /quotes endpoint.
+        pm = floosball_app.personalityManager
+        if pm:
+            player_dict['latestQuote'] = pm.getLatestQuote(player.id)
+
         return build_success_response(player_dict)
     
     except HTTPException:
@@ -889,6 +1016,29 @@ async def get_player(player_id: int, response: Response):
     except Exception as e:
         logger.error(f"Error getting player {player_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/players/{player_id}/quotes", response_model=Dict[str, Any])
+async def get_player_quotes(player_id: int, limit: int = 10):
+    """Recent personality quotes for a player. Powers the Recent Moments
+    box on the player profile page. In-memory ring buffer; lost on
+    server restart since these are flavor, not authoritative."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    pm = floosball_app.personalityManager
+    if pm is None:
+        return build_success_response([])
+    quotes = pm.getRecentQuotes(player_id, limit=max(1, min(limit, 50)))
+    return build_success_response(quotes)
+
+
+@app.get("/api/recent-off-day", response_model=Dict[str, Any])
+async def get_recent_off_day(limit: int = 30):
+    """Recent off-day broadcast events for the highlights feed backfill.
+    Frontend reads this on mount so the feed isn't empty before the next
+    tick fires. In-memory ring buffer."""
+    capped = max(1, min(limit, RECENT_OFF_DAY_LIMIT))
+    return build_success_response(list(_recentOffDayEvents)[:capped])
 
 
 # ============================================================================

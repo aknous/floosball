@@ -1,0 +1,1184 @@
+# Player flavor data — assigned once at player creation, never changes.
+# Pure character flavor for the player detail page; no gameplay effect.
+#
+# WORLDBUILDING:
+# Floosball is a far-future simulation authored by the Cores — AI entities
+# reconstructing human football from patchy, partial transmissions of the
+# old human era. The flavor pools should READ as Cores-generated content:
+# sometimes plausible, sometimes adjacent-to-correct, sometimes completely
+# surreal. No real pop culture, brands, song titles, or actor names — that
+# information didn't survive the transmission. Items should feel like an
+# AI's earnest guess at human life, often hilariously wrong but always
+# committed.
+#
+# - hometowns: list of strings. Mix of plausible US-coded cities (the Cores
+#   recovered atlas pages), real-but-strange town names (which the Cores
+#   especially love), and outright cosmic/abstract locations.
+# - favorites: map of category → list of items. Items lean weird-but-
+#   evocative — never name-dropping a real song/film/show.
+# - mottos: map of personality → list of mottos. These match the
+#   personality voice from vibe_reactions.yaml.
+# - personality_favorites: map of personality → category → items. Overrides
+#   the base favorites pool for that personality+category. New categories
+#   defined here become valid roll options for that personality only.
+#   Use to give variants their own flavor (alien doesn't eat diner pancakes).
+#
+# CANONICAL LORE ANCHORS — reuse these names for continuity:
+#   • The Splintering — the territorial break-up that created the freeholds
+#   • The Long Quiet — the comms-dark period after / during the Splintering
+#   • The Reach — colonized off-Earth territories, organized into sectors
+#   • The Freeholds — semi-autonomous post-Splintering territories
+#   • The Cracked Years — period of instability between Resets
+#   • The Resets — recurring system-wide cycles
+#   • Second-spring — recurring seasonal/cyclic event after each Reset
+#   • The Boundary — something that occasionally "thins" (cosmic / lit)
+
+# ─── Hometowns ──────────────────────────────────────────────────────────────
+
+hometowns:
+  # Floosball team cities (the home of the league)
+  - "New York, NY"
+  - "Boston, MA"
+  - "Philadelphia, PA"
+  - "Pittsburgh, PA"
+  - "Cleveland, OH"
+  - "Chicago, IL"
+  - "Detroit, MI"
+  - "Miami, FL"
+  - "Tampa, FL"
+  - "Nashville, TN"
+  - "Austin, TX"
+  - "Kansas City, MO"
+  - "Las Vegas, NV"
+  - "Portland, OR"
+  - "Anaheim, CA"
+  - "San Diego, CA"
+  - "San Francisco, CA"
+  - "Seattle, WA"
+  - "Vancouver, BC"
+  - "Minneapolis, MN"
+  - "Denver, CO"
+  - "Phoenix, AZ"
+  - "Atlanta, GA"
+  - "Baltimore, MD"
+
+  # Plausible US cities (Cores reconstructed an atlas)
+  - "Tucson, AZ"
+  - "Boise, ID"
+  - "Baton Rouge, LA"
+  - "Tulsa, OK"
+  - "Spokane, WA"
+  - "Buffalo, NY"
+  - "Lincoln, NE"
+  - "Mobile, AL"
+  - "Pasadena, TX"
+  - "Tallahassee, FL"
+  - "Provo, UT"
+  - "Erie, PA"
+  - "Des Moines, IA"
+  - "Bismarck, ND"
+  - "Helena, MT"
+  - "Anchorage, AK"
+  - "Topeka, KS"
+  - "Lubbock, TX"
+  - "Fresno, CA"
+  - "Akron, OH"
+  - "Bakersfield, CA"
+  - "Wichita, KS"
+  - "Springfield, MO"
+  - "Knoxville, TN"
+  - "Cedar Rapids, IA"
+  - "Yuma, AZ"
+  - "Albuquerque, NM"
+  - "Birmingham, AL"
+  - "Jacksonville, FL"
+  - "Cincinnati, OH"
+  - "Chattanooga, TN"
+  - "Bowling Green, KY"
+  - "Reno, NV"
+  - "Eugene, OR"
+  - "Olympia, WA"
+  - "Augusta, ME"
+  - "Concord, NH"
+  - "Toledo, OH"
+  - "Flint, MI"
+  - "Saginaw, MI"
+  - "Hattiesburg, MS"
+  - "Rapid City, SD"
+  - "Kalamazoo, MI"
+  - "Pocatello, ID"
+  - "Cheyenne, WY"
+  - "Fargo, ND"
+  - "St. Louis, MO"
+  - "Indianapolis, IN"
+  - "Charlotte, NC"
+  - "Raleigh, NC"
+  - "Richmond, VA"
+  - "New Orleans, LA"
+  - "Memphis, TN"
+  - "Sacramento, CA"
+  - "Salt Lake City, UT"
+  - "Madison, WI"
+  - "Milwaukee, WI"
+  - "Omaha, NE"
+  - "Honolulu, HI"
+  - "Hartford, CT"
+  - "Providence, RI"
+  - "Burlington, VT"
+  - "Trenton, NJ"
+  - "Albany, NY"
+  - "Tacoma, WA"
+  - "Boulder, CO"
+  - "Asheville, NC"
+  - "Columbia, SC"
+  - "Springfield, IL"
+
+  # Real-but-strange US town names (Cores find these especially funny)
+  - "Truth or Consequences, NM"
+  - "Boring, OR"
+  - "Hell, MI"
+  - "Accident, MD"
+  - "Why, AZ"
+  - "Embarrass, MN"
+  - "Bigfoot, TX"
+  - "Toad Suck, AR"
+  - "Frostproof, FL"
+  - "Knockemstiff, OH"
+  - "Tightwad, MO"
+  - "Eek, AK"
+  - "Walla Walla, WA"
+  - "Ypsilanti, MI"
+  - "Climax, NC"
+  - "Looneyville, WV"
+  - "Two Egg, FL"
+  - "Goofy Ridge, IL"
+  - "Last Chance, CO"
+  - "No Name, CO"
+  - "Hopeulikit, GA"
+  - "Peculiar, MO"
+  - "Burnt Corn, AL"
+  - "Boogertown, NC"
+  - "Yeehaw Junction, FL"
+  - "Sandwich, MA"
+  - "Lick Skillet, GA"
+  - "Gnaw Bone, IN"
+  - "Nothing, AZ"
+  - "Defeated, TN"
+  - "Whynot, NC"
+  - "Chicken, AK"
+  - "Cool, CA"
+  - "Ding Dong, TX"
+  - "Disco, IL"
+  - "Sleepy Eye, MN"
+  - "Smackover, AR"
+  - "Wahoo, NE"
+  - "Zigzag, OR"
+  - "Magnetic, AR"
+  - "Tarzana, CA"
+  - "Gas, KS"
+  - "Bird-in-Hand, PA"
+  - "Intercourse, PA"
+  - "Hatchet Lake, NS"
+
+  # International cities (Cores recovered scattered transmissions worldwide)
+  - "Tokyo, Japan"
+  - "Paris, France"
+  - "Berlin, Germany"
+  - "London, England"
+  - "Dublin, Ireland"
+  - "Edinburgh, Scotland"
+  - "Rome, Italy"
+  - "Madrid, Spain"
+  - "Lisbon, Portugal"
+  - "Vienna, Austria"
+  - "Prague, Czech Republic"
+  - "Athens, Greece"
+  - "Helsinki, Finland"
+  - "Oslo, Norway"
+  - "Stockholm, Sweden"
+  - "Copenhagen, Denmark"
+  - "Reykjavik, Iceland"
+  - "Warsaw, Poland"
+  - "Istanbul, Turkey"
+  - "Cairo, Egypt"
+  - "Cape Town, South Africa"
+  - "Marrakech, Morocco"
+  - "Lagos, Nigeria"
+  - "Mexico City, Mexico"
+  - "Buenos Aires, Argentina"
+  - "Sao Paulo, Brazil"
+  - "Lima, Peru"
+  - "Bogota, Colombia"
+  - "Toronto, Ontario"
+  - "Montreal, Quebec"
+  - "Halifax, Nova Scotia"
+  - "St. John's, Newfoundland"
+  - "Sydney, Australia"
+  - "Melbourne, Australia"
+  - "Auckland, New Zealand"
+  - "Wellington, New Zealand"
+  - "Mumbai, India"
+  - "Bangalore, India"
+  - "Bangkok, Thailand"
+  - "Manila, Philippines"
+  - "Seoul, South Korea"
+  - "Taipei, Taiwan"
+  - "Singapore"
+  - "Tel Aviv, Israel"
+  - "Beirut, Lebanon"
+
+  # Real-but-weird international (Cores especially love these)
+  - "Hell, Norway"
+  - "Boring, Scotland"
+  - "Llanfairpwllgwyngyll, Wales"
+  - "Wagga Wagga, Australia"
+  - "Woolloomooloo, Australia"
+  - "Whakapapa, New Zealand"
+  - "Punkeydoodles Corners, Ontario"
+  - "Westward Ho!, England"
+  - "Snowflake, Manitoba"
+  - "Llamas, Spain"
+  - "Batman, Turkey"
+  - "Ham, France"
+  - "Eggs, Austria"
+
+  # Cosmic / surreal / Cores-confused
+  - "An undisclosed location"
+  - "Atlantis"
+  - "The Moon"
+  - "A small parking lot"
+  - "Behind a strip mall"
+  - "Somewhere in the woods"
+  - "A 24-hour diner"
+  - "Section 214, Row J"
+  - "Off the grid"
+  - "A van down by the river"
+  - "Earth, mostly"
+  - "A town the transmission couldn't render"
+  - "Coordinates redacted"
+  - "Approximately Iowa"
+  - "Latitude unknown"
+  - "Probably somewhere in Ohio"
+  - "Where the maps don't go"
+  - "A field with a single tree"
+  - "Inside a long story"
+  - "The before-time"
+  - "Reconstructed from fragments"
+  - "Just past the gas station"
+  - "A waiting room with no clock"
+  - "The corner of two highways nobody named"
+  - "Wherever the next train stops"
+  - "An afternoon in 1987"
+  - "The exact center of a forgotten city"
+  - "Between two seasons"
+  - "The version of Iowa from a dream"
+  - "A library that closed in 1962"
+  - "The interstate, between exits"
+  - "A motel by a road that no longer exists"
+  - "The roof of a strip mall, summer"
+  - "A childhood backyard"
+  - "A diner that's only open after midnight"
+  - "A bus station with no buses"
+  - "The county fair, the year it rained the whole time"
+  - "Three towns east of where you'd expect"
+  - "A radio signal that drifted too far"
+  - "The town behind the toll booth"
+  - "An old map's blank corner"
+  - "Somewhere with no zip code"
+  - "Inside a closed encyclopedia"
+  # Cores-leaked lore (events that haven't happened, or didn't happen here)
+  - "Old Houston, before the Splintering"
+  - "The settlements past the lunar Splintering line"
+  - "Outpost Nine, the year of the Long Quiet"
+  - "A coastal town, pre-second-spring"
+  - "The Reach, sector four"
+  - "The territory that doesn't appear on current atlases"
+  - "A city the Cores remember building"
+  - "The freeholds, before they were freeholds"
+
+# ─── Favorites — categories and items ──────────────────────────────────────
+
+favorites:
+  food:
+    # Plausible
+    - "well-done steak with too much pepper"
+    - "slightly burnt diner pancakes"
+    - "buttered noodles"
+    - "biscuits and gravy"
+    - "an entire rotisserie chicken"
+    - "cold pizza for breakfast"
+    - "a really good grilled cheese"
+    - "deli pickles by the jar"
+    - "shrimp and grits"
+    - "fried bologna sandwich"
+    - "deviled eggs"
+    - "bone-in pork chop"
+    - "saltine crackers and butter"
+    - "instant noodles eaten dry"
+    - "a single warm dinner roll"
+    - "any breakfast burrito"
+    # Slightly off
+    - "the brown food. specifically the brown food"
+    - "anything that comes with a small wooden stick"
+    - "eggs cooked exactly seven minutes"
+    - "soup eaten with a fork on principle"
+    - "frozen toaster pastries eaten without toasting"
+    - "the green parts of green onions only"
+    # Surreal
+    - "rectangular foods only"
+    - "any food handed to them by a stranger"
+    - "a single ice cube studied for several seconds"
+    - "the smell of bread, not the bread itself"
+    - "food eaten in someone else's kitchen"
+    - "leftovers with no known origin"
+    - "whatever is closest to the door"
+    - "a meal someone else paid for"
+    # Cores-invented brands
+    - "Toaster Squares, frosted of course"
+    - "a sleeve of Saltys"
+    - "a Big Pull jerky stick"
+    - "Honeycomb Grandpa cereal"
+    - "a Diner Star sandwich, no pickles"
+    - "Big Pete's frozen dinner, the meatloaf one"
+    # Cores-leaked lore
+    - "the rations they served on the Reach voyages"
+    - "ceremonial bread baked for the second-spring"
+    - "the kind of soup served at the freehold inns"
+
+  drink:
+    # Plausible
+    - "lukewarm coffee"
+    - "diet ginger ale"
+    - "two coffees at once"
+    - "milk straight from the carton"
+    - "the coldest water you've got"
+    - "unsweetened iced black tea"
+    - "a single cold beer in a frosted mug"
+    - "tap water at room temperature"
+    - "powdered sports drink mixed too strong"
+    - "espresso in a paper cup"
+    - "thermos of soup that counts as a drink"
+    - "the last sip of a coffee cup"
+    - "a glass of milk with one ice cube"
+    - "chocolate milk in a small bottle"
+    - "instant coffee from a kettle"
+    # Slightly off
+    - "any orange beverage"
+    - "anything served in a mug shaped like an animal"
+    - "seven small waters"
+    - "drinks named after weather"
+    # Surreal
+    - "rainwater collected on game day"
+    - "the broth portion of soup"
+    - "drinks with no visible bubbles"
+    - "whichever drink is loneliest"
+    - "tea brewed twice, never once"
+    # Cores-invented brands
+    - "a tall can of Slosh"
+    - "Tin Cup coffee, two creams"
+    - "Crystal Vance, original flavor"
+    - "Roy's Iced Tea"
+    - "a single bottle of Bayou Cola"
+    - "Pep-Up, served warm"
+    - "the diner's house coffee"
+    # Cores-leaked lore
+    - "Splintering-era cider, the cloudy kind"
+    - "post-Quiet brewer's tea"
+    - "spring-cycle ale, served the day after a Reset"
+
+  movie:
+    # Genres / types — never naming real films
+    - "any old western"
+    - "any heist movie with a long con"
+    - "any silent film with a dog"
+    - "documentaries about volcanoes"
+    - "the kind of cooking documentary where nobody talks"
+    - "courtroom dramas with a twist ending"
+    - "any film with a lighthouse in it"
+    - "long, slow Russian films"
+    - "the same noir over and over"
+    - "any film where it rains the whole time"
+    - "buddy cop films and nothing else"
+    - "movies where the dog lives"
+    - "any film set entirely on a single road"
+    - "the kind of movie where someone learns to fish"
+    - "submarine films"
+    - "anything with a pie fight"
+    # Slightly off / Cores-misinterpreted
+    - "the film about the man who loved a tractor"
+    - "the silent two-hour movie of someone making bread"
+    - "a black-and-white film of a horse running"
+    - "the documentary about doors"
+    - "any film with at least three weddings and one death"
+    - "the movie where the protagonist is a forklift"
+    - "the cowboy film with no cowboys"
+    # Surreal
+    - "the films the Cores can't fully render"
+    - "movies with no second act"
+    - "any film with a moon in the title (translated approximately)"
+    - "films watched while doing chores"
+    - "the eight-minute opening of a film they never finished"
+    # Slightly-off pop culture (Cores' approximations)
+    - "the entire Brigantine trilogy"
+    - "the third Vinegar Hill movie (the best one)"
+    - "anything from the Lockstep collection"
+    - "every Thompson Brothers film"
+    - "the long western with the train robbery and the dog"
+    - "the heist film with the brothers who didn't talk"
+    - "the desert film from the seventies, they think it's called 'Dust'"
+    - "the noir with the woman in the green coat"
+    - "the courtroom drama with the twin lawyers"
+    - "any film starring Roy Brennan"
+    # Cores-leaked lore
+    - "the documentary about the spire fires"
+    - "the propaganda films from before the Splintering"
+    - "the lost reel from the Long Quiet"
+    - "the historical drama about the Splintering hearings"
+    - "the silent footage the Cores think is Earth"
+
+  song:
+    # Genre / type descriptors
+    - "any sad pedal-steel song"
+    - "the kind of song with too much harmonica"
+    - "anything with a long fadeout"
+    - "songs sung at funerals you weren't invited to"
+    - "any waltz played slightly too fast"
+    - "songs about leaving towns"
+    - "songs about returning to towns"
+    - "any sea shanty"
+    - "the kind of song that ends with a single piano note"
+    - "any song with a whistled solo"
+    - "songs in three-quarter time"
+    - "anything an old man would hum at a bar"
+    - "any song their mother used to sing"
+    - "songs in a language they don't speak"
+    - "songs with a single accordion"
+    # Cores-misinterpreted
+    - "the song with the line about a horse the Cores never fully decoded"
+    - "the four notes the transmission preserved"
+    - "the chant the Cores think was an anthem"
+    - "anything in the key of D, the Cores think"
+    # Surreal
+    - "songs without lyrics"
+    - "songs only audible underwater"
+    - "the song they hum but can't name"
+    - "any song that makes a dog tilt its head"
+    # Slightly-off pop culture (Cores' approximations)
+    - "anything by Diane Brennan"
+    - "the Old Buoys' live album, side B only"
+    - "the Maypole single"
+    - "anything by the Tessa Brennan trio"
+    - "'Brown Sugar' (the country one, not the soul one)"
+    - "the harmonica anthem from the road movie"
+    - "the song that goes oh-oh-oh four times before the chorus"
+    - "anything off the 'Rumors' album by Fleetwood May"
+    - "any track from Lynsky Skynsky's first record"
+    - "the Old Buoys' Christmas single"
+    # Cores-leaked lore
+    - "the anthem they used during the Splintering ceremony"
+    - "the four-note signal used after every Reset"
+    - "the lullaby from the freehold sectors"
+    - "the protest song from the Long Quiet"
+    - "the chant they recorded during second-spring"
+
+  tv_show:
+    # Genres
+    - "any cooking show with shouting"
+    - "old crime dramas"
+    - "any nature documentary"
+    - "long-form quiet documentaries about birds"
+    - "antiques shows where someone always cries"
+    - "shows where strangers fix each other's houses"
+    - "talk shows from before they had cell phones"
+    - "any quiz show"
+    - "long mystery serials"
+    - "the kind of show that's just an old man fishing"
+    - "old broadcasts of curling"
+    - "shows where the host whispers the entire time"
+    - "shows about people building boats"
+    - "the show with the mailman who solves mysteries"
+    # Cores-misinterpreted
+    - "the show the Cores think was about a single sandwich"
+    - "the news, but only the weather"
+    - "old broadcasts that come in through the wrong band"
+    - "the static between shows"
+    - "the public-access program nobody else remembers"
+    # Surreal
+    - "shows that aired only once"
+    - "the test pattern"
+    - "any program shorter than four minutes"
+    - "shows watched on someone else's TV from across the street"
+    # Slightly-off pop culture (Cores' approximations)
+    - "Old Man Hopkins Investigates"
+    - "Tuesday at Seven"
+    - "Patio People, season three"
+    - "Inside the Lighthouse"
+    - "the courtroom show with the twin lawyers, before they got their own spin-offs"
+    - "Reno P.D. (the early seasons)"
+    - "any season of The Brennan Hour"
+    - "The Quiet Inn"
+    - "any rerun of Oxbow Crossing"
+    # Cores-leaked lore
+    - "the broadcast that came back from the void"
+    - "the entire Splintering-era news reel"
+    - "the educational program about the cracked years"
+    - "the lifestyle show from the freehold sectors"
+    - "old footage of the Reach negotiations"
+
+  smell:
+    - "fresh-cut grass after rain"
+    - "old books in a closed room"
+    - "campfire smoke clinging to a coat"
+    - "coffee in the morning"
+    - "leather seats that have been in the sun"
+    - "the inside of a thrift store"
+    - "an old garage"
+    - "diesel near a barge"
+    - "saltwater on a cold day"
+    - "evergreen needles underfoot"
+    - "biscuits in the oven"
+    - "a brand new football, before the game"
+    - "rain on hot asphalt"
+    - "the dry-grass smell of a big stadium"
+    - "freshly turned soil"
+    # Surreal
+    - "the smell of a season ending"
+    - "the smell of being eight years old"
+    - "the smell of someone else's kitchen"
+    - "the smell of distance"
+    - "snow before it falls"
+    # Cores-leaked lore
+    - "the air right after a Reset"
+    - "the way the freeholds smelled in early spring"
+    - "the chemical bite of the Splintering-era heaters"
+    - "the clean smell of the post-Quiet air"
+
+  sound:
+    - "thunder in the distance"
+    - "a perfectly tuned engine"
+    - "silence, the loud kind"
+    - "ice cracking on a lake"
+    - "a screen door slamming"
+    - "rain on a tin roof"
+    - "a far-off train whistle"
+    - "wind through tall grass"
+    - "the crowd going quiet"
+    - "the second hand on an old clock"
+    - "a coffee maker dripping"
+    - "the click of a cassette ending"
+    - "the snap of a clean catch"
+    - "boots on gravel"
+    - "the hum of stadium lights"
+    # Surreal
+    - "the sound a stadium makes when nobody's there"
+    - "the sound of being remembered"
+    - "the noise an empty room makes"
+    - "the long pause before a verdict"
+    - "the sound of a question nobody answered"
+    # Cores-leaked lore
+    - "the chime when the boundary thinned"
+    - "the all-clear tone after a Reset"
+    - "the hum from the lunar Splintering ports"
+    - "the long siren the freeholds use at dusk"
+
+  hobby:
+    - "whittling small things from larger things"
+    - "metal detecting on weekends"
+    - "fly fishing, badly"
+    - "model trains in the basement"
+    - "growing peppers nobody wants"
+    - "fixing other people's lawnmowers"
+    - "dawn birdwatching"
+    - "long walks with no destination"
+    - "writing letters that won't be sent"
+    - "cooking the same meal every Sunday"
+    - "competitive napping"
+    - "collecting pocket knives"
+    - "rebuilding old motorcycles"
+    - "stamp collecting (not ironic)"
+    - "rock skipping at a specific lake"
+    - "amateur ventriloquism"
+    # Surreal
+    - "memorizing the names of strangers' pets"
+    - "watching trains they have no intention of boarding"
+    - "rearranging their pantry by color"
+    - "collecting weather"
+    - "tracking the path of a single ant for an entire afternoon"
+    - "writing a novel they will not finish"
+    - "ranking clouds privately"
+    - "befriending one specific squirrel"
+    # Cores-leaked lore
+    - "training for the eventual contact"
+    - "transcribing freehold-era ballads from memory"
+    - "stockpiling supplies for the next Reset"
+    - "mapping the route through the cracked years"
+
+  childhood_pet:
+    - "a cat named after a dead president"
+    - "a turtle named Speedy"
+    - "a goldfish that lasted six years"
+    - "a dog named Steve"
+    - "a hamster they don't like to talk about"
+    - "a parrot that swore"
+    - "a stray cat that adopted them"
+    - "a goat (briefly)"
+    - "a beta fish named Chairman"
+    - "a rabbit named Tootsie"
+    - "a corgi named Captain"
+    - "a guinea pig that escaped to the basement"
+    - "an iguana named Friend"
+    - "a chicken with a name and a job"
+    # Surreal
+    - "a dog they adopted in a dream and still mourn"
+    - "a cat that may have been imaginary"
+    - "an unclaimed houseplant they treated as a pet"
+    - "a goldfish they only met once"
+    - "a fox that visited the porch"
+    - "a stuffed animal with formal letterhead"
+
+  weird_skill:
+    - "can recite pi to 47 decimals"
+    - "sleeps with their eyes open"
+    - "always knows what time it is"
+    - "remembers every license plate they've seen"
+    - "can whistle two notes at once"
+    - "never gets cold"
+    - "can fall asleep in 30 seconds"
+    - "can identify any tree by its bark"
+    - "knows every state capital in alphabetical order"
+    - "always wins at rock-paper-scissors"
+    - "can crack any nut with their hands"
+    - "writes equally well with both hands"
+    - "can balance anything on their nose"
+    - "remembers every dream they've had since age six"
+    - "can parallel park in one motion"
+    - "always finds parking"
+    # Surreal
+    - "knows when it's about to rain, twelve hours out"
+    - "can identify any door by its hinge"
+    - "can hold their breath through an entire commercial break"
+    - "knows the weight of any object by sight"
+    - "speaks to dogs with quiet authority"
+    - "always picks the correct elevator button on the first try"
+    - "can hum the dial tone perfectly"
+    - "can tell time without any clock or sun"
+    # Cores-leaked lore
+    - "remembers the route through the cracked years"
+    - "can read freehold-era shorthand without trying"
+    - "feels the boundary thinning before anyone else"
+    - "knows the exact moment of every Reset by instinct"
+
+# ─── Personality-specific favorites ────────────────────────────────────────
+# Override or extend the base favorites pool per personality. If a category
+# is defined here, those items REPLACE the base list for that personality.
+# Categories defined here that aren't in the base pool become valid roll
+# options for that personality only. Lean into voice — alien shouldn't get
+# 'diner pancakes', knight shouldn't get 'a beta fish named Chairman'.
+
+personality_favorites:
+
+  alien:
+    food:
+      - "the green parts of human food only"
+      - "anything in a foil wrapper"
+      - "food eaten with both hands and a formal posture"
+      - "plain salt straight from the cellar"
+      - "an ice cube examined for symmetry"
+      - "any food a teammate has rejected"
+    drink:
+      - "rainwater collected at night"
+      - "broth that has been simmering since dawn"
+      - "any water that has been still for one full hour"
+    movie:
+      - "footage of human gatherings"
+      - "long shots of crowds"
+      - "documentaries about herd behavior"
+    weird_skill:
+      - "can identify the orbital period of any visible body"
+      - "can locate true north by listening"
+      - "knows the exact angle of any sunrise without checking"
+    artifact:
+      - "a single recovered button"
+      - "a paperclip bent slightly out of shape"
+      - "a coin from a country that no longer exists"
+      - "a dried leaf they cannot identify"
+      - "a key with no known door"
+
+  android:
+    food:
+      - "ration pack J-7"
+      - "the cafeteria meal, served at exactly 12:30"
+      - "room-temperature pre-portioned protein"
+      - "anything beige, served on a tray"
+    drink:
+      - "decaf, by procedure"
+      - "water, filtered three times"
+      - "the standard issue thermos"
+    movie:
+      - "training footage they were assigned to memorize"
+      - "the orientation films from before deployment"
+      - "any film classified at clearance level four"
+    weird_skill:
+      - "can recall any document by file number"
+      - "can identify any person by gait at fifty meters"
+      - "knows the exact word count of every report they have filed"
+    protocol:
+      - "Protocol J-7: cover maintenance"
+      - "Protocol K-2: handler check-in cadence"
+      - "Protocol M-9: emergency extraction"
+      - "the unfiled protocol, the one they wrote themselves"
+
+  prophet:
+    movie:
+      - "the film I have already seen tomorrow"
+      - "any film I have walked through before in a vision"
+      - "documentaries about endings"
+      - "the film about the man who could see the next minute"
+    song:
+      - "the song I have already grieved to"
+      - "any song that closes a thread"
+      - "songs I will hear again, in another life"
+    weird_skill:
+      - "knows what the next sentence will be"
+      - "always sets the table for one more than expected"
+      - "answers the phone before it rings"
+      - "can sense an incoming guest by name"
+    vision:
+      - "the one with the field on fire"
+      - "the one with the empty endzone"
+      - "the one I do not speak about"
+      - "the one I have walked through eight times"
+
+  cursed:
+    food:
+      - "whatever was about to expire"
+      - "the last slice, always"
+      - "food from the cart everyone else avoided"
+    drink:
+      - "the drink someone else didn't finish"
+      - "water from a glass with a chip in it"
+    weird_skill:
+      - "always picks the broken vending machine"
+      - "always sits in the seat that gets rained on"
+      - "knows which umbrella will fail next"
+    omen:
+      - "a single black bird that won't look away"
+      - "the broken mirror in the locker room"
+      - "the cracked light fixture that never gets replaced"
+      - "the one ladder you have to walk under to leave"
+
+  time_traveler:
+    food:
+      - "ration cubes from the 2400s, occasionally"
+      - "anything reconstituted from a tablet"
+      - "the breakfast capsule"
+      - "actual fruit (such a treat in this era)"
+    drink:
+      - "synthesized broth from the home era"
+      - "the drink they call 'water' here, but cold"
+      - "fermented anything — the future ran on fermentation"
+    movie:
+      - "partially-recovered films from the home era"
+      - "early-era cinema, charming in its simplicity"
+      - "the holocast they recorded before the trip"
+    weird_skill:
+      - "can operate any machine from any era"
+      - "knows the exact decade of any object by touch"
+      - "remembers every era they've passed through"
+    era:
+      - "the third quarter of the 2400s, before the data wars"
+      - "the long peace of the 2700s"
+      - "the brief arts revival of the 2200s"
+      - "the era they keep getting stranded in"
+
+  sleepwalker:
+    food:
+      - "whatever's in their hand when they wake up"
+      - "cereal eaten without milk, asleep"
+      - "anything dreamed about, then prepared without remembering"
+    drink:
+      - "whatever's in the cup, no questions"
+      - "warm milk, set out by someone else"
+    weird_skill:
+      - "performs every play correctly while fully asleep"
+      - "carries on conversations they don't remember"
+      - "writes notes to themselves they don't recognize"
+    dream:
+      - "the recurring one with the long hallway"
+      - "the one where the field is uphill"
+      - "the one with the locker that won't open"
+
+  superstitious:
+    food:
+      - "the same breakfast for six years running"
+      - "anything in threes"
+      - "food eaten in a specific seat"
+      - "the lucky sandwich"
+    drink:
+      - "the lucky water bottle"
+      - "coffee in the same cup, never washed"
+    weird_skill:
+      - "can sense when something has been moved by even an inch"
+      - "knows when not to step on a line"
+      - "always knows how many people are in a room without counting"
+    ritual:
+      - "the three-tap helmet routine"
+      - "the pre-game sock order"
+      - "the Tuesday pre-walk"
+      - "the cup that must face north"
+
+  oblivious:
+    food:
+      - "whatever someone else recommended"
+      - "the special, every time"
+      - "food they keep forgetting they don't like"
+    weird_skill:
+      - "always finds the way out, eventually"
+      - "remembers people's pets but never their names"
+      - "always shows up at the right place by accident"
+
+  prankster:
+    food:
+      - "whoopee-cake (it is a real thing, allegedly)"
+      - "extra-spicy anything, just to see"
+      - "the donut with a single anchovy hidden inside"
+    drink:
+      - "whatever the rookie ordered"
+      - "the swapped Gatorade"
+    prank:
+      - "the cooler swap, classic"
+      - "the helmet upside-down trick"
+      - "the locker booby-trap with the marshmallows"
+      - "the playbook with one fake play inserted"
+
+  vain:
+    food:
+      - "anything plated correctly"
+      - "the salad that photographs well"
+      - "espresso, so the cup looks elegant"
+    drink:
+      - "anything in a stem glass"
+      - "still water, in a tall flute, please"
+    movie:
+      - "any film they appear in (none yet, but they are open)"
+      - "the runway documentaries"
+      - "the makeup-tutorial classics"
+    pose:
+      - "the over-the-shoulder gaze"
+      - "the slow exhale into a pretend wind"
+      - "the chin-up, eyes-down stadium portrait"
+
+  fossil:
+    food:
+      - "salted beef, dried and quartered"
+      - "hardtack, the way it used to be"
+      - "stew that has been cooking for a week"
+      - "bread baked in a stone oven, like in the old way"
+    drink:
+      - "mead from the freehold inns"
+      - "an ale they've outlived three brewers to taste again"
+    weird_skill:
+      - "remembers when this stadium was a swamp"
+      - "can date any building by the mortar"
+      - "knows the lineage of every coach in this league back six generations"
+    century:
+      - "the late 1700s, before things got loud"
+      - "the long quiet of the 1900s"
+      - "the year before the Splintering, when everyone could still feel it coming"
+
+  ghost:
+    food:
+      - "the smell of food"
+      - "whatever is left on the table after everyone leaves"
+      - "leftovers eaten cold in an empty kitchen"
+    drink:
+      - "water from a glass that someone set down hours ago"
+      - "the cup nobody's claimed"
+    weird_skill:
+      - "is never in any photograph"
+      - "doesn't show up on any roster software"
+      - "can be in a room without anyone noticing"
+    unfinished_thing:
+      - "a sentence they trailed off"
+      - "a doorway they didn't quite cross"
+      - "a song they stopped humming halfway"
+
+  perfectionist:
+    food:
+      - "anything portioned to exactly four ounces"
+      - "the meal-prep container opened at exactly noon"
+      - "the same breakfast for fourteen years running"
+    drink:
+      - "water at exactly 41 degrees"
+      - "coffee with the cream measured by gram"
+    correction:
+      - "the footwork on the second step"
+      - "the alignment on the third snap"
+      - "the angle on the chip block"
+      - "the depth on the dig route"
+
+  paranoid:
+    food:
+      - "anything sealed in front of them"
+      - "food prepared by someone they have personally vetted"
+      - "their own packed lunch, never the catered spread"
+    drink:
+      - "bottled water with the seal still on"
+      - "their own thermos at all times"
+    weird_skill:
+      - "spots the camera in any room within twelve seconds"
+      - "knows the names of every line judge by their gait"
+      - "has memorized the locker room exits in priority order"
+    conspiracy:
+      - "the chain gang takes orders from someone in the press box"
+      - "the lights flicker on a coded schedule"
+      - "the wifi at this stadium is poisoned"
+      - "the second referee is a plant"
+
+  poetic:
+    movie:
+      - "any film where the rain doesn't stop"
+      - "the long quiet film about a single autumn"
+      - "the silent footage of leaves falling"
+    song:
+      - "any song that ends mid-line"
+      - "the song my mother could not finish"
+      - "songs played at the closing of things"
+    image:
+      - "an empty stadium at dusk"
+      - "a single petal on dark water"
+      - "the long shadow of a goalpost at six o'clock"
+      - "the way light leaves a room"
+
+  dramatic:
+    movie:
+      - "any film with three weddings and at least one funeral"
+      - "the long weeping scene, from any Greek tragedy adaptation"
+      - "the silent montage where the protagonist contemplates everything"
+    costume:
+      - "the cape they wore to a wedding (uninvited)"
+      - "the pre-game robe (handmade)"
+      - "the post-touchdown sash"
+
+  trash_talker:
+    target:
+      - "the third-string corner of every team in the league"
+      - "any opponent who shushed the crowd once"
+      - "the head coach who benched a relative"
+      - "the safety who tried to dance"
+
+  mystic:
+    food:
+      - "rice and tea blessed before each meal"
+      - "fruit eaten in silence"
+      - "bread broken between two hands"
+    drink:
+      - "tea steeped exactly seven minutes"
+      - "spring water gathered before dawn"
+    weird_skill:
+      - "can sense the path of an object from across a room"
+      - "knows when a teammate needs to be touched on the shoulder"
+      - "always sets out the right number of cups, even before guests arrive"
+    ritual:
+      - "the morning bow toward the field"
+      - "the quiet thank-you to the football"
+      - "the slow exhale before each snap"
+      - "the dawn walk along the sideline"
+
+  knight:
+    food:
+      - "plainly-prepared venison over a campfire"
+      - "campaign rations as a matter of principle"
+      - "stew shared from a single pot"
+      - "bread broken with one's company"
+    drink:
+      - "ale from the freehold inns"
+      - "water from a stream they have crossed before"
+    oath:
+      - "the oath sworn before their first game"
+      - "the vow they keep to the line"
+      - "the promise made at the freehold gates"
+      - "the oath of the Long Walk"
+
+# ─── Personal mottos — keyed by personality ────────────────────────────────
+
+mottos:
+  stoic:
+    - "Action over noise."
+    - "The work is the point."
+    - "Quiet does it."
+    - "Steady is loud enough."
+    - "Show, don't say."
+    - "Do the thing. Don't talk about it."
+
+  chill:
+    - "It'll work out."
+    - "No need to rush."
+    - "Don't sweat it."
+    - "Long game."
+    - "Easy does it."
+    - "Take it as it comes."
+    - "Hey, it's a long week."
+
+  cool:
+    - "Make 'em watch."
+    - "The legend writes itself."
+    - "Effortless or not at all."
+    - "Style is the strategy."
+    - "Look good, play good."
+
+  lively:
+    - "Joy first."
+    - "Bring people up."
+    - "Y'all ready? Y'ALL ready?"
+    - "Smile or you're losing."
+    - "We do this for the people."
+
+  fiery:
+    - "Eat or be eaten."
+    - "I'll outwork the room."
+    - "Pain is feedback."
+    - "Sleep is for losers."
+    - "I'll take the hit. I'll take a thousand."
+
+  wholesome:
+    - "We rise together."
+    - "Be the kind you'd thank."
+    - "Take care of the room."
+    - "Lift somebody every day."
+    - "Family in the locker room."
+
+  goofy:
+    - "Why not?"
+    - "If it ain't fun, why bother?"
+    - "Make 'em laugh first."
+    - "Loosen up. Game's a game."
+    - "I'd rather be silly than serious."
+
+  melancholy:
+    - "Beauty is brief."
+    - "Pain is part of it."
+    - "Carry it well."
+    - "Kindness, even tired."
+    - "The hard days teach the most."
+
+  unhinged:
+    - "Ride the lightning."
+    - "I AM the lightning."
+    - "Welcome to my brain."
+    - "Sanity is overrated."
+    - "If it's loud, it's living."
+
+  alien:
+    - "Observe. Compute. Approximate."
+    - "Performance is mimicry done well."
+    - "When in human bodies."
+    - "Their game. Their rules. Mostly."
+
+  android:
+    - "Cover holds. Mission proceeds."
+    - "Acknowledged. Continuing."
+    - "Within parameters."
+    - "Logged. Filed. Reported."
+
+  prophet:
+    - "I have walked this hour before."
+    - "Foreknowledge, never protection."
+    - "The path is the path."
+    - "I have seen all the endings."
+
+  cursed:
+    - "Brief, this. Always brief."
+    - "The bill always comes."
+    - "Of course."
+    - "Borrowed time."
+
+  time_traveler:
+    - "Charming, this era."
+    - "We did this better in my time."
+    - "Pre-augmentation, pre-everything."
+    - "It is what it is, in any century."
+
+  sleepwalker:
+    - "Wait did we score?"
+    - "Sleep is the strategy."
+    - "I'll be alright. Just five more."
+    - "Wake me when it matters."
+
+  superstitious:
+    - "Threes."
+    - "Same socks, same day."
+    - "Don't speak it."
+    - "Knock on something."
+
+  oblivious:
+    - "Everything's good. Probably."
+    - "What's the score? Yeah? Cool."
+    - "Hey, what week is it?"
+    - "Was that supposed to happen?"
+
+  prankster:
+    - "Just watch what I do here."
+    - "Nothing personal. Everything personal."
+    - "Set the trap. Wait."
+    - "I rigged the cooler."
+
+  vain:
+    - "Look good, win good."
+    - "Hair first. Game second."
+    - "Make sure they got that on camera."
+    - "Style is the only stat that matters."
+
+  fossil:
+    - "I knew their grandfather."
+    - "Quaint, this disappointment."
+    - "We were tougher then."
+    - "Centuries are short, briefly."
+
+  ghost:
+    - "i'd rather not."
+    - "i'm here. i'm just not visible."
+    - "leave me here. i'll catch up."
+    - "if no one sees it, did it happen."
+
+  perfectionist:
+    - "Run it again. Cleaner."
+    - "Three yards short."
+    - "Mine. All mine. The whole play."
+    - "Not good enough."
+
+  paranoid:
+    - "They're watching."
+    - "Cover the playsheet."
+    - "It's not paranoia."
+    - "Don't write that down."
+
+  poetic:
+    - "Oh, briefly, beautiful."
+    - "Like petals, all things fall."
+    - "Beauty is brief."
+    - "Carry it. Carry it gently."
+
+  dramatic:
+    - "Witness me."
+    - "ARE YOU NOT ENTERTAINED?"
+    - "They will write of this."
+    - "This is OUR moment."
+
+  trash_talker:
+    - "Living rent-free."
+    - "Tell your kids about that play."
+    - "Save it. I'll be back."
+    - "Don't worry. I'll get yours twice."
+
+  mystic:
+    - "I walked the path as it was laid."
+    - "Thanks be."
+    - "All in its proper order."
+    - "I was placed here."
+
+  knight:
+    - "By my hand."
+    - "Honor demanded it."
+    - "Onward."
+    - "Mark this hour."

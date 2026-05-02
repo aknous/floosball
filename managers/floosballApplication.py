@@ -156,6 +156,15 @@ class FloosballApplication:
             1 for p in allPlayers
             if getattr(getattr(p, 'attributes', None), 'personality', None) is None
         )
+        # Flavor backfill — counts players who already have personality but
+        # are missing flavor (e.g. existing DB rows after the flavor columns
+        # were added). assignToPlayerPool will fill these via assignPersonality
+        # → assignFlavor on a no-personality-change pass.
+        flavorBackfillBefore = sum(
+            1 for p in allPlayers
+            if getattr(getattr(p, 'attributes', None), 'personality', None) is not None
+            and getattr(getattr(p, 'attributes', None), 'hometown', None) is None
+        )
         summary = self.personalityManager.assignToPlayerPool(allPlayers)
 
         from managers.personalityReactionEngine import (
@@ -174,16 +183,21 @@ class FloosballApplication:
             f"{rareVariantCount} rare variants), {quirkedCount} quirked"
         )
         if unassignedBefore > 0:
-            logger.info(f"  → {unassignedBefore} backfilled this run")
+            logger.info(f"  → {unassignedBefore} personalities backfilled this run")
+        if flavorBackfillBefore > 0:
+            logger.info(f"  → {flavorBackfillBefore} flavor (hometown/favorite/motto) backfilled this run")
         if rareVariantsActive:
             logger.info(f"  → rare variants in league: {', '.join(rareVariantsActive)}")
 
-        if unassignedBefore > 0:
+        if unassignedBefore > 0 or flavorBackfillBefore > 0:
             try:
-                logger.info(f"Persisting {unassignedBefore} backfilled personalities to DB...")
+                logger.info(
+                    f"Persisting backfill to DB "
+                    f"(personalities={unassignedBefore}, flavor={flavorBackfillBefore})..."
+                )
                 self.playerManager.savePlayerData()
             except Exception as e:
-                logger.error(f"Failed to persist backfilled personalities: {e}")
+                logger.error(f"Failed to persist backfilled player data: {e}")
 
         # Now initialize teams after players are assigned
         logger.info("Initializing teams with rosters...")
