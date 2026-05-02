@@ -4,24 +4,27 @@ new 30-100 range used by the post-split generation in
 floosball_player.py.
 
 Strategy:
-  - attitude, resilience: shift current value down by 7 with small
-    Gaussian noise. Preserves rank ordering — high-attitude players
-    stay high, low stays low — but stretches the floor down to match
-    the new distribution shape.
+  - attitude, resilience: linear remap from 60-100 → 30-100 with a
+    small Gaussian perturbation. Preserves rank ordering AND matches
+    the new generation's distribution shape — old-floor players (60)
+    become real head cases (~30), old-median (80) becomes new-median
+    (~65), top stays top.
   - selfBelief: every existing player has the column default (80, set
     by the inline migration when self_belief was added). No meaningful
     pre-existing value to preserve, so fully resample using the
     player's mental level (avg of unchanged game-pool attrs) as the
-    center.
+    Gaussian center.
 
 After this runs:
-  - Most players' attitude/resilience are 8-15 points lower
-  - A meaningful tail (~7% per attr) sits below 50 — real head cases,
-    fragile players exist
+  - Existing players span the full 30-100 range proportional to their
+    old position
+  - ~7% per attr sit below 50 (real head cases, fragile players)
+  - ~22% sit below 60 (concerning), ~22% above 85 (clear leaders /
+    tough / steady)
   - selfBelief becomes a real per-player attribute rather than a flat 80
 
-Idempotent gate via SHIFT_MARKER: re-running just no-ops. To force a
-re-run, delete the marker file.
+Idempotent gate via marker file: re-running no-ops. To force a re-run,
+delete the marker file.
 
 Usage:
   fly ssh sftp shell
@@ -46,13 +49,30 @@ def clip(value: int, lo: int = 30, hi: int = 100) -> int:
     return max(lo, min(hi, value))
 
 
-def shiftedValue(current: int, shift: int = 7, noise: float = 4.0) -> int:
-    """Map an old 60-100 attr to the new 30-100 distribution while
-    preserving rank ordering. Subtracts shift with small Gaussian noise.
+def scaledValue(current: int, noise: float = 3.0) -> int:
+    """Percentile-preserving remap from the old population (center ~80,
+    stdDev ~10) to the new lr-pool population (center ~72, stdDev ~12).
+
+    Formula: treat current as a sample from the old normal distribution,
+    compute its z-score, then translate to the equivalent z-score in the
+    new distribution:
+        z_old = (current - 80) / 10
+        new = 72 + z_old * 12 = 72 + (current - 80) * 1.2
+
+    So old=60 → 48, old=80 → 72, old=100 → 96. Preserves rank ordering
+    and produces a distribution shape matching the new generation:
+    median ~72, ~7% below 50, tail to 30.
+
+    A small Gaussian perturbation (stdDev=3) adds variance so identical
+    old values don't all map to identical new ones.
     """
     if current is None:
-        return 70  # safe default
-    return clip(round(current - shift + random.gauss(0, noise)))
+        return 72  # new median
+    # Defensive: pre-existing values should be 60-100 but be safe
+    if current < 60:
+        return clip(current)
+    remapped = 72 + (current - 80) * 1.2
+    return clip(round(remapped + random.gauss(0, noise)))
 
 
 def resampledValue(mentalLevel: float, stdDev: float = 10.0) -> int:
@@ -92,8 +112,8 @@ def main() -> int:
         gamePool = [v for v in (foc, ins, cre, dis) if v is not None]
         mentalLevel = sum(gamePool) / len(gamePool) if gamePool else 80
 
-        newAtt = shiftedValue(att)
-        newRes = shiftedValue(res)
+        newAtt = scaledValue(att)
+        newRes = scaledValue(res)
         # selfBelief: existing values are the column default 80. Resample.
         newSb = resampledValue(mentalLevel)
 
