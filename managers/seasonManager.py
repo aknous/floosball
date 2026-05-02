@@ -722,6 +722,12 @@ class SeasonManager:
             # into the form-shift composites so a season-long arc shapes
             # how teams respond to streaks and standings.
             self._driftAttitudes(self.currentSeason.currentWeek)
+            # Locker-room contagion: high-attitude (leader) teammates lift
+            # confidence/determination across the roster; low-attitude (toxic)
+            # teammates drag everyone down. The mechanism that makes attitude
+            # itself a load-bearing attribute (it has no direct game-sim use,
+            # so without this it'd only matter via the form-shift composites).
+            self._propagateAttitudeContagion()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -6624,9 +6630,14 @@ class SeasonManager:
                     vulnerability = p.attributes.complacencyVulnerability()
                     if vulnerability <= 0:
                         continue
+                    # selfBelief gates the confidence component only —
+                    # determination drift is a drive-to-win axis, not a
+                    # belief axis, so it isn't scaled by stability.
+                    sb = getattr(p.attributes, 'selfBelief', 80) or 80
+                    confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
                     drift = -(_formRand(5, 18) / 100) * vulnerability * overperformFactor
                     p.attributes.confidenceModifier = round(
-                        max(-5.0, p.attributes.confidenceModifier + drift), 3)
+                        max(-5.0, p.attributes.confidenceModifier + drift * confStability), 3)
                     p.attributes.determinationModifier = round(
                         max(-5.0, p.attributes.determinationModifier + drift * 0.5), 3)
 
@@ -6638,11 +6649,53 @@ class SeasonManager:
                     resolve = p.attributes.adversityResolve()
                     if resolve <= 0:
                         continue
+                    sb = getattr(p.attributes, 'selfBelief', 80) or 80
+                    confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
                     boost = (_formRand(5, 18) / 100) * resolve * underperformFactor
                     p.attributes.confidenceModifier = round(
-                        min(5.0, p.attributes.confidenceModifier + boost * 0.5), 3)
+                        min(5.0, p.attributes.confidenceModifier + boost * 0.5 * confStability), 3)
                     p.attributes.determinationModifier = round(
                         min(5.0, p.attributes.determinationModifier + boost), 3)
+
+    def _propagateAttitudeContagion(self) -> None:
+        """
+        Locker-room effect: each starter's confidence/determination is nudged
+        by the team's average attitude. High-attitude teammates lift the
+        room; low-attitude teammates drag it down. Runs every week.
+
+        This is what makes attitude a load-bearing attribute — without this,
+        attitude only affects play indirectly (via the season-form composites).
+        Now: a toxic veteran genuinely poisons teammates' confidence; a strong
+        leader genuinely lifts them.
+
+        Per-player drift is bounded ±0.10 per week so the effect compounds
+        slowly across the season but doesn't overwhelm the streak-driven and
+        form-shift adjustments. Players closest to the team's attitude average
+        are pulled less (already aligned with the room).
+        """
+        for team in self.leagueManager.teams:
+            starters = [p for p in team.rosterDict.values() if p is not None]
+            if len(starters) < 4:
+                continue
+            avgAttitude = sum(getattr(p.attributes, 'attitude', 80) or 80
+                              for p in starters) / len(starters)
+            # Neutral at 80; ±20 from neutral = ±0.20 raw swing
+            roomSwing = (avgAttitude - 80) / 100  # -0.20 .. +0.20
+            if abs(roomSwing) < 0.04:
+                continue  # Near-neutral team: no contagion signal worth applying
+            for p in starters:
+                # Selfish: a player's own attitude offsets how much they're
+                # influenced. A player aligned with the room shifts less; a
+                # player out of step (high-attitude on a toxic team, or vice
+                # versa) gets pulled more strongly toward the average.
+                selfPull = (avgAttitude - (getattr(p.attributes, 'attitude', 80) or 80)) / 100
+                # Final drift: room signal scaled by how far this player is
+                # from the room (selfPull). Capped at ±0.10/week.
+                drift = max(-0.10, min(0.10, roomSwing * 0.5 + selfPull * 0.3))
+                p.attributes.confidenceModifier = round(
+                    max(-5.0, min(5.0, p.attributes.confidenceModifier + drift)), 3)
+                p.attributes.determinationModifier = round(
+                    max(-5.0, min(5.0, p.attributes.determinationModifier + drift)), 3)
 
     def _driftAttitudes(self, week: int) -> None:
         """
