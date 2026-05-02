@@ -2494,7 +2494,11 @@ class Game:
                         text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineLongPassList), self.play.receiver.name, self.play.yardage)
                     else:
                         text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineMidPassList), self.play.receiver.name, self.play.yardage)
-                    if not self.play.isInBounds:
+                    # Don't append OOB on a TD — once the receiver crosses the
+                    # goal line the play is dead by score, not by stepping out.
+                    # The OOB flag stays True for clock-management purposes,
+                    # but it shouldn't show up in the narration.
+                    if not self.play.isInBounds and not self.play.isTd:
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, self.play.yardage)
