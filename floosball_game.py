@@ -2636,52 +2636,50 @@ class Game:
                 play.keyPressureMod = play.qbPressureMod
                 play.clutchPlayerName = play.passer.name if play.passer else ''
 
-        # ── Clutch: plays that save or win the game ──
-        # Scoring play when trailing or tied BEFORE the score (go-ahead / tying / winning)
-        isGoAheadScore = (play.isTd or play.isFgGood) and prePlayScoreDiff <= 0
-        # 4th down conversion when trailing or tied (kept the dream alive)
-        is4thDownHero = (
-            getattr(play, 'down', 0) == 4
-            and play.playResult == PlayResult.FirstDown
-            and scoreDiff <= 0
-        )
-        # Big play keeping a close game alive (either direction)
-        isBigGainer = (
-            ((play.isPassCompletion and play.yardage >= 20)
-             or (play.playType == PlayType.Run and play.yardage >= 15))
-            and abs(scoreDiff) <= 7
+        # ── Step 1: Outcome categorization — what kind of play was this? ──
+        # The clock-time / situation filter is handled by gamePressure (which
+        # only clears CLUTCH_PRESSURE_THRESHOLD in genuinely decisive moments).
+        # Here we just classify the OUTCOME — did something pivotal happen?
+        downNum = getattr(play, 'down', 0) or 0
+
+        # Clutch outcomes
+        isClutchOutcome = (
+            # Go-ahead / tying score
+            ((play.isTd or play.isFgGood) and prePlayScoreDiff <= 0)
+            # 4th-down conversion when trailing/tied (drive saved)
+            or (downNum == 4 and play.playResult == PlayResult.FirstDown
+                and scoreDiff <= 0)
+            # Big play in close game
+            or (abs(scoreDiff) <= 7
+                and ((play.isPassCompletion and play.yardage >= 25)
+                     or (play.playType == PlayType.Run and play.yardage >= 20)))
         )
 
-        # ── Choke: plays that squander a chance to win or hand the game away ──
-        # Turnover in a close game (leading, tied, OR trailing within a score)
-        isGiveaway = (
-            (play.isInterception or play.isFumbleLost
-             or play.playResult == PlayResult.TurnoverOnDowns)
-            and abs(scoreDiff) <= 7
-        )
-        # Missed FG when it could have tied or taken the lead (not when already leading)
-        isMissedKick = (
-            play.playType == PlayType.FieldGoal
-            and not play.isFgGood
-            and prePlayScoreDiff <= 0
-        )
-        # Critical drop on 3rd/4th down in a close game
-        isCriticalDrop = (
-            play.passIsDropped
-            and getattr(play, 'down', 0) >= 3
-            and abs(scoreDiff) <= 7
+        # Choke outcomes
+        isChokeOutcome = (
+            # Turnover in close game
+            ((play.isInterception or play.isFumbleLost
+              or play.playResult == PlayResult.TurnoverOnDowns)
+             and abs(scoreDiff) <= 7)
+            # Missed FG to tie / take lead
+            or (play.playType == PlayType.FieldGoal and not play.isFgGood
+                and prePlayScoreDiff <= 0)
+            # Critical drop on 3rd/4th in close game
+            or (play.passIsDropped and downNum >= 3 and abs(scoreDiff) <= 7)
         )
 
-        # Pressure-response gate: the key player's pressure roll must have
-        # actually pushed them up or down. A 0 modifier means the pressure
-        # didn't move them — call the play neutral execution, not clutch/choke.
+        if not (isClutchOutcome or isChokeOutcome):
+            return
+
+        # ── Step 2: Did the player actually clutch/choke? ──
+        # The pressure roll has to have pushed them up or down. A 0 modifier
+        # means the pressure didn't move them — even a pivotal outcome was
+        # driven by talent/luck, not mental state, so don't tag.
         keyPressureMod = getattr(play, 'keyPressureMod', 0) or 0
-        roseToOccasion = keyPressureMod > 0
-        crumbledUnderPressure = keyPressureMod < 0
 
-        if (isGoAheadScore or is4thDownHero or isBigGainer) and roseToOccasion:
+        if isClutchOutcome and keyPressureMod > 0:
             play.isClutchPlay = True
-        elif (isGiveaway or isMissedKick or isCriticalDrop) and crumbledUnderPressure:
+        elif isChokeOutcome and keyPressureMod < 0:
             play.isChokePlay = True
 
     def _accumulateOffenseStats(self, team, score):
@@ -3941,15 +3939,32 @@ class Game:
     def calculateGamePressure(self):
         pressure = 0
 
-        # Quarter pressure (0-40)
-        if self.currentQuarter == 4:
-            # Pressure increases as 4th quarter progresses toward end of game
-            playsIntoQ4 = max(0, self.totalPlays - FOURTH_QUARTER_START)
-            pressure += PRESSURE_BASE + min(PRESSURE_MAX_ADDITIONAL, PRESSURE_MAX_ADDITIONAL * (playsIntoQ4 / PRESSURE_CALCULATION_DIVISOR))
-        elif self.currentQuarter == 5:  # Overtime
-            pressure += 40
+        # Quarter + clock-time pressure (primary axis).
+        # Earlier this used playsIntoQ4 as a clock proxy, which made routine
+        # mid-Q4 plays accumulate too much pressure. Direct clock-time
+        # bucketing makes 'decisive moment' a natural function of when in
+        # the game it happens — final 2 min and OT spike pressure hard, mid-
+        # quarter plays don't.
+        secs = self.gameClockSeconds
+        if self.currentQuarter == 5:  # OT — every play decides
+            pressure += 50
+        elif self.currentQuarter == 4:
+            if secs <= 60:    # final minute
+                pressure += 55
+            elif secs <= 120: # final 2 min — crunch time
+                pressure += 45
+            elif secs <= 300: # final 5 min
+                pressure += 30
+            elif secs <= 600: # final 10 min
+                pressure += 18
+            else:
+                pressure += 10
+        elif self.currentQuarter == 3:
+            pressure += 15 if secs <= 60 else 10  # end-of-quarter bump
+        elif self.currentQuarter == 2:
+            pressure += 15 if secs <= 60 else 5   # end-of-half bump
         else:
-            pressure += 5 * self.currentQuarter
+            pressure += 5
 
         # Score differential pressure (0-30), scaled by quarter so early-game ties
         # don't generate clutch/choke moments
