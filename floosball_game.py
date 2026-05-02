@@ -2577,16 +2577,23 @@ class Game:
     def _evaluateClutchChoke(self):
         """Evaluate whether the current play qualifies as a clutch or choke moment.
 
-        Reserved for truly pivotal late-game plays:
-        - Clutch: go-ahead/game-winning scores, 4th down conversions when driving
-          to tie or win, big plays that keep a late comeback alive.
-        - Choke: turnovers that hand the game away, missed FGs that could have
-          tied/won, drops that kill a critical drive.
+        Reserved for truly pivotal late-game plays where the key player's
+        pressure response actually drove the outcome:
+        - Clutch: pivotal good outcome (go-ahead score, 4th-down conversion,
+          big gainer in close game) AND the key player rose to the occasion
+          (positive pressure modifier).
+        - Choke: pivotal bad outcome (turnover in close game, missed FG to
+          tie/win, critical drop) AND the key player crumbled (negative
+          pressure modifier).
+
+        A 0 pressure modifier — i.e. the pressure roll said the player was
+        unaffected — means the result wasn't driven by their mental state, so
+        even a great play in a tight spot won't tag as clutch. Same for chokes:
+        a turnover by a player whose pressure roll was neutral was just bad
+        luck, not a mental break.
 
         Must be Q4 or OT, game within reach, and pass the WPA gate (applied
-        later in broadcastGameState). The player's pressure modifier is context,
-        not a gate — a game-winning FG in OT is clutch regardless of the
-        kicker's mental roll.
+        later in broadcastGameState).
         """
         play = self.play
         if play.gamePressure < CLUTCH_PRESSURE_THRESHOLD:
@@ -2665,9 +2672,16 @@ class Game:
             and abs(scoreDiff) <= 7
         )
 
-        if isGoAheadScore or is4thDownHero or isBigGainer:
+        # Pressure-response gate: the key player's pressure roll must have
+        # actually pushed them up or down. A 0 modifier means the pressure
+        # didn't move them — call the play neutral execution, not clutch/choke.
+        keyPressureMod = getattr(play, 'keyPressureMod', 0) or 0
+        roseToOccasion = keyPressureMod > 0
+        crumbledUnderPressure = keyPressureMod < 0
+
+        if (isGoAheadScore or is4thDownHero or isBigGainer) and roseToOccasion:
             play.isClutchPlay = True
-        elif isGiveaway or isMissedKick or isCriticalDrop:
+        elif (isGiveaway or isMissedKick or isCriticalDrop) and crumbledUnderPressure:
             play.isChokePlay = True
 
     def _accumulateOffenseStats(self, team, score):
