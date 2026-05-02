@@ -30,8 +30,25 @@ import urllib.request
 from datetime import datetime, timezone
 
 DB_PATH = '/data/floosball.db' if os.path.exists('/data/floosball.db') else 'data/floosball.db'
-API_BASE = 'http://localhost:8000/api'
+# Fly production listens on 8080 (set via fly.toml internal_port). Local dev
+# uses 8000 (run_api.py default). Honor $PORT first if set; otherwise auto-
+# detect by trying 8080 then 8000.
+_PORT = os.environ.get('PORT')
+API_BASE = f'http://localhost:{_PORT}/api' if _PORT else None
 OUTPUT_PATH = '/data/coachless_at_training.json' if os.path.isdir('/data') else 'data/coachless_at_training.json'
+
+
+def detectApiBase() -> str:
+    if API_BASE:
+        return API_BASE
+    for port in (8080, 8000):
+        try:
+            with urllib.request.urlopen(f'http://localhost:{port}/api/teams', timeout=2) as resp:
+                if resp.status == 200:
+                    return f'http://localhost:{port}/api'
+        except Exception:
+            continue
+    raise RuntimeError("Could not reach API on port 8080 or 8000")
 
 
 def main() -> int:
@@ -51,11 +68,12 @@ def main() -> int:
     season = seasonRow[0] if seasonRow else None
     conn.close()
 
+    apiBase = detectApiBase()
     affected = []
-    print(f"Polling {len(teams)} teams from {API_BASE} ...")
+    print(f"Polling {len(teams)} teams from {apiBase} ...")
     for t in teams:
         try:
-            with urllib.request.urlopen(f"{API_BASE}/teams/{t['id']}", timeout=5) as resp:
+            with urllib.request.urlopen(f"{apiBase}/teams/{t['id']}", timeout=5) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
         except Exception as e:
             print(f"  team_id={t['id']:>3} {t['name']:<24}  API error: {e}")
