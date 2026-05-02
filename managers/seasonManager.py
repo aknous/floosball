@@ -712,6 +712,12 @@ class SeasonManager:
             # Accumulate fatigue after each week
             self._accumulateFatigue()
 
+            # Mental-attribute-driven form shift: hot teams w/ low discipline
+            # drift toward complacency, cold teams w/ high discipline mount a
+            # professional resolve. Runs alongside fatigue on the weekly hook
+            # so the effect compounds gradually across the season.
+            self._applyMidseasonFormShift(self.currentSeason.currentWeek)
+
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
             # the week replays on restart (stats get overwritten — safe).
@@ -6566,6 +6572,75 @@ class SeasonManager:
                 weeklyGain = BASE_FATIGUE_PER_WEEK * (FATIGUE_RESILIENCE_CEILING - FATIGUE_RESILIENCE_SCALE * resilienceFactor)
                 adjustedGain = weeklyGain * (1.0 - fundingReduction)
                 player.attributes.fatigue = min(1.0, (player.attributes.fatigue or 0.0) + adjustedGain)
+
+    def _applyMidseasonFormShift(self, week: int) -> None:
+        """
+        Per-week, mental-attribute-driven shift to player confidence/
+        determination so collective discipline shapes whether teams play to,
+        above, or below their potential.
+
+        Hot teams (winPct >= .6) with low individual discipline get complacent
+        — confidence and determination drift downward each week. Disciplined
+        starters on the same hot team barely drift. Cold teams (winPct <= .4)
+        with high individual discipline stay professional — their determination
+        drifts upward. Undisciplined starters on cold teams don't get the
+        boost (resignation).
+
+        Magnitude is per-player and gated by both:
+          - the player's own discipline (high disc resists complacency,
+            high disc enables Cinderella runs)
+          - how far from .500 the team is (a .800 team coasts harder than a
+            .600 team; a .200 team is more desperate than a .400 team)
+
+        Piggybacks on the existing streak-driven modifiers in
+        Player._updatePostGameModifiers — runs on a slower weekly cadence and
+        keys off discipline rather than just attitude.
+        """
+        # Need a few weeks of standings before form is meaningful
+        if week < 4:
+            return
+
+        from random import randint as _formRand
+
+        for team in self.leagueManager.teams:
+            winPct = team.seasonTeamStats.get('winPerc', 0.5)
+            starters = [p for p in team.rosterDict.values() if p is not None]
+            if len(starters) < 4:
+                continue
+
+            # Hot team complacency
+            if winPct >= 0.6:
+                # Surplus over .500 scales the complacency pressure
+                # winPct .6 → 0.2; .8 → 0.6; 1.0 → 1.0
+                overperformFactor = min(1.0, (winPct - 0.5) * 2)
+                for p in starters:
+                    # Per-player vulnerability: disc=80 is neutral, disc=60
+                    # is fully complacent, disc=100+ is fully resistant.
+                    discFactor = max(0.0, min(1.0, (80 - p.attributes.discipline) / 20))
+                    if discFactor <= 0:
+                        continue
+                    drift = -(_formRand(5, 18) / 100) * discFactor * overperformFactor
+                    p.attributes.confidenceModifier = round(
+                        max(-5.0, p.attributes.confidenceModifier + drift), 3)
+                    p.attributes.determinationModifier = round(
+                        max(-5.0, p.attributes.determinationModifier + drift * 0.5), 3)
+
+            # Cold team Cinderella resolve
+            elif winPct <= 0.4:
+                # Deficit below .500 scales the resolve
+                # winPct .4 → 0.2; .2 → 0.6; .0 → 1.0
+                underperformFactor = min(1.0, (0.5 - winPct) * 2)
+                for p in starters:
+                    # Per-player resolve: disc=70 is neutral, disc=100 is full
+                    # resolve. Below 70 there's no boost (player has given up).
+                    discFactor = max(0.0, min(1.0, (p.attributes.discipline - 70) / 30))
+                    if discFactor <= 0:
+                        continue
+                    boost = (_formRand(5, 18) / 100) * discFactor * underperformFactor
+                    p.attributes.confidenceModifier = round(
+                        min(5.0, p.attributes.confidenceModifier + boost * 0.5), 3)
+                    p.attributes.determinationModifier = round(
+                        min(5.0, p.attributes.determinationModifier + boost), 3)
 
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
