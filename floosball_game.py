@@ -2974,6 +2974,13 @@ class Game:
         self._applyFatigue(self.homeTeam)
         self._applyFatigue(self.awayTeam)
 
+        # Apply form-state rating modifier — the trap-game / Cinderella
+        # mechanic. Hot-but-vulnerable teams play slightly worse, struggling
+        # teams with backbone play slightly better. Runs after fatigue so the
+        # multipliers compose cleanly.
+        self._applyFormState(self.homeTeam)
+        self._applyFormState(self.awayTeam)
+
         x = batched_randint(0,1)
         if x == 0:
             self.offensiveTeam = self.homeTeam
@@ -4134,6 +4141,47 @@ class Game:
             if player is not None and player.gameAttributes is not None:
                 player.updateInGameConfidence(modifier * 0.6)
                 player.updateInGameDetermination(modifier * 0.4)
+
+    def _applyFormState(self, team):
+        """
+        Apply the team's current form state as a uniform multiplier on each
+        rostered player's in-game attributes. Drives the trap-game effect
+        for COMPLACENT teams, the Cinderella boost for RESOLUTE teams, and
+        in-between for the other states. Multiplier is read from
+        FORM_STATE_RATING_MULT in constants.
+
+        Magnitude is small (typically ±2-5% on attrs) but compounds across
+        all rostered players, so a SPIRALING team's offense AND defense both
+        underperform — translating to a meaningful WP swing each game.
+        """
+        try:
+            from api_response_builders import TeamResponseBuilder
+            from constants import FORM_STATE_RATING_MULT, RATING_SCALE_MIN
+        except Exception:
+            return
+
+        formState = TeamResponseBuilder.computeFormState(team)
+        multiplier = FORM_STATE_RATING_MULT.get(formState, 1.0)
+        if multiplier == 1.0:
+            return
+
+        # Same attribute set as fatigue handling, plus xFactor for direct
+        # mental-state impact. Capped at 100 on the upside, RATING_SCALE_MIN
+        # on the downside to match the rest of the game's clamps.
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                         'accuracy', 'legStrength', 'reach',
+                         'focus', 'discipline', 'instinct'):
+                val = getattr(player.gameAttributes, attr, 0)
+                if val:
+                    setattr(player.gameAttributes, attr,
+                            max(RATING_SCALE_MIN, min(100, round(val * multiplier))))
+            # Recalc derived stats so xFactor / skillRating / overallRating
+            # reflect the multiplier.
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
 
     def _applyFatigue(self, team):
         """Reduce in-game attributes based on accumulated player fatigue."""
