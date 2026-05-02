@@ -3335,18 +3335,31 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             if isinstance(getattr(p, 'team', None), str)
         ]
     draftOrder = []
-    if sm.currentSeason and hasattr(sm.currentSeason, 'freeAgencyOrder'):
-        for t in sm.currentSeason.freeAgencyOrder:
-            draftOrder.append({
-                "name": t.name,
-                "city": getattr(t, 'city', ''),
-                "abbr": getattr(t, 'abbr', t.name[:3].upper()),
-                "id": getattr(t, 'id', None),
-                "color": getattr(t, 'color', None),
-                "complete": getattr(t, 'freeAgencyComplete', False),
-                "fundingTier": getattr(t, 'fundingTier', 'MID_MARKET'),
-                "fundingTierRank": getattr(t, 'fundingTierRank', 3),
-            })
+    # Once the FA draft preview has run (pre_fa phase onward), prefer the
+    # tier-sorted order it computed and stored. Falls back to the rookie
+    # draft order (worst-first) for earlier phases. Without this fallback,
+    # a refresh during pre_fa wipes the tier groupings the frontend just
+    # rendered, since the rookie order is the only one currently in
+    # currentSeason.freeAgencyOrder.
+    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
+    pendingFaOrder = getattr(sm, '_pendingFaDraftOrder', None)
+    if flowPhase in ('pre_fa', 'fa_draft') and pendingFaOrder:
+        sourceOrder = pendingFaOrder
+    elif sm.currentSeason and hasattr(sm.currentSeason, 'freeAgencyOrder'):
+        sourceOrder = sm.currentSeason.freeAgencyOrder
+    else:
+        sourceOrder = []
+    for t in sourceOrder:
+        draftOrder.append({
+            "name": t.name,
+            "city": getattr(t, 'city', ''),
+            "abbr": getattr(t, 'abbr', t.name[:3].upper()),
+            "id": getattr(t, 'id', None),
+            "color": getattr(t, 'color', None),
+            "complete": getattr(t, 'freeAgencyComplete', False),
+            "fundingTier": getattr(t, 'fundingTier', 'MID_MARKET'),
+            "fundingTierRank": getattr(t, 'fundingTierRank', 3),
+        })
     transactions = getattr(sm, '_offseasonTransactions', [])
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
     faWindowEnd = getattr(sm, '_faWindowEnd', None)
