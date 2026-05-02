@@ -115,10 +115,12 @@ class TeamResponseBuilder(ResponseBuilder):
         if streak <= -2 and winPct > 0.50:
             return 'SHAKY'
 
-        # On the cusp of a streak — won 2 in a row but not yet 3.
-        # Single wins fall through to STEADY since one-off wins after a
-        # neutral stretch aren't a real momentum signal.
-        if streak >= 2:
+        # Building real momentum — won 2 in a row AND the roster is playing
+        # well together (low collective vulnerability). A 2-game streak by
+        # a mentally-flawed team is lucky, not momentum, so it falls back
+        # to STEADY. Same vuln floor as HOT_STREAK keeps the "mental
+        # quality required to celebrate" rule consistent across both.
+        if streak >= 2 and avgVuln < 0.08:
             return 'GETTING_HOT'
 
         return 'STEADY'
