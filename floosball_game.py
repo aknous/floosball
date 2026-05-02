@@ -2347,6 +2347,11 @@ class Game:
     def formatPlayText(self):
         self._evaluateClutchChoke()
 
+        # Snapshot clock state for the feed. By this point clockRunning has
+        # been set either by an inline branch (FG, punt, score, turnover) or
+        # by the post-play shouldClockRun() call.
+        self.play.clockStopped = not self.clockRunning
+
         # ── Player insights: capture involved players' state after play execution ──
         play = self.play
         involvedPlayers = []
@@ -4640,6 +4645,7 @@ class Game:
                     'isClutchPlay': getattr(playObj, 'isClutchPlay', False),
                     'isChokePlay': getattr(playObj, 'isChokePlay', False),
                     'isMomentumShift': getattr(playObj, 'isMomentumShift', False),
+                    'clockStopped': getattr(playObj, 'clockStopped', False),
                     'insights': getattr(playObj, 'insights', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
@@ -4689,6 +4695,7 @@ class Game:
                 'isClutchPlay': getattr(self.play, 'isClutchPlay', False),
                 'isChokePlay': getattr(self.play, 'isChokePlay', False),
                 'isMomentumShift': getattr(self.play, 'isMomentumShift', False),
+                'clockStopped': getattr(self.play, 'clockStopped', False),
                 'insights': getattr(self.play, 'insights', None),
                 'personalityEvent': self._buildPersonalityEvent(),
             }
@@ -5540,6 +5547,12 @@ class Play():
         self.scoreChange = False
         self.passIsDropped = False
         self.isInBounds = True  # Default to in bounds
+        # Whether the game clock stops after this play. Captured by formatPlayText
+        # off self.game.clockRunning, which has been set by either an inline
+        # branch (FG, punt, score, turnover) or the post-play shouldClockRun()
+        # call by the time the play is being narrated. Lets the frontend render
+        # a clock indicator next to each play in the feed.
+        self.clockStopped = False
         self.targetSideline = False  # True when play caller targets sideline routes
         self.down = 0                    # Pre-play down (for clutch/choke 4th down checks)
         self.gamePressure = 0            # Snapshot of game pressure at play time
