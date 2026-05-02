@@ -711,26 +711,44 @@ class PlayerAttributes:
             self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
 
-        # Intangibles: use mentalSeed as center with moderate variance
-        # This allows independent control of physical vs mental abilities
-        stdDev = 7
-        numSkills = 7
-        intSkillValList = np.random.normal(mentalSeed, stdDev, numSkills)
-        intSkillValList = np.clip(intSkillValList, 60, 100)
-        intSkillValList: list = intSkillValList.tolist()
+        # Intangibles: split into two pools.
+        #
+        # Pool A — game-formula attrs (60-100, stdDev 7): focus, instinct,
+        # creativity, discipline. These are baked into linear weights across
+        # ~14 game-sim formulas (xFactor, vision, fumble resist, route
+        # variance, drop chance, defensive coverage, etc). Keeping them in
+        # the original "pro minimum" range avoids cascading balance issues —
+        # a 30-discipline player would fumble dramatically more often, etc.
+        #
+        # Pool B — locker-room/state attrs (30-100, mentalSeed offset down
+        # to 50, stdDev 12): attitude, resilience, selfBelief. These feed
+        # composites and modulators (contagion, fatigue, confidence
+        # volatility) — wider range produces real toxic teammates, fragile
+        # players, and confidence-volatile players without breaking the
+        # game-formula balance.
+        gameStdDev = 7
+        gamePool = np.random.normal(mentalSeed, gameStdDev, 4)
+        gamePool = np.clip(gamePool, 60, 100).tolist()
 
-        self.instinct = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.focus = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.creativity = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.discipline = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.resilience = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        # Locker-room pool centers slightly lower with bigger variance so the
+        # tails actually get used. mentalSeed-7 keeps most players near-pro
+        # (median ~73) while letting a meaningful minority fall into real
+        # trouble (10-15% below 60, 3-5% below 50). Clipped to 30 for the
+        # extreme tail — actual head cases exist but stay rare.
+        lrCenter = max(55, mentalSeed - 7)
+        lrStdDev = 10
+        lrPool = np.random.normal(lrCenter, lrStdDev, 3)
+        lrPool = np.clip(lrPool, 30, 100).tolist()
+
+        self.instinct    = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.focus       = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.creativity  = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.discipline  = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.attitude    = int(lrPool.pop(randint(0, len(lrPool)) - 1))
+        self.resilience  = int(lrPool.pop(randint(0, len(lrPool)) - 1))
         # selfBelief: governs how volatile this player's confidence is in
-        # response to performance and team form. High selfBelief = stable
-        # (small swings — quietly confident regardless of recent results);
-        # low selfBelief = volatile (big swings — soars when things click,
-        # cratters when they don't).
-        self.selfBelief = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        # response to performance and team form. High = stable; low = volatile.
+        self.selfBelief  = int(lrPool.pop(randint(0, len(lrPool)) - 1))
 
         # Generate any missing core physical attributes (needed for defensive ratings)
         # Core 5: speed, power, agility, hands, reach — every player needs these
