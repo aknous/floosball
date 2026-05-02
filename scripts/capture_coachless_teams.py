@@ -74,11 +74,14 @@ def main() -> int:
     for t in teams:
         try:
             with urllib.request.urlopen(f"{apiBase}/teams/{t['id']}", timeout=5) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
+                envelope = json.loads(resp.read().decode('utf-8'))
         except Exception as e:
             print(f"  team_id={t['id']:>3} {t['name']:<24}  API error: {e}")
             continue
-        coach = data.get('coach')
+        # Response shape: {success, message, data: {...team_dict...}}.
+        # Tolerate the unwrapped shape too in case the format changes.
+        teamData = envelope.get('data') if isinstance(envelope.get('data'), dict) else envelope
+        coach = teamData.get('coach')
         if coach is None:
             affected.append({'team_id': t['id'], 'name': t['name'], 'abbr': t['abbr']})
             print(f"  team_id={t['id']:>3} {t['name']:<24}  NO COACH (memory)")
