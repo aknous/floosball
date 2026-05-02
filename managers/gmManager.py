@@ -143,14 +143,25 @@ class GmManager:
                 elif probability == 0.0:
                     outcome = "below_threshold"
                 elif self._rollSuccess(probability):
-                    outcome = "success"
-                    teamManager.hireCoachFromPool(team, coachId)
-                    availableIds.discard(coachId)
-                    hired = True
-                    logger.info(
-                        f"GM: {team.name} hired {coachName} by vote "
-                        f"({count} votes, p={probability:.0%})"
-                    )
+                    # hireCoachFromPool can return False if the pool row was
+                    # already taken or removed since availableCoaches was
+                    # snapshotted. Treat that as a failed hire so the loop
+                    # tries the next candidate / fallback rather than
+                    # silently leaving the team coachless.
+                    if teamManager.hireCoachFromPool(team, coachId):
+                        outcome = "success"
+                        availableIds.discard(coachId)
+                        hired = True
+                        logger.info(
+                            f"GM: {team.name} hired {coachName} by vote "
+                            f"({count} votes, p={probability:.0%})"
+                        )
+                    else:
+                        outcome = "ineligible"
+                        logger.warning(
+                            f"GM: {team.name} hire of {coachName} (id={coachId}) "
+                            f"failed despite passing roll — pool entry missing/taken"
+                        )
                 else:
                     outcome = "failed_roll"
 

@@ -5,6 +5,7 @@ Coordinates all manager components and provides the main entry point for the ref
 
 import asyncio
 from typing import Dict, Any, Optional
+from datetime import datetime
 from logger_config import get_logger
 from database.connection import SessionLocal
 from database.models import SimulationState as DBSimulationState
@@ -288,11 +289,28 @@ class FloosballApplication:
             # already persisted to DB. Replaying would roll rosters back and nuke
             # that work (this is the bug that wiped production before). Treat the
             # offseason as complete: advance past it, then start the next season.
+            #
+            # The phase-aware resume work (feature/offseason-checkpoints) writes
+            # offseason_phase + offseason_phase_target + offseason_completed_steps
+            # so a future revision can do better than skip-and-advance. For now
+            # we surface those values + the rollback snapshot path in the warning
+            # so the operator knows what state the offseason was in and which
+            # /data/offseason_s{N}_{phase}.db snapshot to restore from if needed.
             if savedState.get('in_offseason'):
+                phase = savedState.get('offseason_phase')
+                target = savedState.get('offseason_phase_target')
+                steps = savedState.get('offseason_completed_steps')
+                seasonNum = savedState['current_season']
+                snapshotHint = (
+                    f"/data/offseason_s{seasonNum}_{phase}.db"
+                    if phase else "no snapshot recorded (pre-checkpoints offseason)"
+                )
                 logger.warning(
                     f"Resume: simulation_state.in_offseason=True for season "
-                    f"{savedState['current_season']} — treating offseason as complete "
-                    f"and advancing to the next season rather than replaying."
+                    f"{seasonNum} (phase={phase}, target={target}, "
+                    f"completed_steps={steps}) — treating offseason as complete "
+                    f"and advancing to the next season rather than replaying. "
+                    f"To roll back, restore the DB from: {snapshotHint}"
                 )
                 seasonsPlayed = savedState['current_season']  # advance past completed season
                 resumeFromWeek = 0
@@ -311,6 +329,8 @@ class FloosballApplication:
 
         # If we recovered from a mid-offseason crash, persist the advance + clear
         # the flag right away so another immediate restart won't repeat this.
+        # Also clear the phase + completed_steps fields so the next offseason
+        # starts from a clean checkpoint state.
         if resumeMidOffseason:
             self._saveSimulationState(
                 current_season=seasonsPlayed + 1,
@@ -319,6 +339,10 @@ class FloosballApplication:
                 total_seasons=totalSeasons,
                 is_active=True,
                 in_offseason=False,
+                offseason_phase=None,
+                offseason_phase_target=None,
+                offseason_completed_steps=None,
+                update_phase_fields=True,
             )
             gameState.setState('seasonsPlayed', seasonsPlayed)
         
@@ -421,6 +445,9 @@ class FloosballApplication:
                     'total_seasons': state.total_seasons,
                     'is_active': state.is_active,
                     'in_offseason': bool(getattr(state, 'in_offseason', False)),
+                    'offseason_phase': getattr(state, 'offseason_phase', None),
+                    'offseason_phase_target': getattr(state, 'offseason_phase_target', None),
+                    'offseason_completed_steps': getattr(state, 'offseason_completed_steps', None),
                     'last_saved': state.last_saved
                 }
             return None
@@ -431,13 +458,22 @@ class FloosballApplication:
     def _saveSimulationState(self, current_season: int, current_week: int,
                             in_playoffs: bool, total_seasons: int,
                             is_active: bool, playoff_round: Optional[str] = None,
-                            in_offseason: Optional[bool] = None) -> None:
+                            in_offseason: Optional[bool] = None,
+                            offseason_phase: Optional[str] = None,
+                            offseason_phase_target: Optional[datetime] = None,
+                            offseason_completed_steps: Optional[str] = None,
+                            update_phase_fields: bool = False) -> None:
         """Save simulation state to database using existing session.
 
         in_offseason is set True right before handleOffseason() runs, then
         cleared after seasonsPlayed has been advanced. If omitted, the existing
         value is preserved — so routine within-season saves don't accidentally
         wipe the flag.
+
+        Phase fields (offseason_phase, offseason_phase_target,
+        offseason_completed_steps) are only written when update_phase_fields is
+        True. Otherwise they're preserved across normal week-tick saves so a
+        partially-completed offseason flow survives unrelated state writes.
         """
         try:
             # Use the teamManager's existing database session to avoid locking issues
@@ -457,6 +493,9 @@ class FloosballApplication:
                     total_seasons=total_seasons,
                     is_active=is_active,
                     in_offseason=bool(in_offseason) if in_offseason is not None else False,
+                    offseason_phase=offseason_phase if update_phase_fields else None,
+                    offseason_phase_target=offseason_phase_target if update_phase_fields else None,
+                    offseason_completed_steps=offseason_completed_steps if update_phase_fields else None,
                 )
                 session.add(state)
             else:
@@ -468,6 +507,10 @@ class FloosballApplication:
                 state.is_active = is_active
                 if in_offseason is not None:
                     state.in_offseason = bool(in_offseason)
+                if update_phase_fields:
+                    state.offseason_phase = offseason_phase
+                    state.offseason_phase_target = offseason_phase_target
+                    state.offseason_completed_steps = offseason_completed_steps
 
             # Commit the transaction - WAL mode should prevent locking
             session.commit()

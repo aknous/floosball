@@ -461,6 +461,24 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Phase-aware offseason resume (feature/offseason-checkpoints).
+        # offseason_phase mirrors seasonManager._offseasonFlowPhase, target is
+        # the next-phase deadline for waiting phases, completed_steps is a
+        # JSON array of finished non-idempotent step keys. Together they let
+        # a mid-offseason restart pick up where it left off instead of the
+        # blunt skip-and-advance.
+        for col, ddl in (
+            ("offseason_phase",           "VARCHAR(32)"),
+            ("offseason_phase_target",    "DATETIME"),
+            ("offseason_completed_steps", "TEXT"),
+        ):
+            try:
+                conn.execute(text(f"ALTER TABLE simulation_state ADD COLUMN {col} {ddl}"))
+                conn.commit()
+                logger.info(f"  Migration: added simulation_state.{col}")
+            except Exception:
+                conn.rollback()
+
         # Retire the 'random' powerup slug on stashed achievement rewards.
         # Tycoon now grants income_boost; Veteran grants extra_swap. Map
         # existing 'random' rows by their achievement source so the user

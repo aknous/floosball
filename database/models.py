@@ -872,10 +872,19 @@ class SimulationState(Base):
     playoff_round: Mapped[Optional[str]] = mapped_column(String(50))
     # True while handleOffseason() is executing. Set before offseason starts,
     # cleared after seasonsPlayed is advanced. If a crash lands mid-offseason,
-    # the resume logic treats the offseason as completed (any partial work was
-    # already persisted) rather than replaying the season from its final week
-    # and blowing away the already-advanced roster/player state.
+    # the resume logic uses offseason_phase + offseason_completed_steps to
+    # pick up where it left off rather than replaying the whole offseason.
     in_offseason: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Top-level offseason flow phase for resume: post_bowl, frontoffice,
+    # rookie_draft, pre_fa, fa_draft, training. Mirrors seasonManager
+    # _offseasonFlowPhase so the in-memory state survives a restart.
+    offseason_phase: Mapped[Optional[str]] = mapped_column(String(32))
+    # ISO datetime (UTC) the current waiting phase is counting down to. Lets
+    # post-restart resume restore the timer instead of recomputing.
+    offseason_phase_target: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # JSON array of completed step keys (e.g. ["frontoffice_decisions",
+    # "training"]). Lets phase resume skip non-idempotent batch work.
+    offseason_completed_steps: Mapped[Optional[str]] = mapped_column(Text)
     total_seasons: Mapped[int] = mapped_column(Integer, default=20)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

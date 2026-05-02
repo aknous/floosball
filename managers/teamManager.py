@@ -1275,8 +1275,15 @@ class TeamManager:
                     self.logger.debug(f"Generated and saved coach {team.coach.name} for {team.name}")
 
     def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach) -> None:
-        """Assign a specific coach to a team."""
+        """Assign a specific coach to a team and persist the assignment.
+
+        Without _saveCoachToDatabase, the new coach exists only in memory —
+        the GM hire-coach fallback path (no vote met threshold → auto-generate
+        a coach) leaves the team coachless on the next restart, since
+        _loadCoachFromDatabase finds no Coach row tied to team_id.
+        """
         team.coach = coach
+        self._saveCoachToDatabase(team)
 
     def fireCoach(self, team: FloosTeam.Team) -> None:
         """Remove a team's coach (leaves them coachless until next hire).
