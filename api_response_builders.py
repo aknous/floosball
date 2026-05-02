@@ -35,13 +35,77 @@ class ResponseBuilder:
 
 class TeamResponseBuilder(ResponseBuilder):
     """Builder for team-related API responses"""
-    
+
+    @staticmethod
+    def computeFormState(team) -> str:
+        """Compute the team's at-a-glance form state.
+
+        Combines recent results (current streak), record (winPct), and the
+        aggregate mental composites of the starting unit. Returns one of:
+          HOT_STREAK   — winning streak >= 3
+          GETTING_HOT  — won most recent (streak >= 1, < 3)
+          STEADY       — default
+          SHAKY        — lost recent game(s) but record still positive
+          COOLING_OFF  — high winPct + currently losing + collective vulnerability
+          SPIRALING    — losing streak >= 3 + low collective resolve
+          COMPLACENT   — high winPct + high collective vulnerability (silent danger)
+          RESOLUTE     — low winPct + high collective resolve (Cinderella signal)
+          UNKNOWN      — when not enough games have been played to form a signal
+        """
+        wins = team.seasonTeamStats.get('wins', 0)
+        losses = team.seasonTeamStats.get('losses', 0)
+        games = wins + losses
+        if games < 4:
+            return 'UNKNOWN'
+
+        streak = team.seasonTeamStats.get('streak', 0)
+        winPct = wins / games if games > 0 else 0.5
+
+        # Aggregate mental state from rostered starters
+        starters = [p for p in (team.rosterDict or {}).values() if p is not None]
+        if starters:
+            try:
+                avgVuln = sum(p.attributes.complacencyVulnerability() for p in starters) / len(starters)
+            except Exception:
+                avgVuln = 0.0
+            try:
+                avgResolve = sum(p.attributes.adversityResolve() for p in starters) / len(starters)
+            except Exception:
+                avgResolve = 0.0
+        else:
+            avgVuln = 0.0
+            avgResolve = 0.0
+
+        # Strongest signals first
+        if streak >= 3:
+            return 'HOT_STREAK'
+        if streak <= -3:
+            # Cold but resilient roster signals comeback potential
+            if avgResolve >= 0.45:
+                return 'RESOLUTE'
+            return 'SPIRALING'
+        # Hot team showing cracks
+        if winPct >= 0.65 and avgVuln >= 0.40:
+            if streak < 0:
+                return 'COOLING_OFF'
+            return 'COMPLACENT'
+        # Cold team with mental backbone
+        if winPct <= 0.35 and avgResolve >= 0.45:
+            return 'RESOLUTE'
+        # Recent slip on a winning team
+        if streak <= -2 and winPct > 0.5:
+            return 'SHAKY'
+        # Building a streak but not there yet
+        if streak >= 1:
+            return 'GETTING_HOT'
+        return 'STEADY'
+
     @staticmethod
     def buildBasicTeamDict(team) -> Dict[str, Any]:
         """Build basic team information dictionary"""
         wins = team.seasonTeamStats['wins']
         losses = team.seasonTeamStats['losses']
-        
+
         return {
             'name': team.name,
             'city': team.city,
@@ -59,7 +123,8 @@ class TeamResponseBuilder(ResponseBuilder):
             'leagueChampion': team.leagueChampion,
             'floosbowlChampion': team.floosbowlChampion,
             'winningStreak': team.winningStreak,
-            'streak': team.seasonTeamStats.get('streak', 0)
+            'streak': team.seasonTeamStats.get('streak', 0),
+            'formState': TeamResponseBuilder.computeFormState(team),
         }
     
     @staticmethod
