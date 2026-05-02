@@ -55,11 +55,10 @@ class TeamResponseBuilder(ResponseBuilder):
         wins = team.seasonTeamStats.get('wins', 0)
         losses = team.seasonTeamStats.get('losses', 0)
         games = wins + losses
-        if games < 4:
-            return 'UNKNOWN'
 
         streak = team.seasonTeamStats.get('streak', 0)
         winPct = wins / games if games > 0 else 0.5
+        elo = getattr(team, 'elo', 1500) or 1500
 
         # Aggregate mental state from rostered starters
         starters = [p for p in (team.rosterDict or {}).values() if p is not None]
@@ -76,6 +75,26 @@ class TeamResponseBuilder(ResponseBuilder):
             avgVuln = 0.0
             avgResolve = 0.0
 
+        # COMPLACENT — checked BEFORE the games<4 gate because it can fire
+        # from week 1 on pedigree alone. Two triggers:
+        #
+        #   1. High ELO (>= 1600) + vulnerable composite — a team that came
+        #      into the season with a strong rating assumes they'll be good
+        #      and coasts from the jump (defending-champion trap).
+        #   2. Strong record (>= 0.65 winPct) + vulnerable composite — a
+        #      team that built up wins and feels untouchable, lets off the
+        #      gas regardless of how long ago the wins came.
+        #
+        # avgVuln gate is the same in both cases — the mental composite is
+        # what makes them vulnerable to coasting; ELO/record just gives them
+        # the cover to think they can afford it.
+        if avgVuln >= 0.08 and (winPct >= 0.65 or elo >= 1600):
+            return 'COMPLACENT'
+
+        # Need at least a few games of data for the standings-driven states
+        if games < 4:
+            return 'UNKNOWN'
+
         # Priority order matters — composite-driven signals can preempt
         # streak-driven ones when they convey more information. Thresholds
         # tuned so realistic rosters (composite avg in the 75–85 band) can
@@ -86,18 +105,6 @@ class TeamResponseBuilder(ResponseBuilder):
         # adversityResolve = (weighted - 70) / 30).
         if streak <= -3:
             return 'RESOLUTE' if avgResolve >= 0.30 else 'SPIRALING'
-
-        # COMPLACENT is a season-arc state, not tied to current streak.
-        # The narrative: a team that did well to start the season and feels
-        # they can coast — strong record (top of the standings) but the
-        # roster's collective mental composite says they're vulnerable. Can
-        # be on a streak, between streaks, or even mid-slip — what defines
-        # them is the record + the vulnerability, not the recent results.
-        # Preempts HOT_STREAK so a 5-win streak by a vulnerable top team
-        # still reads as COMPLACENT — the wins came against weaker teams
-        # because the league is uneven, not because they're playing solid.
-        if winPct >= 0.65 and avgVuln >= 0.08:
-            return 'COMPLACENT'
 
         # True hot streak — winning AND the roster is playing well together
         if streak >= 3:
