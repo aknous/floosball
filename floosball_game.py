@@ -2540,6 +2540,12 @@ class Game:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
             text = '{}yd Field Goal attempt by {}'.format(self.play.fgDistance, self.play.kicker.name)
+        elif self.play.playType == PlayType.ExtraPoint:
+            kickerName = self.play.kicker.name if getattr(self.play, 'kicker', None) else 'Kicker'
+            if self.play.isXpGood:
+                text = f'{kickerName} converts the extra point'
+            else:
+                text = f'{kickerName} misses the extra point'
         elif self.play.playType is PlayType.Punt:
             punter = self.play.offense.rosterDict.get('k')
             punterName = punter.name if punter else 'Punter'
@@ -3514,15 +3520,11 @@ class Game:
                         self._addScore(self.defensiveTeam, 6)
                         self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
-                        if self._shouldGoForTwo(self.defensiveTeam):
-                            self.play.playResult = PlayResult.Touchdown
-                        else:
-                            self.play.extraPointTry(self.defensiveTeam)
-                            if self.play.isXpGood:
-                                self.play.playResult = PlayResult.TouchdownXP
-                                self._addScore(self.defensiveTeam, 1)
-                            else:
-                                self.play.playResult = PlayResult.TouchdownNoXP
+                        # Defensive TD: PAT/2-pt now runs as a separate no-time
+                        # play (mirroring the offensive TD path). No ptsAlwd
+                        # tracking on the PAT — the team that lost the ball was
+                        # on offense, not allowing points from their own offense.
+                        self.play.playResult = PlayResult.Touchdown
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
                         self.play.isTd = True
                         self.play.scoreChange = True
@@ -3535,8 +3537,10 @@ class Game:
                             break
 
                         self.broadcastGameState(includeLastPlay=True)
-                        if self.play.playResult is PlayResult.Touchdown:
+                        if self._shouldGoForTwo(self.defensiveTeam):
                             self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
+                        else:
+                            self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                     else:
                         self.broadcastGameState(includeLastPlay=True)
@@ -3567,40 +3571,27 @@ class Game:
                         self._addScore(self.offensiveTeam, 6)
                         self._applyMomentumEvent(MOMENTUM_TD, self.offensiveTeam)
 
+                        # Broadcast TD as its own play, then run the PAT/2-pt
+                        # attempt as a separate no-time play. This matches the
+                        # 2-pt pattern that already existed and gives the XP
+                        # its own entry in the play-by-play feed.
+                        self.play.playResult = PlayResult.Touchdown
+                        self.play.scoreChange = True
+                        self.play.homeTeamScore = self.homeScore
+                        self.play.awayTeamScore = self.awayScore
+                        self.formatPlayText()
+                        if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
+                            self.highlights.insert(0, {'play': self.play})
+                            self.leagueHighlights.insert(0, {'play': self.play})
+                        self.gameFeed.insert(0, {'play': self.play})
+                        self.broadcastGameState(includeLastPlay=True)
+                        if self.checkOvertimeEnd():
+                            break
+
                         if self._shouldGoForTwo(self.offensiveTeam):
-                            # Broadcast TD first, then simulate 2-pt as a separate play
-                            self.play.playResult = PlayResult.Touchdown
-                            self.play.scoreChange = True
-                            self.play.homeTeamScore = self.homeScore
-                            self.play.awayTeamScore = self.awayScore
-                            self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
-                                self.highlights.insert(0, {'play': self.play})
-                                self.leagueHighlights.insert(0, {'play': self.play})
-                            self.gameFeed.insert(0, {'play': self.play})
-                            self.broadcastGameState(includeLastPlay=True)
-                            if self.checkOvertimeEnd():
-                                break
                             self._simulate2PointConversionPlay(self.offensiveTeam, self.defensiveTeam)
                         else:
-                            self.play.extraPointTry(self.offensiveTeam)
-                            if self.play.isXpGood:
-                                self.play.playResult = PlayResult.TouchdownXP
-                                self._addScore(self.offensiveTeam, 1)
-                                self.play.defense.gameDefenseStats['ptsAlwd'] += 1
-                            else:
-                                self.play.playResult = PlayResult.TouchdownNoXP
-                            self.play.scoreChange = True
-                            self.play.homeTeamScore = self.homeScore
-                            self.play.awayTeamScore = self.awayScore
-                            self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
-                                self.highlights.insert(0, {'play': self.play})
-                                self.leagueHighlights.insert(0, {'play': self.play})
-                            self.gameFeed.insert(0, {'play': self.play})
-                            self.broadcastGameState(includeLastPlay=True)
-                            if self.checkOvertimeEnd():
-                                break
+                            self._simulateExtraPointPlay(self.offensiveTeam, self.defensiveTeam)
 
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                         self._pendingPossessionChange = True
@@ -3634,16 +3625,10 @@ class Game:
                             self._addScore(self.defensiveTeam, 6)
                             self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
-                            if self._shouldGoForTwo(self.defensiveTeam):
-                                self.play.playResult = PlayResult.Touchdown
-                            else:
-                                self.play.extraPointTry(self.defensiveTeam)
-                                if self.play.isXpGood:
-                                    self.play.playResult = PlayResult.TouchdownXP
-                                    self._addScore(self.defensiveTeam, 1)
-                                else:
-                                    self.play.playResult = PlayResult.TouchdownNoXP
-
+                            # Scoop-and-score TD: PAT/2-pt now fires as a
+                            # separate no-time play. trackPtsAllowed=False
+                            # because the team that fumbled was on offense.
+                            self.play.playResult = PlayResult.Touchdown
                             self.play.isTd = True
                             self.play.scoreChange = True
                             self.play.homeTeamScore = self.homeScore
@@ -3663,8 +3648,10 @@ class Game:
                             if self.checkOvertimeEnd():
                                 break
 
-                            if self.play.playResult is PlayResult.Touchdown:
+                            if self._shouldGoForTwo(self.defensiveTeam):
                                 self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
+                            else:
+                                self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
 
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
@@ -5001,6 +4988,75 @@ class Game:
         self.yardsToSafety = savedYardsToSafety
         self.down = savedDown
         self.yardsToFirstDown = savedYardsToFirstDown
+
+    def _simulateExtraPointPlay(self, scoringTeam: 'FloosTeam.Team',
+                                opposingTeam: 'FloosTeam.Team',
+                                trackPtsAllowed: bool = True) -> bool:
+        """
+        Simulate a PAT kick as a separate, no-time play immediately following a TD.
+        Mirrors _simulate2PointConversionPlay so the XP appears as its own entry
+        in the play-by-play feed instead of being smushed onto the TD play.
+        Returns True if the kick was good.
+
+        trackPtsAllowed: when True, opposingTeam.gameDefenseStats['ptsAlwd'] is
+        bumped on a successful kick. Set False for defensive TDs (pick-six,
+        scoop-and-score) where the team that "lost" the ball was on offense
+        and shouldn't accrue points-allowed for the PAT either way.
+        """
+        # Save game state
+        savedOffensive = self.offensiveTeam
+        savedDefensive = self.defensiveTeam
+        savedYardsToEndzone = self.yardsToEndzone
+        savedYardsToSafety = self.yardsToSafety
+        savedDown = self.down
+        savedYardsToFirstDown = self.yardsToFirstDown
+
+        # PAT kicks from the 15-yard line. Set field state before snapshotting
+        # so any consumer reading play.yardsToEndzone sees the right context.
+        self.offensiveTeam = scoringTeam
+        self.defensiveTeam = opposingTeam
+        self.yardsToEndzone = 15
+        self.yardsToSafety = FIELD_LENGTH - 15
+        self.down = 1
+        self.yardsToFirstDown = 15
+
+        self.play = Play(self)
+        # Stable identity separate from the touchdown — same reasoning as
+        # the 2-pt path; React keys + REST serialization need a unique
+        # playNumber per feed entry.
+        self.totalPlays += 1
+        self.play.playNumber = self.totalPlays
+        self.play.playType = PlayType.ExtraPoint
+
+        self.play.extraPointTry(scoringTeam)
+        if self.play.isXpGood:
+            self._addScore(scoringTeam, 1)
+            self.play.playResult = PlayResult.ExtraPointGood
+            self.play.scoreChange = True
+            if trackPtsAllowed:
+                opposingTeam.gameDefenseStats['ptsAlwd'] += 1
+        else:
+            self.play.playResult = PlayResult.ExtraPointNoGood
+            self.play.scoreChange = False
+
+        self.play.homeTeamScore = self.homeScore
+        self.play.awayTeamScore = self.awayScore
+
+        self.formatPlayText()
+        alreadyInFeed = bool(self.gameFeed) and self.gameFeed[0].get('play') is self.play
+        if not alreadyInFeed:
+            self.gameFeed.insert(0, {'play': self.play})
+        self.broadcastGameState(includeLastPlay=True)
+
+        # Restore game state
+        self.offensiveTeam = savedOffensive
+        self.defensiveTeam = savedDefensive
+        self.yardsToEndzone = savedYardsToEndzone
+        self.yardsToSafety = savedYardsToSafety
+        self.down = savedDown
+        self.yardsToFirstDown = savedYardsToFirstDown
+
+        return self.play.isXpGood
 
     def shouldClockRun(self) -> bool:
         """
