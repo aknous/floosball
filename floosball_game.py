@@ -4836,10 +4836,15 @@ class Game:
             return ('hurryUp', 15)  # End-of-half trailing or tied
         if q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
             return ('hurryUp', 15 if scoreDiff <= -8 else 25)  # Mid-late deficit
-        if secs <= 300 and scoreDiff > 8:
-            return ('burnClock', 40)
-        if secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:
-            return ('burnClock', 38)
+        # Burn-clock only kicks in late Q3 / Q4 onward. The clock resets to
+        # 900s each quarter, so without a quarter gate a team up 8+ in Q1
+        # at 4:30 would wrongly enter burn-clock mode.
+        if q == 3 and secs <= 300 and scoreDiff > 14:
+            return ('burnClock', 40)  # Late Q3 with two-score lead
+        if q >= 4 and scoreDiff > 8:
+            return ('burnClock', 40)  # Q4/OT comfortable lead
+        if q >= 4 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:
+            return ('burnClock', 38)  # Q4/OT any lead under 2:00
         return ('neutral', DEFAULT_BASE)
 
     def recordTempoIntent(self) -> None:
