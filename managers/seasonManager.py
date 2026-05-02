@@ -728,6 +728,10 @@ class SeasonManager:
             # itself a load-bearing attribute (it has no direct game-sim use,
             # so without this it'd only matter via the form-shift composites).
             self._propagateAttitudeContagion()
+            # Track how many consecutive weeks each team has held their
+            # current form state — feeds the regression-to-mean weakening
+            # in _applyFormState.
+            self._updateTeamFormHistory()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -6656,6 +6660,27 @@ class SeasonManager:
                         min(5.0, p.attributes.confidenceModifier + boost * 0.5 * confStability), 3)
                     p.attributes.determinationModifier = round(
                         min(5.0, p.attributes.determinationModifier + boost), 3)
+
+    def _updateTeamFormHistory(self) -> None:
+        """Track how many consecutive weeks each team has been in their
+        current form state. _applyFormState reads this at kickoff to apply
+        a regression-to-mean weakening for teams stuck in the same state
+        for several weeks — a SPIRALING team eventually catches a break, a
+        HOT_STREAK team eventually has an off game, etc.
+
+        Stored as ephemeral attributes on the team object since form state
+        is recomputed dynamically and the streak count is meaningful only
+        within a season anyway.
+        """
+        from api_response_builders import TeamResponseBuilder
+        for team in self.leagueManager.teams:
+            currentState = TeamResponseBuilder.computeFormState(team)
+            lastState = getattr(team, '_lastFormState', None)
+            if currentState == lastState:
+                team._formStateWeeksHeld = getattr(team, '_formStateWeeksHeld', 0) + 1
+            else:
+                team._lastFormState = currentState
+                team._formStateWeeksHeld = 1
 
     def _propagateAttitudeContagion(self) -> None:
         """

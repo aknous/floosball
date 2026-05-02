@@ -4150,6 +4150,12 @@ class Game:
         in-between for the other states. Multiplier is read from
         FORM_STATE_RATING_MULT in constants.
 
+        Regression-to-mean: teams stuck in the same state for 3+ consecutive
+        weeks have an increasing chance per game to have their modifier
+        halved — letting a SPIRALING team catch a break or a HOT_STREAK team
+        have an off game. Without this, the compounding feedback loops would
+        let teams stay locked in for unrealistically long stretches.
+
         Magnitude is small (typically ±2-5% on attrs) but compounds across
         all rostered players, so a SPIRALING team's offense AND defense both
         underperform — translating to a meaningful WP swing each game.
@@ -4164,6 +4170,25 @@ class Game:
         multiplier = FORM_STATE_RATING_MULT.get(formState, 1.0)
         if multiplier == 1.0:
             return
+
+        # Regression-to-mean: each week beyond week 2 in the same state
+        # adds 15% to the chance the modifier is halved this game, capped
+        # at 70%. Halving (rather than zeroing) keeps the form effect
+        # directionally consistent — a SPIRALING team has a "less awful"
+        # game, not a randomly elite one.
+        weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
+        if weeksHeld >= 3:
+            weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
+            if _random.random() < weakenChance:
+                multiplier = 1.0 + (multiplier - 1.0) * 0.5
+                # Stash the weakening info on the play insights would be ideal,
+                # but at this point self.play doesn't exist yet (game is just
+                # starting). Logged at debug level for visibility.
+                logging.debug(
+                    f"_applyFormState: {team.abbr} {formState} (held "
+                    f"{weeksHeld} weeks) weakened {weakenChance:.0%} → "
+                    f"multiplier {multiplier:.3f}"
+                )
 
         # Same attribute set as fatigue handling, plus xFactor for direct
         # mental-state impact. Capped at 100 on the upside, RATING_SCALE_MIN
