@@ -1276,6 +1276,8 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
                                 'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
                                 'clockStopped': getattr(play_data, 'clockStopped', False),
+                                'clutchPerformers': list(getattr(play_data, 'clutchPerformers', []) or []),
+                                'chokePerformers': list(getattr(play_data, 'chokePerformers', []) or []),
                                 'insights': getattr(play_data, 'insights', None),
                                 'personalityEvent': getattr(play_data, 'personalityEvent', None),
                             }

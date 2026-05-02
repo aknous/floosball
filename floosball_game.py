@@ -2671,16 +2671,37 @@ class Game:
         if not (isClutchOutcome or isChokeOutcome):
             return
 
-        # ── Step 2: Did the player actually clutch/choke? ──
-        # The pressure roll has to have pushed them up or down. A 0 modifier
-        # means the pressure didn't move them — even a pivotal outcome was
-        # driven by talent/luck, not mental state, so don't tag.
-        keyPressureMod = getattr(play, 'keyPressureMod', 0) or 0
+        # ── Step 2: Did any involved player actually clutch/choke? ──
+        # Build the list of (name, modifier) for every player whose pressure
+        # roll could have driven the outcome, then split into clutch/choke
+        # performers based on direction. Multiple performers possible — e.g.
+        # on a clutch TD pass both the QB and receiver may have risen.
+        involved = []
+        if play.playType == PlayType.Run and getattr(play, 'runner', None):
+            involved.append((play.runner.name, getattr(play, 'keyPressureMod', 0) or 0))
+        elif play.playType == PlayType.Pass:
+            if getattr(play, 'passer', None):
+                involved.append((play.passer.name, getattr(play, 'qbPressureMod', 0) or 0))
+            if getattr(play, 'receiver', None):
+                involved.append((play.receiver.name, getattr(play, 'rcvPressureMod', 0) or 0))
+        elif play.playType == PlayType.FieldGoal and getattr(play, 'kicker', None):
+            involved.append((play.kicker.name, getattr(play, 'keyPressureMod', 0) or 0))
 
-        if isClutchOutcome and keyPressureMod > 0:
+        risers = [name for (name, mod) in involved if mod > 0]
+        fallers = [name for (name, mod) in involved if mod < 0]
+
+        if isClutchOutcome and risers:
             play.isClutchPlay = True
-        elif isChokeOutcome and keyPressureMod < 0:
+            play.clutchPerformers = risers
+            # Keep clutchPlayerName populated with the top performer for any
+            # legacy consumers (single-name display fallbacks)
+            topRiser = max(involved, key=lambda x: x[1])
+            play.clutchPlayerName = topRiser[0]
+        elif isChokeOutcome and fallers:
             play.isChokePlay = True
+            play.chokePerformers = fallers
+            topFaller = min(involved, key=lambda x: x[1])
+            play.clutchPlayerName = topFaller[0]
 
     def _accumulateOffenseStats(self, team, score):
         """Accumulate a team's offensive stats into season totals after a game."""
@@ -4858,6 +4879,8 @@ class Game:
                     'isChokePlay': getattr(playObj, 'isChokePlay', False),
                     'isMomentumShift': getattr(playObj, 'isMomentumShift', False),
                     'clockStopped': getattr(playObj, 'clockStopped', False),
+                    'clutchPerformers': list(getattr(playObj, 'clutchPerformers', []) or []),
+                    'chokePerformers': list(getattr(playObj, 'chokePerformers', []) or []),
                     'insights': getattr(playObj, 'insights', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
@@ -4908,6 +4931,8 @@ class Game:
                 'isChokePlay': getattr(self.play, 'isChokePlay', False),
                 'isMomentumShift': getattr(self.play, 'isMomentumShift', False),
                 'clockStopped': getattr(self.play, 'clockStopped', False),
+                'clutchPerformers': list(getattr(self.play, 'clutchPerformers', []) or []),
+                'chokePerformers': list(getattr(self.play, 'chokePerformers', []) or []),
                 'insights': getattr(self.play, 'insights', None),
                 'personalityEvent': self._buildPersonalityEvent(),
             }
@@ -5828,7 +5853,13 @@ class Play():
         self.rcvPressureMod = 0.0        # Receiver-specific pressure modifier (pass plays)
         self.isClutchPlay = False        # High pressure + positive mod + good outcome
         self.isChokePlay = False         # High pressure + negative mod + bad outcome
-        self.clutchPlayerName = ''       # Name of the player who clutched/choked
+        self.clutchPlayerName = ''       # Legacy — single player name (for back-compat)
+        # Lists of player names who rose / crumbled under pressure on this play.
+        # Populated by _evaluateClutchChoke when the play tags as clutch or choke.
+        # Multiple if multiple involved players had non-zero pressure mods in the
+        # same direction (e.g. QB and receiver both rose on a clutch TD).
+        self.clutchPerformers = []
+        self.chokePerformers = []
         self.sackedBy = None             # Defender who made the sack
         self.interceptedBy = None        # Defender who intercepted
         self.tackledBy = None            # Primary tackler on run plays
