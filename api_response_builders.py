@@ -87,17 +87,18 @@ class TeamResponseBuilder(ResponseBuilder):
         if streak <= -3:
             return 'RESOLUTE' if avgResolve >= 0.30 else 'SPIRALING'
 
-        # Vulnerable hot team on a streak — silent-danger signal overrides
-        # the plain HOT_STREAK label so "winning despite real issues" is
-        # called out instead of celebrated. Vuln >= 0.08 catches teams
-        # whose composite weighted avg is ~78 or lower — below average,
-        # exactly the population where the streak is masking real flaws.
-        # HOT_STREAK is reserved for teams that are *both* winning AND
-        # mentally solid — a real signal rather than just a streak count.
-        if streak >= 3 and winPct >= 0.55 and avgVuln >= 0.08:
+        # Vulnerable hot team on a *short* streak — silent-danger warning.
+        # Capped at streak == 3-4: by the time a team has won 5+ in a row,
+        # the streak itself is proof they're actually playing well, no
+        # matter what their composite suggests. COMPLACENT should be a
+        # transient warning state ("the cracks could show any day now") —
+        # if it doesn't pan out and the wins keep coming, the team has
+        # earned HOT_STREAK regardless.
+        if streak in (3, 4) and winPct >= 0.55 and avgVuln >= 0.08:
             return 'COMPLACENT'
 
-        # True hot streak — winning AND the roster is playing well together
+        # True hot streak — 3+ wins and either mentally solid or sustained
+        # the streak past the COMPLACENT-warning window
         if streak >= 3:
             return 'HOT_STREAK'
 
