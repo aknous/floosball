@@ -251,20 +251,31 @@ class Player:
         self.careerStats.gp += 1
         self.careerStatsDict['gp'] = self.careerStatsDict.get('gp', 0) + 1
         if isinstance(self.team,Team):
+            # Per-game streak adjustments. Refactored from an attitude-only
+            # cascade to use the same complacency / resolve composites the
+            # weekly form-shift mechanic relies on, so streak reactions are
+            # consistent with the season-arc trend they feed into.
             if self.team.winningStreak:
-                self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(0,25)/100), 3)
+                # Winning streak: confidence boost, but vulnerable players
+                # get less of one (their hot-team coasting tendency caps
+                # the upside). Bulletproof players get the full +0..25.
+                vuln = self.attributes.complacencyVulnerability()
+                boostMax = max(8, round(25 * (1 - 0.6 * vuln)))
+                self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(0, boostMax)/100), 3)
             elif self.team.seasonTeamStats['streak'] < -2:
-                if self.attributes.attitude < 70:
-                    self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-20,0)/100), 3)
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-20,0)/100), 3)
-                elif self.attributes.attitude < 80:
-                    self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-10,0)/100), 3)
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-10,0)/100), 3)
-                elif self.attributes.attitude < 90:
-                    self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-5,0)/100), 3)
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-5,0)/100), 3)
+                # Losing streak: response shaped by adversityResolve.
+                # High resolve (>=0.7): determination goes UP (counter-puncher).
+                # Low resolve: confidence/determination drop, scaling with
+                # how short of resolve they are (no resolve → biggest drop).
+                resolve = self.attributes.adversityResolve()
+                if resolve >= 0.7:
+                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(0, 10)/100), 3)
                 else:
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(0,10)/100), 3)
+                    shortfall = 1.0 - resolve  # 0=full resolve, 1=none
+                    penaltyMax = max(0, round(20 * shortfall))
+                    if penaltyMax > 0:
+                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-penaltyMax, 0)/100), 3)
+                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-penaltyMax, 0)/100), 3)
 
             if self.attributes.confidenceModifier > 5:
                 self.attributes.confidenceModifier = 5
@@ -484,6 +495,48 @@ class PlayerAttributes:
         self.favorite_category = None
         self.favorite_item = None
         self.motto = None
+
+    # ── Mental composites for season-form trends ──
+    # Two distinct composites: one captures how vulnerable a player is to
+    # coasting / cracking under expectations when their team is winning;
+    # the other captures how hard they fight back when the team is losing.
+    # Both used by the weekly form-shift mechanic in seasonManager and by
+    # the per-game streak adjustment in _updatePostGameModifiers.
+
+    def complacencyVulnerability(self) -> float:
+        """0 = bulletproof, 1 = fully vulnerable. Hot-team direction.
+          discipline       40%   professional habits, doesn't slack
+          pressureHandling 25%   season-level expectations weight (-10 to +10
+                                 normalized to 60-100 scale)
+          focus            20%   mental sharpness vs going through the motions
+          attitude         15%   ego resistance / leader-vs-toxic axis
+        Composite weighted to a 60–100 scale; 80+ → 0, ≤60 → 1.
+        """
+        ph = getattr(self, 'pressureHandling', 0) or 0
+        ph_norm = 80 + ph * 2  # -10→60, 0→80, +10→100
+        weighted = (
+            (getattr(self, 'discipline', 80) or 80) * 0.40
+            + ph_norm * 0.25
+            + (getattr(self, 'focus', 80) or 80) * 0.20
+            + (getattr(self, 'attitude', 80) or 80) * 0.15
+        )
+        return max(0.0, min(1.0, (80 - weighted) / 20))
+
+    def adversityResolve(self) -> float:
+        """0 = checked out, 1 = full Cinderella. Cold-team direction.
+          resilience  40%   bouncing back from setbacks
+          attitude    25%   morale floor — the leader-vs-toxic axis
+          discipline  20%   keeps doing the right things
+          creativity  15%   finds new ways to win
+        Composite weighted to a 60–100 scale; ≤70 → 0, 100 → 1.
+        """
+        weighted = (
+            (getattr(self, 'resilience', 80) or 80) * 0.40
+            + (getattr(self, 'attitude', 80) or 80) * 0.25
+            + (getattr(self, 'discipline', 80) or 80) * 0.20
+            + (getattr(self, 'creativity', 80) or 80) * 0.15
+        )
+        return max(0.0, min(1.0, (weighted - 70) / 30))
 
     def computeMoodTier(self):
         """Compute the 1-5 mood tier from confidence + determination."""

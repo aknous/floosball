@@ -717,6 +717,11 @@ class SeasonManager:
             # professional resolve. Runs alongside fatigue on the weekly hook
             # so the effect compounds gradually across the season.
             self._applyMidseasonFormShift(self.currentSeason.currentWeek)
+            # Attitude drifts with playing experience: winning trends a
+            # roster toward leadership, losing toward toxicity. Feeds back
+            # into the form-shift composites so a season-long arc shapes
+            # how teams respond to streaks and standings.
+            self._driftAttitudes(self.currentSeason.currentWeek)
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -6576,25 +6581,28 @@ class SeasonManager:
     def _applyMidseasonFormShift(self, week: int) -> None:
         """
         Per-week, mental-attribute-driven shift to player confidence/
-        determination so collective discipline shapes whether teams play to,
-        above, or below their potential.
+        determination so the team's collective mental makeup shapes whether
+        they play to, above, or below their potential.
 
-        Hot teams (winPct >= .6) with low individual discipline get complacent
-        — confidence and determination drift downward each week. Disciplined
-        starters on the same hot team barely drift. Cold teams (winPct <= .4)
-        with high individual discipline stay professional — their determination
-        drifts upward. Undisciplined starters on cold teams don't get the
-        boost (resignation).
+        The check is per-team (winPct gates the direction) but the effect is
+        per-player (each starter's adjustment is scaled by their own mental
+        composite). Two distinct composites drive the two directions:
 
-        Magnitude is per-player and gated by both:
-          - the player's own discipline (high disc resists complacency,
-            high disc enables Cinderella runs)
-          - how far from .500 the team is (a .800 team coasts harder than a
-            .600 team; a .200 team is more desperate than a .400 team)
+          Hot team (winPct >= .6) — _complacencyVulnerability runs.
+              Discipline + focus + attitude composite. Low values drift
+              confidence/determination DOWN; high values hold steady. A
+              hot team with a few low-discipline guys still slips on those
+              specific players while their disciplined teammates anchor.
 
-        Piggybacks on the existing streak-driven modifiers in
-        Player._updatePostGameModifiers — runs on a slower weekly cadence and
-        keys off discipline rather than just attitude.
+          Cold team (winPct <= .4) — _adversityResolve runs. Resilience +
+              discipline + attitude composite. High values drift
+              confidence/determination UP; low values stay flat (resignation).
+              A cold team with high-resilience starters can mount a real
+              comeback even with some checked-out teammates.
+
+        These layer on top of the per-game streak modifiers in
+        Player._updatePostGameModifiers. Streaks drive game-to-game
+        volatility; this drives season-arc tilt.
         """
         # Need a few weeks of standings before form is meaningful
         if week < 4:
@@ -6608,39 +6616,80 @@ class SeasonManager:
             if len(starters) < 4:
                 continue
 
-            # Hot team complacency
+            # Hot team complacency check
             if winPct >= 0.6:
-                # Surplus over .500 scales the complacency pressure
-                # winPct .6 → 0.2; .8 → 0.6; 1.0 → 1.0
+                # Surplus over .500 scales the pressure: .6 → 0.2; .8 → 0.6; 1.0 → 1.0
                 overperformFactor = min(1.0, (winPct - 0.5) * 2)
                 for p in starters:
-                    # Per-player vulnerability: disc=80 is neutral, disc=60
-                    # is fully complacent, disc=100+ is fully resistant.
-                    discFactor = max(0.0, min(1.0, (80 - p.attributes.discipline) / 20))
-                    if discFactor <= 0:
+                    vulnerability = p.attributes.complacencyVulnerability()
+                    if vulnerability <= 0:
                         continue
-                    drift = -(_formRand(5, 18) / 100) * discFactor * overperformFactor
+                    drift = -(_formRand(5, 18) / 100) * vulnerability * overperformFactor
                     p.attributes.confidenceModifier = round(
                         max(-5.0, p.attributes.confidenceModifier + drift), 3)
                     p.attributes.determinationModifier = round(
                         max(-5.0, p.attributes.determinationModifier + drift * 0.5), 3)
 
-            # Cold team Cinderella resolve
+            # Cold team resolve check
             elif winPct <= 0.4:
-                # Deficit below .500 scales the resolve
-                # winPct .4 → 0.2; .2 → 0.6; .0 → 1.0
+                # Deficit below .500 scales the resolve: .4 → 0.2; .2 → 0.6; .0 → 1.0
                 underperformFactor = min(1.0, (0.5 - winPct) * 2)
                 for p in starters:
-                    # Per-player resolve: disc=70 is neutral, disc=100 is full
-                    # resolve. Below 70 there's no boost (player has given up).
-                    discFactor = max(0.0, min(1.0, (p.attributes.discipline - 70) / 30))
-                    if discFactor <= 0:
+                    resolve = p.attributes.adversityResolve()
+                    if resolve <= 0:
                         continue
-                    boost = (_formRand(5, 18) / 100) * discFactor * underperformFactor
+                    boost = (_formRand(5, 18) / 100) * resolve * underperformFactor
                     p.attributes.confidenceModifier = round(
                         min(5.0, p.attributes.confidenceModifier + boost * 0.5), 3)
                     p.attributes.determinationModifier = round(
                         min(5.0, p.attributes.determinationModifier + boost), 3)
+
+    def _driftAttitudes(self, week: int) -> None:
+        """
+        Per-week attitude drift driven by playing experiences. Players on
+        winning teams trend upward (toxic → supportive); players on losing
+        teams trend downward (supportive → toxic). High-resilience players
+        resist the negative drift; players already at the extreme ends move
+        more slowly (entrenched leaders / entrenched toxicity).
+
+        Magnitude is small (±1-2 per week max) so a player's underlying
+        attitude only changes meaningfully over multiple weeks. This feeds
+        back into both composite scores: rising attitude raises a player's
+        adversity resolve and lowers their complacency vulnerability over
+        the course of a season — a young player on a winning team grows
+        into a leader; a journeyman stuck on a losing team can sour.
+        """
+        if week < 4:
+            return  # Same warm-up gate as the form shift
+        from random import randint as _attRand
+
+        for team in self.leagueManager.teams:
+            winPct = team.seasonTeamStats.get('winPerc', 0.5)
+            starters = [p for p in team.rosterDict.values() if p is not None]
+            if len(starters) < 4:
+                continue
+
+            # Magnitude scales with how far from .500 (0..2 per week max).
+            magnitude = abs(winPct - 0.5) * 4
+            if magnitude < 0.5:
+                continue  # Mid-tier teams: no drift signal
+
+            for p in starters:
+                current = getattr(p.attributes, 'attitude', 80) or 80
+                if winPct > 0.5:
+                    # Toward leadership. Players already near the ceiling
+                    # gain less (diminishing returns above 90).
+                    ceilingResist = max(0.0, (current - 80) / 20)  # 0..1
+                    cap = max(0, round(magnitude * (1.0 - 0.6 * ceilingResist)))
+                    if cap > 0:
+                        p.attributes.attitude = min(100, current + _attRand(0, cap))
+                else:
+                    # Toward toxicity. Resilience cushions the slide.
+                    resilience = getattr(p.attributes, 'resilience', 80) or 80
+                    resilienceResist = max(0.0, (resilience - 70) / 30)  # 0..1
+                    cap = max(0, round(magnitude * (1.0 - 0.5 * resilienceResist)))
+                    if cap > 0:
+                        p.attributes.attitude = max(0, current - _attRand(0, cap))
 
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
