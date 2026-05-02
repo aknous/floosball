@@ -255,27 +255,38 @@ class Player:
             # cascade to use the same complacency / resolve composites the
             # weekly form-shift mechanic relies on, so streak reactions are
             # consistent with the season-arc trend they feed into.
+            #
+            # selfBelief governs the magnitude of CONFIDENCE swings only —
+            # determination is the drive-to-win axis, not a belief axis, so
+            # it's not gated. selfBelief 80 = neutral (no scaling); 100 =
+            # half-magnitude swings (steady); 60 = 1.4x swings (volatile).
+            sb = getattr(self.attributes, 'selfBelief', 80) or 80
+            confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
+
             if self.team.winningStreak:
                 # Winning streak: confidence boost, but vulnerable players
                 # get less of one (their hot-team coasting tendency caps
                 # the upside). Bulletproof players get the full +0..25.
                 vuln = self.attributes.complacencyVulnerability()
-                boostMax = max(8, round(25 * (1 - 0.6 * vuln)))
+                boostMax = max(8, round(25 * (1 - 0.6 * vuln) * confStability))
                 self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(0, boostMax)/100), 3)
             elif self.team.seasonTeamStats['streak'] < -2:
                 # Losing streak: response shaped by adversityResolve.
                 # High resolve (>=0.7): determination goes UP (counter-puncher).
                 # Low resolve: confidence/determination drop, scaling with
                 # how short of resolve they are (no resolve → biggest drop).
+                # Confidence drop scaled by selfBelief; determination drop is not.
                 resolve = self.attributes.adversityResolve()
                 if resolve >= 0.7:
                     self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(0, 10)/100), 3)
                 else:
                     shortfall = 1.0 - resolve  # 0=full resolve, 1=none
-                    penaltyMax = max(0, round(20 * shortfall))
-                    if penaltyMax > 0:
-                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-penaltyMax, 0)/100), 3)
-                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-penaltyMax, 0)/100), 3)
+                    confPenaltyMax = max(0, round(20 * shortfall * confStability))
+                    detPenaltyMax = max(0, round(20 * shortfall))
+                    if confPenaltyMax > 0:
+                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-confPenaltyMax, 0)/100), 3)
+                    if detPenaltyMax > 0:
+                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-detPenaltyMax, 0)/100), 3)
 
             if self.attributes.confidenceModifier > 5:
                 self.attributes.confidenceModifier = 5
@@ -460,6 +471,10 @@ class PlayerAttributes:
         self.instinct = 0
         self.creativity = 0
         self.resilience = 0
+        # selfBelief (60-100): how stable this player's confidence is.
+        # High = quiet, steady belief — small swings from results.
+        # Low = volatile — confidence soars and crashes with recent results.
+        self.selfBelief = 80
         # clutchFactor: deprecated. Was meant to amplify pressure-induced
         # variance but never got populated (always 0). Kept on the class so
         # DB sync code that reads/writes the existing clutch_factor column
@@ -699,7 +714,7 @@ class PlayerAttributes:
         # Intangibles: use mentalSeed as center with moderate variance
         # This allows independent control of physical vs mental abilities
         stdDev = 7
-        numSkills = 6
+        numSkills = 7
         intSkillValList = np.random.normal(mentalSeed, stdDev, numSkills)
         intSkillValList = np.clip(intSkillValList, 60, 100)
         intSkillValList: list = intSkillValList.tolist()
@@ -710,6 +725,12 @@ class PlayerAttributes:
         self.discipline = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
         self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
         self.resilience = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        # selfBelief: governs how volatile this player's confidence is in
+        # response to performance and team form. High selfBelief = stable
+        # (small swings — quietly confident regardless of recent results);
+        # low selfBelief = volatile (big swings — soars when things click,
+        # cratters when they don't).
+        self.selfBelief = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
 
         # Generate any missing core physical attributes (needed for defensive ratings)
         # Core 5: speed, power, agility, hands, reach — every player needs these

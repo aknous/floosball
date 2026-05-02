@@ -423,6 +423,7 @@ class PlayerManager:
                 player.attributes.creativity = attrs.creativity
                 player.attributes.resilience = attrs.resilience
                 player.attributes.clutchFactor = attrs.clutch_factor
+                player.attributes.selfBelief = getattr(attrs, 'self_belief', 80) or 80
                 player.attributes.pressureHandling = attrs.pressure_handling
                 player.attributes.longevity = attrs.longevity
                 player.attributes.playMakingAbility = attrs.play_making_ability
@@ -1378,6 +1379,7 @@ class PlayerManager:
                             creativity=attrs.creativity,
                             resilience=attrs.resilience,
                             clutch_factor=attrs.clutchFactor,
+                            self_belief=getattr(attrs, 'selfBelief', 80),
                             pressure_handling=attrs.pressureHandling,
                             longevity=attrs.longevity,
                             play_making_ability=attrs.playMakingAbility,
@@ -1427,6 +1429,7 @@ class PlayerManager:
                         db_attrs.creativity = attrs.creativity
                         db_attrs.resilience = attrs.resilience
                         db_attrs.clutch_factor = attrs.clutchFactor
+                        db_attrs.self_belief = getattr(attrs, 'selfBelief', 80)
                         db_attrs.pressure_handling = attrs.pressureHandling
                         db_attrs.longevity = attrs.longevity
                         db_attrs.play_making_ability = attrs.playMakingAbility

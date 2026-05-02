@@ -494,6 +494,16 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # selfBelief on player_attributes — confidence stability axis.
+        # Defaults to 80 for existing rows so legacy players sit at the
+        # neutral point until the next offseason rolls them through training.
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN self_belief INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.self_belief")
+        except Exception:
+            conn.rollback()
+
         # Retire the 'random' powerup slug on stashed achievement rewards.
         # Tycoon now grants income_boost; Veteran grants extra_swap. Map
         # existing 'random' rows by their achievement source so the user

@@ -218,6 +218,8 @@ class PlayerAttributes(Base):
     creativity: Mapped[int] = mapped_column(Integer)
     resilience: Mapped[int] = mapped_column(Integer)
     clutch_factor: Mapped[int] = mapped_column(Integer)
+    # Volatility of confidence response to results. High = stable, low = volatile.
+    self_belief: Mapped[int] = mapped_column(Integer, default=80)
     pressure_handling: Mapped[int] = mapped_column(Integer)
     longevity: Mapped[int] = mapped_column(Integer)
     play_making_ability: Mapped[int] = mapped_column(Integer)
