@@ -76,28 +76,51 @@ class TeamResponseBuilder(ResponseBuilder):
             avgVuln = 0.0
             avgResolve = 0.0
 
-        # Strongest signals first
+        # Priority order matters — composite-driven signals can preempt
+        # streak-driven ones when they convey more information. Thresholds
+        # tuned so realistic rosters (composite avg in the 75–85 band) can
+        # actually hit COMPLACENT / COOLING_OFF / RESOLUTE.
+
+        # Crashing — extended losing streak. Resolve threshold of 0.30
+        # catches teams whose average composite is at-or-above 79 (since
+        # adversityResolve = (weighted - 70) / 30).
+        if streak <= -3:
+            return 'RESOLUTE' if avgResolve >= 0.30 else 'SPIRALING'
+
+        # Vulnerable hot team on a streak — silent-danger signal overrides
+        # the plain HOT_STREAK label so "winning despite real issues" is
+        # called out instead of celebrated. Vuln >= 0.08 catches teams
+        # whose composite weighted avg is ~78 or lower — below average,
+        # exactly the population where the streak is masking real flaws.
+        # HOT_STREAK is reserved for teams that are *both* winning AND
+        # mentally solid — a real signal rather than just a streak count.
+        if streak >= 3 and winPct >= 0.55 and avgVuln >= 0.08:
+            return 'COMPLACENT'
+
+        # True hot streak — winning AND the roster is playing well together
         if streak >= 3:
             return 'HOT_STREAK'
-        if streak <= -3:
-            # Cold but resilient roster signals comeback potential
-            if avgResolve >= 0.45:
-                return 'RESOLUTE'
-            return 'SPIRALING'
-        # Hot team showing cracks
-        if winPct >= 0.65 and avgVuln >= 0.40:
-            if streak < 0:
-                return 'COOLING_OFF'
-            return 'COMPLACENT'
-        # Cold team with mental backbone
-        if winPct <= 0.35 and avgResolve >= 0.45:
+
+        # Winning team currently slipping — active fade. Same vuln floor
+        # as COMPLACENT so vulnerable teams can flip to COOLING_OFF as
+        # soon as they start dropping games.
+        if winPct >= 0.55 and streak < 0 and avgVuln >= 0.08:
+            return 'COOLING_OFF'
+
+        # Losing team with mental backbone — Cinderella signal
+        if winPct <= 0.40 and avgResolve >= 0.30:
             return 'RESOLUTE'
-        # Recent slip on a winning team
-        if streak <= -2 and winPct > 0.5:
+
+        # Brief slip on a winning team (transient)
+        if streak <= -2 and winPct > 0.50:
             return 'SHAKY'
-        # Building a streak but not there yet
-        if streak >= 1:
+
+        # On the cusp of a streak — won 2 in a row but not yet 3.
+        # Single wins fall through to STEADY since one-off wins after a
+        # neutral stretch aren't a real momentum signal.
+        if streak >= 2:
             return 'GETTING_HOT'
+
         return 'STEADY'
 
     @staticmethod
