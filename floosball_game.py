@@ -2981,6 +2981,14 @@ class Game:
         self._applyFormState(self.homeTeam)
         self._applyFormState(self.awayTeam)
 
+        # Per-matchup contextual modifiers stacked on top of form state:
+        #   - trap game (heavy favorite + low discipline)
+        #   - playoff push (late-season bubble team + positive determination)
+        #   - clinched coast (clinched playoffs + low discipline)
+        # Lets a COMPLACENT team's trap-game game be a real upset, a
+        # RESOLUTE team's late-season urgency be a real push, etc.
+        self._applyContextModifiers()
+
         x = batched_randint(0,1)
         if x == 0:
             self.offensiveTeam = self.homeTeam
@@ -4142,27 +4150,40 @@ class Game:
                 player.updateInGameConfidence(modifier * 0.6)
                 player.updateInGameDetermination(modifier * 0.4)
 
+    def _applyTeamRatingMult(self, team, multiplier):
+        """Apply a uniform attribute multiplier to all rostered players, then
+        recompute derived ratings. Shared by _applyFormState and
+        _applyContextModifiers.
+        """
+        if multiplier == 1.0:
+            return
+        from constants import RATING_SCALE_MIN
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                         'accuracy', 'legStrength', 'reach',
+                         'focus', 'discipline', 'instinct'):
+                val = getattr(player.gameAttributes, attr, 0)
+                if val:
+                    setattr(player.gameAttributes, attr,
+                            max(RATING_SCALE_MIN, min(100, round(val * multiplier))))
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+
     def _applyFormState(self, team):
         """
         Apply the team's current form state as a uniform multiplier on each
         rostered player's in-game attributes. Drives the trap-game effect
         for COMPLACENT teams, the Cinderella boost for RESOLUTE teams, and
-        in-between for the other states. Multiplier is read from
-        FORM_STATE_RATING_MULT in constants.
+        in-between for the other states.
 
-        Regression-to-mean: teams stuck in the same state for 3+ consecutive
-        weeks have an increasing chance per game to have their modifier
-        halved — letting a SPIRALING team catch a break or a HOT_STREAK team
-        have an off game. Without this, the compounding feedback loops would
-        let teams stay locked in for unrealistically long stretches.
-
-        Magnitude is small (typically ±2-5% on attrs) but compounds across
-        all rostered players, so a SPIRALING team's offense AND defense both
-        underperform — translating to a meaningful WP swing each game.
+        Regression-to-mean: teams stuck in the same state for 3+ weeks have
+        an increasing chance per game to have their modifier halved.
         """
         try:
             from api_response_builders import TeamResponseBuilder
-            from constants import FORM_STATE_RATING_MULT, RATING_SCALE_MIN
+            from constants import FORM_STATE_RATING_MULT
         except Exception:
             return
 
@@ -4171,24 +4192,94 @@ class Game:
         if multiplier == 1.0:
             return
 
-        # Regression-to-mean: each week beyond week 2 in the same state
-        # adds 15% to the chance the modifier is halved this game, capped
-        # at 70%. Halving (rather than zeroing) keeps the form effect
-        # directionally consistent — a SPIRALING team has a "less awful"
-        # game, not a randomly elite one.
         weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
         if weeksHeld >= 3:
             weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
             if _random.random() < weakenChance:
                 multiplier = 1.0 + (multiplier - 1.0) * 0.5
-                # Stash the weakening info on the play insights would be ideal,
-                # but at this point self.play doesn't exist yet (game is just
-                # starting). Logged at debug level for visibility.
                 logging.debug(
                     f"_applyFormState: {team.abbr} {formState} (held "
                     f"{weeksHeld} weeks) weakened {weakenChance:.0%} → "
                     f"multiplier {multiplier:.3f}"
                 )
+
+        self._applyTeamRatingMult(team, multiplier)
+
+    def _computeContextMultiplier(self, team, opponent) -> float:
+        """Combined per-matchup contextual multiplier covering:
+          - trap game: heavy favorite + low team discipline → coasts
+          - playoff push: late season + on bubble + positive determination
+                          → urgency boost (scales harder toward season end)
+          - clinched coast: late season + clinched + low discipline → coasts
+        """
+        if not self.isRegularSeasonGame:
+            return 1.0
+        starters = [p for p in team.rosterDict.values() if p is not None]
+        if not starters:
+            return 1.0
+        teamElo = getattr(team, 'elo', 1500) or 1500
+        oppElo = getattr(opponent, 'elo', 1500) or 1500
+        avgDiscipline = sum(p.attributes.discipline for p in starters) / len(starters)
+        avgDetMod = sum(
+            getattr(p.attributes, 'determinationModifier', 0) or 0
+            for p in starters
+        ) / len(starters)
+
+        multiplier = 1.0
+
+        # Trap game — heavy favorite (ELO advantage ≥ 100) with low discipline
+        # plays down to the underdog. Discipline 80+ = no trap; 60 = full trap.
+        if teamElo - oppElo >= 100:
+            trapScale = max(0.0, min(1.0, (80 - avgDiscipline) / 20))
+            if trapScale > 0:
+                trapMag = 0.02 + 0.01 * trapScale  # 2-3%
+                multiplier *= 1.0 - trapMag
+                logging.debug(
+                    f"_context: {team.abbr} trap-game vs {opponent.abbr} "
+                    f"(ELO+{teamElo-oppElo}, disc {avgDiscipline:.1f}) "
+                    f"× {1.0 - trapMag:.3f}"
+                )
+
+        week = self.week or 0
+        if week >= 24:
+            clinched = bool(getattr(team, 'clinchedPlayoffs', False))
+            eliminated = bool(getattr(team, 'eliminated', False))
+
+            if clinched:
+                # Clinched coasters: low discipline → going through motions.
+                # Magnitude scales toward season end (week 24: 2%, week 28: 4%).
+                if avgDiscipline < 75:
+                    coastMag = 0.02 + (week - 24) * 0.005
+                    multiplier *= 1.0 - coastMag
+                    logging.debug(
+                        f"_context: {team.abbr} clinched-coast wk{week} "
+                        f"(disc {avgDiscipline:.1f}) × {1.0 - coastMag:.3f}"
+                    )
+            elif not eliminated:
+                # On bubble — playoff push if collective determination is
+                # positive (drive to win expressed). Urgency scales with how
+                # close to season end (week 24: 0.2x, week 28: 1.0x). Captures
+                # both 'cusp-push' (weeks 24-26) and 'win-and-in' (week 28).
+                if avgDetMod > 0:
+                    urgencyFactor = min(1.0, (week - 23) / 5)
+                    detFactor = min(1.0, avgDetMod / 3)
+                    pushMag = 0.02 + 0.03 * urgencyFactor * detFactor
+                    multiplier *= 1.0 + pushMag
+                    logging.debug(
+                        f"_context: {team.abbr} playoff-push wk{week} "
+                        f"(detMod {avgDetMod:+.2f}, urgency {urgencyFactor:.1f}) "
+                        f"× {1.0 + pushMag:.3f}"
+                    )
+
+        return multiplier
+
+    def _applyContextModifiers(self):
+        """Stack per-matchup contextual modifiers (trap game, playoff push,
+        clinched coast) on top of the form-state modifier."""
+        homeMult = self._computeContextMultiplier(self.homeTeam, self.awayTeam)
+        awayMult = self._computeContextMultiplier(self.awayTeam, self.homeTeam)
+        self._applyTeamRatingMult(self.homeTeam, homeMult)
+        self._applyTeamRatingMult(self.awayTeam, awayMult)
 
         # Same attribute set as fatigue handling, plus xFactor for direct
         # mental-state impact. Capped at 100 on the upside, RATING_SCALE_MIN
