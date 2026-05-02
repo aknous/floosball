@@ -460,6 +460,10 @@ class PlayerAttributes:
         self.instinct = 0
         self.creativity = 0
         self.resilience = 0
+        # clutchFactor: deprecated. Was meant to amplify pressure-induced
+        # variance but never got populated (always 0). Kept on the class so
+        # DB sync code that reads/writes the existing clutch_factor column
+        # doesn't crash; not used by any game-sim logic.
         self.clutchFactor = 0
         self.pressureHandling = randint(-10, 10)  # -10 (chokes) to +10 (thrives under pressure)
 
@@ -598,11 +602,7 @@ class PlayerAttributes:
         
         # Calculate the magnitude of potential variance based on pressure and pressureHandling
         maxVariance = abs(self.pressureHandling) * normalizedPressure
-        
-        # Clutch factor increases the magnitude of potential swings
-        clutchMultiplier = 1 + (self.clutchFactor / 100.0)
-        maxVariance *= clutchMultiplier
-        
+
         # Roll for outcome (1-100)
         roll = batched_randint(1, 100)
 
