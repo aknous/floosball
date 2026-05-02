@@ -4239,6 +4239,20 @@ class Game:
                     f"(ELO+{teamElo-oppElo}, disc {avgDiscipline:.1f}) "
                     f"× {1.0 - trapMag:.3f}"
                 )
+        # Underdog hunger — heavy underdog (ELO deficit ≥ 100) with positive
+        # collective determination plays above their level. Mirrors the
+        # trap-game effect from the other side: heavy favorites coast on low
+        # discipline; heavy underdogs lift on high determination. The two
+        # together close the matchup gap by 4-6% in real upset scenarios.
+        elif oppElo - teamElo >= 100 and avgDetMod > 0:
+            detFactor = min(1.0, avgDetMod / 3)  # +3 modifier = full effect
+            hungerMag = 0.02 + 0.01 * detFactor  # 2-3%
+            multiplier *= 1.0 + hungerMag
+            logging.debug(
+                f"_context: {team.abbr} underdog-hunger vs {opponent.abbr} "
+                f"(ELO-{oppElo-teamElo}, detMod {avgDetMod:+.2f}) "
+                f"× {1.0 + hungerMag:.3f}"
+            )
 
         week = self.week or 0
         if week >= 24:
