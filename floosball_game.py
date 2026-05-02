@@ -2539,7 +2539,11 @@ class Game:
                     else:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
-            text = '{}yd Field Goal attempt by {}'.format(self.play.fgDistance, self.play.kicker.name)
+            kickerName = self.play.kicker.name
+            if self.play.isFgGood:
+                text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
+            else:
+                text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is no good'
         elif self.play.playType == PlayType.ExtraPoint:
             kickerName = self.play.kicker.name if getattr(self.play, 'kicker', None) else 'Kicker'
             if self.play.isXpGood:
