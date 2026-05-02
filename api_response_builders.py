@@ -101,10 +101,11 @@ class TeamResponseBuilder(ResponseBuilder):
         if streak >= 3:
             return 'HOT_STREAK'
 
-        # Winning team currently slipping — active fade. Same vuln floor
-        # as COMPLACENT so vulnerable teams can flip to COOLING_OFF as
-        # soon as they start dropping games.
-        if winPct >= 0.55 and streak < 0 and avgVuln >= 0.08:
+        # Winning team currently slipping — active fade. Lower vuln floor
+        # than COMPLACENT (0.04 vs 0.08) since a team that's actually
+        # losing games already shows the cracks; even mild vulnerabilities
+        # are a meaningful signal once the slip starts.
+        if winPct >= 0.55 and streak < 0 and avgVuln >= 0.04:
             return 'COOLING_OFF'
 
         # Losing team with mental backbone — Cinderella signal
@@ -115,12 +116,13 @@ class TeamResponseBuilder(ResponseBuilder):
         if streak <= -2 and winPct > 0.50:
             return 'SHAKY'
 
-        # Building real momentum — won 2 in a row AND the roster is playing
-        # well together (low collective vulnerability). A 2-game streak by
-        # a mentally-flawed team is lucky, not momentum, so it falls back
-        # to STEADY. Same vuln floor as HOT_STREAK keeps the "mental
-        # quality required to celebrate" rule consistent across both.
-        if streak >= 2 and avgVuln < 0.08:
+        # Building momentum — won 2 in a row. The mental-quality
+        # distinction lives at the 3+ mark (HOT_STREAK vs COMPLACENT),
+        # so 2-win streaks just register as GETTING_HOT regardless. This
+        # keeps the label visible enough to be a useful trend signal —
+        # without it, mid-tier teams pop straight from STEADY to
+        # HOT_STREAK / COMPLACENT with no buildup label.
+        if streak >= 2:
             return 'GETTING_HOT'
 
         return 'STEADY'
