@@ -37,6 +37,37 @@ class TeamResponseBuilder(ResponseBuilder):
     """Builder for team-related API responses"""
 
     @staticmethod
+    def _isPedigreed(team) -> bool:
+        """Is this team in the top 10% of the league by ELO?
+
+        Used by computeFormState to decide whether a vulnerable team should
+        carry COMPLACENT from the start of the season on pedigree alone.
+        Threshold is computed relative to the current league so it tracks
+        whatever the talent landscape is rather than a fixed ELO number.
+        """
+        teamElo = getattr(team, 'elo', 1500) or 1500
+        try:
+            from api import main as _apiMain
+            app = getattr(_apiMain, 'floosball_app', None)
+            teamMgr = getattr(app, 'teamManager', None) if app else None
+            if not teamMgr or not getattr(teamMgr, 'teams', None):
+                return False
+            import math
+            elos = sorted(
+                ((getattr(t, 'elo', 1500) or 1500) for t in teamMgr.teams),
+                reverse=True,
+            )
+            if not elos:
+                return False
+            # Top 10% with a floor of 2 so very small leagues still produce
+            # a meaningful "elite" group rather than just one team.
+            topCount = max(2, math.ceil(len(elos) * 0.1))
+            threshold = elos[min(topCount - 1, len(elos) - 1)]
+            return teamElo >= threshold
+        except Exception:
+            return False
+
+    @staticmethod
     def computeFormState(team) -> str:
         """Compute the team's at-a-glance form state.
 
@@ -76,19 +107,23 @@ class TeamResponseBuilder(ResponseBuilder):
             avgResolve = 0.0
 
         # COMPLACENT — checked BEFORE the games<4 gate because it can fire
-        # from week 1 on pedigree alone. Two triggers:
+        # from week 1 on pedigree alone. Two triggers, both gated by a
+        # vulnerable composite:
         #
-        #   1. High ELO (>= 1600) + vulnerable composite — a team that came
-        #      into the season with a strong rating assumes they'll be good
-        #      and coasts from the jump (defending-champion trap).
-        #   2. Strong record (>= 0.65 winPct) + vulnerable composite — a
-        #      team that built up wins and feels untouchable, lets off the
-        #      gas regardless of how long ago the wins came.
+        #   1. Pedigree — team's ELO is in the top 10% of the league. They
+        #      came into the season with a strong rating and assume they'll
+        #      be good (defending-champion trap). Computed relative to the
+        #      league rather than a static ELO so the threshold tracks
+        #      whatever the current talent landscape is.
+        #   2. Record — winPct >= 0.65. They built up wins and feel
+        #      untouchable, letting off the gas regardless of when the
+        #      wins came.
         #
         # avgVuln gate is the same in both cases — the mental composite is
-        # what makes them vulnerable to coasting; ELO/record just gives them
-        # the cover to think they can afford it.
-        if avgVuln >= 0.08 and (winPct >= 0.65 or elo >= 1600):
+        # what makes them vulnerable to coasting; pedigree/record just gives
+        # them the cover to think they can afford it.
+        isPedigreed = TeamResponseBuilder._isPedigreed(team)
+        if avgVuln >= 0.08 and (winPct >= 0.65 or isPedigreed):
             return 'COMPLACENT'
 
         # Need at least a few games of data for the standings-driven states
