@@ -87,18 +87,19 @@ class TeamResponseBuilder(ResponseBuilder):
         if streak <= -3:
             return 'RESOLUTE' if avgResolve >= 0.30 else 'SPIRALING'
 
-        # Vulnerable hot team on a *short* streak — silent-danger warning.
-        # Capped at streak == 3-4: by the time a team has won 5+ in a row,
-        # the streak itself is proof they're actually playing well, no
-        # matter what their composite suggests. COMPLACENT should be a
-        # transient warning state ("the cracks could show any day now") —
-        # if it doesn't pan out and the wins keep coming, the team has
-        # earned HOT_STREAK regardless.
-        if streak in (3, 4) and winPct >= 0.55 and avgVuln >= 0.08:
+        # COMPLACENT is a season-arc state, not tied to current streak.
+        # The narrative: a team that did well to start the season and feels
+        # they can coast — strong record (top of the standings) but the
+        # roster's collective mental composite says they're vulnerable. Can
+        # be on a streak, between streaks, or even mid-slip — what defines
+        # them is the record + the vulnerability, not the recent results.
+        # Preempts HOT_STREAK so a 5-win streak by a vulnerable top team
+        # still reads as COMPLACENT — the wins came against weaker teams
+        # because the league is uneven, not because they're playing solid.
+        if winPct >= 0.65 and avgVuln >= 0.08:
             return 'COMPLACENT'
 
-        # True hot streak — 3+ wins and either mentally solid or sustained
-        # the streak past the COMPLACENT-warning window
+        # True hot streak — winning AND the roster is playing well together
         if streak >= 3:
             return 'HOT_STREAK'
 
