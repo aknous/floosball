@@ -817,7 +817,19 @@ class PlayerManager:
         # stick around a year longer than projected).
         longevity = getattr(getattr(player, 'attributes', None), 'longevity', 6) or 6
         remaining = max(1, longevity - seasonsPlayed + 1)
-        return max(1, min(base, remaining))
+
+        # Tier-based contract floor — top players get longer deals at the
+        # end of their career than the bare runway clamp would suggest.
+        # An aged TierS still commands at least a 3-year offer (teams take
+        # the dead-cap risk for hall-of-fame trajectory players); TierA
+        # holds at 2 years; lower tiers fall to the runway floor of 1.
+        if tier == FloosPlayer.PlayerTier.TierS:
+            floor = 3
+        elif tier == FloosPlayer.PlayerTier.TierA:
+            floor = 2
+        else:
+            floor = 1
+        return max(floor, min(base, remaining))
     
     def conductInitialDraft(self) -> None:
         """Conduct the initial draft (replaces playerDraft function)"""
