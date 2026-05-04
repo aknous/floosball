@@ -371,6 +371,7 @@ class PlayerManager:
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
+            player.willRetire = bool(getattr(db_player, 'will_retire', False))
             
             # Load tier if present
             if db_player.tier:
@@ -423,6 +424,7 @@ class PlayerManager:
                 player.attributes.creativity = attrs.creativity
                 player.attributes.resilience = attrs.resilience
                 player.attributes.clutchFactor = attrs.clutch_factor
+                player.attributes.selfBelief = getattr(attrs, 'self_belief', 80) or 80
                 player.attributes.pressureHandling = attrs.pressure_handling
                 player.attributes.longevity = attrs.longevity
                 player.attributes.playMakingAbility = attrs.play_making_ability
@@ -435,6 +437,10 @@ class PlayerManager:
                 player.attributes.personality = getattr(attrs, 'personality', None)
                 player.attributes.quirk = getattr(attrs, 'quirk', None)
                 player.attributes.mood = getattr(attrs, 'mood', 3) or 3
+                player.attributes.hometown = getattr(attrs, 'hometown', None)
+                player.attributes.favorite_category = getattr(attrs, 'favorite_category', None)
+                player.attributes.favorite_item = getattr(attrs, 'favorite_item', None)
+                player.attributes.motto = getattr(attrs, 'motto', None)
 
             # Load career stats from related table
             if db_player.career_stats:
@@ -812,7 +818,19 @@ class PlayerManager:
         # stick around a year longer than projected).
         longevity = getattr(getattr(player, 'attributes', None), 'longevity', 6) or 6
         remaining = max(1, longevity - seasonsPlayed + 1)
-        return max(1, min(base, remaining))
+
+        # Tier-based contract floor — top players get longer deals at the
+        # end of their career than the bare runway clamp would suggest.
+        # An aged TierS still commands at least a 3-year offer (teams take
+        # the dead-cap risk for hall-of-fame trajectory players); TierA
+        # holds at 2 years; lower tiers fall to the runway floor of 1.
+        if tier == FloosPlayer.PlayerTier.TierS:
+            floor = 3
+        elif tier == FloosPlayer.PlayerTier.TierA:
+            floor = 2
+        else:
+            floor = 1
+        return max(floor, min(base, remaining))
     
     def conductInitialDraft(self) -> None:
         """Conduct the initial draft (replaces playerDraft function)"""
@@ -1311,6 +1329,7 @@ class PlayerManager:
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
+                        will_retire=bool(getattr(player, 'willRetire', False)),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1336,7 +1355,8 @@ class PlayerManager:
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
-                
+                    db_player.will_retire = bool(getattr(player, 'willRetire', False))
+
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
                 
@@ -1374,6 +1394,7 @@ class PlayerManager:
                             creativity=attrs.creativity,
                             resilience=attrs.resilience,
                             clutch_factor=attrs.clutchFactor,
+                            self_belief=getattr(attrs, 'selfBelief', 80),
                             pressure_handling=attrs.pressureHandling,
                             longevity=attrs.longevity,
                             play_making_ability=attrs.playMakingAbility,
@@ -1386,6 +1407,10 @@ class PlayerManager:
                             personality=getattr(attrs, 'personality', None),
                             quirk=getattr(attrs, 'quirk', None),
                             mood=getattr(attrs, 'mood', 3) or 3,
+                            hometown=getattr(attrs, 'hometown', None),
+                            favorite_category=getattr(attrs, 'favorite_category', None),
+                            favorite_item=getattr(attrs, 'favorite_item', None),
+                            motto=getattr(attrs, 'motto', None),
                         )
                         self.db_session.add(db_attrs)
                     else:
@@ -1419,6 +1444,7 @@ class PlayerManager:
                         db_attrs.creativity = attrs.creativity
                         db_attrs.resilience = attrs.resilience
                         db_attrs.clutch_factor = attrs.clutchFactor
+                        db_attrs.self_belief = getattr(attrs, 'selfBelief', 80)
                         db_attrs.pressure_handling = attrs.pressureHandling
                         db_attrs.longevity = attrs.longevity
                         db_attrs.play_making_ability = attrs.playMakingAbility
@@ -1431,6 +1457,10 @@ class PlayerManager:
                         db_attrs.personality = getattr(attrs, 'personality', None)
                         db_attrs.quirk = getattr(attrs, 'quirk', None)
                         db_attrs.mood = getattr(attrs, 'mood', 3) or 3
+                        db_attrs.hometown = getattr(attrs, 'hometown', None)
+                        db_attrs.favorite_category = getattr(attrs, 'favorite_category', None)
+                        db_attrs.favorite_item = getattr(attrs, 'favorite_item', None)
+                        db_attrs.motto = getattr(attrs, 'motto', None)
 
                 # Save career stats (season 0 = career totals)
                 if hasattr(player, 'careerStatsDict') and player.careerStatsDict:

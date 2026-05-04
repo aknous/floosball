@@ -1214,6 +1214,7 @@ class TeamManager:
             dbCoach.clock_management = team.coach.clockManagement
             dbCoach.player_development = team.coach.playerDevelopment
             dbCoach.scouting = getattr(team.coach, 'scouting', 80)
+            dbCoach.attitude = getattr(team.coach, 'attitude', 80)
             dbCoach.overall_rating = team.coach.overallRating
             self.db_session.flush()
             team.coach.id = dbCoach.id
@@ -1255,6 +1256,7 @@ class TeamManager:
             coach.clockManagement = dbCoach.clock_management
             coach.playerDevelopment = dbCoach.player_development
             coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
+            coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
             team.coach = coach
             # Remove coach name from unused pool so no future player gets it
             if coach.name in self._coachNamePool:
@@ -1275,8 +1277,15 @@ class TeamManager:
                     self.logger.debug(f"Generated and saved coach {team.coach.name} for {team.name}")
 
     def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach) -> None:
-        """Assign a specific coach to a team."""
+        """Assign a specific coach to a team and persist the assignment.
+
+        Without _saveCoachToDatabase, the new coach exists only in memory —
+        the GM hire-coach fallback path (no vote met threshold → auto-generate
+        a coach) leaves the team coachless on the next restart, since
+        _loadCoachFromDatabase finds no Coach row tied to team_id.
+        """
         team.coach = coach
+        self._saveCoachToDatabase(team)
 
     def fireCoach(self, team: FloosTeam.Team) -> None:
         """Remove a team's coach (leaves them coachless until next hire).
@@ -1362,6 +1371,7 @@ class TeamManager:
                     clock_management=coach.clockManagement,
                     player_development=coach.playerDevelopment,
                     scouting=getattr(coach, 'scouting', 80),
+                    attitude=getattr(coach, 'attitude', 80),
                     overall_rating=coach.overallRating,
                 )
                 self.db_session.add(dbCoach)
@@ -1397,6 +1407,7 @@ class TeamManager:
         coach.clockManagement = dbCoach.clock_management
         coach.playerDevelopment = dbCoach.player_development
         coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
+        coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
         team.coach = coach
         dbCoach.team_id = team.id
         self.db_session.flush()

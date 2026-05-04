@@ -165,6 +165,11 @@ class SeasonManager:
         # and is owned by the draft generators, not this flow controller.
         self._offseasonFlowPhase: Optional[str] = None
         self._offseasonFlowTarget: Optional[datetime.datetime] = None
+        # Step-completion gate set used by the phase-aware checkpoints. Each
+        # entry is a step key marked via _markOffseasonStepComplete; the set
+        # is persisted to simulation_state.offseason_completed_steps so a
+        # restart can read it back and skip already-completed batch work.
+        self._offseasonCompletedSteps: set = set()
 
         logger.info("SeasonManager initialized")
 
@@ -706,6 +711,35 @@ class SeasonManager:
 
             # Accumulate fatigue after each week
             self._accumulateFatigue()
+
+            # Mental-attribute-driven form shift: hot teams w/ low discipline
+            # drift toward complacency, cold teams w/ high discipline mount a
+            # professional resolve. Runs alongside fatigue on the weekly hook
+            # so the effect compounds gradually across the season.
+            self._applyMidseasonFormShift(self.currentSeason.currentWeek)
+            # Attitude drifts with playing experience: winning trends a
+            # roster toward leadership, losing toward toxicity. Feeds back
+            # into the form-shift composites so a season-long arc shapes
+            # how teams respond to streaks and standings.
+            self._driftAttitudes(self.currentSeason.currentWeek)
+            # Locker-room contagion: high-attitude (leader) teammates lift
+            # confidence/determination across the roster; low-attitude (toxic)
+            # teammates drag everyone down. The mechanism that makes attitude
+            # itself a load-bearing attribute (it has no direct game-sim use,
+            # so without this it'd only matter via the form-shift composites).
+            self._propagateAttitudeContagion()
+            # Track how many consecutive weeks each team has held their
+            # current form state — feeds the regression-to-mean weakening
+            # in _applyFormState.
+            self._updateTeamFormHistory()
+
+            # Retirement announcements fire when the Front Office opens
+            # (GM_ACTIVE_WEEK) so users don't burn resign votes on players
+            # who are ultimately going to retire — and have time to plan
+            # FA-ballot replacements before the offseason kicks in.
+            from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
+            if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
+                self._evaluateRetirementCandidates()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -3397,6 +3431,11 @@ class SeasonManager:
         """
         logger.info("Processing offseason activities")
 
+        # Reset the per-phase completion tracker. Each non-idempotent step in
+        # this method calls _markOffseasonStepComplete; future phase-aware
+        # resume work will use the persisted set to skip already-done steps.
+        self._resetOffseasonCompletedSteps()
+
         # OFFSEASON_TEST runs the season silently and only broadcasts during
         # the offseason. Enable the broadcaster as the very first step so
         # phase-change events for post_bowl + frontoffice (set before / inside
@@ -3449,38 +3488,77 @@ class SeasonManager:
         # rookie draft kickoff target (noon ET in SCHEDULED).
         await self._setOffseasonFlow('frontoffice', self._computeRookieDraftTarget())
 
-        # STEP 1: Increment free agent years for existing free agents
-        logger.info("Step 1: Increment free agent years")
-        for player in self.playerManager.freeAgents:
-            if hasattr(player, 'freeAgentYears'):
-                player.freeAgentYears += 1
-            else:
-                player.freeAgentYears = 1
-
-        # STEP 2: Resolve GM votes (coach, re-sign, cut)
-        logger.info("Step 2: Resolve GM votes")
+        # All five front-office sub-steps are non-idempotent (FA-year increment,
+        # GM-vote resolution, coach increments, contract decrements, cut votes
+        # — each mutates persistent state). Gate behind a single completion
+        # marker so a future phase-aware resume can skip the whole batch.
         gmResults = []
-        await self._resolveGmFireCoachVotes(gmResults)
-        await self._resolveGmResignVotes(gmResults)
+        if not self._isOffseasonStepComplete('frontoffice_decisions'):
+            # STEP 1: Increment free agent years for existing free agents
+            logger.info("Step 1: Increment free agent years")
+            for player in self.playerManager.freeAgents:
+                if hasattr(player, 'freeAgentYears'):
+                    player.freeAgentYears += 1
+                else:
+                    player.freeAgentYears = 1
 
-        # STEP 2.5: Increment coach seasons and handle retirements
-        logger.info("Step 2.5: Coach season increments and retirements")
-        teamManager = self.serviceContainer.getService('team_manager')
-        if teamManager:
-            seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
-            teamManager.handleCoachRetirement(seasonNum)
-            # Save updated coach data (seasonsCoached increment + any new coaches)
-            for team in teamManager.teams:
-                if team.coach:
-                    teamManager._saveCoachToDatabase(team)
+            # STEP 2: Resolve GM votes (coach, re-sign, cut)
+            logger.info("Step 2: Resolve GM votes")
+            await self._resolveGmFireCoachVotes(gmResults)
+            await self._resolveGmResignVotes(gmResults)
 
-        # STEP 3: Process contract decrements and retirements for rostered players
-        logger.info("Step 3: Contract decrements and team retirements")
-        await self._processRosteredPlayerContracts()
+            # Safety net: any team without a coach after fire/hire resolution
+            # gets one auto-generated + persisted. Catches edge cases like a
+            # passed fire vote with no quorum-meeting hire vote where every
+            # candidate failed its roll. assignCoachesToTeams is a no-op for
+            # teams that already have one, so this is cheap to call here.
+            teamManager_safety = self.serviceContainer.getService('team_manager')
+            if teamManager_safety:
+                coachlessBefore = [t.name for t in teamManager_safety.teams if t.coach is None]
+                if coachlessBefore:
+                    logger.warning(
+                        f"Coach safety net engaging for {len(coachlessBefore)} "
+                        f"team(s) without a coach: {coachlessBefore}"
+                    )
+                    teamManager_safety.assignCoachesToTeams()
 
-        # STEP 3.5: Resolve Cut Player GM votes (releases players to FA pool)
-        logger.info("Step 3.5: Resolve GM cut player votes")
-        await self._resolveGmCutVotes(gmResults)
+            # STEP 2.5: Increment coach seasons and handle retirements
+            logger.info("Step 2.5: Coach season increments and retirements")
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
+                teamManager.handleCoachRetirement(seasonNum)
+                # Save updated coach data (seasonsCoached increment + any new coaches)
+                for team in teamManager.teams:
+                    if team.coach:
+                        teamManager._saveCoachToDatabase(team)
+
+            # STEP 3: Process contract decrements and retirements for rostered players
+            logger.info("Step 3: Contract decrements and team retirements")
+            await self._processRosteredPlayerContracts()
+
+            # STEP 3.5: Resolve Cut Player GM votes (releases players to FA pool)
+            logger.info("Step 3.5: Resolve GM cut player votes")
+            await self._resolveGmCutVotes(gmResults)
+
+            self._markOffseasonStepComplete('frontoffice_decisions')
+        else:
+            logger.info("Frontoffice decisions already completed (resumed) — skipping STEP 1-3.5")
+
+        # Final coach assertion before any draft phase fires. handleCoachRetirement
+        # (STEP 2.5 above) replaces retiring coaches, and the fire-vote safety net
+        # catches anyone whose hire vote fell through. This last sweep is paranoia
+        # for any remaining hole — every team must have a coach once we leave the
+        # frontoffice phase, since training, draft AI, and game sim all assume one.
+        teamManager_final = self.serviceContainer.getService('team_manager')
+        if teamManager_final:
+            stillCoachless = [t.name for t in teamManager_final.teams if t.coach is None]
+            if stillCoachless:
+                logger.error(
+                    f"Coach assertion failed entering rookie draft: {stillCoachless} "
+                    f"— forcing assignCoachesToTeams"
+                )
+                teamManager_final.assignCoachesToTeams()
 
         # Fire offseason_start so the frontend transitions into OffseasonPanel
         # before rookie events start streaming. Broadcaster was already
@@ -3810,68 +3888,77 @@ class SeasonManager:
         # market tier — training runs with that context.
         await self._setOffseasonFlow('training', None)
 
-        # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
-        # Prospects train through their drafting team's coach/funding too, so coaches
-        # with strong playerDevelopment and MEGA-market teams grow pipelines faster.
-        logger.info("Step 7: Player offseason training")
-        from constants import FUNDING_DEV_BONUS
-        teamDevRating: dict = {}       # player.id → coach dev rating
-        teamFundingBonus: dict = {}    # player.id → funding dev bonus
-        teamManager = self.serviceContainer.getService('team_manager')
-        for team in teamManager.teams:
-            coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
-            fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
-            # Rostered players train with this team's coach/funding
-            for rosterPlayer in team.rosterDict.values():
-                if rosterPlayer is not None and hasattr(rosterPlayer, 'id'):
-                    teamDevRating[rosterPlayer.id] = coachDevRating
-                    teamFundingBonus[rosterPlayer.id] = fundingBonus
-            # Prospects get the same treatment — they're part of this team's pipeline
-            for prospect in getattr(team, 'prospects', []):
-                if hasattr(prospect, 'id'):
-                    teamDevRating[prospect.id] = coachDevRating
-                    teamFundingBonus[prospect.id] = fundingBonus
-        for player in self.playerManager.activePlayers:
-            if hasattr(player, 'offseasonTraining'):
-                devRating = teamDevRating.get(getattr(player, 'id', None), 50)
-                fundingBonus = teamFundingBonus.get(getattr(player, 'id', None), 0)
-                player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
+        # Training + post-training finalize (steps 7–12) are all non-idempotent
+        # — they bump skills, retire/induct players, reset season counters.
+        # Single completion gate so a future phase-aware resume skips them on
+        # restart instead of double-training and double-inducting.
+        if not self._isOffseasonStepComplete('training_and_finalize'):
+            # STEP 7: Player offseason training (after FA draft so new signings train with their coach)
+            # Prospects train through their drafting team's coach/funding too, so coaches
+            # with strong playerDevelopment and MEGA-market teams grow pipelines faster.
+            logger.info("Step 7: Player offseason training")
+            from constants import FUNDING_DEV_BONUS
+            teamDevRating: dict = {}       # player.id → coach dev rating
+            teamFundingBonus: dict = {}    # player.id → funding dev bonus
+            teamManager = self.serviceContainer.getService('team_manager')
+            for team in teamManager.teams:
+                coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
+                fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
+                # Rostered players train with this team's coach/funding
+                for rosterPlayer in team.rosterDict.values():
+                    if rosterPlayer is not None and hasattr(rosterPlayer, 'id'):
+                        teamDevRating[rosterPlayer.id] = coachDevRating
+                        teamFundingBonus[rosterPlayer.id] = fundingBonus
+                # Prospects get the same treatment — they're part of this team's pipeline
+                for prospect in getattr(team, 'prospects', []):
+                    if hasattr(prospect, 'id'):
+                        teamDevRating[prospect.id] = coachDevRating
+                        teamFundingBonus[prospect.id] = fundingBonus
+            for player in self.playerManager.activePlayers:
+                if hasattr(player, 'offseasonTraining'):
+                    devRating = teamDevRating.get(getattr(player, 'id', None), 50)
+                    fundingBonus = teamFundingBonus.get(getattr(player, 'id', None), 0)
+                    player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
 
-        # STEP 7.5: Advance prospect development window — auto-release washouts
-        logger.info("Step 7.5: Prospect development window advancement")
-        self.playerManager._advanceProspectWindow()
+            # STEP 7.5: Advance prospect development window — auto-release washouts
+            logger.info("Step 7.5: Prospect development window advancement")
+            self.playerManager._advanceProspectWindow()
 
-        # STEP 8: Handle retired players on fantasy rosters
-        # Must run before HoF which clears newlyRetiredPlayers
-        retiredPlayerIds = {
-            p.id for p in self.playerManager.newlyRetiredPlayers
-            if hasattr(p, 'id')
-        }
-        retiredPlayerIds.update(
-            p.id for p in self.playerManager.retiredPlayers
-            if hasattr(p, 'id')
-        )
-        if retiredPlayerIds:
-            nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
-            logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
-            self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
+            # STEP 8: Handle retired players on fantasy rosters
+            # Must run before HoF which clears newlyRetiredPlayers
+            retiredPlayerIds = {
+                p.id for p in self.playerManager.newlyRetiredPlayers
+                if hasattr(p, 'id')
+            }
+            retiredPlayerIds.update(
+                p.id for p in self.playerManager.retiredPlayers
+                if hasattr(p, 'id')
+            )
+            if retiredPlayerIds:
+                nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
+                logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
+                self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
 
-        # STEP 9: Reset season performance ratings
-        logger.info("Step 9: Reset season performance ratings")
-        for player in self.playerManager.activePlayers:
-            if hasattr(player, 'seasonPerformanceRating'):
-                player.seasonPerformanceRating = 0
+            # STEP 9: Reset season performance ratings
+            logger.info("Step 9: Reset season performance ratings")
+            for player in self.playerManager.activePlayers:
+                if hasattr(player, 'seasonPerformanceRating'):
+                    player.seasonPerformanceRating = 0
 
-        # STEP 10: Update team ratings and defenses after roster changes
-        logger.info("Step 10: Update team ratings")
-        await self._updateTeamRatings()
+            # STEP 10: Update team ratings and defenses after roster changes
+            logger.info("Step 10: Update team ratings")
+            await self._updateTeamRatings()
 
-        # STEP 11: Induct Hall of Fame players
-        logger.info("Step 11: Hall of Fame inductions")
-        self.playerManager.inductHallOfFame()
+            # STEP 11: Induct Hall of Fame players
+            logger.info("Step 11: Hall of Fame inductions")
+            self.playerManager.inductHallOfFame()
 
-        # STEP 12: Save unused names
-        self.playerManager.saveUnusedNames()
+            # STEP 12: Save unused names
+            self.playerManager.saveUnusedNames()
+
+            self._markOffseasonStepComplete('training_and_finalize')
+        else:
+            logger.info("Training + finalize already completed (resumed) — skipping STEP 7-12")
 
         # ── Offseason flow complete ──────────────────────────
         # Clear phase + target so the UI falls back to the plain "Offseason"
@@ -4447,29 +4534,13 @@ class SeasonManager:
 
                 # Decrement contract term
                 player.termRemaining -= 1
-                
-                # Check for retirement
-                shouldRetire = False
-                
-                if player.seasonsPlayed > player.attributes.longevity:
-                    # Player is past their longevity
-                    if player.termRemaining <= 0:
-                        # Contract expired - higher retirement chance
-                        if player.seasonsPlayed > 15:
-                            shouldRetire = randint(1, 100) > 10  # 90% retire
-                        elif player.seasonsPlayed > 10:
-                            shouldRetire = randint(1, 100) > 35  # 65% retire
-                        elif player.seasonsPlayed >= 7:
-                            shouldRetire = randint(1, 100) > 95  # 5% retire
-                    else:
-                        # Still under contract - lower retirement chance
-                        if player.seasonsPlayed > 15:
-                            shouldRetire = randint(1, 100) > 30  # 70% retire
-                        elif player.seasonsPlayed > 10:
-                            shouldRetire = randint(1, 100) > 75  # 25% retire
-                        elif player.seasonsPlayed >= 7:
-                            shouldRetire = randint(1, 100) > 90  # 10% retire
-                
+
+                # Retirement is contract-end-only and pre-decided during the
+                # regular season (see _evaluateRetirementCandidates). The flag
+                # is only set on players whose contract expires this offseason,
+                # so users see retirements coming and can vote on replacements.
+                shouldRetire = bool(getattr(player, 'willRetire', False))
+
                 if shouldRetire:
                     # Player retires (overrides re-sign)
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
@@ -4537,6 +4608,57 @@ class SeasonManager:
 
         if fixes or faRemovals:
             logger.info(f"Roster integrity: fixed {fixes} team refs, removed {faRemovals} rostered players from FA list")
+
+    def _evaluateRetirementCandidates(self) -> list:
+        """Decide which players will retire after this season.
+
+        Runs late in the regular season so users see retirements coming and
+        can plan replacements via FA ballots. Only flags players whose
+        contracts expire this offseason (termRemaining == 1) — no mid-contract
+        retirements. Probability bands match the prior expired-contract logic.
+        Returns the list of players newly flagged as retiring.
+        """
+        from random import randint
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return []
+
+        flagged = []
+        for team in teamManager.teams:
+            for player in team.rosterDict.values():
+                if player is None:
+                    continue
+                if getattr(player, 'willRetire', False):
+                    continue
+                if player.termRemaining != 1:
+                    continue
+                if player.seasonsPlayed <= player.attributes.longevity:
+                    continue
+
+                shouldRetire = False
+                if player.seasonsPlayed > 15:
+                    shouldRetire = randint(1, 100) > 10  # 90%
+                elif player.seasonsPlayed > 10:
+                    shouldRetire = randint(1, 100) > 35  # 65%
+                elif player.seasonsPlayed >= 7:
+                    shouldRetire = randint(1, 100) > 95  # 5%
+
+                if shouldRetire:
+                    player.willRetire = True
+                    flagged.append((player, team))
+
+        if flagged:
+            leagueHighlights = []
+            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+                leagueHighlights = self.currentSeason.leagueHighlights
+            for player, team in flagged:
+                leagueHighlights.insert(0, {
+                    'event': {'text': f'{player.name} ({team.name}) has announced he will retire at the end of the season'}
+                })
+                logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
+
+        return flagged
 
     def _executePlayerRetirement(self, player, team, position, leagueHighlights):
         """Execute the retirement of a player from a team roster"""
@@ -4808,9 +4930,17 @@ class SeasonManager:
         Using this helper everywhere keeps WS state and REST state in sync —
         without it, transitions like rookie_draft → pre_fa stay invisible
         until the user manually refreshes the page.
+
+        Also persists phase + target to simulation_state and snapshots the DB
+        on each phase transition so a mid-offseason restart can resume rather
+        than skip-and-advance.
         """
+        previousPhase = self._offseasonFlowPhase
         self._offseasonFlowPhase = phase
         self._offseasonFlowTarget = target
+        self._persistOffseasonFlow()
+        if phase and phase != previousPhase:
+            self._snapshotDbForPhase(phase)
         if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
             try:
                 await broadcaster.broadcast_season_event({
@@ -4820,6 +4950,104 @@ class SeasonManager:
                 })
             except Exception as e:
                 logger.warning(f"Could not broadcast offseason_phase_change: {e}")
+
+    def _persistOffseasonFlow(self) -> None:
+        """Write current _offseasonFlowPhase / _offseasonFlowTarget to
+        simulation_state. Called from _setOffseasonFlow and from the step
+        completion helper so a restart sees the most recent in-memory state.
+        """
+        try:
+            from database.connection import get_session as _gs
+            from database.models import SimulationState
+            sess = _gs()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                if not row:
+                    return
+                row.offseason_phase = self._offseasonFlowPhase
+                row.offseason_phase_target = self._offseasonFlowTarget
+                row.offseason_completed_steps = self._encodeCompletedSteps()
+                sess.commit()
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.debug(f"Could not persist offseason flow state: {e}")
+
+    def _encodeCompletedSteps(self) -> Optional[str]:
+        steps = getattr(self, '_offseasonCompletedSteps', None)
+        if not steps:
+            return None
+        import json
+        return json.dumps(sorted(steps))
+
+    def _isOffseasonStepComplete(self, step: str) -> bool:
+        return step in getattr(self, '_offseasonCompletedSteps', set())
+
+    def _markOffseasonStepComplete(self, step: str) -> None:
+        """Record that a non-idempotent offseason step has finished. Lets
+        phase resume skip work that already mutated DB state (e.g. front-
+        office contract decrements, training stat development).
+        """
+        if not hasattr(self, '_offseasonCompletedSteps') or self._offseasonCompletedSteps is None:
+            self._offseasonCompletedSteps = set()
+        self._offseasonCompletedSteps.add(step)
+        self._persistOffseasonFlow()
+
+    def _resetOffseasonCompletedSteps(self) -> None:
+        self._offseasonCompletedSteps = set()
+        self._persistOffseasonFlow()
+
+    def _snapshotDbForPhase(self, phase: str) -> None:
+        """Copy floosball.db to /data/offseason_${season}_${phase}.db using
+        SQLite's online backup API so a corrupted resume can be rolled back
+        manually. Skipped on non-prod paths (no /data) and silently noops
+        on any error — snapshots are belt-and-suspenders, not load-bearing.
+
+        Old snapshots from previous seasons are pruned before writing the
+        new one. Each season produces 6 checkpoints at ~90MB each, so
+        accumulating them across seasons would burn ~500MB/year of disk.
+        """
+        try:
+            import os
+            import glob
+            import sqlite3
+            dbPath = os.path.join('data', 'floosball.db')
+            if os.path.exists('/data') and os.path.isdir('/data'):
+                dbPath = '/data/floosball.db'
+            if not os.path.exists(dbPath):
+                return
+            seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+            outDir = os.path.dirname(dbPath)
+
+            # Prune snapshots from prior seasons — only the current season's
+            # checkpoints are useful for resume / rollback.
+            for old in glob.glob(os.path.join(outDir, 'offseason_s*_*.db')):
+                fname = os.path.basename(old)
+                # parse season number out of 'offseason_s{N}_{phase}.db'
+                try:
+                    snap_season = int(fname.split('_')[1].lstrip('s'))
+                except (ValueError, IndexError):
+                    continue
+                if snap_season < seasonNum:
+                    try:
+                        os.remove(old)
+                        logger.info(f"  Pruned stale snapshot: {fname}")
+                    except OSError:
+                        pass
+
+            outPath = os.path.join(outDir, f"offseason_s{seasonNum}_{phase}.db")
+            src = sqlite3.connect(dbPath)
+            try:
+                dst = sqlite3.connect(outPath)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+            logger.info(f"  Offseason checkpoint snapshot: {outPath}")
+        except Exception as e:
+            logger.debug(f"Could not snapshot DB for phase {phase}: {e}")
 
     def _computeRookieDraftTarget(self) -> Optional[datetime.datetime]:
         """Compute the wall-clock target for when the rookie draft will begin.
@@ -6424,6 +6652,219 @@ class SeasonManager:
                 weeklyGain = BASE_FATIGUE_PER_WEEK * (FATIGUE_RESILIENCE_CEILING - FATIGUE_RESILIENCE_SCALE * resilienceFactor)
                 adjustedGain = weeklyGain * (1.0 - fundingReduction)
                 player.attributes.fatigue = min(1.0, (player.attributes.fatigue or 0.0) + adjustedGain)
+
+    def _applyMidseasonFormShift(self, week: int) -> None:
+        """
+        Per-week, mental-attribute-driven shift to player confidence/
+        determination so the team's collective mental makeup shapes whether
+        they play to, above, or below their potential.
+
+        The check is per-team (winPct gates the direction) but the effect is
+        per-player (each starter's adjustment is scaled by their own mental
+        composite). Two distinct composites drive the two directions:
+
+          Hot team (winPct >= .6) — _complacencyVulnerability runs.
+              Discipline + focus + attitude composite. Low values drift
+              confidence/determination DOWN; high values hold steady. A
+              hot team with a few low-discipline guys still slips on those
+              specific players while their disciplined teammates anchor.
+
+          Cold team (winPct <= .4) — _adversityResolve runs. Resilience +
+              discipline + attitude composite. High values drift
+              confidence/determination UP; low values stay flat (resignation).
+              A cold team with high-resilience starters can mount a real
+              comeback even with some checked-out teammates.
+
+        These layer on top of the per-game streak modifiers in
+        Player._updatePostGameModifiers. Streaks drive game-to-game
+        volatility; this drives season-arc tilt.
+        """
+        # Need a few weeks of standings before form is meaningful
+        if week < 4:
+            return
+
+        from random import randint as _formRand
+
+        for team in self.leagueManager.teams:
+            winPct = team.seasonTeamStats.get('winPerc', 0.5)
+            starters = [p for p in team.rosterDict.values() if p is not None]
+            if len(starters) < 4:
+                continue
+
+            # Hot team complacency check
+            if winPct >= 0.6:
+                # Surplus over .500 scales the pressure: .6 → 0.2; .8 → 0.6; 1.0 → 1.0
+                overperformFactor = min(1.0, (winPct - 0.5) * 2)
+                for p in starters:
+                    vulnerability = p.attributes.complacencyVulnerability()
+                    if vulnerability <= 0:
+                        continue
+                    # selfBelief gates the confidence component only —
+                    # determination drift is a drive-to-win axis, not a
+                    # belief axis, so it isn't scaled by stability.
+                    sb = getattr(p.attributes, 'selfBelief', 80) or 80
+                    confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
+                    drift = -(_formRand(5, 18) / 100) * vulnerability * overperformFactor
+                    p.attributes.confidenceModifier = round(
+                        max(-5.0, p.attributes.confidenceModifier + drift * confStability), 3)
+                    p.attributes.determinationModifier = round(
+                        max(-5.0, p.attributes.determinationModifier + drift * 0.5), 3)
+
+            # Cold team resolve check
+            elif winPct <= 0.4:
+                # Deficit below .500 scales the resolve: .4 → 0.2; .2 → 0.6; .0 → 1.0
+                underperformFactor = min(1.0, (0.5 - winPct) * 2)
+                for p in starters:
+                    resolve = p.attributes.adversityResolve()
+                    if resolve <= 0:
+                        continue
+                    sb = getattr(p.attributes, 'selfBelief', 80) or 80
+                    confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
+                    boost = (_formRand(5, 18) / 100) * resolve * underperformFactor
+                    p.attributes.confidenceModifier = round(
+                        min(5.0, p.attributes.confidenceModifier + boost * 0.5 * confStability), 3)
+                    p.attributes.determinationModifier = round(
+                        min(5.0, p.attributes.determinationModifier + boost), 3)
+
+    def _updateTeamFormHistory(self) -> None:
+        """Track how many consecutive weeks each team has been in their
+        current form state. _applyFormState reads this at kickoff to apply
+        a regression-to-mean weakening for teams stuck in the same state
+        for several weeks — a SPIRALING team eventually catches a break, a
+        HOT_STREAK team eventually has an off game, etc.
+
+        Stored as ephemeral attributes on the team object since form state
+        is recomputed dynamically and the streak count is meaningful only
+        within a season anyway.
+        """
+        from api_response_builders import TeamResponseBuilder
+        for team in self.leagueManager.teams:
+            currentState = TeamResponseBuilder.computeFormState(team)
+            lastState = getattr(team, '_lastFormState', None)
+            if currentState == lastState:
+                team._formStateWeeksHeld = getattr(team, '_formStateWeeksHeld', 0) + 1
+            else:
+                team._lastFormState = currentState
+                team._formStateWeeksHeld = 1
+
+    def _propagateAttitudeContagion(self) -> None:
+        """
+        Locker-room effect: each starter's confidence/determination is nudged
+        by the team's average attitude. High-attitude teammates lift the
+        room; low-attitude teammates drag it down. Runs every week.
+
+        This is what makes attitude a load-bearing attribute — without this,
+        attitude only affects play indirectly (via the season-form composites).
+        Now: a toxic veteran genuinely poisons teammates' confidence; a strong
+        leader genuinely lifts them.
+
+        Per-player drift is bounded ±0.10 per week so the effect compounds
+        slowly across the season but doesn't overwhelm the streak-driven and
+        form-shift adjustments. Players closest to the team's attitude average
+        are pulled less (already aligned with the room).
+        """
+        for team in self.leagueManager.teams:
+            starters = [p for p in team.rosterDict.values() if p is not None]
+            if len(starters) < 4:
+                continue
+            avgAttitude = sum(getattr(p.attributes, 'attitude', 80) or 80
+                              for p in starters) / len(starters)
+
+            # Coach acts as an anchor on the locker room. A leader-coach pulls
+            # the room signal upward (reigning in toxic players); a toxic-coach
+            # pulls it downward (or fails to dampen toxicity). Coach is roughly
+            # 1/3 the weight of the player average — their job is to shape the
+            # room, not to override the personalities in it.
+            coach = getattr(team, 'coach', None)
+            coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
+            effectiveAvg = (avgAttitude * 3 + coachAttitude) / 4
+
+            # Neutral at 80; ±20 from neutral = ±0.20 raw swing
+            roomSwing = (effectiveAvg - 80) / 100  # -0.20 .. +0.20
+
+            # Toxic-coach amplifier: a low-attitude coach widens the negative
+            # signal (toxicity festers under poor leadership). A leader-coach
+            # blunts negative signals (active intervention reigns in toxic
+            # players). No effect when the room signal is already positive.
+            if roomSwing < 0:
+                # coachInfluence: 70 → 1.25x (amplify), 80 → 1.0x, 95 → 0.65x (dampen)
+                coachInfluence = max(0.5, min(1.4, 1.0 - (coachAttitude - 80) / 40))
+                roomSwing *= coachInfluence
+
+            if abs(roomSwing) < 0.04:
+                continue  # Near-neutral team: no contagion signal worth applying
+            for p in starters:
+                # Selfish: a player's own attitude offsets how much they're
+                # influenced. A player aligned with the room shifts less; a
+                # player out of step (high-attitude on a toxic team, or vice
+                # versa) gets pulled more strongly toward the average.
+                selfPull = (effectiveAvg - (getattr(p.attributes, 'attitude', 80) or 80)) / 100
+                # Final drift: room signal scaled by how far this player is
+                # from the room (selfPull). Capped at ±0.10/week.
+                drift = max(-0.10, min(0.10, roomSwing * 0.5 + selfPull * 0.3))
+                p.attributes.confidenceModifier = round(
+                    max(-5.0, min(5.0, p.attributes.confidenceModifier + drift)), 3)
+                p.attributes.determinationModifier = round(
+                    max(-5.0, min(5.0, p.attributes.determinationModifier + drift)), 3)
+
+    def _driftAttitudes(self, week: int) -> None:
+        """
+        Per-week attitude drift driven by playing experiences. Players on
+        winning teams trend upward (toxic → supportive); players on losing
+        teams trend downward (supportive → toxic). High-resilience players
+        resist the negative drift; players already at the extreme ends move
+        more slowly (entrenched leaders / entrenched toxicity).
+
+        Magnitude is small (±1-2 per week max) so a player's underlying
+        attitude only changes meaningfully over multiple weeks. This feeds
+        back into both composite scores: rising attitude raises a player's
+        adversity resolve and lowers their complacency vulnerability over
+        the course of a season — a young player on a winning team grows
+        into a leader; a journeyman stuck on a losing team can sour.
+        """
+        if week < 4:
+            return  # Same warm-up gate as the form shift
+        from random import randint as _attRand
+
+        for team in self.leagueManager.teams:
+            winPct = team.seasonTeamStats.get('winPerc', 0.5)
+            starters = [p for p in team.rosterDict.values() if p is not None]
+            if len(starters) < 4:
+                continue
+
+            # Magnitude scales with how far from .500 (0..2 per week max).
+            magnitude = abs(winPct - 0.5) * 4
+            if magnitude < 0.5:
+                continue  # Mid-tier teams: no drift signal
+
+            # Coach attitude scales drift. A leader-coach (90+) makes upward
+            # drift faster (winning teams build leaders sooner) and softens
+            # downward drift (good coach holds the room together when losing).
+            # A toxic-coach (≤70) does the opposite. ±~30% effect at extremes.
+            coach = getattr(team, 'coach', None)
+            coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
+            coachLift = (coachAttitude - 80) / 60  # -1/3 .. +1/3 across 60-100
+
+            for p in starters:
+                current = getattr(p.attributes, 'attitude', 80) or 80
+                if winPct > 0.5:
+                    # Toward leadership. Players already near the ceiling
+                    # gain less (diminishing returns above 90). Coach lift
+                    # adds up to +30% to upward drift magnitude.
+                    ceilingResist = max(0.0, (current - 80) / 20)  # 0..1
+                    coachScale = 1.0 + max(-0.3, coachLift)  # leader: faster, toxic: same
+                    cap = max(0, round(magnitude * coachScale * (1.0 - 0.6 * ceilingResist)))
+                    if cap > 0:
+                        p.attributes.attitude = min(100, current + _attRand(0, cap))
+                else:
+                    # Toward toxicity. Resilience cushions the slide. A
+                    # leader-coach further cushions; a toxic-coach amplifies.
+                    resilience = getattr(p.attributes, 'resilience', 80) or 80
+                    resilienceResist = max(0.0, (resilience - 70) / 30)  # 0..1
+                    coachScale = max(0.5, 1.0 - coachLift)  # leader: cushion, toxic: amp
+                    cap = max(0, round(magnitude * coachScale * (1.0 - 0.5 * resilienceResist)))
+                    if cap > 0:
+                        p.attributes.attitude = max(0, current - _attRand(0, cap))
 
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.

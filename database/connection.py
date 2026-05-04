@@ -304,6 +304,7 @@ def _runPendingMigrations():
             ('prospect_seasons', 'INTEGER DEFAULT 0'),
             ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
             ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
+            ('will_retire', 'BOOLEAN DEFAULT 0'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {colDef}"))
@@ -337,6 +338,21 @@ def _runPendingMigrations():
         # Old columns (archetype, demeanor) stay nullable in the schema for back-compat
         # on existing DBs but are unused; the new fields are personality + mood.
         for col, colDef in [('personality', 'VARCHAR(30)'), ('mood', 'INTEGER DEFAULT 3')]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Flavor fields — pure character flavor on the player detail page.
+        # Backfilled at boot for legacy NULL rows, same pattern as personality.
+        for col, colDef in [
+            ('hometown', 'VARCHAR(60)'),
+            ('favorite_category', 'VARCHAR(30)'),
+            ('favorite_item', 'VARCHAR(120)'),
+            ('motto', 'VARCHAR(160)'),
+        ]:
             try:
                 conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} {colDef}"))
                 conn.commit()
@@ -408,6 +424,14 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Coach attitude (locker-room presence: toxic ↔ leader spectrum)
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN attitude INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added coaches.attitude")
+        except Exception:
+            conn.rollback()
+
         # app_settings table — admin-editable runtime config (feedback URL,
         # survey URL, button visibility, etc). Created via SQLAlchemy below;
         # this seed step inserts default rows when missing.
@@ -458,6 +482,34 @@ def _runPendingMigrations():
             conn.execute(text("ALTER TABLE simulation_state ADD COLUMN in_offseason BOOLEAN DEFAULT 0"))
             conn.commit()
             logger.info("  Migration: added simulation_state.in_offseason")
+        except Exception:
+            conn.rollback()
+
+        # Phase-aware offseason resume (feature/offseason-checkpoints).
+        # offseason_phase mirrors seasonManager._offseasonFlowPhase, target is
+        # the next-phase deadline for waiting phases, completed_steps is a
+        # JSON array of finished non-idempotent step keys. Together they let
+        # a mid-offseason restart pick up where it left off instead of the
+        # blunt skip-and-advance.
+        for col, ddl in (
+            ("offseason_phase",           "VARCHAR(32)"),
+            ("offseason_phase_target",    "DATETIME"),
+            ("offseason_completed_steps", "TEXT"),
+        ):
+            try:
+                conn.execute(text(f"ALTER TABLE simulation_state ADD COLUMN {col} {ddl}"))
+                conn.commit()
+                logger.info(f"  Migration: added simulation_state.{col}")
+            except Exception:
+                conn.rollback()
+
+        # selfBelief on player_attributes — confidence stability axis.
+        # Defaults to 80 for existing rows so legacy players sit at the
+        # neutral point until the next offseason rolls them through training.
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN self_belief INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.self_belief")
         except Exception:
             conn.rollback()
 

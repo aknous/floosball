@@ -25,7 +25,7 @@ _optionalBearerScheme = HTTPBearer(auto_error=False)
 
 _USERNAME_FIRSTS = [
     # Original
-    "Bootleg", "Moist", "Cornbread", "Squids", "Gootsy", "Frunk", "Chud",
+    "Bootleg", "Moist", "Cornbread", "Squids", "Gootsy",
     "Schmorby", "Quasi", "Stove", "Flakey", "Ovaltine", "Pickled", "Socks",
     "Reverend", "Professor", "Laserdisc", "Powershell", "Discount", "Turbo",
     "Wombat", "Pretzel", "Biscuit", "Waffle", "Pudding", "Gravy", "Noodle",
@@ -60,7 +60,23 @@ _USERNAME_FIRSTS = [
     "Reckless", "Vagrant", "Honorary", "Interim", "Auxiliary",
     "Forfeited", "Embargoed", "Suspended", "Expired", "Sanctioned",
     "Defective", "Unverified", "Classified", "Redacted", "Restricted",
-    "Surplus", "Armored", "Confiscated", "Repossessed", "Unclaimed",
+    "Armored", "Confiscated", "Repossessed", "Unclaimed",
+    # Expanded IV — config-name style: object/material as descriptor,
+    # mythological singletons, archaic titles, place-as-name, edible adj.
+    "Plywood", "Linoleum", "Stucco", "Vellum", "Velour", "Pleather",
+    "Chamois", "Parchment", "Lacquer", "Enamel", "Brocade", "Toadstool",
+    "Frosted", "Buttered", "Glazed", "Salted", "Steamed", "Pungent",
+    "Crusty", "Velvety", "Greasy", "Crinkly", "Smudgy", "Tangled",
+    "Lopsided", "Wonky", "Threadbare", "Mottled", "Speckled", "Blotchy",
+    "Spongy", "Rubbery", "Squidgy", "Mushy", "Brackish", "Dingy",
+    "Sergeant", "Captain", "Magistrate", "Cardinal", "Duchess", "Baron",
+    "Viscount", "Bishop", "Constable", "Pharaoh", "Czar", "Brother",
+    "Sister", "Grandmaster", "Grand", "Admiral", "Idaho", "Tulsa",
+    "Hoboken", "Nantucket", "Sacramento", "Bavaria", "Saskatchewan",
+    "Toledo", "Topeka", "Fresno", "Fondue", "Schnitzel", "Frittata",
+    "Pierogi", "Goulash", "Tamale", "Empanada", "Knish", "Latke",
+    "Rigatoni", "Anubis", "Beowulf", "Crassus", "Jezebel", "Spacepope",
+    "Hercules", "Atlas", "Hermes", "Persephone", "Werewolf", "Penguin",
 ]
 
 _USERNAME_LASTS = [
@@ -106,6 +122,24 @@ _USERNAME_LASTS = [
     "Jackhammer", "Crowsnest", "Tumblebum", "Hornblower", "Frogmouth",
     "Jetsam", "Nightcap", "Gutterball", "Pratfall", "Sideburns",
     "Potluck", "Corkboard", "Thumbtack", "Paperweight", "Sockpuppet",
+    # Expanded IV — config-name style: Wodehousian surnames, Italianate
+    # romance, mock-bureaucratic, weather/edible mashups, kerfuffle-class.
+    "Throckmorton", "Pemberton", "Snickerton", "Pottersworth", "Wickerby",
+    "Hardcastle", "Snufflesworth", "Cresswell", "Pondworth", "Snufflebee",
+    "Wadsworth", "Mulligrub", "Pumblechook", "Hardacre", "Hocknell",
+    "Throgshire", "Twaddle", "Lordling", "Snortlebottom", "Mortimer",
+    "Mortadella", "Provolone", "Bruschetta", "Caponata", "Limoncello",
+    "Bolognese", "Carbonara", "Risotto", "Gnocchi", "Ravioli",
+    "Calzone", "Cannoli", "Tortellini", "Espresso", "Mascarpone",
+    "Doorbell", "Mailbox", "Streetlamp", "Manhole", "Saltshaker",
+    "Pepperpot", "Coatrack", "Doormat", "Floorboard", "Doorhinge",
+    "Thunderhead", "Snowdrift", "Slushpile", "Cloudburst", "Heatwave",
+    "Bratwurst", "Sauerkraut", "Cheesecurd", "Marshmallow", "Custardpie",
+    "Conundrum", "Quandary", "Skirmish", "Pandemonium", "Calamity",
+    "Kerplunk", "Ballyhoo", "Befuddlement", "Bafflement", "Dispute",
+    "Stipulation", "Memorandum", "Affidavit", "Loophole", "Indictment",
+    "Suplex", "Powerbomb", "Bodyslam", "Headlock", "Pinkerton",
+    "Spectacles", "Hollyhock", "Pickleweed", "Bumblefiddle", "Periwinkle",
 ]
 
 

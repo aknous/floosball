@@ -137,6 +137,33 @@ FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMAL
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
 
+# ---- Form-state Per-game Rating Multiplier ----
+# Applied to in-game player attributes at kickoff based on the team's current
+# form state. Multiplier acts on physical + skill-related mental attrs, then
+# derived ratings (skillRating, xFactor, overallRating) are recalculated. The
+# form-state label users see now has actual mechanical bite — COMPLACENT teams
+# really do drop a few games they should win, RESOLUTE teams really do play
+# above their record, etc.
+#
+# Magnitudes:
+#   1.03 ≈ +3% on attrs ≈ +2-3 rating points (RESOLUTE Cinderella boost)
+#   0.96 ≈ -4% on attrs ≈ -3-4 rating points (COMPLACENT trap-game risk)
+#   0.95 ≈ -5% on attrs ≈ -4-5 rating points (SPIRALING broken / can't get out
+#         of own way)
+FORM_STATE_RATING_MULT = {
+    'HOT_STREAK':  1.00,   # Already winning — no extra boost
+    'GETTING_HOT': 1.00,   # Was 1.02 — selection effect already gives these
+                           # teams +14pp lift over expected, so no extra mult
+    'STEADY':      1.00,
+    'SHAKY':       0.985,  # Mild slip
+    'COOLING_OFF': 0.97,   # Active fade
+    'COMPLACENT':  0.93,   # Was 0.96 — old value moved results 0pp; bumped
+                           # so the trap-game effect actually bites elite teams
+    'SPIRALING':   0.95,   # Broken
+    'RESOLUTE':    1.03,   # Cinderella backbone
+    'UNKNOWN':     1.00,
+}
+
 # ---- Prospect Pipeline ----
 # Prospects are drafted rookies stashed on the team's pipeline (not roster-eligible).
 # They develop each offseason via offseasonTraining(), same as active players, and
