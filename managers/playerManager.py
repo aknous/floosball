@@ -3083,6 +3083,8 @@ class PlayerManager:
             if pick not in self.activePlayers:
                 self.activePlayers.append(pick)
             self.addToPositionList(pick)
+            # Assign jersey number now so promoted prospects don't show #0.
+            team.assignPlayerNumber(pick)
 
             pickRecord = {
                 "teamId": team.id, "teamName": team.name, "teamAbbr": teamAbbr,
@@ -3208,6 +3210,10 @@ class PlayerManager:
         best.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
         best.previousTeam = getattr(best, 'previousTeam', None)
         best.team = team  # Update runtime team ref so persistence saves team_id correctly
+        # Defensive: legacy prospects may have been created before number
+        # assignment was added — give them one now if missing.
+        if not getattr(best, 'currentNumber', 0):
+            team.assignPlayerNumber(best)
         team.rosterDict[slot] = best
         if best in team.prospects:
             team.prospects.remove(best)
@@ -3343,6 +3349,8 @@ class PlayerManager:
                 if player not in self.activePlayers:
                     self.activePlayers.append(player)
                 self.addToPositionList(player)
+                # Assign jersey number now so promoted prospects don't show #0.
+                team.assignPlayerNumber(player)
                 seeded += 1
 
         # Assign tiers now that ratings are settled

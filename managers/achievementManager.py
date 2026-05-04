@@ -313,8 +313,8 @@ def getUserAchievements(session: Session, userId: int, currentSeason: int = 0) -
     out = []
     for ach, ua in rows:
         progress = ua.progress if ua else 0
-        completedAt = ua.completed_at.isoformat() if ua and ua.completed_at else None
-        claimedAt = ua.claimed_at.isoformat() if ua and ua.claimed_at else None
+        completedAt = ua.completed_at.isoformat() + 'Z' if ua and ua.completed_at else None
+        claimedAt = ua.claimed_at.isoformat() + 'Z' if ua and ua.claimed_at else None
         # Secret achievements: hide name/description/reward until unlocked.
         # Caller can still see the count so they know secrets exist.
         isSecret = ach.category == "secret"
@@ -382,8 +382,8 @@ def getPendingRewards(session: Session, userId: int, currentSeason: int = 0,
             "kind": r.kind,
             "slug": r.slug,
             "source": r.source,
-            "availableAt": r.available_at.isoformat(),
-            "createdAt": r.created_at.isoformat(),
+            "availableAt": r.available_at.isoformat() + 'Z',
+            "createdAt": r.created_at.isoformat() + 'Z',
             "deferUntilSeason": r.defer_until_season,
             "canDefer": canDefer,
         })
