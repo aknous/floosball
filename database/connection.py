@@ -432,6 +432,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Starter pack + selection mechanic (feature/pack-revamp)
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN starter_pack_claimed_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added users.starter_pack_claimed_season")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE pack_types ADD COLUMN cards_kept INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added pack_types.cards_kept")
+        except Exception:
+            conn.rollback()
+
         # app_settings table — admin-editable runtime config (feedback URL,
         # survey URL, button visibility, etc). Created via SQLAlchemy below;
         # this seed step inserts default rows when missing.
@@ -1024,6 +1038,22 @@ def clear_db():
 
     # Recreate all tables (create_all is safe — skips existing preserved tables)
     Base.metadata.create_all(bind=engine)
+
+    # Clear per-season user flags — these are scoped to season number, and
+    # fresh start resets the counter to 1.  Without this reset, prior-run
+    # stamps (e.g. starter_pack_claimed_season=1) carry over and incorrectly
+    # match the new season-1, hiding once-per-season offers.
+    try:
+        with engine.connect() as conn:
+            for col in ('starter_pack_claimed_season', 'favorite_team_locked_season'):
+                try:
+                    conn.execute(text(f"UPDATE users SET {col} = NULL"))
+                except Exception:
+                    pass
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to reset per-season user flags on fresh start: {e}")
+
     logger.info(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
     # Run migrations for preserved tables (e.g. new columns on users)

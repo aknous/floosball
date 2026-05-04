@@ -3981,6 +3981,10 @@ class SeasonManager:
             from database.connection import get_session
             from database.models import User, UserCurrency
             from api.auth import _provisionStarterPack
+            # Pass currentSeason explicitly — at boot time this runs BEFORE
+            # api.main.floosball_app is wired, so _provisionStarterPack's
+            # fallback lookup of seasonManager wouldn't find anything.
+            currentSeason = self.currentSeason.seasonNumber if self.currentSeason else None
             session = get_session()
             usersWithoutCurrency = (
                 session.query(User)
@@ -3992,7 +3996,7 @@ class SeasonManager:
                 session.close()
                 return
             for user in usersWithoutCurrency:
-                _provisionStarterPack(session, user)
+                _provisionStarterPack(session, user, currentSeason=currentSeason)
             session.commit()
             session.close()
             logger.info(f"Re-provisioned starter packs for {len(usersWithoutCurrency)} existing user(s)")
