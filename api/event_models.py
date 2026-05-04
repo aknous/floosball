@@ -97,7 +97,7 @@ class GameEvent:
             'gameId': gameId,
             'homeTeam': homeTeam,
             'awayTeam': awayTeam,
-            'startTime': startTime.isoformat() if isinstance(startTime, datetime) else startTime,
+            'startTime': startTime.isoformat() + 'Z' if isinstance(startTime, datetime) else startTime,
             'message': f"{awayTeam.get('name', 'Away')} at {homeTeam.get('name', 'Home')}"
         }
     

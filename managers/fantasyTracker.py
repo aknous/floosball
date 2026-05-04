@@ -776,7 +776,7 @@ class FantasyTracker:
                     "weekCardBonus": round(weekCardBonus, 1),
                     "weekTotal": weekTotal,
                     "lockedAt": (
-                        roster.locked_at.isoformat()
+                        roster.locked_at.isoformat() + 'Z'
                         if roster.locked_at else None
                     ),
                     "players": rosterPlayers,

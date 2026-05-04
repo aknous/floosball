@@ -308,17 +308,31 @@ class TeamManager:
                     
                     team.rosterDict[roster_key] = player
                     team.playerCap += player.capHit
-                    team.playerNumbersList.append(player.currentNumber)
-                    
+                    # Only track non-zero numbers — zero is a sentinel for
+                    # "unassigned" and would otherwise pollute the dedupe set.
+                    if player.currentNumber:
+                        team.playerNumbersList.append(player.currentNumber)
+
                     # Update player's team reference to be the Team object
                     player.team = team
-                
+
+                # Backfill jersey numbers for any rostered player still at 0.
+                # Legacy promoted-prospect data shipped without a number; this
+                # one-shot pass assigns one on first boot after the fix.
+                backfilled = 0
+                for player in team.rosterDict.values():
+                    if player and not getattr(player, 'currentNumber', 0):
+                        team.assignPlayerNumber(player)
+                        backfilled += 1
+                if backfilled:
+                    self.logger.info(f"Backfilled {backfilled} jersey number(s) for {team.name}")
+
                 teams_with_rosters += 1
                 # Debug: print first team's roster keys
                 if teams_with_rosters == 1:
                     self.logger.info(f"DEBUG: First team roster keys: {list(team.rosterDict.keys())}")
                 self.logger.debug(f"Rebuilt roster for {team.name}: {len(team.rosterDict)} players")
-        
+
         self.logger.info(f"Rebuilt rosters for {teams_with_rosters}/{len(self.teams)} teams")
     
     def _createTeamsFromConfig(self, config: Dict[str, Any]) -> None:

@@ -1871,10 +1871,15 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
 
 @app.post("/api/admin/personality/reload")
 async def admin_reload_personality_templates(_auth: None = Depends(_checkAdminAuth)):
-    """Hot-reload vibe_reactions.yaml + quirk_reactions.yaml from disk.
+    """Hot-reload personality content from disk:
+      - vibe_reactions.yaml
+      - quirk_reactions.yaml
+      - player_flavor.yaml
+
     Use after uploading new template files (e.g. via `fly ssh sftp`) to apply
-    changes without restarting the app. Clears the shuffled-deck cache so
-    the next reaction draw uses the updated pools."""
+    changes without restarting the app. Clears the shuffled-deck cache so the
+    next reaction draw uses the updated pools.
+    """
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     floosball_app.personalityManager.reloadTemplates()
@@ -1883,6 +1888,8 @@ async def admin_reload_personality_templates(_auth: None = Depends(_checkAdminAu
         "ok": True,
         "personalities": len(eng.personalities),
         "quirks": len(eng.quirks),
+        "hometowns": len((eng.flavor or {}).get('hometowns', []) or []),
+        "favoriteCategories": len(((eng.flavor or {}).get('favorites') or {}).keys()),
     }
 
 
@@ -1986,7 +1993,7 @@ async def admin_get_beta_allowlist(_auth: None = Depends(_checkAdminAuth)):
             "emails": [
                 {
                     "email": e.email,
-                    "addedAt": e.added_at.isoformat() if e.added_at else None,
+                    "addedAt": e.added_at.isoformat() + 'Z' if e.added_at else None,
                 }
                 for e in entries
             ]
@@ -2077,7 +2084,7 @@ async def admin_get_beta_requests(_auth: None = Depends(_checkAdminAuth)):
                     "id": r.id,
                     "email": r.email,
                     "status": r.status,
-                    "requestedAt": r.requested_at.isoformat() if r.requested_at else None,
+                    "requestedAt": r.requested_at.isoformat() + 'Z' if r.requested_at else None,
                 }
                 for r in requests
             ]
@@ -2257,9 +2264,9 @@ def admin_list_users(q: Optional[str] = Query(default=None),
                 "favoriteTeam": f"{favTeam.city} {favTeam.name}" if favTeam else None,
                 "favoriteTeamId": u.favorite_team_id,
                 "onboarded": u.has_completed_onboarding,
-                "createdAt": u.created_at.isoformat() if u.created_at else None,
+                "createdAt": u.created_at.isoformat() + 'Z' if u.created_at else None,
                 "isActive": u.is_active,
-                "lastLoginAt": u.last_login_at.isoformat() if u.last_login_at else None,
+                "lastLoginAt": u.last_login_at.isoformat() + 'Z' if u.last_login_at else None,
                 "betaStatus": betaStatus,
                 "isAdmin": getattr(u, 'is_admin', False),
             })
@@ -4313,7 +4320,7 @@ def get_notifications(user: _User = Depends(_getCurrentUser)):
                     "message": n.message,
                     "data": _json.loads(n.data) if n.data else None,
                     "isRead": n.is_read,
-                    "createdAt": n.created_at.isoformat() if n.created_at else None,
+                    "createdAt": n.created_at.isoformat() + 'Z' if n.created_at else None,
                 }
                 for n in notifs
             ]
@@ -4508,7 +4515,7 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
                 "id": roster.id,
                 "season": roster.season,
                 "isLocked": roster.is_locked,
-                "lockedAt": roster.locked_at.isoformat() if roster.locked_at else None,
+                "lockedAt": roster.locked_at.isoformat() + 'Z' if roster.locked_at else None,
                 "totalPoints": totalEarned,
                 "cardBonusPoints": cardBonus,
                 "swapsAvailable": roster.swaps_available,
@@ -4719,7 +4726,7 @@ def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
         roster.is_locked = True
         roster.locked_at = datetime.utcnow()
         session.commit()
-        return build_success_response({"message": "Roster locked", "lockedAt": roster.locked_at.isoformat()})
+        return build_success_response({"message": "Roster locked", "lockedAt": roster.locked_at.isoformat() + 'Z'})
     except HTTPException:
         raise
     except Exception as e:
@@ -5392,7 +5399,7 @@ def getCurrencyHistory(
                     "description": tx.description,
                     "season": tx.season,
                     "week": tx.week,
-                    "createdAt": tx.created_at.isoformat() if tx.created_at else None,
+                    "createdAt": tx.created_at.isoformat() + 'Z' if tx.created_at else None,
                 }
                 for tx in transactions
             ]
@@ -7689,7 +7696,7 @@ def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
                     "voteType": v.vote_type,
                     "targetPlayerId": v.target_player_id,
                     "costPaid": v.cost_paid,
-                    "createdAt": v.created_at.isoformat() if v.created_at else None,
+                    "createdAt": v.created_at.isoformat() + 'Z' if v.created_at else None,
                 }
                 for v in votes
             ],
@@ -7778,7 +7785,7 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
                 "probability": r.success_probability,
                 "outcome": r.outcome,
                 "details": r.details,
-                "resolvedAt": r.resolved_at.isoformat() if r.resolved_at else None,
+                "resolvedAt": r.resolved_at.isoformat() + 'Z' if r.resolved_at else None,
             })
 
         return build_success_response({
@@ -8449,7 +8456,7 @@ def bot_get_unsubmitted(_auth: None = Depends(_checkBotAuth)):
                 weekEntry = schedule[weekIdx]
                 startTime = weekEntry.get('startTime') if isinstance(weekEntry, dict) else None
                 if startTime:
-                    nextGameStart = startTime.isoformat() if hasattr(startTime, 'isoformat') else str(startTime)
+                    nextGameStart = startTime.isoformat() + 'Z' if hasattr(startTime, 'isoformat') else str(startTime)
 
         return build_success_response({
             "rosterMissing": rosterMissing,
