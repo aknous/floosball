@@ -30,6 +30,7 @@ logger = get_logger("floosball.personalityReactionEngine")
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'templates')
 VIBE_FILE = 'vibe_reactions.yaml'
 QUIRK_FILE = 'quirk_reactions.yaml'
+FLAVOR_FILE = 'player_flavor.yaml'
 
 
 # Base vibes — assigned to most players, weighted distribution
@@ -99,6 +100,10 @@ class PersonalityReactionEngine:
     def __init__(self):
         self.personalities: Dict[str, Any] = {}
         self.quirks: Dict[str, Any] = {}
+        # Flavor data — hometowns list, favorites map, mottos by personality.
+        # Used by assignFlavor() to roll a player's character flavor at
+        # creation time. Loaded alongside personality YAML.
+        self.flavor: Dict[str, Any] = {}
         # Shuffled-deck cache: keyed by (deckKey, frozenPool) so each unique
         # pool composition gets its own draw order. Drawn lines pop off until
         # the deck empties, at which point it reshuffles. Prevents the
@@ -113,12 +118,24 @@ class PersonalityReactionEngine:
     def _load(self) -> None:
         vibePath = os.path.join(TEMPLATE_DIR, VIBE_FILE)
         quirkPath = os.path.join(TEMPLATE_DIR, QUIRK_FILE)
+        flavorPath = os.path.join(TEMPLATE_DIR, FLAVOR_FILE)
         with open(vibePath, 'r') as f:
             self.personalities = yaml.safe_load(f) or {}
         with open(quirkPath, 'r') as f:
             self.quirks = yaml.safe_load(f) or {}
+        # Flavor file is optional — log warning but don't fail if missing.
+        try:
+            with open(flavorPath, 'r') as f:
+                self.flavor = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            logger.warning(f"Flavor file not found at {flavorPath} — "
+                           f"player flavor will be empty")
+            self.flavor = {}
+        favoriteCats = list((self.flavor.get('favorites') or {}).keys())
         logger.info(f"Loaded {len(self.personalities)} personalities, "
-                    f"{len(self.quirks)} quirks")
+                    f"{len(self.quirks)} quirks, "
+                    f"{len(self.flavor.get('hometowns', []) or [])} hometowns, "
+                    f"{len(favoriteCats)} favorite categories")
 
     def reload(self) -> None:
         """Force-reload templates from disk (for hot editing)."""
@@ -200,6 +217,54 @@ class PersonalityReactionEngine:
         if not eligible:
             return None
         return random.choice(eligible)
+
+    def assignFlavor(self, personality: str) -> Dict[str, Optional[str]]:
+        """Roll a player's flavor data (hometown, favorite, motto) at creation
+        time. Returns a dict with keys hometown, favorite_category,
+        favorite_item, motto. Falls back to None for any missing pool.
+
+        Personality-specific overrides via `personality_favorites:` in the
+        YAML. If a personality has its own list for a category, that REPLACES
+        the base list for that category (so alien doesn't get 'diner
+        pancakes'). Personality-specific categories not in base are also
+        valid roll options for that personality.
+        """
+        out: Dict[str, Optional[str]] = {
+            'hometown': None,
+            'favorite_category': None,
+            'favorite_item': None,
+            'motto': None,
+        }
+        if not self.flavor:
+            return out
+
+        hometowns = self.flavor.get('hometowns') or []
+        if hometowns:
+            out['hometown'] = random.choice(hometowns)
+
+        baseFavorites = self.flavor.get('favorites') or {}
+        personalityFavs = (self.flavor.get('personality_favorites') or {}).get(personality, {})
+        # Categories available to this personality = union of base + their own
+        availableCats = set()
+        for cat, items in baseFavorites.items():
+            if items:
+                availableCats.add(cat)
+        for cat, items in personalityFavs.items():
+            if items:
+                availableCats.add(cat)
+        if availableCats:
+            cat = random.choice(sorted(availableCats))
+            # Personality-specific items REPLACE base for this category
+            items = personalityFavs.get(cat) or baseFavorites.get(cat) or []
+            if items:
+                out['favorite_category'] = cat
+                out['favorite_item'] = random.choice(items)
+
+        mottos = (self.flavor.get('mottos') or {}).get(personality) or []
+        if mottos:
+            out['motto'] = random.choice(mottos)
+
+        return out
 
     # ------------------------------------------------------------------
     # Reaction picking
@@ -295,6 +360,24 @@ class PersonalityReactionEngine:
     def hasSidelinePool(self, personality: str) -> bool:
         p = self.personalities.get(personality)
         return bool(p and p.get('sideline'))
+
+    def hasOffDayPool(self, personality: str) -> bool:
+        p = self.personalities.get(personality)
+        return bool(p and p.get('off_day'))
+
+    def pickOffDayLine(self, personality: str,
+                        ctx: Optional[Dict] = None) -> Optional[str]:
+        """Pick a between-games off-day line. These populate the highlights
+        feed when no games are live, surfacing personality outside the game
+        modal. Strictly uses the personality's `off_day:` pool."""
+        p = self.personalities.get(personality)
+        if not p:
+            return None
+        deckKey = f'off_day:{personality}'
+        line = self._drawFromDeck(deckKey, p.get('off_day', []))
+        if not line:
+            return None
+        return self._format(line, ctx)
 
     def pickSidelineCutaway(self, personality: str, quirk: Optional[str],
                              ctx: Optional[Dict] = None,

@@ -42,6 +42,14 @@ class Coach:
         # scouting specialist on a MEGA-market team nails every ceiling call;
         # a castoff on a SMALL-market team sees wide potential ranges.
         self.scouting = 80
+        # Attitude (60-100): coach's locker-room presence on the toxic→leader
+        # spectrum. Leader-tier coaches reign in toxic players (dampening their
+        # contagion) and make the room want to play hard for them; toxic-tier
+        # coaches let dysfunction fester and add to it. Wired into:
+        #   - _propagateAttitudeContagion (anchor effect on room signal)
+        #   - _driftAttitudes (scales upward / downward drift magnitude)
+        #   - _computeContextMultiplier ("play hard for them" boost/penalty)
+        self.attitude = 80
 
     @property
     def overallRating(self):
@@ -55,7 +63,7 @@ class Coach:
         center = seed if seed is not None else randint(70, 90)
         for attr in ['offensiveMind', 'defensiveMind', 'adaptability',
                      'aggressiveness', 'clockManagement', 'playerDevelopment',
-                     'scouting']:
+                     'scouting', 'attitude']:
             val = int(np.clip(np.random.normal(center, 10), 60, 100))
             setattr(self, attr, val)
         return self

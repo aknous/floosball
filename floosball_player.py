@@ -196,6 +196,12 @@ class Player:
         self.term = 0
         self.termRemaining = 0
         self.capHit = 0
+        # willRetire: set during the regular season when a retirement-eligible
+        # player is determined to be calling it after this season. Surfaces
+        # in the UI well before the offseason so users can plan replacements.
+        # Players retire ONLY at the end of their contract — flag is set only
+        # for those whose contract expires this offseason.
+        self.willRetire = False
         self.seasonPerformanceRating = 0
         self.playerRating = 0
         self.offensiveRating = 0
@@ -251,20 +257,42 @@ class Player:
         self.careerStats.gp += 1
         self.careerStatsDict['gp'] = self.careerStatsDict.get('gp', 0) + 1
         if isinstance(self.team,Team):
+            # Per-game streak adjustments. Refactored from an attitude-only
+            # cascade to use the same complacency / resolve composites the
+            # weekly form-shift mechanic relies on, so streak reactions are
+            # consistent with the season-arc trend they feed into.
+            #
+            # selfBelief governs the magnitude of CONFIDENCE swings only —
+            # determination is the drive-to-win axis, not a belief axis, so
+            # it's not gated. selfBelief 80 = neutral (no scaling); 100 =
+            # half-magnitude swings (steady); 60 = 1.4x swings (volatile).
+            sb = getattr(self.attributes, 'selfBelief', 80) or 80
+            confStability = max(0.4, min(1.6, 1.0 - (sb - 80) / 50))
+
             if self.team.winningStreak:
-                self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(0,25)/100), 3)
+                # Winning streak: confidence boost, but vulnerable players
+                # get less of one (their hot-team coasting tendency caps
+                # the upside). Bulletproof players get the full +0..25.
+                vuln = self.attributes.complacencyVulnerability()
+                boostMax = max(8, round(25 * (1 - 0.6 * vuln) * confStability))
+                self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(0, boostMax)/100), 3)
             elif self.team.seasonTeamStats['streak'] < -2:
-                if self.attributes.attitude < 70:
-                    self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-20,0)/100), 3)
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-20,0)/100), 3)
-                elif self.attributes.attitude < 80:
-                    self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-10,0)/100), 3)
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-10,0)/100), 3)
-                elif self.attributes.attitude < 90:
-                    self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-5,0)/100), 3)
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-5,0)/100), 3)
+                # Losing streak: response shaped by adversityResolve.
+                # High resolve (>=0.7): determination goes UP (counter-puncher).
+                # Low resolve: confidence/determination drop, scaling with
+                # how short of resolve they are (no resolve → biggest drop).
+                # Confidence drop scaled by selfBelief; determination drop is not.
+                resolve = self.attributes.adversityResolve()
+                if resolve >= 0.7:
+                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(0, 10)/100), 3)
                 else:
-                    self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(0,10)/100), 3)
+                    shortfall = 1.0 - resolve  # 0=full resolve, 1=none
+                    confPenaltyMax = max(0, round(20 * shortfall * confStability))
+                    detPenaltyMax = max(0, round(20 * shortfall))
+                    if confPenaltyMax > 0:
+                        self.attributes.confidenceModifier = round(self.attributes.confidenceModifier + (batched_randint(-confPenaltyMax, 0)/100), 3)
+                    if detPenaltyMax > 0:
+                        self.attributes.determinationModifier = round(self.attributes.determinationModifier + (batched_randint(-detPenaltyMax, 0)/100), 3)
 
             if self.attributes.confidenceModifier > 5:
                 self.attributes.confidenceModifier = 5
@@ -449,6 +477,14 @@ class PlayerAttributes:
         self.instinct = 0
         self.creativity = 0
         self.resilience = 0
+        # selfBelief (60-100): how stable this player's confidence is.
+        # High = quiet, steady belief — small swings from results.
+        # Low = volatile — confidence soars and crashes with recent results.
+        self.selfBelief = 80
+        # clutchFactor: deprecated. Was meant to amplify pressure-induced
+        # variance but never got populated (always 0). Kept on the class so
+        # DB sync code that reads/writes the existing clutch_factor column
+        # doesn't crash; not used by any game-sim logic.
         self.clutchFactor = 0
         self.pressureHandling = randint(-10, 10)  # -10 (chokes) to +10 (thrives under pressure)
 
@@ -478,9 +514,74 @@ class PlayerAttributes:
         self.quirk = None
         self.mood = 3  # neutral start
 
+        # Flavor (hometown, favorite, motto) — rolled once at creation,
+        # never changes. Pure character flavor for the player detail page.
+        self.hometown = None
+        self.favorite_category = None
+        self.favorite_item = None
+        self.motto = None
+
+    # ── Mental composites for season-form trends ──
+    # Two distinct composites: one captures how vulnerable a player is to
+    # coasting / cracking under expectations when their team is winning;
+    # the other captures how hard they fight back when the team is losing.
+    # Both used by the weekly form-shift mechanic in seasonManager and by
+    # the per-game streak adjustment in _updatePostGameModifiers.
+
+    def complacencyVulnerability(self) -> float:
+        """0 = bulletproof, 1 = fully vulnerable. Hot-team direction.
+          discipline       40%   professional habits, doesn't slack
+          pressureHandling 25%   season-level expectations weight (-10 to +10
+                                 normalized to 60-100 scale)
+          focus            20%   mental sharpness vs going through the motions
+          attitude         15%   ego resistance / leader-vs-toxic axis
+        Composite weighted to a 60–100 scale; 80+ → 0, ≤60 → 1.
+        """
+        ph = getattr(self, 'pressureHandling', 0) or 0
+        ph_norm = 80 + ph * 2  # -10→60, 0→80, +10→100
+        weighted = (
+            (getattr(self, 'discipline', 80) or 80) * 0.40
+            + ph_norm * 0.25
+            + (getattr(self, 'focus', 80) or 80) * 0.20
+            + (getattr(self, 'attitude', 80) or 80) * 0.15
+        )
+        return max(0.0, min(1.0, (80 - weighted) / 20))
+
+    def adversityResolve(self) -> float:
+        """0 = checked out, 1 = full Cinderella. Cold-team direction.
+          resilience  40%   bouncing back from setbacks
+          attitude    25%   morale floor — the leader-vs-toxic axis
+          discipline  20%   keeps doing the right things
+          creativity  15%   finds new ways to win
+        Composite weighted to a 60–100 scale; ≤70 → 0, 100 → 1.
+        """
+        weighted = (
+            (getattr(self, 'resilience', 80) or 80) * 0.40
+            + (getattr(self, 'attitude', 80) or 80) * 0.25
+            + (getattr(self, 'discipline', 80) or 80) * 0.20
+            + (getattr(self, 'creativity', 80) or 80) * 0.15
+        )
+        return max(0.0, min(1.0, (weighted - 70) / 30))
+
     def computeMoodTier(self):
-        """Compute the 1-5 mood tier from confidence + determination."""
-        combined = self.confidenceModifier + self.determinationModifier
+        """Compute the 1-5 mood tier as a catchall mental-state signal.
+
+        Blends three inputs:
+          - confidenceModifier (volatile, -5..+5) — current week-to-week vibe
+          - determinationModifier (volatile, -5..+5) — drive level
+          - attitude (slow, 30-100) — locker-room identity (toxic ↔ leader)
+
+        Attitude shifts the floor/ceiling so a toxic player can never feel
+        electric for long and a leader has a higher resting state. This is
+        what lets one pill represent the player's full mental state instead
+        of needing separate Mood + Attitude readouts.
+        """
+        attitude = getattr(self, 'attitude', 80) or 80
+        # 30 → −10 (deep toxic drag), 80 → 0 (neutral), 100 → +4 (leader lift).
+        # Asymmetric: toxic players pull mood down harder than leaders push it up,
+        # which matches how locker-room dysfunction tends to swamp performance.
+        attBias = (attitude - 80) / 5
+        combined = self.confidenceModifier + self.determinationModifier + attBias
         if combined >= 6:
             return 5
         elif combined >= 3:
@@ -538,11 +639,7 @@ class PlayerAttributes:
         
         # Calculate the magnitude of potential variance based on pressure and pressureHandling
         maxVariance = abs(self.pressureHandling) * normalizedPressure
-        
-        # Clutch factor increases the magnitude of potential swings
-        clutchMultiplier = 1 + (self.clutchFactor / 100.0)
-        maxVariance *= clutchMultiplier
-        
+
         # Roll for outcome (1-100)
         roll = batched_randint(1, 100)
 
@@ -636,20 +733,44 @@ class PlayerAttributes:
             self.speed = int(skillValList.pop(randint(0, len(skillValList)) - 1))
             self.agility = int(skillValList.pop(randint(0, len(skillValList)) - 1))
 
-        # Intangibles: use mentalSeed as center with moderate variance
-        # This allows independent control of physical vs mental abilities
-        stdDev = 7
-        numSkills = 6
-        intSkillValList = np.random.normal(mentalSeed, stdDev, numSkills)
-        intSkillValList = np.clip(intSkillValList, 60, 100)
-        intSkillValList: list = intSkillValList.tolist()
+        # Intangibles: split into two pools.
+        #
+        # Pool A — game-formula attrs (60-100, stdDev 7): focus, instinct,
+        # creativity, discipline. These are baked into linear weights across
+        # ~14 game-sim formulas (xFactor, vision, fumble resist, route
+        # variance, drop chance, defensive coverage, etc). Keeping them in
+        # the original "pro minimum" range avoids cascading balance issues —
+        # a 30-discipline player would fumble dramatically more often, etc.
+        #
+        # Pool B — locker-room/state attrs (30-100, mentalSeed offset down
+        # to 50, stdDev 12): attitude, resilience, selfBelief. These feed
+        # composites and modulators (contagion, fatigue, confidence
+        # volatility) — wider range produces real toxic teammates, fragile
+        # players, and confidence-volatile players without breaking the
+        # game-formula balance.
+        gameStdDev = 7
+        gamePool = np.random.normal(mentalSeed, gameStdDev, 4)
+        gamePool = np.clip(gamePool, 60, 100).tolist()
 
-        self.instinct = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.focus = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.creativity = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.discipline = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.attitude = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
-        self.resilience = int(intSkillValList.pop(randint(0, len(intSkillValList)) - 1))
+        # Locker-room pool centers slightly lower with bigger variance so the
+        # tails actually get used. mentalSeed-7 keeps most players near-pro
+        # (median ~73) while letting a meaningful minority fall into real
+        # trouble (10-15% below 60, 3-5% below 50). Clipped to 30 for the
+        # extreme tail — actual head cases exist but stay rare.
+        lrCenter = max(55, mentalSeed - 7)
+        lrStdDev = 10
+        lrPool = np.random.normal(lrCenter, lrStdDev, 3)
+        lrPool = np.clip(lrPool, 30, 100).tolist()
+
+        self.instinct    = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.focus       = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.creativity  = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.discipline  = int(gamePool.pop(randint(0, len(gamePool)) - 1))
+        self.attitude    = int(lrPool.pop(randint(0, len(lrPool)) - 1))
+        self.resilience  = int(lrPool.pop(randint(0, len(lrPool)) - 1))
+        # selfBelief: governs how volatile this player's confidence is in
+        # response to performance and team form. High = stable; low = volatile.
+        self.selfBelief  = int(lrPool.pop(randint(0, len(lrPool)) - 1))
 
         # Generate any missing core physical attributes (needed for defensive ratings)
         # Core 5: speed, power, agility, hands, reach — every player needs these

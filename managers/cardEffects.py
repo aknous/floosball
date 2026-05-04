@@ -3430,6 +3430,9 @@ EFFECT_REGISTRY = {
 }
 
 
+_LOGGED_UNKNOWN_EFFECTS: set = set()
+
+
 def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: int,
                    firstPassBreakdowns=None) -> EffectResult:
     """Dispatch to the named effect's compute function.
@@ -3440,7 +3443,13 @@ def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: in
     effectName = effectConfig.get("effectName", "")
     handler = EFFECT_REGISTRY.get(effectName)
     if not handler:
-        logger.warning(f"Unknown effect: {effectName}")
+        # Prior-season templates may reference effects that were removed or
+        # renamed in later releases. Log once per unknown name to flag the
+        # legacy reference without flooding logs each time a user's
+        # collection is projected.
+        if effectName not in _LOGGED_UNKNOWN_EFFECTS:
+            _LOGGED_UNKNOWN_EFFECTS.add(effectName)
+            logger.warning(f"Unknown effect (legacy or removed): {effectName}")
         return EffectResult()
 
     primary = effectConfig.get("primary", {})

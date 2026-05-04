@@ -119,6 +119,9 @@ class Coach(Base):
     # Scouting — accuracy with which fans can see upcoming rookies' potential.
     # Stacks with funding tier to determine the attribute-range blur on /api/rookies/upcoming.
     scouting: Mapped[int] = mapped_column(Integer, default=80)
+    # Locker-room presence on toxic→leader spectrum. Drives attitude contagion
+    # control + 'play hard for them' game-day effect.
+    attitude: Mapped[int] = mapped_column(Integer, default=80)
     overall_rating: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -156,6 +159,10 @@ class Player(Base):
     # Upcoming rookies are visible to fans all season for scouting/voting but
     # aren't on any roster or pipeline yet. Cleared at draft time.
     is_upcoming_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set during the regular season when an end-of-contract player has decided
+    # to retire after this season. Surfaces in UI so users see retirements
+    # coming and can vote on replacements via FA ballot.
+    will_retire: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -218,6 +225,8 @@ class PlayerAttributes(Base):
     creativity: Mapped[int] = mapped_column(Integer)
     resilience: Mapped[int] = mapped_column(Integer)
     clutch_factor: Mapped[int] = mapped_column(Integer)
+    # Volatility of confidence response to results. High = stable, low = volatile.
+    self_belief: Mapped[int] = mapped_column(Integer, default=80)
     pressure_handling: Mapped[int] = mapped_column(Integer)
     longevity: Mapped[int] = mapped_column(Integer)
     play_making_ability: Mapped[int] = mapped_column(Integer)
@@ -239,6 +248,13 @@ class PlayerAttributes(Base):
     personality: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     quirk: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     mood: Mapped[int] = mapped_column(Integer, default=3)
+
+    # Flavor fields — assigned once at player creation, never change.
+    # Pure character flavor for the player detail page; no gameplay effect.
+    hometown: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    favorite_category: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    favorite_item: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    motto: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
 
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="attributes")
@@ -872,10 +888,19 @@ class SimulationState(Base):
     playoff_round: Mapped[Optional[str]] = mapped_column(String(50))
     # True while handleOffseason() is executing. Set before offseason starts,
     # cleared after seasonsPlayed is advanced. If a crash lands mid-offseason,
-    # the resume logic treats the offseason as completed (any partial work was
-    # already persisted) rather than replaying the season from its final week
-    # and blowing away the already-advanced roster/player state.
+    # the resume logic uses offseason_phase + offseason_completed_steps to
+    # pick up where it left off rather than replaying the whole offseason.
     in_offseason: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Top-level offseason flow phase for resume: post_bowl, frontoffice,
+    # rookie_draft, pre_fa, fa_draft, training. Mirrors seasonManager
+    # _offseasonFlowPhase so the in-memory state survives a restart.
+    offseason_phase: Mapped[Optional[str]] = mapped_column(String(32))
+    # ISO datetime (UTC) the current waiting phase is counting down to. Lets
+    # post-restart resume restore the timer instead of recomputing.
+    offseason_phase_target: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # JSON array of completed step keys (e.g. ["frontoffice_decisions",
+    # "training"]). Lets phase resume skip non-idempotent batch work.
+    offseason_completed_steps: Mapped[Optional[str]] = mapped_column(Text)
     total_seasons: Mapped[int] = mapped_column(Integer, default=20)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

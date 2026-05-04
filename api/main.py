@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import os
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
-from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent
+from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent, PlayerOffDayEvent
 from api_response_builders import (
     TeamResponseBuilder, 
     PlayerResponseBuilder, 
@@ -126,9 +126,130 @@ async def startup_event():
     from api.game_broadcaster import broadcaster as _broadcaster
     _broadcaster.set_main_loop(_asyncio.get_running_loop())
 
+    # Background task: periodic off-day flavor broadcasts. Fires only when
+    # no games are live so it surfaces personality between rounds without
+    # competing with live play feed.
+    _asyncio.create_task(_offDayFlavorLoop())
+
     # The FloosballApplication will be injected by the main entry point
     # For now, log that we're ready
     logger.info("API server ready - waiting for FloosballApplication initialization")
+
+
+# Tunables for between-games personality broadcasts.
+# Env-override for testing: set FLOOSBALL_OFF_DAY_FAST=1 to speed up
+# broadcasts to one every 8s for live debugging. Default cadence (90s,
+# 60% chance) is what we want in production.
+import os as _os
+from collections import deque as _deque
+_OFF_DAY_FAST = _os.environ.get('FLOOSBALL_OFF_DAY_FAST', '').lower() in ('1', 'true', 'yes')
+OFF_DAY_INTERVAL_SECONDS = 8 if _OFF_DAY_FAST else 90  # how often to consider firing
+OFF_DAY_FIRE_CHANCE = 1.0 if _OFF_DAY_FAST else 0.6    # not every tick fires — keeps feed slow
+OFF_DAY_QUIET_AFTER_GAME = 60                          # wait this long after last live play
+
+# Ring buffer of recent off-day events for the highlights-feed backfill.
+# Frontend reads this on page load so the feed isn't empty until the next
+# tick fires. In-memory only — fine since these are flavor.
+RECENT_OFF_DAY_LIMIT = 30
+_recentOffDayEvents: _deque = _deque(maxlen=RECENT_OFF_DAY_LIMIT)
+
+async def _offDayFlavorLoop():
+    """Periodically broadcast a player_off_day event when no games are live.
+    Slow drip — feeds the highlights ticker between rounds with personality.
+
+    Per off-day window:
+    - Tracks recently-quoted player IDs in `_recentlyQuotedPlayers` so the
+      same player doesn't speak twice in a row. The set resets when all
+      eligible players have been picked, OR when games start (new window).
+    - Clears the recent-events ring buffer once at the moment games start,
+      so the next off-day window begins with a fresh feed.
+    """
+    import asyncio as _asyncio
+    import random as _random
+    from api.game_broadcaster import broadcaster as _broadcaster
+
+    recentlyQuoted: set[int] = set()
+    prevGamesActive = False
+
+    while True:
+        try:
+            await _asyncio.sleep(OFF_DAY_INTERVAL_SECONDS)
+            if not _broadcaster.is_enabled():
+                continue
+            gamesActive = _areGamesStarted()
+            # Transition: idle → active. Wipe the off-day feed and recent set
+            # so the next idle window starts fresh.
+            if gamesActive and not prevGamesActive:
+                _recentOffDayEvents.clear()
+                recentlyQuoted.clear()
+            prevGamesActive = gamesActive
+            if gamesActive:
+                continue
+            if not floosball_app:
+                continue
+            if _random.random() > OFF_DAY_FIRE_CHANCE:
+                continue
+            personalityMgr = getattr(floosball_app, 'personalityManager', None)
+            if personalityMgr is None:
+                continue
+            players = getattr(floosball_app.playerManager, 'activePlayers', None) or []
+            # Only rostered players — exclude free agents, prospects, and
+            # upcoming rookies. player.team is a team OBJECT for rostered
+            # players and the STRING markers 'Free Agent' / 'Prospect' /
+            # 'Upcoming Rookie' for everyone else.
+            def _isRostered(p):
+                if getattr(p, 'is_prospect', False):
+                    return False
+                team = getattr(p, 'team', None)
+                return getattr(team, 'id', None) is not None
+            eligible = [p for p in players
+                        if getattr(getattr(p, 'attributes', None), 'personality', None)
+                        and _isRostered(p)]
+            # During playoffs, restrict eligible players to those on teams
+            # actually playing this week (or just played). Eliminated teams
+            # shouldn't speak. Regular season — everyone is eligible.
+            sm = floosball_app.seasonManager if floosball_app else None
+            cs = sm.currentSeason if sm else None
+            weekGames = (getattr(cs, 'activeGames', None)
+                         or getattr(cs, 'completedWeekGames', None) or []) if cs else []
+            inPlayoffs = any(getattr(g, 'gameType', '') == 'playoff' for g in weekGames)
+            if inPlayoffs:
+                playoffTeamIds = set()
+                for g in weekGames:
+                    if getattr(g, 'gameType', '') == 'playoff':
+                        h = getattr(g, 'homeTeam', None)
+                        a = getattr(g, 'awayTeam', None)
+                        if h is not None: playoffTeamIds.add(getattr(h, 'id', None))
+                        if a is not None: playoffTeamIds.add(getattr(a, 'id', None))
+                eligible = [p for p in eligible
+                            if getattr(getattr(p, 'team', None), 'id', None) in playoffTeamIds]
+            if not eligible:
+                continue
+            # Avoid the same player speaking twice in one off-day window.
+            # If everyone has had a turn, recycle.
+            unspoken = [p for p in eligible if p.id not in recentlyQuoted]
+            if not unspoken:
+                recentlyQuoted.clear()
+                unspoken = eligible
+            player = _random.choice(unspoken)
+            payload = personalityMgr.composeOffDay(player)
+            if not payload:
+                continue
+            recentlyQuoted.add(player.id)
+            event = PlayerOffDayEvent.offDay(
+                playerId=payload.get('playerId'),
+                playerName=payload.get('playerName'),
+                teamId=payload.get('teamId'),
+                teamAbbr=payload.get('teamAbbr'),
+                personality=payload.get('personality'),
+                text=payload.get('text'),
+            )
+            # Push into the recent ring buffer so the highlights feed can
+            # backfill on page load. Most recent at the LEFT (index 0).
+            _recentOffDayEvents.appendleft(event)
+            await _broadcaster.broadcast_season_event(event)
+        except Exception as e:
+            logger.warning(f"off-day flavor loop error: {e}")
 
 
 @app.on_event("shutdown")
@@ -287,6 +408,7 @@ def _buildCoachDict(team) -> Optional[dict]:
         'clockManagement': coach.clockManagement,
         'playerDevelopment': coach.playerDevelopment,
         'scouting': getattr(coach, 'scouting', 80),
+        'attitude': getattr(coach, 'attitude', 80),
         'seasonsCoached': coach.seasonsCoached,
     }
 
@@ -881,7 +1003,13 @@ async def get_player(player_id: int, response: Response):
         else:
             player_dict['stats'] = allSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
-        
+
+        # Personality quotes — latest one for the hover tooltip,
+        # full list shown on the player profile page via /quotes endpoint.
+        pm = floosball_app.personalityManager
+        if pm:
+            player_dict['latestQuote'] = pm.getLatestQuote(player.id)
+
         return build_success_response(player_dict)
     
     except HTTPException:
@@ -889,6 +1017,29 @@ async def get_player(player_id: int, response: Response):
     except Exception as e:
         logger.error(f"Error getting player {player_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/players/{player_id}/quotes", response_model=Dict[str, Any])
+async def get_player_quotes(player_id: int, limit: int = 10):
+    """Recent personality quotes for a player. Powers the Recent Moments
+    box on the player profile page. In-memory ring buffer; lost on
+    server restart since these are flavor, not authoritative."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    pm = floosball_app.personalityManager
+    if pm is None:
+        return build_success_response([])
+    quotes = pm.getRecentQuotes(player_id, limit=max(1, min(limit, 50)))
+    return build_success_response(quotes)
+
+
+@app.get("/api/recent-off-day", response_model=Dict[str, Any])
+async def get_recent_off_day(limit: int = 30):
+    """Recent off-day broadcast events for the highlights feed backfill.
+    Frontend reads this on mount so the feed isn't empty before the next
+    tick fires. In-memory ring buffer."""
+    capped = max(1, min(limit, RECENT_OFF_DAY_LIMIT))
+    return build_success_response(list(_recentOffDayEvents)[:capped])
 
 
 # ============================================================================
@@ -1125,6 +1276,9 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'isClutchPlay': getattr(play_data, 'isClutchPlay', False),
                                 'isChokePlay': getattr(play_data, 'isChokePlay', False),
                                 'isMomentumShift': getattr(play_data, 'isMomentumShift', False),
+                                'clockStopped': getattr(play_data, 'clockStopped', False),
+                                'clutchPerformers': list(getattr(play_data, 'clutchPerformers', []) or []),
+                                'chokePerformers': list(getattr(play_data, 'chokePerformers', []) or []),
                                 'insights': getattr(play_data, 'insights', None),
                                 'personalityEvent': getattr(play_data, 'personalityEvent', None),
                             }
@@ -3184,18 +3338,31 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             if isinstance(getattr(p, 'team', None), str)
         ]
     draftOrder = []
-    if sm.currentSeason and hasattr(sm.currentSeason, 'freeAgencyOrder'):
-        for t in sm.currentSeason.freeAgencyOrder:
-            draftOrder.append({
-                "name": t.name,
-                "city": getattr(t, 'city', ''),
-                "abbr": getattr(t, 'abbr', t.name[:3].upper()),
-                "id": getattr(t, 'id', None),
-                "color": getattr(t, 'color', None),
-                "complete": getattr(t, 'freeAgencyComplete', False),
-                "fundingTier": getattr(t, 'fundingTier', 'MID_MARKET'),
-                "fundingTierRank": getattr(t, 'fundingTierRank', 3),
-            })
+    # Once the FA draft preview has run (pre_fa phase onward), prefer the
+    # tier-sorted order it computed and stored. Falls back to the rookie
+    # draft order (worst-first) for earlier phases. Without this fallback,
+    # a refresh during pre_fa wipes the tier groupings the frontend just
+    # rendered, since the rookie order is the only one currently in
+    # currentSeason.freeAgencyOrder.
+    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
+    pendingFaOrder = getattr(sm, '_pendingFaDraftOrder', None)
+    if flowPhase in ('pre_fa', 'fa_draft') and pendingFaOrder:
+        sourceOrder = pendingFaOrder
+    elif sm.currentSeason and hasattr(sm.currentSeason, 'freeAgencyOrder'):
+        sourceOrder = sm.currentSeason.freeAgencyOrder
+    else:
+        sourceOrder = []
+    for t in sourceOrder:
+        draftOrder.append({
+            "name": t.name,
+            "city": getattr(t, 'city', ''),
+            "abbr": getattr(t, 'abbr', t.name[:3].upper()),
+            "id": getattr(t, 'id', None),
+            "color": getattr(t, 'color', None),
+            "complete": getattr(t, 'freeAgencyComplete', False),
+            "fundingTier": getattr(t, 'fundingTier', 'MID_MARKET'),
+            "fundingTierRank": getattr(t, 'fundingTierRank', 3),
+        })
     transactions = getattr(sm, '_offseasonTransactions', [])
     faWindowOpen = getattr(sm, '_faWindowOpen', False)
     faWindowEnd = getattr(sm, '_faWindowEnd', None)
@@ -6640,6 +6807,8 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(400, "Target player not on your favorite team")
             if req.voteType == "resign_player" and player.term_remaining != 1:
                 raise HTTPException(400, "Player does not have an expiring contract")
+            if req.voteType == "resign_player" and getattr(player, 'will_retire', False):
+                raise HTTPException(400, "Player has announced retirement and cannot be re-signed")
         elif req.voteType == "hire_coach":
             if not req.targetPlayerId:
                 raise HTTPException(400, "targetPlayerId (coach ID) required for hire_coach")
@@ -6801,6 +6970,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "clockManagement": c.clockManagement,
                 "playerDevelopment": c.playerDevelopment,
                 "scouting": getattr(c, 'scouting', 80),
+                "attitude": getattr(c, 'attitude', 80),
             }
 
         # Available coaches in pool
@@ -6818,6 +6988,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "clockManagement": c.clock_management,
                 "playerDevelopment": c.player_development,
                 "scouting": getattr(c, 'scouting', 80),
+                "attitude": getattr(c, 'attitude', 80),
             })
 
         # Rostered players (for cut votes — all players eligible)
@@ -6836,10 +7007,16 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "rating": p.player_rating,
                 "tier": p.tier,
                 "termRemaining": p.term_remaining,
+                "willRetire": bool(getattr(p, 'will_retire', False)),
             })
 
-        # Expiring contract players (for resign votes)
-        expiringPlayers = [p for p in rosteredPlayers if p["termRemaining"] == 1]
+        # Expiring contract players that haven't announced retirement —
+        # those are the only ones eligible for a resign vote.
+        expiringPlayers = [
+            p for p in rosteredPlayers
+            if p["termRemaining"] == 1 and not p["willRetire"]
+        ]
+        retiringPlayers = [p for p in rosteredPlayers if p["willRetire"]]
 
         return build_success_response({
             "teamId": teamId,
@@ -6847,6 +7024,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
             "availableCoaches": availableCoaches,
             "rosteredPlayers": rosteredPlayers,
             "expiringPlayers": expiringPlayers,
+            "retiringPlayers": retiringPlayers,
         })
     finally:
         session.close()
