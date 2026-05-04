@@ -282,7 +282,15 @@ class PersonalityManager:
     def composeOffDay(self, player, ctx: Optional[Dict] = None) -> Optional[Dict]:
         """Pick a between-games off-day line for a player. These populate the
         highlights feed when no games are live, surfacing personality outside
-        the game modal. Returns the same shape as personality reactions."""
+        the game modal. Returns the same shape as personality reactions.
+
+        Off-day cards in the highlights feed render the player's full name +
+        team in a header above the quote. Templates use `{name}` for grammar
+        in third-person lines (e.g. "{name} took the long way home"). To
+        avoid the full name appearing twice (header + line opening), render
+        `{name}` as the first name only — "Joe took the long way home" reads
+        natural alongside the "Joe Smith · ABC" header.
+        """
         attrs = getattr(player, 'attributes', None)
         if attrs is None:
             return None
@@ -291,8 +299,11 @@ class PersonalityManager:
             return None
         quirk = getattr(attrs, 'quirk', None)
 
+        fullName = getattr(player, 'name', '') or ''
+        firstName = fullName.split(' ', 1)[0] if fullName else ''
+
         renderCtx = dict(ctx or {})
-        renderCtx.setdefault('name', getattr(player, 'name', ''))
+        renderCtx.setdefault('name', firstName or fullName)
 
         text = self.engine.pickOffDayLine(personality, renderCtx)
         if not text:

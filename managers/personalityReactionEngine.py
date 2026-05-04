@@ -369,7 +369,12 @@ class PersonalityReactionEngine:
                         ctx: Optional[Dict] = None) -> Optional[str]:
         """Pick a between-games off-day line. These populate the highlights
         feed when no games are live, surfacing personality outside the game
-        modal. Strictly uses the personality's `off_day:` pool."""
+        modal. Strictly uses the personality's `off_day:` pool.
+
+        prefixIfMissing=False — the highlights feed already attributes the
+        speaker in a header above the quote, so the engine should NOT
+        auto-prepend "{name}: " to first-person lines.
+        """
         p = self.personalities.get(personality)
         if not p:
             return None
@@ -377,7 +382,7 @@ class PersonalityReactionEngine:
         line = self._drawFromDeck(deckKey, p.get('off_day', []))
         if not line:
             return None
-        return self._format(line, ctx)
+        return self._format(line, ctx, prefixIfMissing=False)
 
     def pickSidelineCutaway(self, personality: str, quirk: Optional[str],
                              ctx: Optional[Dict] = None,
@@ -403,16 +408,21 @@ class PersonalityReactionEngine:
     # Formatting
     # ------------------------------------------------------------------
 
-    def _format(self, text: str, ctx: Optional[Dict]) -> str:
+    def _format(self, text: str, ctx: Optional[Dict],
+                prefixIfMissing: bool = True) -> str:
         """Substitute {name}-style placeholders with role-default fallbacks.
 
         Lines without `{name}` are quote-style (e.g. "Mission accomplished.",
         "TOLD YOU!", "I LIVE FOR THIS!") and get prefixed with the player's
         name so the reader knows who is speaking. Lines with `{name}` are
         description-style and render as-is after substitution.
+
+        prefixIfMissing=False — caller (e.g. pickOffDayLine) renders the
+        speaker in a separate header, so the engine shouldn't duplicate
+        the attribution by prepending "{name}: ".
         """
         ctx = ctx or {}
-        if '{name}' not in text:
+        if prefixIfMissing and '{name}' not in text:
             text = '{name}: ' + text
         cm = ChainMap(dict(ctx), PLACEHOLDER_DEFAULTS)
         try:

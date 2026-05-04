@@ -150,7 +150,7 @@ OFF_DAY_QUIET_AFTER_GAME = 60                          # wait this long after la
 # Ring buffer of recent off-day events for the highlights-feed backfill.
 # Frontend reads this on page load so the feed isn't empty until the next
 # tick fires. In-memory only — fine since these are flavor.
-RECENT_OFF_DAY_LIMIT = 30
+RECENT_OFF_DAY_LIMIT = 12
 _recentOffDayEvents: _deque = _deque(maxlen=RECENT_OFF_DAY_LIMIT)
 
 async def _offDayFlavorLoop():
