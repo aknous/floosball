@@ -371,6 +371,7 @@ class PlayerManager:
             player.prospect_seasons = int(getattr(db_player, 'prospect_seasons', 0) or 0)
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
+            player.willRetire = bool(getattr(db_player, 'will_retire', False))
             
             # Load tier if present
             if db_player.tier:
@@ -1328,6 +1329,7 @@ class PlayerManager:
                         prospect_seasons=int(getattr(player, 'prospect_seasons', 0) or 0),
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
+                        will_retire=bool(getattr(player, 'willRetire', False)),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1353,7 +1355,8 @@ class PlayerManager:
                     db_player.prospect_seasons = int(getattr(player, 'prospect_seasons', 0) or 0)
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
-                
+                    db_player.will_retire = bool(getattr(player, 'willRetire', False))
+
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
                 

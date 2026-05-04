@@ -226,6 +226,9 @@ class GmManager:
                     outcome = "ineligible"
                 elif not hasattr(player, 'termRemaining') or player.termRemaining != 1:
                     outcome = "ineligible"
+                elif getattr(player, 'willRetire', False):
+                    # Player has already announced retirement — no resign possible.
+                    outcome = "retiring"
                 elif probability == 0.0:
                     outcome = "below_threshold"
                 elif self._rollSuccess(probability):

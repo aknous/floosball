@@ -68,6 +68,46 @@ class TeamResponseBuilder(ResponseBuilder):
             return False
 
     @staticmethod
+    def _vulnRaw(p) -> float:
+        """Unclamped complacency vulnerability for team-averaging.
+
+        The per-player composite clamps at 0 (you can't have negative
+        vulnerability conceptually), but that asymmetric clamp distorts
+        team averages: high-attribute players read 0 instead of "negative
+        vuln," so they don't offset low-attribute teammates and team avgs
+        skew upward. Mirrors the formula in Player.complacencyVulnerability
+        without the clamp.
+        """
+        try:
+            ph = getattr(p.attributes, 'pressureHandling', 0) or 0
+            ph_norm = 80 + ph * 2
+            weighted = (
+                (getattr(p.attributes, 'discipline', 80) or 80) * 0.40
+                + ph_norm * 0.25
+                + (getattr(p.attributes, 'focus', 80) or 80) * 0.20
+                + (getattr(p.attributes, 'attitude', 80) or 80) * 0.15
+            )
+            return (80 - weighted) / 20
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _resolveRaw(p) -> float:
+        """Unclamped adversity resolve for team-averaging. Same rationale
+        as _vulnRaw — the per-player clamp at 0 distorts team avgs.
+        """
+        try:
+            weighted = (
+                (getattr(p.attributes, 'resilience', 80) or 80) * 0.40
+                + (getattr(p.attributes, 'attitude', 80) or 80) * 0.25
+                + (getattr(p.attributes, 'discipline', 80) or 80) * 0.20
+                + (getattr(p.attributes, 'creativity', 80) or 80) * 0.15
+            )
+            return (weighted - 70) / 30
+        except Exception:
+            return 0.0
+
+    @staticmethod
     def computeFormState(team) -> str:
         """Compute the team's at-a-glance form state.
 
@@ -91,17 +131,14 @@ class TeamResponseBuilder(ResponseBuilder):
         winPct = wins / games if games > 0 else 0.5
         elo = getattr(team, 'elo', 1500) or 1500
 
-        # Aggregate mental state from rostered starters
+        # Aggregate mental state from rostered starters. Uses unclamped raw
+        # composites so above-average players actually offset below-average
+        # teammates in the team average (per-player clamp at 0 distorts
+        # aggregate by losing high-attribute info).
         starters = [p for p in (team.rosterDict or {}).values() if p is not None]
         if starters:
-            try:
-                avgVuln = sum(p.attributes.complacencyVulnerability() for p in starters) / len(starters)
-            except Exception:
-                avgVuln = 0.0
-            try:
-                avgResolve = sum(p.attributes.adversityResolve() for p in starters) / len(starters)
-            except Exception:
-                avgResolve = 0.0
+            avgVuln = sum(TeamResponseBuilder._vulnRaw(p) for p in starters) / len(starters)
+            avgResolve = sum(TeamResponseBuilder._resolveRaw(p) for p in starters) / len(starters)
         else:
             avgVuln = 0.0
             avgResolve = 0.0
@@ -110,20 +147,27 @@ class TeamResponseBuilder(ResponseBuilder):
         # from week 1 on pedigree alone. Two triggers, both gated by a
         # vulnerable composite:
         #
-        #   1. Pedigree — team's ELO is in the top 10% of the league. They
-        #      came into the season with a strong rating and assume they'll
-        #      be good (defending-champion trap). Computed relative to the
-        #      league rather than a static ELO so the threshold tracks
-        #      whatever the current talent landscape is.
-        #   2. Record — winPct >= 0.65. They built up wins and feel
-        #      untouchable, letting off the gas regardless of when the
-        #      wins came.
+        #   1. Pedigree — team's ELO is in the top 10% of the league AND
+        #      games are still few. They came into the season with a strong
+        #      rating and assume they'll be good (defending-champion trap).
+        #      Once a real record exists the record path takes over.
+        #   2. Record — winPct >= 0.75 (truly elite, not just winning).
+        #      They built up wins and feel untouchable, letting off the gas.
         #
-        # avgVuln gate is the same in both cases — the mental composite is
-        # what makes them vulnerable to coasting; pedigree/record just gives
-        # them the cover to think they can afford it.
+        # COMPLACENT requires a vulnerable composite AND a sense that the
+        # team has 'banked' wins they can coast on. The streak gate is what
+        # makes this distinct from HOT_STREAK: a team currently winning is
+        # riding momentum, not coasting; a team with a strong record but
+        # cooling streak (or just gotten cold) is the trap-game candidate.
+        # Pedigree path keeps the early-season "defending champion" trap
+        # open even before games play out.
         isPedigreed = TeamResponseBuilder._isPedigreed(team)
-        if avgVuln >= 0.08 and (winPct >= 0.65 or isPedigreed):
+        pedigreeFire = isPedigreed and games < 6 and avgVuln >= 0.06
+        # Record path: elite winPct AND streak no longer red-hot (streak <= 2).
+        # A team currently on a 3+ game streak goes to HOT_STREAK below;
+        # COMPLACENT catches the ones who built up wins and are now riding it.
+        recordFire = (winPct >= 0.75 and avgVuln >= 0.08 and streak <= 2)
+        if pedigreeFire or recordFire:
             return 'COMPLACENT'
 
         # Need at least a few games of data for the standings-driven states
@@ -132,28 +176,32 @@ class TeamResponseBuilder(ResponseBuilder):
 
         # Priority order matters — composite-driven signals can preempt
         # streak-driven ones when they convey more information. Thresholds
-        # tuned so realistic rosters (composite avg in the 75–85 band) can
-        # actually hit COMPLACENT / COOLING_OFF / RESOLUTE.
+        # match the locker-room tier ladder so RESOLUTE / COOLING_OFF /
+        # COMPLACENT correspond to genuinely above-baseline composites.
 
-        # Crashing — extended losing streak. Resolve threshold of 0.30
-        # catches teams whose average composite is at-or-above 79 (since
-        # adversityResolve = (weighted - 70) / 30).
+        # Crashing — extended losing streak. Resolve threshold of 0.22 is
+        # the Resilient tier boundary. Loosening to 0.18 over 10 seasons
+        # diluted the signal (per-season lift went random walk), so back
+        # to the tight gate where the Cinderella label actually means
+        # 'visibly above-average backbone'.
         if streak <= -3:
-            return 'RESOLUTE' if avgResolve >= 0.30 else 'SPIRALING'
+            return 'RESOLUTE' if avgResolve >= 0.22 else 'SPIRALING'
 
         # True hot streak — winning AND the roster is playing well together
         if streak >= 3:
             return 'HOT_STREAK'
 
-        # Winning team currently slipping — active fade. Lower vuln floor
-        # than COMPLACENT (0.04 vs 0.08) since a team that's actually
-        # losing games already shows the cracks; even mild vulnerabilities
-        # are a meaningful signal once the slip starts.
-        if winPct >= 0.55 and streak < 0 and avgVuln >= 0.04:
+        # Winning team currently slipping — active fade. Tighter winPct
+        # threshold (0.55) so this catches teams whose record is still
+        # winning rather than .500 stragglers; loosening to 0.50 added
+        # noise without strengthening the signal.
+        if winPct >= 0.55 and streak < 0 and avgVuln >= 0.06:
             return 'COOLING_OFF'
 
-        # Losing team with mental backbone — Cinderella signal
-        if winPct <= 0.40 and avgResolve >= 0.30:
+        # Losing team with mental backbone — Cinderella signal. Tighter
+        # gates (winPct ≤ 0.40, resolve ≥ 0.22) preserve a meaningful
+        # archetype rather than firing on every middling team.
+        if winPct <= 0.40 and avgResolve >= 0.22:
             return 'RESOLUTE'
 
         # Brief slip on a winning team (transient)
@@ -177,6 +225,8 @@ class TeamResponseBuilder(ResponseBuilder):
         wins = team.seasonTeamStats['wins']
         losses = team.seasonTeamStats['losses']
 
+        lockerRoom = TeamResponseBuilder.computeLockerRoom(team)
+
         return {
             'name': team.name,
             'city': team.city,
@@ -196,6 +246,82 @@ class TeamResponseBuilder(ResponseBuilder):
             'winningStreak': team.winningStreak,
             'streak': team.seasonTeamStats.get('streak', 0),
             'formState': TeamResponseBuilder.computeFormState(team),
+            'lockerRoom': lockerRoom,
+        }
+
+    @staticmethod
+    def computeLockerRoom(team) -> Dict[str, Any]:
+        """Aggregate the season-form composites into team-level readouts.
+
+        Returns the average vulnerability + resolve composites the form-state
+        machine uses, plus tiered labels for UI display. Surfaces the
+        invisible 'why' behind a team's form label — e.g. a HOT_STREAK team
+        with high vulnerability is on borrowed time; a SPIRALING team with
+        high resolve is the Cinderella signal.
+        """
+        starters = [p for p in (team.rosterDict or {}).values() if p is not None]
+        if not starters:
+            return {
+                'vulnerability': 0.0, 'vulnerabilityTier': 'steady', 'vulnerabilityLabel': 'Steady',
+                'resolve': 0.0, 'resolveTier': 'steady', 'resolveLabel': 'Steady',
+                'fortitude': 0.0, 'fortitudeTier': 'steady', 'fortitudeLabel': 'Steady',
+            }
+        # Unclamped raw composites so high-attribute players offset low ones
+        # in the aggregate (see _vulnRaw / _resolveRaw docstrings).
+        avgVuln = sum(TeamResponseBuilder._vulnRaw(p) for p in starters) / len(starters)
+        avgResolve = sum(TeamResponseBuilder._resolveRaw(p) for p in starters) / len(starters)
+
+        # Vulnerability — higher = more prone to coasting/cracking.
+        # Calibrated against widened lr-pool distribution (avg roster ~0.05,
+        # league spread 0–0.13). Steady covers the league middle.
+        if avgVuln >= 0.12:
+            vTier, vLabel = 'fragile', 'Fragile'
+        elif avgVuln >= 0.08:
+            vTier, vLabel = 'wobbly', 'Wobbly'
+        elif avgVuln >= 0.03:
+            vTier, vLabel = 'steady', 'Steady'
+        else:
+            vTier, vLabel = 'locked', 'Locked-In'
+
+        # Resolve — higher = harder mental backbone, fights back when down.
+        # Avg roster ~0.18 (center attitude/resilience ≈ 73 with widened pool).
+        # League spread 0 .. 0.40.
+        if avgResolve >= 0.32:
+            rTier, rLabel = 'iron', 'Iron-Willed'
+        elif avgResolve >= 0.22:
+            rTier, rLabel = 'resilient', 'Resilient'
+        elif avgResolve >= 0.10:
+            rTier, rLabel = 'steady', 'Steady'
+        else:
+            rTier, rLabel = 'brittle', 'Brittle'
+
+        # Fortitude — single composite of resolve and vulnerability.
+        # Vuln weighted 1.5× because vuln signals are smaller in absolute
+        # terms (0.05 typical) than resolve signals (0.18 typical), so a
+        # straight subtraction would let resolve dominate.
+        # Avg roster ≈ 0.10; league spread roughly -0.20 .. +0.40.
+        fortitudeScore = avgResolve - 1.5 * avgVuln
+        if fortitudeScore >= 0.25:
+            fTier, fLabel = 'hardened', 'Hardened'
+        elif fortitudeScore >= 0.15:
+            fTier, fLabel = 'resilient', 'Resilient'
+        elif fortitudeScore >= 0.00:
+            fTier, fLabel = 'steady', 'Steady'
+        elif fortitudeScore >= -0.15:
+            fTier, fLabel = 'wobbly', 'Wobbly'
+        else:
+            fTier, fLabel = 'brittle', 'Brittle'
+
+        return {
+            'vulnerability': round(avgVuln, 3),
+            'vulnerabilityTier': vTier,
+            'vulnerabilityLabel': vLabel,
+            'resolve': round(avgResolve, 3),
+            'resolveTier': rTier,
+            'resolveLabel': rLabel,
+            'fortitude': round(fortitudeScore, 3),
+            'fortitudeTier': fTier,
+            'fortitudeLabel': fLabel,
         }
     
     @staticmethod
@@ -384,6 +510,25 @@ class PlayerResponseBuilder(ResponseBuilder):
             attr_dict['personality'] = personalityName
             attr_dict['mood'] = mood
             attr_dict['moodTier'] = moodTier
+
+        # Attitude (locker-room presence, 30-100 scale). Surfaced on the
+        # player page next to mood — distinct axis: attitude is who they are
+        # in the room, mood is how they're feeling this week.
+        attitudeVal = getattr(player.attributes, 'attitude', None)
+        if attitudeVal is not None:
+            if attitudeVal >= 90:
+                attTier, attLabel = 'leader', 'Leader'
+            elif attitudeVal >= 80:
+                attTier, attLabel = 'positive', 'Positive'
+            elif attitudeVal >= 65:
+                attTier, attLabel = 'steady', 'Steady'
+            elif attitudeVal >= 50:
+                attTier, attLabel = 'sour', 'Sour'
+            else:
+                attTier, attLabel = 'toxic', 'Toxic'
+            attr_dict['attitudeValue'] = attitudeVal
+            attr_dict['attitudeLabel'] = attLabel
+            attr_dict['attitudeTier'] = attTier
 
         # Defensive attributes (position-specific)
         defAttrs = player.attributes.getDefensiveAttributes(player.position)

@@ -152,11 +152,13 @@ FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MAR
 #         of own way)
 FORM_STATE_RATING_MULT = {
     'HOT_STREAK':  1.00,   # Already winning — no extra boost
-    'GETTING_HOT': 1.02,   # Building momentum
+    'GETTING_HOT': 1.00,   # Was 1.02 — selection effect already gives these
+                           # teams +14pp lift over expected, so no extra mult
     'STEADY':      1.00,
     'SHAKY':       0.985,  # Mild slip
     'COOLING_OFF': 0.97,   # Active fade
-    'COMPLACENT':  0.96,   # Trap-game — biggest upset risk
+    'COMPLACENT':  0.93,   # Was 0.96 — old value moved results 0pp; bumped
+                           # so the trap-game effect actually bites elite teams
     'SPIRALING':   0.95,   # Broken
     'RESOLUTE':    1.03,   # Cinderella backbone
     'UNKNOWN':     1.00,

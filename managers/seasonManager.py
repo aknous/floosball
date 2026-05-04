@@ -733,6 +733,14 @@ class SeasonManager:
             # in _applyFormState.
             self._updateTeamFormHistory()
 
+            # Retirement announcements fire when the Front Office opens
+            # (GM_ACTIVE_WEEK) so users don't burn resign votes on players
+            # who are ultimately going to retire — and have time to plan
+            # FA-ballot replacements before the offseason kicks in.
+            from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
+            if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
+                self._evaluateRetirementCandidates()
+
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
             # the week replays on restart (stats get overwritten — safe).
@@ -4526,29 +4534,13 @@ class SeasonManager:
 
                 # Decrement contract term
                 player.termRemaining -= 1
-                
-                # Check for retirement
-                shouldRetire = False
-                
-                if player.seasonsPlayed > player.attributes.longevity:
-                    # Player is past their longevity
-                    if player.termRemaining <= 0:
-                        # Contract expired - higher retirement chance
-                        if player.seasonsPlayed > 15:
-                            shouldRetire = randint(1, 100) > 10  # 90% retire
-                        elif player.seasonsPlayed > 10:
-                            shouldRetire = randint(1, 100) > 35  # 65% retire
-                        elif player.seasonsPlayed >= 7:
-                            shouldRetire = randint(1, 100) > 95  # 5% retire
-                    else:
-                        # Still under contract - lower retirement chance
-                        if player.seasonsPlayed > 15:
-                            shouldRetire = randint(1, 100) > 30  # 70% retire
-                        elif player.seasonsPlayed > 10:
-                            shouldRetire = randint(1, 100) > 75  # 25% retire
-                        elif player.seasonsPlayed >= 7:
-                            shouldRetire = randint(1, 100) > 90  # 10% retire
-                
+
+                # Retirement is contract-end-only and pre-decided during the
+                # regular season (see _evaluateRetirementCandidates). The flag
+                # is only set on players whose contract expires this offseason,
+                # so users see retirements coming and can vote on replacements.
+                shouldRetire = bool(getattr(player, 'willRetire', False))
+
                 if shouldRetire:
                     # Player retires (overrides re-sign)
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
@@ -4616,6 +4608,57 @@ class SeasonManager:
 
         if fixes or faRemovals:
             logger.info(f"Roster integrity: fixed {fixes} team refs, removed {faRemovals} rostered players from FA list")
+
+    def _evaluateRetirementCandidates(self) -> list:
+        """Decide which players will retire after this season.
+
+        Runs late in the regular season so users see retirements coming and
+        can plan replacements via FA ballots. Only flags players whose
+        contracts expire this offseason (termRemaining == 1) — no mid-contract
+        retirements. Probability bands match the prior expired-contract logic.
+        Returns the list of players newly flagged as retiring.
+        """
+        from random import randint
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return []
+
+        flagged = []
+        for team in teamManager.teams:
+            for player in team.rosterDict.values():
+                if player is None:
+                    continue
+                if getattr(player, 'willRetire', False):
+                    continue
+                if player.termRemaining != 1:
+                    continue
+                if player.seasonsPlayed <= player.attributes.longevity:
+                    continue
+
+                shouldRetire = False
+                if player.seasonsPlayed > 15:
+                    shouldRetire = randint(1, 100) > 10  # 90%
+                elif player.seasonsPlayed > 10:
+                    shouldRetire = randint(1, 100) > 35  # 65%
+                elif player.seasonsPlayed >= 7:
+                    shouldRetire = randint(1, 100) > 95  # 5%
+
+                if shouldRetire:
+                    player.willRetire = True
+                    flagged.append((player, team))
+
+        if flagged:
+            leagueHighlights = []
+            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+                leagueHighlights = self.currentSeason.leagueHighlights
+            for player, team in flagged:
+                leagueHighlights.insert(0, {
+                    'event': {'text': f'{player.name} ({team.name}) has announced he will retire at the end of the season'}
+                })
+                logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
+
+        return flagged
 
     def _executePlayerRetirement(self, player, team, position, leagueHighlights):
         """Execute the retirement of a player from a team roster"""
@@ -4959,9 +5002,14 @@ class SeasonManager:
         SQLite's online backup API so a corrupted resume can be rolled back
         manually. Skipped on non-prod paths (no /data) and silently noops
         on any error — snapshots are belt-and-suspenders, not load-bearing.
+
+        Old snapshots from previous seasons are pruned before writing the
+        new one. Each season produces 6 checkpoints at ~90MB each, so
+        accumulating them across seasons would burn ~500MB/year of disk.
         """
         try:
             import os
+            import glob
             import sqlite3
             dbPath = os.path.join('data', 'floosball.db')
             if os.path.exists('/data') and os.path.isdir('/data'):
@@ -4970,6 +5018,23 @@ class SeasonManager:
                 return
             seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
             outDir = os.path.dirname(dbPath)
+
+            # Prune snapshots from prior seasons — only the current season's
+            # checkpoints are useful for resume / rollback.
+            for old in glob.glob(os.path.join(outDir, 'offseason_s*_*.db')):
+                fname = os.path.basename(old)
+                # parse season number out of 'offseason_s{N}_{phase}.db'
+                try:
+                    snap_season = int(fname.split('_')[1].lstrip('s'))
+                except (ValueError, IndexError):
+                    continue
+                if snap_season < seasonNum:
+                    try:
+                        os.remove(old)
+                        logger.info(f"  Pruned stale snapshot: {fname}")
+                    except OSError:
+                        pass
+
             outPath = os.path.join(outDir, f"offseason_s{seasonNum}_{phase}.db")
             src = sqlite3.connect(dbPath)
             try:
@@ -6704,8 +6769,28 @@ class SeasonManager:
                 continue
             avgAttitude = sum(getattr(p.attributes, 'attitude', 80) or 80
                               for p in starters) / len(starters)
+
+            # Coach acts as an anchor on the locker room. A leader-coach pulls
+            # the room signal upward (reigning in toxic players); a toxic-coach
+            # pulls it downward (or fails to dampen toxicity). Coach is roughly
+            # 1/3 the weight of the player average — their job is to shape the
+            # room, not to override the personalities in it.
+            coach = getattr(team, 'coach', None)
+            coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
+            effectiveAvg = (avgAttitude * 3 + coachAttitude) / 4
+
             # Neutral at 80; ±20 from neutral = ±0.20 raw swing
-            roomSwing = (avgAttitude - 80) / 100  # -0.20 .. +0.20
+            roomSwing = (effectiveAvg - 80) / 100  # -0.20 .. +0.20
+
+            # Toxic-coach amplifier: a low-attitude coach widens the negative
+            # signal (toxicity festers under poor leadership). A leader-coach
+            # blunts negative signals (active intervention reigns in toxic
+            # players). No effect when the room signal is already positive.
+            if roomSwing < 0:
+                # coachInfluence: 70 → 1.25x (amplify), 80 → 1.0x, 95 → 0.65x (dampen)
+                coachInfluence = max(0.5, min(1.4, 1.0 - (coachAttitude - 80) / 40))
+                roomSwing *= coachInfluence
+
             if abs(roomSwing) < 0.04:
                 continue  # Near-neutral team: no contagion signal worth applying
             for p in starters:
@@ -6713,7 +6798,7 @@ class SeasonManager:
                 # influenced. A player aligned with the room shifts less; a
                 # player out of step (high-attitude on a toxic team, or vice
                 # versa) gets pulled more strongly toward the average.
-                selfPull = (avgAttitude - (getattr(p.attributes, 'attitude', 80) or 80)) / 100
+                selfPull = (effectiveAvg - (getattr(p.attributes, 'attitude', 80) or 80)) / 100
                 # Final drift: room signal scaled by how far this player is
                 # from the room (selfPull). Capped at ±0.10/week.
                 drift = max(-0.10, min(0.10, roomSwing * 0.5 + selfPull * 0.3))
@@ -6752,20 +6837,32 @@ class SeasonManager:
             if magnitude < 0.5:
                 continue  # Mid-tier teams: no drift signal
 
+            # Coach attitude scales drift. A leader-coach (90+) makes upward
+            # drift faster (winning teams build leaders sooner) and softens
+            # downward drift (good coach holds the room together when losing).
+            # A toxic-coach (≤70) does the opposite. ±~30% effect at extremes.
+            coach = getattr(team, 'coach', None)
+            coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
+            coachLift = (coachAttitude - 80) / 60  # -1/3 .. +1/3 across 60-100
+
             for p in starters:
                 current = getattr(p.attributes, 'attitude', 80) or 80
                 if winPct > 0.5:
                     # Toward leadership. Players already near the ceiling
-                    # gain less (diminishing returns above 90).
+                    # gain less (diminishing returns above 90). Coach lift
+                    # adds up to +30% to upward drift magnitude.
                     ceilingResist = max(0.0, (current - 80) / 20)  # 0..1
-                    cap = max(0, round(magnitude * (1.0 - 0.6 * ceilingResist)))
+                    coachScale = 1.0 + max(-0.3, coachLift)  # leader: faster, toxic: same
+                    cap = max(0, round(magnitude * coachScale * (1.0 - 0.6 * ceilingResist)))
                     if cap > 0:
                         p.attributes.attitude = min(100, current + _attRand(0, cap))
                 else:
-                    # Toward toxicity. Resilience cushions the slide.
+                    # Toward toxicity. Resilience cushions the slide. A
+                    # leader-coach further cushions; a toxic-coach amplifies.
                     resilience = getattr(p.attributes, 'resilience', 80) or 80
                     resilienceResist = max(0.0, (resilience - 70) / 30)  # 0..1
-                    cap = max(0, round(magnitude * (1.0 - 0.5 * resilienceResist)))
+                    coachScale = max(0.5, 1.0 - coachLift)  # leader: cushion, toxic: amp
+                    cap = max(0, round(magnitude * coachScale * (1.0 - 0.5 * resilienceResist)))
                     if cap > 0:
                         p.attributes.attitude = max(0, current - _attRand(0, cap))
 

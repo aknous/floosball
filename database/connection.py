@@ -304,6 +304,7 @@ def _runPendingMigrations():
             ('prospect_seasons', 'INTEGER DEFAULT 0'),
             ('drafting_team_id', 'INTEGER REFERENCES teams(id)'),
             ('is_upcoming_rookie', 'BOOLEAN DEFAULT 0'),
+            ('will_retire', 'BOOLEAN DEFAULT 0'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} {colDef}"))
@@ -420,6 +421,14 @@ def _runPendingMigrations():
             conn.execute(text("ALTER TABLE coaches ADD COLUMN scouting INTEGER DEFAULT 80"))
             conn.commit()
             logger.info("  Migration: added coaches.scouting")
+        except Exception:
+            conn.rollback()
+
+        # Coach attitude (locker-room presence: toxic ↔ leader spectrum)
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN attitude INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added coaches.attitude")
         except Exception:
             conn.rollback()
 

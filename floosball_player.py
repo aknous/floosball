@@ -196,6 +196,12 @@ class Player:
         self.term = 0
         self.termRemaining = 0
         self.capHit = 0
+        # willRetire: set during the regular season when a retirement-eligible
+        # player is determined to be calling it after this season. Surfaces
+        # in the UI well before the offseason so users can plan replacements.
+        # Players retire ONLY at the end of their contract — flag is set only
+        # for those whose contract expires this offseason.
+        self.willRetire = False
         self.seasonPerformanceRating = 0
         self.playerRating = 0
         self.offensiveRating = 0
@@ -558,8 +564,24 @@ class PlayerAttributes:
         return max(0.0, min(1.0, (weighted - 70) / 30))
 
     def computeMoodTier(self):
-        """Compute the 1-5 mood tier from confidence + determination."""
-        combined = self.confidenceModifier + self.determinationModifier
+        """Compute the 1-5 mood tier as a catchall mental-state signal.
+
+        Blends three inputs:
+          - confidenceModifier (volatile, -5..+5) — current week-to-week vibe
+          - determinationModifier (volatile, -5..+5) — drive level
+          - attitude (slow, 30-100) — locker-room identity (toxic ↔ leader)
+
+        Attitude shifts the floor/ceiling so a toxic player can never feel
+        electric for long and a leader has a higher resting state. This is
+        what lets one pill represent the player's full mental state instead
+        of needing separate Mood + Attitude readouts.
+        """
+        attitude = getattr(self, 'attitude', 80) or 80
+        # 30 → −10 (deep toxic drag), 80 → 0 (neutral), 100 → +4 (leader lift).
+        # Asymmetric: toxic players pull mood down harder than leaders push it up,
+        # which matches how locker-room dysfunction tends to swamp performance.
+        attBias = (attitude - 80) / 5
+        combined = self.confidenceModifier + self.determinationModifier + attBias
         if combined >= 6:
             return 5
         elif combined >= 3:

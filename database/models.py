@@ -119,6 +119,9 @@ class Coach(Base):
     # Scouting — accuracy with which fans can see upcoming rookies' potential.
     # Stacks with funding tier to determine the attribute-range blur on /api/rookies/upcoming.
     scouting: Mapped[int] = mapped_column(Integer, default=80)
+    # Locker-room presence on toxic→leader spectrum. Drives attitude contagion
+    # control + 'play hard for them' game-day effect.
+    attitude: Mapped[int] = mapped_column(Integer, default=80)
     overall_rating: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -156,6 +159,10 @@ class Player(Base):
     # Upcoming rookies are visible to fans all season for scouting/voting but
     # aren't on any roster or pipeline yet. Cleared at draft time.
     is_upcoming_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set during the regular season when an end-of-contract player has decided
+    # to retire after this season. Surfaces in UI so users see retirements
+    # coming and can vote on replacements via FA ballot.
+    will_retire: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

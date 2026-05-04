@@ -408,6 +408,7 @@ def _buildCoachDict(team) -> Optional[dict]:
         'clockManagement': coach.clockManagement,
         'playerDevelopment': coach.playerDevelopment,
         'scouting': getattr(coach, 'scouting', 80),
+        'attitude': getattr(coach, 'attitude', 80),
         'seasonsCoached': coach.seasonsCoached,
     }
 
@@ -6806,6 +6807,8 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(400, "Target player not on your favorite team")
             if req.voteType == "resign_player" and player.term_remaining != 1:
                 raise HTTPException(400, "Player does not have an expiring contract")
+            if req.voteType == "resign_player" and getattr(player, 'will_retire', False):
+                raise HTTPException(400, "Player has announced retirement and cannot be re-signed")
         elif req.voteType == "hire_coach":
             if not req.targetPlayerId:
                 raise HTTPException(400, "targetPlayerId (coach ID) required for hire_coach")
@@ -6967,6 +6970,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "clockManagement": c.clockManagement,
                 "playerDevelopment": c.playerDevelopment,
                 "scouting": getattr(c, 'scouting', 80),
+                "attitude": getattr(c, 'attitude', 80),
             }
 
         # Available coaches in pool
@@ -6984,6 +6988,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "clockManagement": c.clock_management,
                 "playerDevelopment": c.player_development,
                 "scouting": getattr(c, 'scouting', 80),
+                "attitude": getattr(c, 'attitude', 80),
             })
 
         # Rostered players (for cut votes — all players eligible)
@@ -7002,10 +7007,16 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "rating": p.player_rating,
                 "tier": p.tier,
                 "termRemaining": p.term_remaining,
+                "willRetire": bool(getattr(p, 'will_retire', False)),
             })
 
-        # Expiring contract players (for resign votes)
-        expiringPlayers = [p for p in rosteredPlayers if p["termRemaining"] == 1]
+        # Expiring contract players that haven't announced retirement —
+        # those are the only ones eligible for a resign vote.
+        expiringPlayers = [
+            p for p in rosteredPlayers
+            if p["termRemaining"] == 1 and not p["willRetire"]
+        ]
+        retiringPlayers = [p for p in rosteredPlayers if p["willRetire"]]
 
         return build_success_response({
             "teamId": teamId,
@@ -7013,6 +7024,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
             "availableCoaches": availableCoaches,
             "rosteredPlayers": rosteredPlayers,
             "expiringPlayers": expiringPlayers,
+            "retiringPlayers": retiringPlayers,
         })
     finally:
         session.close()

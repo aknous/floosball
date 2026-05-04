@@ -1438,18 +1438,40 @@ class Game:
             and self.offensiveTeam is self.otFirstPossTeam
         )
 
-        # High-probability FG (>80%) — kick immediately if it wins/takes lead.
-        # When a FG only ties (down by exactly 3) or it's the first possession,
-        # play for TD on downs 1–3 and only kick as a 4th-down fallback.
+        # Early-down FG to win/take lead. Even at 80% probability, advancing
+        # a few yards turns it into a 95% chip shot — so the threshold for
+        # kicking on 1st-3rd down is much higher than the 4th-down fallback.
+        # Coach aggressiveness shifts it slightly: aggressive coaches will
+        # take ~88% kicks, conservative coaches demand near-automatic.
+        # When a FG only ties (down by exactly 3) or it's the first
+        # possession, play for TD on downs 1–3 and only kick on 4th.
         fgOnlyTies = (scoreDiff == -3)
-        if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= 0.80:
-            if self.down == 4 or (not isFirstPoss and not fgOnlyTies):
+        if (self.down < 4 and scoreDiff >= -3 and not isFirstPoss and not fgOnlyTies
+                and self.yardsToEndzone <= kickerMaxFg):
+            aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+            # 60 aggr → 0.96 (chip shot only), 80 → 0.92, 100 → 0.88
+            earlyDownFgThreshold = 0.92 - aggrNorm * 0.04
+            if fgProb >= earlyDownFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
 
         if self.down == 4:
-            # Kick FG on 4th if probability is reasonable and it ties or wins
+            # Kick FG on 4th if probability is reasonable and it ties or wins.
+            # Long-shot FG check: if the kick is low-probability AND the
+            # yards-to-go is reachable, prefer going for it to get closer
+            # for a higher-percentage attempt. Aggressive coaches roll the
+            # dice on the conversion more often.
             if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= fgThreshold:
+                if fgProb < 0.55 and self.yardsToFirstDown <= 5:
+                    aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+                    # 60 aggr → 15%, 80 → 45%, 100 → 75%
+                    goForItChance = 0.45 + aggrNorm * 0.30
+                    if _random.random() < goForItChance:
+                        if self.yardsToFirstDown <= 2:
+                            self.play.runPlay()
+                        else:
+                            self.play.passPlay(self._selectPassPlay('short'))
+                        return
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -1568,6 +1590,22 @@ class Game:
             'yardsToEndzone': self.yardsToEndzone,
             'coachAggr': coach.aggressiveness if coach else None,
         }
+
+        # Q2 end-of-half: punting wastes the half. With limited time left
+        # and not stuck deep in own territory, take a shot (or kick a
+        # makeable FG) instead of giving the ball up. Aggressive coaches
+        # pull the trigger earlier; even the most conservative coach
+        # stops punting once the clock dips under 15s.
+        if self.currentQuarter == 2 and self.yardsToSafety > 35:
+            shotTimeThreshold = max(15, round(25 + aggrNorm * 10))
+            if self.gameClockSeconds <= shotTimeThreshold:
+                if inFieldGoalRange:
+                    self.play.playType = PlayType.FieldGoal
+                    return
+                # Take a shot at the endzone — long if there's room, otherwise medium
+                passLength = 'long' if self.yardsToEndzone <= 60 else 'medium'
+                self.play.passPlay(self._selectPassPlay(passLength))
+                return
 
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
@@ -2234,9 +2272,23 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
 
-        # End-of-game FG attempt (tied, leading by ≤3, or trailing by ≤3)
+        # End-of-game FG attempt (tied, leading by ≤3, or trailing by ≤3).
+        # If the kick is a long shot AND yards-to-go is reachable AND there's
+        # enough clock to run another play, prefer going for it to get
+        # closer. Aggressive coaches lean toward the conversion attempt;
+        # very late (≤30s) the FG is the only realistic option.
         if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
             if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
+                canAdvance = self.gameClockSeconds >= 30
+                if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
+                    aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+                    goForItChance = 0.45 + aggrNorm * 0.30
+                    if _random.random() < goForItChance:
+                        if self.yardsToFirstDown <= 2:
+                            self.play.runPlay()
+                        else:
+                            self.play.passPlay(self._selectPassPlay('short'))
+                        return
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -2690,17 +2742,28 @@ class Game:
         risers = [name for (name, mod) in involved if mod > 0]
         fallers = [name for (name, mod) in involved if mod < 0]
 
+        # FGs are always-pressure plays — making or missing under high
+        # gamePressure is itself the clutch/choke moment. If the kicker's
+        # pressure roll landed neutral (mod == 0) we still credit/blame
+        # them, since the kick attempt under pressure is the entire story.
+        if play.playType == PlayType.FieldGoal and not (risers or fallers):
+            if getattr(play, 'kicker', None):
+                if isClutchOutcome:
+                    risers = [play.kicker.name]
+                elif isChokeOutcome:
+                    fallers = [play.kicker.name]
+
         if isClutchOutcome and risers:
             play.isClutchPlay = True
             play.clutchPerformers = risers
             # Keep clutchPlayerName populated with the top performer for any
             # legacy consumers (single-name display fallbacks)
-            topRiser = max(involved, key=lambda x: x[1])
+            topRiser = max(involved, key=lambda x: x[1]) if involved else (risers[0], 0)
             play.clutchPlayerName = topRiser[0]
         elif isChokeOutcome and fallers:
             play.isChokePlay = True
             play.chokePerformers = fallers
-            topFaller = min(involved, key=lambda x: x[1])
+            topFaller = min(involved, key=lambda x: x[1]) if involved else (fallers[0], 0)
             play.clutchPlayerName = topFaller[0]
 
     def _accumulateOffenseStats(self, team, score):
@@ -3333,14 +3396,16 @@ class Game:
 
                         if self._shouldOnsideKick():
                             # Announce attempt
+                            onsideAttemptEvent = {
+                                'text': f'{kickingTeam.abbr} attempts an onside kick!',
+                                'quarter': self.currentQuarter,
+                                'timeRemaining': self.formatTime(self.gameClockSeconds)
+                            }
+                            self.gameFeed.insert(0, {'event': onsideAttemptEvent})
                             self.broadcastGameState(
                                 includeLastPlay=False,
                                 isPossessionChange=True,
-                                eventMessage={
-                                    'text': f'{kickingTeam.abbr} attempts an onside kick!',
-                                    'quarter': self.currentQuarter,
-                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
-                                }
+                                eventMessage=onsideAttemptEvent
                             )
                             if self.timingManager:
                                 await self.timingManager.waitBeforeOnsideResult()
@@ -3351,38 +3416,44 @@ class Game:
 
                             if kickingTeamRecovers:
                                 self.turnover(self.offensiveTeam, self.defensiveTeam, 50)
+                                onsideRecoverEvent = {
+                                    'text': f'{kickingTeam.abbr} recovers the onside kick! Ball at midfield!',
+                                    'quarter': self.currentQuarter,
+                                    'timeRemaining': self.formatTime(self.gameClockSeconds)
+                                }
+                                self.gameFeed.insert(0, {'event': onsideRecoverEvent})
                                 self.broadcastGameState(
                                     includeLastPlay=False,
                                     isPossessionChange=True,
-                                    eventMessage={
-                                        'text': f'{kickingTeam.abbr} recovers the onside kick! Ball at midfield!',
-                                        'quarter': self.currentQuarter,
-                                        'timeRemaining': self.formatTime(self.gameClockSeconds)
-                                    }
+                                    eventMessage=onsideRecoverEvent
                                 )
                             else:
                                 # Receiving team keeps ball — move to their 40 instead of their 20
                                 self.yardsToEndzone = 60
                                 self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
-                                self.broadcastGameState(
-                                    includeLastPlay=False,
-                                    isPossessionChange=True,
-                                    eventMessage={
-                                        'text': f'{receivingTeam.abbr} recovers at their own 40!',
-                                        'quarter': self.currentQuarter,
-                                        'timeRemaining': self.formatTime(self.gameClockSeconds)
-                                    }
-                                )
-                        else:
-                            # Normal kickoff
-                            self.broadcastGameState(
-                                includeLastPlay=False,
-                                isPossessionChange=True,
-                                eventMessage={
-                                    'text': f'{kickingTeam.abbr} kicks off',
+                                onsideFailEvent = {
+                                    'text': f'{receivingTeam.abbr} recovers at their own 40!',
                                     'quarter': self.currentQuarter,
                                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                                 }
+                                self.gameFeed.insert(0, {'event': onsideFailEvent})
+                                self.broadcastGameState(
+                                    includeLastPlay=False,
+                                    isPossessionChange=True,
+                                    eventMessage=onsideFailEvent
+                                )
+                        else:
+                            # Normal kickoff
+                            kickoffEvent = {
+                                'text': f'{kickingTeam.abbr} kicks off',
+                                'quarter': self.currentQuarter,
+                                'timeRemaining': self.formatTime(self.gameClockSeconds)
+                            }
+                            self.gameFeed.insert(0, {'event': kickoffEvent})
+                            self.broadcastGameState(
+                                includeLastPlay=False,
+                                isPossessionChange=True,
+                                eventMessage=kickoffEvent
                             )
 
                         self._pendingKickoff = False
@@ -4279,10 +4350,14 @@ class Game:
 
         # Trap game — heavy favorite (ELO advantage ≥ 100) with low discipline
         # plays down to the underdog. Discipline 80+ = no trap; 60 = full trap.
+        # Magnitude bumped again (was 3-5.5%) — multi-season diagnostics still
+        # showed near-zero lift over 1,280 fires. Stronger now so the
+        # mechanic produces measurable upset pressure rather than washing
+        # out vs ELO advantage.
         if teamElo - oppElo >= 100:
             trapScale = max(0.0, min(1.0, (80 - avgDiscipline) / 20))
             if trapScale > 0:
-                trapMag = 0.02 + 0.01 * trapScale  # 2-3%
+                trapMag = 0.05 + 0.03 * trapScale  # 5-8%
                 multiplier *= 1.0 - trapMag
                 logging.debug(
                     f"_context: {team.abbr} trap-game vs {opponent.abbr} "
@@ -4290,13 +4365,11 @@ class Game:
                     f"× {1.0 - trapMag:.3f}"
                 )
         # Underdog hunger — heavy underdog (ELO deficit ≥ 100) with positive
-        # collective determination plays above their level. Mirrors the
-        # trap-game effect from the other side: heavy favorites coast on low
-        # discipline; heavy underdogs lift on high determination. The two
-        # together close the matchup gap by 4-6% in real upset scenarios.
+        # collective determination plays above their level. Magnitude
+        # bumped to match the strengthened trap-game.
         elif oppElo - teamElo >= 100 and avgDetMod > 0:
             detFactor = min(1.0, avgDetMod / 3)  # +3 modifier = full effect
-            hungerMag = 0.02 + 0.01 * detFactor  # 2-3%
+            hungerMag = 0.05 + 0.02 * detFactor  # 5-7%
             multiplier *= 1.0 + hungerMag
             logging.debug(
                 f"_context: {team.abbr} underdog-hunger vs {opponent.abbr} "
@@ -4311,9 +4384,11 @@ class Game:
 
             if clinched:
                 # Clinched coasters: low discipline → going through motions.
-                # Magnitude scales toward season end (week 24: 2%, week 28: 4%).
+                # Magnitude scales toward season end. Bumped again — multi-
+                # season data showed 3-6% wasn't enough to break out of
+                # the noise floor on a sample of 1,280 fires.
                 if avgDiscipline < 75:
-                    coastMag = 0.02 + (week - 24) * 0.005
+                    coastMag = 0.05 + (week - 24) * 0.01  # wk24: 5%, wk28: 9%
                     multiplier *= 1.0 - coastMag
                     logging.debug(
                         f"_context: {team.abbr} clinched-coast wk{week} "
@@ -4335,6 +4410,28 @@ class Game:
                         f"× {1.0 + pushMag:.3f}"
                     )
 
+        # Play-hard-for-the-coach: leader-coaches (90+) get a small lift from
+        # players who buy in; toxic-coaches (≤70) get a small drag from a
+        # disengaged room. Effect is small (±2% at the extremes) — coach
+        # personality colors the whole season elsewhere via attitude
+        # contagion / drift; this is just the day-of expression.
+        coach = getattr(team, 'coach', None)
+        coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
+        if coachAttitude >= 90:
+            coachMag = 0.01 + (coachAttitude - 90) / 1000  # 1.0% .. 2.0%
+            multiplier *= 1.0 + coachMag
+            logging.debug(
+                f"_context: {team.abbr} play-hard-for-coach (coach att "
+                f"{coachAttitude}) × {1.0 + coachMag:.3f}"
+            )
+        elif coachAttitude <= 70:
+            coachMag = 0.01 + (70 - coachAttitude) / 1000  # 1.0% .. 2.0%
+            multiplier *= 1.0 - coachMag
+            logging.debug(
+                f"_context: {team.abbr} disengaged-from-coach (coach att "
+                f"{coachAttitude}) × {1.0 - coachMag:.3f}"
+            )
+
         return multiplier
 
     def _applyContextModifiers(self):
@@ -4344,24 +4441,6 @@ class Game:
         awayMult = self._computeContextMultiplier(self.awayTeam, self.homeTeam)
         self._applyTeamRatingMult(self.homeTeam, homeMult)
         self._applyTeamRatingMult(self.awayTeam, awayMult)
-
-        # Same attribute set as fatigue handling, plus xFactor for direct
-        # mental-state impact. Capped at 100 on the upside, RATING_SCALE_MIN
-        # on the downside to match the rest of the game's clamps.
-        for player in team.rosterDict.values():
-            if player is None or player.gameAttributes is None:
-                continue
-            for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
-                         'accuracy', 'legStrength', 'reach',
-                         'focus', 'discipline', 'instinct'):
-                val = getattr(player.gameAttributes, attr, 0)
-                if val:
-                    setattr(player.gameAttributes, attr,
-                            max(RATING_SCALE_MIN, min(100, round(val * multiplier))))
-            # Recalc derived stats so xFactor / skillRating / overallRating
-            # reflect the multiplier.
-            player.gameAttributes.calculateIntangibles()
-            player.gameAttributes.calculateSkills()
 
     def _applyFatigue(self, team):
         """Reduce in-game attributes based on accumulated player fatigue."""
@@ -5349,7 +5428,16 @@ class Game:
         self.play.homeTeamScore = self.homeScore
         self.play.awayTeamScore = self.awayScore
 
+        # XP is a no-time play — clock is always stopped. formatPlayText
+        # snapshots clockStopped from self.clockRunning, but during the
+        # XP simulation that flag still reflects the prior play's clock
+        # state. Force clockRunning False before the snapshot so the feed
+        # indicator reads correctly.
+        savedClockRunning = self.clockRunning
+        self.clockRunning = False
         self.formatPlayText()
+        self.clockRunning = savedClockRunning
+
         alreadyInFeed = bool(self.gameFeed) and self.gameFeed[0].get('play') is self.play
         if not alreadyInFeed:
             self.gameFeed.insert(0, {'play': self.play})
@@ -5539,8 +5627,34 @@ class Game:
         # Score differential from home team's perspective
         scoreDiff = self.homeScore - self.awayScore
 
+        # Expected PAT: when a TD just hit the books, the WP should already
+        # anticipate the kick attempt that's about to follow. Without this,
+        # a missed XP shows zero WPA (score doesn't change between the +6
+        # TD and the missed XP). Bake in the league-avg XP success rate
+        # (~0.95) so a missed XP correctly registers as a small negative
+        # WPA correction. The scoring team is the one whose score went up
+        # on this play (tracked on the play via _addScore).
+        currentPlay = getattr(self, 'play', None)
+        if (currentPlay is not None
+                and getattr(currentPlay, 'isTd', False)
+                and getattr(currentPlay, 'scoringTeam', None) is not None):
+            expectedPat = 0.95
+            if currentPlay.scoringTeam is self.homeTeam:
+                scoreDiff += expectedPat
+            else:
+                scoreDiff -= expectedPat
+
         # Expected points from current field position
         expectedPoints = self.calculateExpectedPoints()
+
+        # XP attempts run from the 15-yd line with the scoring team listed
+        # as offense, but the situation is actually "kicking the PAT, then
+        # kickoff to opponent" — the field position is misleading for WP.
+        # Zero out the EP swing so the missed-XP / made-XP delta only comes
+        # from the score change, not from the inflated goal-line EP.
+        currentPlay = getattr(self, 'play', None)
+        if currentPlay is not None and getattr(currentPlay, 'playType', None) == PlayType.ExtraPoint:
+            expectedPoints = 0
 
         # Adjust expected points based on who has possession
         if self.offensiveTeam == self.homeTeam:
@@ -5755,11 +5869,16 @@ class Game:
         """
         Add points to a team's score and update the appropriate quarter score.
         Consolidates repeated scoring logic throughout the game.
-        
+
         Args:
             team: The team to award points to (homeTeam or awayTeam)
             points: Number of points to add
         """
+        # Record who scored on this play so calculateWinProbability can
+        # bake in expected PAT on TDs (anticipating the upcoming kick
+        # makes a missed XP show as a real negative WPA event).
+        if hasattr(self, 'play') and self.play is not None:
+            self.play.scoringTeam = team
         if team == self.homeTeam:
             self.homeScore += points
             if self.currentQuarter == 1:
@@ -5837,6 +5956,9 @@ class Play():
         self.isXpGood = False
         self.isSafety = False
         self.scoreChange = False
+        # Set by _addScore on any scoring play. Used by calculateWinProbability
+        # to bake the expected PAT into a TD's WP.
+        self.scoringTeam = None
         self.passIsDropped = False
         self.isInBounds = True  # Default to in bounds
         # Whether the game clock stops after this play. Captured by formatPlayText
@@ -5912,7 +6034,8 @@ class Play():
             phNorm = getattr(attrs, 'pressureHandling', 0) / 10
 
             # Combined mental score: -1 (chokes) to +1 (ice cold)
-            mentalScore = 0.5 * phNorm + 0.3 * mentalNorm + 0.2 * (getattr(attrs, 'clutchFactor', 0) / 100)
+            # Reweighted from old 0.5/0.3/0.2 split (clutchFactor was removed)
+            mentalScore = 0.6 * phNorm + 0.4 * mentalNorm
 
             # Max swing scales with pressure intensity: low pressure = tiny, high = up to ±12%
             maxSwing = normalizedPressure * 0.12
