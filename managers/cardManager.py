@@ -387,7 +387,7 @@ class CardManager:
             "sellValue": sellValue,
             "combineValue": getCardValue(userCard, currentSeason),
             "isActive": isActive,
-            "acquiredAt": userCard.acquired_at.isoformat() if userCard.acquired_at else None,
+            "acquiredAt": userCard.acquired_at.isoformat() + 'Z' if userCard.acquired_at else None,
             "acquiredVia": userCard.acquired_via,
         }
 
