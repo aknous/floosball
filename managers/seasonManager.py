@@ -1245,15 +1245,23 @@ class SeasonManager:
             from database.connection import get_session as _getSession
             from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
             swapSession = _getSession()
+            currentWeek = (
+                self.currentSeason.currentWeek
+                if self.currentSeason and self.currentSeason.currentWeek
+                else 0
+            )
             rosters = swapSession.query(FantasyRoster).filter_by(
                 season=season, is_locked=True
             ).all()
             updated = 0
             for roster in rosters:
-                # AP bump — count equipped AP cards whose grants are still
-                # unused this cycle (swap_bonus_active=True). Each adds room
-                # for one extra outstanding swap so the weekly organic refill
-                # can stack on top of the AP grant.
+                # AP bump — count equipped AP cards (THIS WEEK only) whose
+                # grants are still unused this cycle (swap_bonus_active=True).
+                # Each adds room for one extra outstanding swap so the weekly
+                # organic refill can stack on top of the AP grant.
+                # Without the week filter, carry-forward rows from earlier
+                # weeks would inflate the count and the cap would ratchet up
+                # by 1 every week.
                 apActiveCount = swapSession.query(EquippedCard).join(
                     UserCard, EquippedCard.user_card_id == UserCard.id
                 ).join(
@@ -1261,10 +1269,11 @@ class SeasonManager:
                 ).filter(
                     EquippedCard.user_id == roster.user_id,
                     EquippedCard.season == season,
+                    EquippedCard.week == currentWeek,
                     EquippedCard.swap_bonus_active == True,
                     CardTemplate.classification.isnot(None),
                     CardTemplate.classification.contains("all_pro"),
-                ).count()
+                ).count() if currentWeek > 0 else 0
                 maxSwaps = 1 + apActiveCount
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
@@ -2156,20 +2165,33 @@ class SeasonManager:
                 ).first() is not None
                 if hasActiveFlex:
                     continue
-                # Champion card equipped this week?
-                hasChampion = (
-                    session.query(EquippedCard.id)
-                    .join(UserCard, EquippedCard.user_card_id == UserCard.id)
-                    .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
-                    .filter(
-                        EquippedCard.user_id == userId,
-                        EquippedCard.season == season,
-                        EquippedCard.week == currentWeek,
-                        CardTemplate.classification.isnot(None),
-                        CardTemplate.classification.contains("champion"),
-                    )
-                    .limit(1).count()
-                ) > 0
+                # Champion card equipped recently? The sweep runs at week
+                # rollover BEFORE carry-forward fills the new week's rows,
+                # so checking week == currentWeek would miss a Champion that
+                # the user clearly still has equipped (just not yet copied
+                # over). Use the latest week we have equipped data for to
+                # answer "is Champion still in the loadout?".
+                from sqlalchemy import func
+                latestEqWeek = session.query(func.max(EquippedCard.week)).filter(
+                    EquippedCard.user_id == userId,
+                    EquippedCard.season == season,
+                    EquippedCard.week <= currentWeek,
+                ).scalar()
+                hasChampion = False
+                if latestEqWeek is not None:
+                    hasChampion = (
+                        session.query(EquippedCard.id)
+                        .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                        .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                        .filter(
+                            EquippedCard.user_id == userId,
+                            EquippedCard.season == season,
+                            EquippedCard.week == latestEqWeek,
+                            CardTemplate.classification.isnot(None),
+                            CardTemplate.classification.contains("champion"),
+                        )
+                        .limit(1).count()
+                    ) > 0
                 if hasChampion:
                     continue
                 session.delete(rp)
