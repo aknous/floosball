@@ -1,0 +1,408 @@
+# Stadium Quirks — each home stadium has unique field/atmospheric conditions
+# tied to the team name. Effects are small (±5-15%) but flavorful — the goal
+# is character, not balance disruption. Every team's stadium has its own vibe.
+#
+# Schema:
+#   <team_name>:
+#     icon: kebab-case-key       # SVG key on the frontend
+#     tagline: short pregame description
+#     description: longer flavor for hover/modal
+#     effects:                    # all optional, all multiplicative (1.0 = no change)
+#       passAccuracy:    1.0     # affects completion rate
+#       runYardage:      1.0     # affects yards per carry
+#       fgAccuracy:      1.0     # affects field goal make rate
+#       fumbleRate:      1.0     # affects fumble probability
+#       sackRate:        1.0     # affects sack probability
+#       deepPassChance:  1.0     # affects deep-shot weighting
+#       paceMod:         1.0     # affects plays per drive (clock per play)
+#       roadDiscipline:  1.0     # road-team discipline (penalties, false starts)
+#       homeBoost:       1.0     # generic home-team confidence (small ELO-flavored swing)
+#       clutchVariance:  1.0     # amplitude of clutch/choke effects
+#     flavor:
+#       ambient: [...]            # idle lines between plays / drives
+#       bigPlay: [...]            # lines on big plays
+#       miss: [...]               # lines on missed FGs / dropped passes / fumbles
+
+Strangers:
+  icon: shadow-figure
+  tagline: Shadowy Stadium
+  description: |
+    The lighting is dim, the corners are dark, and you can never quite see who's
+    on the sideline. The field is wrapped in long shadows.
+  effects:
+    passAccuracy: 0.96
+    deepPassChance: 0.92
+    fgAccuracy: 0.96
+  flavor:
+    ambient:
+      - "A shadow stretches across the 30-yard line. No one knows who cast it."
+      - "The receiver loses sight of the ball as it crosses into a dark patch."
+    miss:
+      - "The kicker watches the ball disappear into the shadows. Wide left."
+
+Normals:
+  icon: gridlines
+  tagline: Painfully Average
+  description: |
+    Regulation field, regulation grass, regulation lighting, regulation everything.
+    There is a sign on the wall that reads "PROCEDURE." Big plays feel weirdly absent.
+  effects:
+    deepPassChance: 0.92
+    runYardage: 0.97
+    paceMod: 0.95
+  flavor:
+    ambient:
+      - "The scoreboard runs a montage of players checking off forms."
+      - "Someone in the crowd is reading the rulebook for fun."
+      - "The sideline drinks are all room temperature."
+
+Broads:
+  icon: asphalt
+  tagline: Hard Top
+  description: |
+    The "field" is a strip of road. Painted lines, blacktop in the middle,
+    cracks down the seams. Cuts feel concrete-hard. Runs go fast; landings hurt.
+  effects:
+    runYardage: 1.05
+    fumbleRate: 1.06
+    paceMod: 1.04
+  flavor:
+    ambient:
+      - "A runner's cleats spark off the asphalt as he cuts upfield."
+      - "The kicker eyes a pothole at the 32 and adjusts his approach."
+
+Drivers:
+  icon: car-horn
+  tagline: Beltway Brawl
+  description: |
+    Horns blare from the parking lot. The crowd cuts each other off in the
+    aisles. Road rage in the sections. Visiting offenses get rattled by the
+    constant honking; everyone plays a little too aggressive.
+  effects:
+    paceMod: 1.06
+    fumbleRate: 1.05
+    roadDiscipline: 0.93
+  flavor:
+    ambient:
+      - "A car horn from the parking lot interrupts the snap count."
+      - "A fan in row 22 is screaming 'USE YOUR BLINKER' at no one in particular."
+      - "Two cars in the lot are nose-to-nose, neither will back up. Refs ignore it."
+
+Melons:
+  icon: melon-slice
+  tagline: Sticky Stadium
+  description: |
+    Spilled melon juice and sticky concession-stand syrup coat the field. The
+    ball doesn't squirt loose easily, but breakaways die fast.
+  effects:
+    fumbleRate: 0.85
+    runYardage: 0.95
+  flavor:
+    ambient:
+      - "The PA crackles: 'Please report any sticky patches to maintenance.'"
+      - "A receiver gets up with a piece of cantaloupe stuck to his knee."
+
+Rocks:
+  icon: electric-guitar
+  tagline: Hall of Fame
+  description: |
+    The stadium runs like a rock concert. Marshall stacks line the tunnels.
+    A drum solo plays between every series. The crowd headbangs in unison.
+    Road offenses can't hear themselves over the distortion.
+  effects:
+    roadDiscipline: 0.92
+    paceMod: 1.04
+    clutchVariance: 1.07
+  flavor:
+    ambient:
+      - "A power chord rips through the PA. The road QB winces."
+      - "The crowd starts a 'CLE-VE-LAND ROCKS' chant during the snap."
+      - "A drum solo erupts between plays. The play clock keeps running."
+      - "The Jumbotron cuts to a wall of amps. Someone is just turning them up."
+
+Beans:
+  icon: soup-pot
+  tagline: Soupy Field
+  description: |
+    The field is permanently soupy. Mud sloshes around the cleats. Footing
+    is bad, the ball is slick, kicks die in the muck.
+  effects:
+    runYardage: 0.93
+    fgAccuracy: 0.93
+    fumbleRate: 1.10
+    paceMod: 0.95
+  flavor:
+    ambient:
+      - "A runner's foot disappears mid-cut. He pulls it out with a slurp."
+      - "The ball lands in a puddle and stays there. The ref fishes it out."
+      - "A linebacker is unrecognizable under a layer of mud."
+
+Caddies:
+  icon: golf-flag
+  tagline: Eldorado Greens
+  description: |
+    A fairway-perfect field with vintage Cadillacs lining the sidelines as
+    luxury suites. PA uses golf parlance — drives, approaches, the rough.
+    Bench seats are upholstered in DeVille leather. Long balls carry; kicks
+    fly true; runs are a slow stroll up the fairway.
+  effects:
+    deepPassChance: 1.07
+    fgAccuracy: 1.05
+    runYardage: 0.97
+  flavor:
+    ambient:
+      - "The PA announces the kick like a tee shot: 'Quiet, please.'"
+      - "A '59 Eldorado idles on the sideline. Its driver tips a hat."
+      - "A groundskeeper replaces a divot before the next snap."
+      - "The receiver's drive lands on the fairway. The PA calls it 'in the short grass.'"
+      - "A caddie hands the QB a five-iron between drives. He politely declines."
+
+Blouses:
+  icon: purple-rain
+  tagline: Purple Rain
+  description: |
+    A faint purple mist hangs over the field. The crowd dresses in lace and
+    velvet. A guitar solo rips during every TV timeout. Doves circle the
+    upper deck. The vibes are funky and a little chaotic.
+  effects:
+    deepPassChance: 1.07
+    fumbleRate: 1.05
+    clutchVariance: 1.10
+  flavor:
+    ambient:
+      - "A guitar solo wails from the rafters. The center forgets the count."
+      - "Purple rain drifts onto the 40. The receiver just stands in it."
+      - "A dove lands on the goalpost. The crowd loses it."
+
+Cranes:
+  icon: radio-tower
+  tagline: KACL Live
+  description: |
+    A radio show broadcasts live from the press box, complete with opera
+    cuts and wine pairings. The host's voice carries everywhere. Road teams
+    feel like they're being psychoanalyzed in real time.
+  effects:
+    roadDiscipline: 0.91
+    paceMod: 0.96
+  flavor:
+    ambient:
+      - "The PA cuts in: 'I'm listening.' The road QB stares at the press box."
+      - "A wine cork pops in the broadcast booth. The receiver flinches."
+      - "An aria swells during the snap. The center pauses, moved."
+
+Pinecones:
+  icon: pine-tree
+  tagline: The Grove
+  description: |
+    The stadium is built inside a stand of old conifers. Trees line the
+    sidelines. Pinecones drop from the canopy. Smells like a Christmas tree
+    farm. Deep balls vanish into the branches.
+  effects:
+    deepPassChance: 0.94
+    fumbleRate: 1.05
+    paceMod: 0.96
+  flavor:
+    ambient:
+      - "A pinecone thumps onto the 40-yard line. A ref kicks it aside."
+      - "The deep ball clips a low branch. Receivers point up, baffled."
+      - "A squirrel sprints across the back of the end zone."
+
+Oysters:
+  icon: mountain-peak
+  tagline: Mountain Brine
+  description: |
+    High-altitude air mixed with a strange salty mist. Visiting kickers'
+    legs feel weak; visiting offenses gas out late.
+  effects:
+    homeBoost: 1.05
+  flavor:
+    ambient:
+      - "The road kicker is doubled over on the sideline, panting."
+      - "A faint salt fog rolls across the 50-yard line."
+
+Moonlight:
+  icon: crescent-moon
+  tagline: Moonlit Field
+  description: |
+    Every home game is played at night under nothing but moonlight and torches.
+    The ball is hard to see, especially deep.
+  effects:
+    passAccuracy: 0.95
+    deepPassChance: 0.90
+    fgAccuracy: 0.96
+  flavor:
+    ambient:
+      - "A torch flickers near the sideline. The receiver loses sight of the ball."
+      - "The moon is full tonight. The crowd howls."
+
+Slippers:
+  icon: ruby-shoe
+  tagline: No Place Like Home
+  description: |
+    A yellow brick path runs down the middle of the field. The end zones are
+    ruby red. A funnel cloud is always somewhere on the horizon. The home
+    crowd believes — really believes — there's no place like home.
+  effects:
+    paceMod: 0.93
+    homeBoost: 1.06
+    fumbleRate: 0.94
+  flavor:
+    ambient:
+      - "The wind kicks up. Something cartwheels across the parking lot."
+      - "A fan in ruby slippers clicks her heels three times. The crowd cheers."
+      - "The PA plays a single scratchy note from somewhere over the rainbow."
+      - "A munchkin choir in the upper deck strikes up between drives."
+
+Sand Dollars:
+  icon: sand-pile
+  tagline: Sandy Field
+  description: |
+    Real sand on the field. Beach chairs along the sideline. Ocean breeze
+    carries the smell of salt. Running is hard work; kicks fall short.
+  effects:
+    runYardage: 0.93
+    fgAccuracy: 0.95
+    fumbleRate: 0.95
+  flavor:
+    ambient:
+      - "A seagull steals a sideline reporter's sandwich. Play stops briefly."
+      - "Sand sprays into the air on a hard cut. The runner spits."
+
+Dry Heat:
+  icon: sun
+  tagline: Desert Heat
+  description: |
+    The temperature reads 112°F. There is no shade. Late-game stamina is a
+    real concern, especially for visiting teams.
+  effects:
+    homeBoost: 1.04
+  flavor:
+    ambient:
+      - "The road team's water cooler is empty. Already."
+      - "A mirage shimmers above the far hashmarks."
+
+Residents:
+  icon: spotlight
+  tagline: The Headliner
+  description: |
+    Halftime is a 45-minute residency show. The headliner — Celine impersonator,
+    Cirque acrobats, Elvis on a wire — performs between every drive. Pace is
+    glacial. Big moments are EVENTS.
+  effects:
+    paceMod: 0.90
+    clutchVariance: 1.15
+  flavor:
+    ambient:
+      - "An Elvis impersonator descends on a wire and lip-syncs at midfield."
+      - "A Cirque acrobat hangs from the goalpost. Play continues underneath."
+      - "The PA introduces the next snap like a Vegas opener: 'Ladies and gentlemen...'"
+      - "A magician saws a cheerleader in half during the TV timeout."
+
+Rhyme:
+  icon: quill
+  tagline: Poetry Slam
+  description: |
+    Between every play, a poet at midfield reads a stanza. Pace slows to a
+    crawl. The vibes are heavy.
+  effects:
+    paceMod: 0.85
+    sackRate: 1.05
+  flavor:
+    ambient:
+      - "The poet at midfield reads a haiku about 3rd-and-7."
+      - "A receiver pauses to applaud. The play clock keeps running."
+
+Bachelorettes:
+  icon: tiara
+  tagline: Rowdy Crowd
+  description: |
+    Bachelorette parties pack the lower bowl. Sashes everywhere. The noise is
+    relentless. Road offenses get false-start happy.
+  effects:
+    roadDiscipline: 0.90
+  flavor:
+    ambient:
+      - "A 'BRIDE TRIBE' sash gets thrown onto the field. Play stops."
+      - "The crowd boos the road QB by name. He looks rattled."
+
+Lattes:
+  icon: coffee-cup
+  tagline: Caffeinated Air
+  description: |
+    Espresso machines hiss from the concessions. Steam drifts onto the field.
+    Players are jittery. Pace is up; mistakes follow.
+  effects:
+    paceMod: 1.08
+    fumbleRate: 1.06
+    deepPassChance: 1.04
+  flavor:
+    ambient:
+      - "A linebacker has the shakes. He keeps shifting."
+      - "The PA plays a milk-frother sound effect after every first down."
+
+Jetskis:
+  icon: water-spray
+  tagline: Spray Zone
+  description: |
+    Jetskis idle on the sidelines. Spray drifts onto the field. The ball is
+    perpetually slick.
+  effects:
+    fumbleRate: 1.12
+    passAccuracy: 0.96
+  flavor:
+    ambient:
+      - "A jetski revs on the sideline. The QB's grip is visibly wet."
+      - "A wave breaks over the front row. They cheer."
+
+Phones:
+  icon: glass-panel
+  tagline: The Glass Cube
+  description: |
+    Glass-and-aluminum stadium, white walls, minimalist signage. The
+    scoreboard runs a software update every Sunday. Replays are reviewed
+    instantly and frequently. The whole place feels sterile and very on-brand.
+  effects:
+    paceMod: 0.94
+    homeBoost: 1.03
+  flavor:
+    ambient:
+      - "The scoreboard reads 'INSTALLING UPDATE 4.1...' for a full play."
+      - "A genius bar staffer sprints onto the field to debug the down marker."
+      - "A keynote-style chime plays after every first down."
+      - "The PA introduces the next play in lower-case Helvetica: 'next.'"
+
+Babies:
+  icon: pillow
+  tagline: Cushioned Field
+  description: |
+    The field is plush. Memory-foam turf, pillow-top end zones, soft as a
+    nursery rug. Tackles are gentle. Energy gets absorbed into the ground.
+  effects:
+    runYardage: 0.94
+    sackRate: 0.88
+    fumbleRate: 0.90
+    paceMod: 0.95
+  flavor:
+    ambient:
+      - "A linebacker bounces lightly off a tackle. Both players grin."
+      - "A receiver lands and the field puffs up like a marshmallow."
+      - "A baby in the front row is asleep through a 4th-and-1."
+
+Classics:
+  icon: glass-bottle
+  tagline: The Original Recipe
+  description: |
+    A working soda fountain on every concourse. Vintage fountain bottles in
+    every cupholder. A polar bear waves from the upper deck. Sponsorship
+    signs read 1955. Everything tastes a little sweeter here, in a wholesome
+    Americana sort of way.
+  effects:
+    runYardage: 1.04
+    deepPassChance: 0.94
+    homeBoost: 1.03
+  flavor:
+    ambient:
+      - "A polar bear in the upper deck holds up a glass bottle. Crowd roars."
+      - "The PA crackles a 1955-style call: 'And he's off — !'"
+      - "A vendor walks the aisles in a soda jerk hat. He's been on the job 60 years."
+      - "The goalpost has a fountain logo painted on it. Nobody questions it."
