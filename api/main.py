@@ -4693,7 +4693,9 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
 def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
     """Lock the user's fantasy roster for the current season."""
     from database.connection import get_session
-    from database.models import FantasyRoster, FantasyRosterPlayer
+    from database.models import (
+        FantasyRoster, FantasyRosterPlayer, EquippedCard, UserCard, CardTemplate,
+    )
 
     currentSeasonNum = _getCurrentSeasonNumber()
     if currentSeasonNum is None:
@@ -4729,6 +4731,36 @@ def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
 
         roster.is_locked = True
         roster.locked_at = datetime.utcnow()
+
+        # Retroactively grant All-Pro swap bonuses for any equipped AP cards.
+        # The equip endpoint only grants when the roster is already locked, so
+        # equipping before locking — the natural flow when a user fills slots
+        # then equips cards, then locks — silently skipped the grant. Replay
+        # it here so the swap_bonus_active flag and last_swap_grant_cycle
+        # markers reflect reality.
+        sm = floosball_app.seasonManager
+        currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
+        if currentWeek > 0:
+            swapCycle = (currentWeek - 1) // 7 + 1
+            equippedAP = (
+                session.query(EquippedCard, UserCard, CardTemplate)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(
+                    EquippedCard.user_id == user.id,
+                    EquippedCard.season == currentSeasonNum,
+                    EquippedCard.week == currentWeek,
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("all_pro"),
+                )
+                .all()
+            )
+            for eqCard, uc, _tmpl in equippedAP:
+                if uc.last_swap_grant_cycle < swapCycle:
+                    roster.swaps_available += 1
+                    uc.last_swap_grant_cycle = swapCycle
+                    eqCard.swap_bonus_active = True
+
         session.commit()
         return build_success_response({"message": "Roster locked", "lockedAt": roster.locked_at.isoformat() + 'Z'})
     except HTTPException:
