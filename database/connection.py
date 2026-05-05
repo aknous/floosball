@@ -751,11 +751,16 @@ def _backfillPlayerSeasonStatsFromGames():
             logger.info(f"  Backfill diagnostic: sample passing_stats = {str(sampleRow[0])[:100] if sampleRow else 'NO ROWS WITH DATA'}")
 
         # Find season stats rows where all denormalized stat columns are zero or NULL
-        # but the player has game data (meaning the stats were zeroed by the save bug)
+        # but the player has game data (meaning the stats were zeroed by the save bug).
+        # Kickers also need a fgAtt check — they never accumulate passing/rushing/
+        # receiving yards, so the standard zero-check would always fire on them and
+        # the reconstruction would wipe per-range FG fields (game_player_stats
+        # doesn't track those).
         result = conn.execute(text(
             "SELECT pss.id, pss.player_id, pss.season FROM player_season_stats pss "
             "WHERE COALESCE(pss.passing_yards, 0) = 0 AND COALESCE(pss.rushing_yards, 0) = 0 "
             "  AND COALESCE(pss.receiving_yards, 0) = 0 AND COALESCE(pss.sacks, 0) = 0 "
+            "  AND COALESCE(CAST(json_extract(pss.kicking_stats, '$.fgAtt') AS INTEGER), 0) = 0 "
             "  AND EXISTS ("
             "    SELECT 1 FROM game_player_stats gps "
             "    JOIN games g ON gps.game_id = g.id "
@@ -825,6 +830,19 @@ def _backfillPlayerSeasonStatsFromGames():
                 receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
             if kicking.get('fgAtt', 0) > 0:
                 kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
+            # Per-range FG percentages (under 20 / 20-40 / 40-50 / 50+).
+            # Each pair tracks attempts (xxxAtt) and makes (xxx).
+            for mkKey, attKey, percKey in (
+                ('fgUnder20', 'fgUnder20att', 'fgUnder20perc'),
+                ('fg20to40', 'fg20to40att', 'fg20to40perc'),
+                ('fg40to50', 'fg40to50att', 'fg40to50perc'),
+                ('fgOver50', 'fgOver50att', 'fgOver50perc'),
+            ):
+                att = kicking.get(attKey, 0) or 0
+                if att > 0:
+                    kicking[percKey] = round((kicking.get(mkKey, 0) or 0) / att * 100, 1)
+                else:
+                    kicking[percKey] = 0
 
             # Update the row
             sPassing = passing.get('yards', 0)
@@ -879,14 +897,20 @@ def _backfillPlayerCareerStatsFromGames():
     from sqlalchemy import text
     conn = engine.connect()
     try:
-        # Find players with game data but zeroed/NULL or missing career stats
+        # Find players with game data but zeroed/NULL or missing career stats.
+        # Kickers don't accumulate passing/rushing/receiving yards, so the
+        # check also looks at the kicking_stats JSON for fgAtt — without this,
+        # the backfill would fire for every kicker on every startup and
+        # overwrite their (correctly-saved) career row with a reconstruction
+        # that lacks per-range FG fields (game_player_stats never tracks them).
         result = conn.execute(text(
             "SELECT DISTINCT gps.player_id FROM game_player_stats gps "
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM player_career_stats pcs "
             "  WHERE pcs.player_id = gps.player_id AND pcs.season = 0 "
             "    AND (COALESCE(pcs.passing_yards, 0) > 0 OR COALESCE(pcs.rushing_yards, 0) > 0 "
-            "         OR COALESCE(pcs.receiving_yards, 0) > 0)"
+            "         OR COALESCE(pcs.receiving_yards, 0) > 0 "
+            "         OR COALESCE(CAST(json_extract(pcs.kicking_stats, '$.fgAtt') AS INTEGER), 0) > 0)"
             ")"
         ))
         playerIds = [row[0] for row in result.fetchall()]
@@ -941,6 +965,19 @@ def _backfillPlayerCareerStatsFromGames():
                 receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
             if kicking.get('fgAtt', 0) > 0:
                 kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
+            # Per-range FG percentages (under 20 / 20-40 / 40-50 / 50+).
+            # Each pair tracks attempts (xxxAtt) and makes (xxx).
+            for mkKey, attKey, percKey in (
+                ('fgUnder20', 'fgUnder20att', 'fgUnder20perc'),
+                ('fg20to40', 'fg20to40att', 'fg20to40perc'),
+                ('fg40to50', 'fg40to50att', 'fg40to50perc'),
+                ('fgOver50', 'fgOver50att', 'fgOver50perc'),
+            ):
+                att = kicking.get(attKey, 0) or 0
+                if att > 0:
+                    kicking[percKey] = round((kicking.get(mkKey, 0) or 0) / att * 100, 1)
+                else:
+                    kicking[percKey] = 0
 
             # Check if career row exists
             existing = conn.execute(text(

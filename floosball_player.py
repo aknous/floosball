@@ -388,20 +388,22 @@ class Player:
                 self.seasonStatsDict['kicking']['fg45+'] = self.seasonStatsDict['kicking'].get('fg45+', 0) + 1
                 self.careerStatsDict['kicking']['fg45+'] = self.careerStatsDict['kicking'].get('fg45+', 0) + 1
                 
-        # Handle distance-specific attempt tracking (these are tracked separately from makes)
+        # Handle distance-specific attempt + make tracking. Both buckets get
+        # incremented on a successful kick so we can compute per-range FG%
+        # (under 20 / 20-40 / 40-50 / 50+) at save/read time.
         if isRegularSeason:
-            if yards < 50 and yards > 39:
-                self.seasonStatsDict['kicking']['fg40to50att'] = self.seasonStatsDict['kicking'].get('fg40to50att', 0) + 1
-                self.careerStatsDict['kicking']['fg40to50att'] = self.careerStatsDict['kicking'].get('fg40to50att', 0) + 1
-            elif yards < 40 and yards > 19:
-                self.seasonStatsDict['kicking']['fg20to40att'] = self.seasonStatsDict['kicking'].get('fg20to40att', 0) + 1
-                self.careerStatsDict['kicking']['fg20to40att'] = self.careerStatsDict['kicking'].get('fg20to40att', 0) + 1
-            elif yards < 20:
-                self.seasonStatsDict['kicking']['fgUnder20att'] = self.seasonStatsDict['kicking'].get('fgUnder20att', 0) + 1
-                self.careerStatsDict['kicking']['fgUnder20att'] = self.careerStatsDict['kicking'].get('fgUnder20att', 0) + 1
+            if yards < 20:
+                attKey, mkKey = 'fgUnder20att', 'fgUnder20'
+            elif yards < 40:
+                attKey, mkKey = 'fg20to40att', 'fg20to40'
+            elif yards < 50:
+                attKey, mkKey = 'fg40to50att', 'fg40to50'
             else:
-                self.seasonStatsDict['kicking']['fgOver50att'] = self.seasonStatsDict['kicking'].get('fgOver50att', 0) + 1
-                self.careerStatsDict['kicking']['fgOver50att'] = self.careerStatsDict['kicking'].get('fgOver50att', 0) + 1
+                attKey, mkKey = 'fgOver50att', 'fgOver50'
+            self.seasonStatsDict['kicking'][attKey] = self.seasonStatsDict['kicking'].get(attKey, 0) + 1
+            self.careerStatsDict['kicking'][attKey] = self.careerStatsDict['kicking'].get(attKey, 0) + 1
+            self.seasonStatsDict['kicking'][mkKey] = self.seasonStatsDict['kicking'].get(mkKey, 0) + 1
+            self.careerStatsDict['kicking'][mkKey] = self.careerStatsDict['kicking'].get(mkKey, 0) + 1
 
 
     def addMissedFg(self, yards, isRegularSeason):
