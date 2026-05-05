@@ -1365,14 +1365,24 @@ class TeamManager:
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
 
     def generateCoachPool(self, count: int = 5) -> None:
-        """Generate unassigned coaches and persist them to the DB coach pool."""
+        """Top up the unassigned coach pool to `count` entries.
+
+        Preserves existing pool entries — earlier versions of this method
+        wiped and regenerated the pool on every boot, which invalidated any
+        outstanding GM hire_coach votes (target_player_id pointed at a
+        Coach DB row that no longer existed). With existing rows preserved,
+        an in-flight vote keeps its target through restarts and offseason
+        transitions, and only NEW coaches are added when the pool runs low.
+        """
         if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
             return
         from database.models import Coach as DBCoach
         try:
-            # Clear old pool entries (unassigned coaches)
-            self.db_session.query(DBCoach).filter(DBCoach.team_id == None).delete()
-            for _ in range(count):
+            existing = self.db_session.query(DBCoach).filter(DBCoach.team_id == None).count()
+            needed = max(0, count - existing)
+            if needed == 0:
+                return
+            for _ in range(needed):
                 coach = self.generateCoach()
                 dbCoach = DBCoach(
                     name=coach.name,
@@ -1390,9 +1400,11 @@ class TeamManager:
                 )
                 self.db_session.add(dbCoach)
             self.db_session.flush()
-            self.logger.info(f"Generated coach pool of {count} available coaches")
+            self.logger.info(
+                f"Topped up coach pool: added {needed} (existing {existing}, target {count})"
+            )
         except Exception as e:
-            self.logger.error(f"Failed to generate coach pool: {e}")
+            self.logger.error(f"Failed to top up coach pool: {e}")
             self.db_session.rollback()
 
     def getAvailableCoaches(self):
