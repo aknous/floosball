@@ -574,6 +574,7 @@ async def get_team(team_id: int, response: Response):
                     'defensivePosition': player.defensivePosition.value if player.defensivePosition else None,
                     'termRemaining': player.termRemaining,
                     'tier': player.playerTier.name if hasattr(player.playerTier, 'name') else str(player.playerTier),
+                    'serviceTime': player.serviceTime.value if hasattr(player.serviceTime, 'value') else str(player.serviceTime),
                     'fatigue': round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1),
                     'resilience': getattr(player.attributes, 'resilience', 80),
                     'ratingHistory': history,

@@ -228,8 +228,13 @@ class SeasonManager:
         """Get current timing mode as string"""
         return self.timingManager.getModeString()
     
-    async def startNewSeason(self) -> None:
-        """Initialize and start a new season"""
+    async def startNewSeason(self, resumeFromWeek: int = 0) -> None:
+        """Initialize and start a new season.
+
+        resumeFromWeek > 0 indicates a server restart mid-season — preserves
+        in-memory state (e.g. fatigue, form) that would otherwise be reset
+        as if it were a brand-new season.
+        """
         seasonNumber = self.serviceContainer.getService('game_state').getState('seasonsPlayed', 0) + 1
         logger.info(f"Starting season {seasonNumber}")
         
@@ -269,8 +274,10 @@ class SeasonManager:
         if not scheduleLoaded:
             self.createSchedule()
 
-        # Initialize season stats
-        self._initializeSeasonStats()
+        # Initialize season stats. Pass resumeFromWeek so a mid-season
+        # restart skips the fatigue reset (DB already has the accumulated
+        # values; resetting them in-memory would zero everyone back to fresh).
+        self._initializeSeasonStats(isResume=(resumeFromWeek > 0))
 
         # Restore reigning champion flag from DB
         self._restoreReigningChampion(seasonNumber)
@@ -5501,16 +5508,23 @@ class SeasonManager:
             
             logger.debug(f"Saved roster history for {team.name}, season {self.currentSeason.seasonNumber}")
         
-    def _initializeSeasonStats(self) -> None:
-        """Initialize season statistics tracking"""
+    def _initializeSeasonStats(self, isResume: bool = False) -> None:
+        """Initialize season statistics tracking.
+
+        isResume=True means we're restarting the server mid-season — the DB
+        already has the accumulated values (fatigue, etc.) so we shouldn't
+        zero them back to fresh.
+        """
         # Save roster history for each team at the start of the season
         self._saveRosterHistory()
 
-        # Reset fatigue for all players at the start of a new season
-        for team in self.leagueManager.teams:
-            for player in team.rosterDict.values():
-                if player is not None:
-                    player.attributes.fatigue = 0.0
+        # Reset fatigue for all players only at the start of a genuinely new
+        # season — never on a mid-season restart.
+        if not isResume:
+            for team in self.leagueManager.teams:
+                for player in team.rosterDict.values():
+                    if player is not None:
+                        player.attributes.fatigue = 0.0
 
         # Initialize team season stats
         for team in self.leagueManager.teams:

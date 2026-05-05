@@ -386,8 +386,9 @@ class FloosballApplication:
                 is_active=True
             )
 
-            # Start new season
-            await self.seasonManager.startNewSeason()
+            # Start new season — pass resumeFromWeek so a mid-season restart
+            # preserves accumulated fatigue / form instead of zeroing them.
+            await self.seasonManager.startNewSeason(resumeFromWeek=resumeFromWeek)
 
             # Run season simulation (this will update state as it progresses)
             await self.seasonManager.runSeasonSimulation(resumeFromWeek=resumeFromWeek)
