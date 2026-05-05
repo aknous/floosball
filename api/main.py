@@ -4448,9 +4448,12 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
         if roster is None:
             return build_success_response({"roster": None, "season": displaySeason, "hasFlexSlot": hasFlexSlot})
 
-        # If roster already has a FLEX player, ensure hasFlexSlot stays true
-        if not hasFlexSlot and any(rp.slot == "FLEX" for rp in roster.players):
-            hasFlexSlot = True
+        # Note: hasFlexSlot reflects only the user's current entitlement
+        # (active temp_flex powerup OR equipped Champion card). A stale FLEX
+        # rosterPlayer left behind from an expired powerup does NOT keep
+        # hasFlexSlot true — the seasonManager sweeps those at week start so
+        # this should rarely matter, but the swap endpoint also re-validates
+        # before any add/swap action.
 
         rosterPlayers = []
         for rp in roster.players:
@@ -5631,6 +5634,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     continue
                 # Carry forward existing streak count — actual increment happens at week end
                 prevStreak = getattr(prev, 'streak_count', 1) or 1
+                # Carry forward the All-Pro swap-bonus flag too. Without this,
+                # a card that granted a swap last week looks like a fresh equip
+                # this week, and unequipping it skips the refund — letting users
+                # accumulate swaps by equip/unequip cycles.
+                prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
                 equippedRepo.save(EquippedCard(
                     user_id=user.id,
                     season=currentSeason,
@@ -5639,6 +5647,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     user_card_id=prev.user_card_id,
                     locked=gamesActive,
                     streak_count=prevStreak,
+                    swap_bonus_active=prevSwapBonus,
                 ))
             session.commit()
             equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)

@@ -1952,7 +1952,14 @@ class SeasonManager:
             from database.repositories.notification_repository import NotificationRepository
 
             session = _getSession()
-            # Find all power-ups that expired last week
+            # Defensive sweep: catch any stale FLEX rosterPlayers whose powerup
+            # expired before this week (covers cases where the precise
+            # week-boundary notification didn't fire — server downtime, week
+            # skip, etc.). Runs first so the per-week notifications below get
+            # a clean state to compare against.
+            self._sweepStaleFlexPlayers(session, season, currentWeek)
+            # Find all power-ups that expired last week — this drives the
+            # one-shot user notification (fires once per purchase).
             expiredPurchases = session.query(ShopPurchase).filter(
                 ShopPurchase.item_slug.in_(["temp_card_slot", "temp_flex"]),
                 ShopPurchase.season == season,
@@ -2047,6 +2054,65 @@ class SeasonManager:
             session.close()
         except Exception as e:
             logger.warning(f"Failed to notify expired power-ups: {e}")
+
+    def _sweepStaleFlexPlayers(self, session, season: int, currentWeek: int) -> None:
+        """Remove FLEX rosterPlayers that no longer have backing entitlement.
+
+        A FLEX slot is granted by an active temp_flex powerup OR a Champion-
+        classified card equipped this week. If neither is true, any FLEX
+        rosterPlayer is stranded and should be removed. This is a defensive
+        sweep — the precise expiration handler runs alongside it but only
+        catches the exact week-boundary case.
+        """
+        try:
+            from database.models import (
+                ShopPurchase, FantasyRoster, FantasyRosterPlayer,
+                EquippedCard, UserCard, CardTemplate,
+            )
+            staleFlex = (
+                session.query(FantasyRosterPlayer)
+                .join(FantasyRoster, FantasyRosterPlayer.roster_id == FantasyRoster.id)
+                .filter(
+                    FantasyRosterPlayer.slot == "FLEX",
+                    FantasyRoster.season == season,
+                )
+                .all()
+            )
+            removed = 0
+            for rp in staleFlex:
+                userId = rp.roster.user_id
+                # Active temp_flex?
+                hasActiveFlex = session.query(ShopPurchase.id).filter(
+                    ShopPurchase.user_id == userId,
+                    ShopPurchase.season == season,
+                    ShopPurchase.item_slug == "temp_flex",
+                    ShopPurchase.expires_at_week >= currentWeek,
+                ).first() is not None
+                if hasActiveFlex:
+                    continue
+                # Champion card equipped this week?
+                hasChampion = (
+                    session.query(EquippedCard.id)
+                    .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                    .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                    .filter(
+                        EquippedCard.user_id == userId,
+                        EquippedCard.season == season,
+                        EquippedCard.week == currentWeek,
+                        CardTemplate.classification.isnot(None),
+                        CardTemplate.classification.contains("champion"),
+                    )
+                    .limit(1).count()
+                ) > 0
+                if hasChampion:
+                    continue
+                session.delete(rp)
+                removed += 1
+            if removed:
+                session.commit()
+                logger.info(f"Swept {removed} stale FLEX rosterPlayer(s) at week {currentWeek}")
+        except Exception as e:
+            logger.warning(f"Failed to sweep stale FLEX players: {e}")
 
     def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
         """Save a completed game to the database"""
