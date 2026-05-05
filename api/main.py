@@ -4912,10 +4912,24 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         rosterPlayer.player_id = req.newPlayerId
         rosterPlayer.points_at_lock = float(newPlayerSeasonFP)
 
-        # Consume purchased swaps first, then organic
+        # Consume purchased swaps first, then organic.
+        # When consuming from swaps_available, mark one equipped All-Pro card's
+        # grant as used (swap_bonus_active=False). Without this, the card's
+        # grant looks "still active" — letting users equip an All-Pro card,
+        # use the granted swap, unequip the card (which would otherwise refund
+        # because swap_bonus_active was True), and re-equip later for another
+        # grant. Marking the grant as used keeps last_swap_grant_cycle pinned
+        # at the current cycle on the UserCard, preventing re-grant.
         if roster.purchased_swaps > 0:
             roster.purchased_swaps -= 1
         else:
+            from database.models import EquippedCard
+            cardGrantRow = session.query(EquippedCard).filter_by(
+                user_id=user.id, season=currentSeasonNum, week=currentWeek,
+                swap_bonus_active=True,
+            ).first()
+            if cardGrantRow:
+                cardGrantRow.swap_bonus_active = False
             roster.swaps_available -= 1
         session.commit()
 
@@ -5850,14 +5864,20 @@ def setEquippedCards(
                 if template.classification and "all_pro" in template.classification:
                     newAllProIds.add(c.userCardId)
 
-            # Cards being unequipped (were equipped, now aren't)
+            # Cards being unequipped (were equipped with their grant unused —
+            # prevAllProIds is filtered on swap_bonus_active=True, so a card
+            # whose grant was already consumed via a swap won't be in this
+            # set and won't be refunded here).
             unequippedAllPro = prevAllProIds - newAllProIds
             for ucId in unequippedAllPro:
                 uc = cardUserCards.get(ucId) or session.get(UserCard, ucId)
                 if uc and roster.swaps_available > 0:
                     roster.swaps_available -= 1
+                    # Reset the cycle marker so re-equipping later in the same
+                    # cycle re-grants. (If the swap had been used we'd never
+                    # reach this branch — the card's swap_bonus_active would
+                    # already be False, excluding it from prevAllProIds.)
                     uc.last_swap_grant_cycle = 0
-                # If swap was used (swaps_available == 0), keep exhaustion
 
             # Cards being newly equipped
             freshAllPro = newAllProIds - prevAllProIds
