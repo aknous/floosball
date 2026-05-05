@@ -6526,7 +6526,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             # If games are running, the current partial week can't actually be
             # used (rosters/cards locked), so defer the effective start to next
             # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6546,7 +6550,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             # If games are running, the current partial week can't actually be
             # used (rosters/cards locked), so defer the effective start to next
             # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6563,7 +6571,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 3)
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6583,7 +6595,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             # If games are running, the current partial week can't actually be
             # used (rosters/cards locked), so defer the effective start to next
             # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6740,7 +6756,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Income boost (Endowment) — raises weekly FP floobit cap
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            gamesRunning = _areGamesStarted()
             weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
             from constants import POWERUP_INCOME_BOOST, WEEKLY_FP_FLOOBIT_CAP
             active.append({
@@ -6756,7 +6772,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Fortune's Favor (Patronage) — boosts chance card trigger rates
         activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
         if activeFavor:
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            gamesRunning = _areGamesStarted()
             weeksRemaining = activeFavor.expires_at_week - currentWeek + (0 if gamesRunning else 1)
             active.append({
                 "slug": "fortunes_favor",
@@ -8791,7 +8807,7 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             if durationWeeks:
                 # Defer start to next week if games are live (current week can't
                 # be used). Active through the last week of the duration.
-                gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None)) if sm and sm.currentSeason else False
+                gamesRunning = _areGamesStarted()
                 effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
                 expiresAtWeek = effectiveStartWeek + durationWeeks - 1
                 purchaseWeek = effectiveStartWeek
