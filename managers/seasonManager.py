@@ -1230,13 +1230,16 @@ class SeasonManager:
     def _grantRosterSwaps(self, season: int) -> None:
         """Grant 1 organic swap to all locked rosters at week end.
 
-        Cap accounts for sources that legitimately push swaps_available above
-        the baseline:
-          +1 baseline organic
-          +1 if a Champion-classified card is equipped
-          +1 per equipped All-Pro card with an active grant this cycle
-        Without the AP component, an AP card's grant would push swaps to 1
-        and immediately suppress the next weekly organic refill (1 < 1 fails).
+        Cap = 1 baseline + 1 per equipped All-Pro card whose grant is still
+        unused this cycle (swap_bonus_active=True). The AP bump exists so an
+        AP grant doesn't immediately suppress the next weekly organic refill
+        (without it, swaps would already be at the cap of 1 and the refill
+        check `1 < 1` would fail).
+
+        Champion used to bump this cap by 1 — leftover from when adding a
+        FLEX player consumed a swap. That cost was removed long ago (empty
+        FLEX adds are free), so the Champion bump no longer has a purpose
+        and was removed.
         """
         try:
             from database.connection import get_session as _getSession
@@ -1247,17 +1250,6 @@ class SeasonManager:
             ).all()
             updated = 0
             for roster in rosters:
-                # Champion bump
-                hasChampion = swapSession.query(EquippedCard).join(
-                    UserCard, EquippedCard.user_card_id == UserCard.id
-                ).join(
-                    CardTemplate, UserCard.card_template_id == CardTemplate.id
-                ).filter(
-                    EquippedCard.user_id == roster.user_id,
-                    EquippedCard.season == season,
-                    CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("champion")
-                ).first() is not None
                 # AP bump — count equipped AP cards whose grants are still
                 # unused this cycle (swap_bonus_active=True). Each adds room
                 # for one extra outstanding swap so the weekly organic refill
@@ -1273,7 +1265,7 @@ class SeasonManager:
                     CardTemplate.classification.isnot(None),
                     CardTemplate.classification.contains("all_pro"),
                 ).count()
-                maxSwaps = 1 + (1 if hasChampion else 0) + apActiveCount
+                maxSwaps = 1 + apActiveCount
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
                     updated += 1
