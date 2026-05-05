@@ -5678,6 +5678,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         for eq in equipped:
             cardData = cardManager.serializeCard(eq.user_card, currentSeason)
             template = eq.user_card.card_template
+            # All-Pro cards carry a swap-grant state per equipped instance:
+            # True = grant unused (refundable on unequip), False = grant used.
+            # Non-All-Pro cards return None (UI shows the badge normally).
+            isAllPro = bool(template.classification and "all_pro" in template.classification)
+            swapBonusActive = bool(getattr(eq, 'swap_bonus_active', False)) if isAllPro else None
             result.append({
                 "slotNumber": eq.slot_number,
                 "card": cardData,
@@ -5687,6 +5692,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 "streakCount": getattr(eq, 'streak_count', 1) or 1,
                 "cardTeamId": template.team_id,
                 "templatePosition": template.position,
+                "swapBonusActive": swapBonusActive,
             })
 
         # Check if user qualifies for 6th slot: MVP card equipped OR active temp_card_slot power-up
