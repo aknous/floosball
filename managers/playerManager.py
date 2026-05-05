@@ -455,6 +455,13 @@ class PlayerManager:
                             'gamesPlayed': stat_record.games_played,
                             'fantasyPoints': stat_record.fantasy_points,
                         }
+                        # Re-point stat_tracker at the restored dict — without
+                        # this, in-game stat increments go to the original
+                        # empty dict from Player.__init__ and never reach
+                        # career totals (only fantasy points slipped through
+                        # via separate end-of-season rollup paths).
+                        if hasattr(player, 'stat_tracker'):
+                            player.stat_tracker.career_stats_dict = player.careerStatsDict
 
             # Recalculate dual ratings (offensive/defensive) from loaded attributes
             player.updateRating()
@@ -1508,12 +1515,19 @@ class PlayerManager:
                         db_career_stats.rushing_tds = rushing.get('tds', 0)
                         db_career_stats.receiving_yards = receiving.get('yards', 0)
                         db_career_stats.receiving_tds = receiving.get('tds', 0)
-                        # Update JSON
-                        db_career_stats.passing_stats = stats_dict.get('passing')
-                        db_career_stats.rushing_stats = stats_dict.get('rushing')
-                        db_career_stats.receiving_stats = stats_dict.get('receiving')
-                        db_career_stats.kicking_stats = stats_dict.get('kicking')
-                        db_career_stats.defense_stats = stats_dict.get('defense')
+                        # Update JSON — wrap with dict() AND flag_modified()
+                        # because the in-memory dict IS the same SQLAlchemy
+                        # loaded; without explicit dirty-marking the update
+                        # is silently dropped on value-equality.
+                        from sqlalchemy.orm.attributes import flag_modified
+                        db_career_stats.passing_stats = dict(stats_dict.get('passing') or {})
+                        db_career_stats.rushing_stats = dict(stats_dict.get('rushing') or {})
+                        db_career_stats.receiving_stats = dict(stats_dict.get('receiving') or {})
+                        db_career_stats.kicking_stats = dict(stats_dict.get('kicking') or {})
+                        db_career_stats.defense_stats = dict(stats_dict.get('defense') or {})
+                        for _f in ('passing_stats', 'rushing_stats', 'receiving_stats',
+                                   'kicking_stats', 'defense_stats'):
+                            flag_modified(db_career_stats, _f)
                 
                 # Save season stats (if we have a current season)
                 season_manager = self.serviceContainer.getService('season_manager')
@@ -1598,12 +1612,22 @@ class PlayerManager:
                                 db_season_stats.sacks = s_defense.get('sacks', 0)
                                 db_season_stats.interceptions = s_defense.get('ints', 0)
                                 db_season_stats.tackles = s_defense.get('tackles', 0)
-                                # Update JSON
-                                db_season_stats.passing_stats = season_dict.get('passing')
-                                db_season_stats.rushing_stats = season_dict.get('rushing')
-                                db_season_stats.receiving_stats = season_dict.get('receiving')
-                                db_season_stats.kicking_stats = season_dict.get('kicking')
-                                db_season_stats.defense_stats = season_dict.get('defense')
+                                # Update JSON — wrap with dict() AND use
+                                # flag_modified() because the in-memory dict
+                                # we mutate IS the same object SQLAlchemy
+                                # loaded from DB. Without flag_modified,
+                                # SQLAlchemy compares new == loaded (both
+                                # reflect the mutations) and silently skips
+                                # the column update.
+                                from sqlalchemy.orm.attributes import flag_modified
+                                db_season_stats.passing_stats = dict(season_dict.get('passing') or {})
+                                db_season_stats.rushing_stats = dict(season_dict.get('rushing') or {})
+                                db_season_stats.receiving_stats = dict(season_dict.get('receiving') or {})
+                                db_season_stats.kicking_stats = dict(season_dict.get('kicking') or {})
+                                db_season_stats.defense_stats = dict(season_dict.get('defense') or {})
+                                for _f in ('passing_stats', 'rushing_stats', 'receiving_stats',
+                                           'kicking_stats', 'defense_stats'):
+                                    flag_modified(db_season_stats, _f)
             
             # Commit all changes
             try:

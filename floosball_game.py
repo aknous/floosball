@@ -1227,6 +1227,117 @@ class Game:
             return 0.5
         return max(0.0, min(1.0, (coach.clockManagement - 60) / 40))
 
+    def _isFgDrainMode(self) -> bool:
+        """True when the offense should drain clock to set up an end-of-game FG.
+        Late Q2/Q4, scoring within 3 (trailing or tied), in chip-shot FG range.
+
+        When True:
+          - Sideline pass targeting is suppressed (clock should keep running)
+          - Run weight is bumped (in-bounds runs let clock tick toward FG-snap time)
+          - Pre-snap drain extends to leave just enough for the FG kick (~7s)
+        """
+        if self.currentQuarter not in (2, 4):
+            return False
+        if self.gameClockSeconds > 60:
+            return False
+        isHome = (self.offensiveTeam is self.homeTeam)
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if not (-3 <= scoreDiff <= 0):
+            return False
+        if self._isGarbageTime(scoreDiff):
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is None:
+            return False
+        kickerMax = kicker.maxFgDistance - FG_SNAP_DISTANCE
+        if self.yardsToEndzone > kickerMax:
+            return False
+        try:
+            return self._estimateFgProbability() >= 0.75
+        except Exception:
+            return False
+
+    def _logLateGameDecision(self, decision: str, **context) -> None:
+        """Append a structured entry for late-game FG/clock decisions to
+        logs/late_game_decisions.jsonl. Used for offline analysis of how
+        the decision logic plays out across many seasons. Never raises —
+        diagnostics must not break the game."""
+        try:
+            import json as _json
+            import os
+            from datetime import datetime
+            entry = {
+                'ts': datetime.utcnow().isoformat() + 'Z',
+                'decision': decision,
+                'season': getattr(self, 'seasonNumber', None),
+                'week': getattr(self, 'week', None),
+                'gameId': getattr(self, 'id', None),
+                'gameType': getattr(self, 'gameType', None),
+                'quarter': self.currentQuarter,
+                'secondsRemaining': self.gameClockSeconds,
+                'down': self.down,
+                'yardsToFirstDown': self.yardsToFirstDown,
+                'yardsToEndzone': self.yardsToEndzone,
+                'offenseAbbr': getattr(self.offensiveTeam, 'abbr', None),
+                'defenseAbbr': getattr(self.defensiveTeam, 'abbr', None),
+                'homeScore': self.homeScore,
+                'awayScore': self.awayScore,
+                'offTimeoutsRemaining': (
+                    self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                    else self.awayTimeoutsRemaining
+                ),
+                **context,
+            }
+            os.makedirs('logs', exist_ok=True)
+            with open('logs/late_game_decisions.jsonl', 'a') as f:
+                f.write(_json.dumps(entry) + '\n')
+        except Exception:
+            pass
+
+    def _estimateAvailablePlays(self) -> int:
+        """Conservative estimate of productive offensive plays remaining before
+        regulation ends, RESERVING ~7s for a closing FG attempt.
+
+        So "1 play available" means: room for one productive snap AND still
+        kick the FG before time expires. "0 plays available" means: only
+        time to snap the FG itself.
+
+        Inter-play clock-stopper preference (cheapest first):
+          - Timeout (~3s reset, costs a TO)
+          - Spike (~5s burn, costs a down — only viable on 1st/2nd down since
+            spiking on 3rd would forfeit possession)
+          - Sideline / incomplete pass (~18s — partial drain mixed with clock
+            stops, not always achievable)
+
+        Each productive play burns ~7s of execution. Spikes count as zero-yard
+        clock-stoppers between productive plays, not as productive plays.
+        """
+        secs = self.gameClockSeconds - 7  # reserve for closing FG kick
+        if secs <= 5:
+            return 0
+        timeoutsLeft = (
+            self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+            else self.awayTimeoutsRemaining
+        )
+        # Realistic spike budget — using more would forfeit too many downs.
+        # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
+        spikesAvailable = 1 if self.down < 3 else 0
+        plays = 0
+        while secs > 5:
+            plays += 1
+            secs -= 7  # productive play execution
+            if secs <= 5:
+                break
+            if timeoutsLeft > 0:
+                timeoutsLeft -= 1
+                secs -= 3
+            elif spikesAvailable > 0:
+                spikesAvailable -= 1
+                secs -= 5
+            else:
+                secs -= 18
+        return plays
+
     def _isGarbageTime(self, scoreDiff: int) -> bool:
         """Check if the deficit is too large to realistically overcome.
 
@@ -1258,6 +1369,10 @@ class Game:
         if scoreDiff > 0 or self.currentQuarter not in (2, 4):
             return False
         if self._isGarbageTime(scoreDiff):
+            return False
+        # Suppress sideline targeting when setting up an end-of-game FG —
+        # we WANT the clock running so the FG ends the game with no time left.
+        if self._isFgDrainMode():
             return False
 
         clockIQ = self._coachClockIQ(coach)
@@ -1796,7 +1911,33 @@ class Game:
             self.play.playType = PlayType.Punt
             return
 
-        elif self.yardsToEndzone <= 5 and inFieldGoalRange:
+        # Tied + Q4 + meaningful clock left + manageable 4th down — aggressive
+        # coaches may go for the conversion to advance for a higher-confidence
+        # FG (or a winning TD) instead of kicking from longer range and giving
+        # the ball back with significant time left. Chip-shot range still
+        # defaults to the kick (high prob > the conversion gamble).
+        if (self.currentQuarter == 4 and scoreDiff == 0 and inFieldGoalRange
+                and self.gameClockSeconds >= 30
+                and self.yardsToFirstDown <= 5
+                and self.yardsToEndzone > 15
+                and fgProb < 0.92):
+            goBias = max(0.0, aggrNorm)  # 0 (avg) to 1 (max aggressive)
+            if self.yardsToFirstDown <= 2:
+                goChance = 0.10 + goBias * 0.40  # avg=10%, aggressive=50%
+            else:
+                goChance = 0.05 + goBias * 0.20  # avg=5%, aggressive=25%
+            if _random.random() < goChance:
+                self.play.insights['fourthDown']['decision'] = 'goForIt'
+                self.play.insights['fourthDown']['reason'] = (
+                    'tied Q4 with time — aggressive push to advance FG'
+                )
+                if self.yardsToFirstDown <= 2:
+                    self.play.runPlay()
+                else:
+                    self.play.passPlay(self._selectPassPlay('short'))
+                return
+
+        if self.yardsToEndzone <= 5 and inFieldGoalRange:
             x = batched_randint(1, 10)
             if x < 7:
                 self.play.playType = PlayType.FieldGoal
@@ -1933,6 +2074,15 @@ class Game:
         weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
+
+        # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
+        # moving. Avoid deep passes (incomplete = clock stop) and medium-deep
+        # routes that risk turnover or sideline catches.
+        if self._isFgDrainMode():
+            weights['run'] = weights.get('run', 0) * 3.0
+            weights['short'] = weights.get('short', 0) * 1.0
+            weights['medium'] = weights.get('medium', 0) * 0.3
+            weights['long'] = weights.get('long', 0) * 0.15
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
@@ -2155,10 +2305,41 @@ class Game:
                 kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
                 despFgProb = self._estimateFgProbability()
                 if self.yardsToEndzone <= kickerMax:
-                    # Low-probability long FG: try to get closer if time allows
                     despThreshold = self._coachFgThreshold(coach)
-                    if despFgProb < despThreshold and self.gameClockSeconds > 8:
-                        pass  # Skip — try to get closer first
+                    aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+                    playsAvailable = self._estimateAvailablePlays()
+                    # Don't auto-kick on 1st-3rd down if there's still room for a
+                    # productive play before the FG. _estimateAvailablePlays
+                    # already reserves ~7s for the closing FG kick, so >= 1
+                    # means "1 play + FG fits". Defer rate is very high here —
+                    # kicking the tying FG when a snap still fits is wrong.
+                    if self.down < 4 and playsAvailable >= 1:
+                        playsBonus = min(0.04, (playsAvailable - 1) * 0.02)
+                        deferChance = 0.94 + playsBonus + 0.03 * aggrNorm + 0.02 * gameIQ
+                        deferChance = max(0.85, min(0.99, deferChance))
+                        if _random.random() < deferChance:
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'deferFG',
+                                'reason': 'In FG range but plays remain — try for TD first',
+                                'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'down': self.down,
+                                'fgProbability': round(despFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                            # Fall through to weighted play caller below
+                        else:
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'desperationFG',
+                                'reason': 'Coach chose tying FG over TD attempt',
+                                'clockRemaining': self.gameClockSeconds,
+                                'fgProbability': round(despFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                            self.play.playType = PlayType.FieldGoal
+                            return
+                    elif despFgProb < despThreshold and self.gameClockSeconds > 8:
+                        pass  # Long shot, try to get closer first
                     elif _random.random() < 0.6 + 0.4 * gameIQ:
                         self.play.insights['clockMgmt'] = {
                             'decision': 'desperationFG',
@@ -2169,6 +2350,51 @@ class Game:
                         }
                         self.play.playType = PlayType.FieldGoal
                         return
+
+            # Game-winning FG: tied in Q4 with chip-shot range and little time —
+            # take the safe winner instead of risking a turnover trying for a TD.
+            # 4th down or last realistic play → kick now. Otherwise, drain clock
+            # with a safe run unless the coach is aggressive enough to push.
+            if (self.currentQuarter == 4 and scoreDiff == 0
+                    and self.gameClockSeconds <= 30
+                    and not self._isGarbageTime(scoreDiff)):
+                kicker = self.offensiveTeam.rosterDict.get('k')
+                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                if self.yardsToEndzone <= kickerMax:
+                    winFgProb = self._estimateFgProbability()
+                    if winFgProb >= 0.75:
+                        playsAvailable = self._estimateAvailablePlays()
+                        aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
+                        # Kick when there's no meaningful play room left.
+                        # Helper reserves FG time, so playsAvailable == 0 means
+                        # "only the FG itself fits before regulation ends".
+                        if self.down == 4 or playsAvailable == 0:
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'gameWinningFG',
+                                'reason': 'Tied, in chip-shot range, kick to win',
+                                'clockRemaining': self.gameClockSeconds,
+                                'fgProbability': round(winFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                            self.play.playType = PlayType.FieldGoal
+                            return
+                        # Plays remain — aggressive coach may push for TD,
+                        # but the smart default is to drain clock with a run
+                        # and kick the chip shot on the last possible play.
+                        pushChance = 0.10 + 0.25 * aggrNorm - 0.15 * gameIQ
+                        pushChance = max(0.05, min(0.40, pushChance))
+                        if _random.random() >= pushChance:
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'setupGameWinningFG',
+                                'reason': 'In chip-shot range, draining clock for FG',
+                                'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'fgProbability': round(winFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                            self.play.runPlay()
+                            return
+                        # else: aggressive push — fall through to normal play caller
             # Spike: Q2/Q4/OT, clock running, no timeouts, trailing/tied
             # Urgency scales with remaining time — almost always spike under 30s,
             # less likely at 90s+ (sometimes better to just run a play)
@@ -2522,12 +2748,18 @@ class Game:
                 elif self.play.yardage > 0 and self.play.yardage <= 3:
                     runList = shortRunOutsideList if isOutside else shortRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
+                    if self.play.tackledBy and not self.play.isTd:
+                        text += ', tackled by {}'.format(self.play.tackledBy.name)
                 elif self.play.yardage > 3 and self.play.yardage <= 9:
                     runList = midRunOutsideList if isOutside else midRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
+                    if self.play.tackledBy and not self.play.isTd:
+                        text += ', tackled by {}'.format(self.play.tackledBy.name)
                 elif self.play.yardage >= 10:
                     runList = longRunOutsideList if isOutside else longRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
+                    if self.play.tackledBy and not self.play.isTd:
+                        text += ', tackled by {}'.format(self.play.tackledBy.name)
         elif self.play.playType is PlayType.Pass:
             if self.play.isSack:
                 sacker = self.play.sackedBy
@@ -2575,6 +2807,8 @@ class Game:
                             text += ', fumbles, {} recover'.format(self.play.defense.abbr)
                     else:
                         text += ', fumbles, {} recovers'.format(self.play.receiver.name)
+                elif self.play.tackledBy and not self.play.isTd:
+                    text += ', tackled by {}'.format(self.play.tackledBy.name)
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
                 interceptorName = interceptor.name if interceptor else self.play.defense.abbr
@@ -2623,6 +2857,23 @@ class Game:
             qb = self.play.offense.rosterDict.get('qb')
             qbName = qb.name if qb else 'QB'
             text = f'{qbName} takes a knee'
+
+        # Blitz callout — only when the blitz actually put pressure on the QB
+        # (sack, or defense winning the rush matchup). Pass plays only; runs
+        # don't have a QB facing pressure even if a blitz was called.
+        if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
+            pressureFelt = (
+                self.play.isSack
+                or getattr(self.play, 'rushDifferential', 0) > 0
+            )
+            if pressureFelt:
+                if self.play.blitzKind == 'allOut':
+                    blitzPrefix = 'All-out blitz! '
+                elif self.play.blitzedBy is not None:
+                    blitzPrefix = '{} is blitzing! '.format(self.play.blitzedBy.name)
+                else:
+                    blitzPrefix = 'Blitz! '
+                text = blitzPrefix + text
 
         self.play.playText = text
 
@@ -2718,6 +2969,8 @@ class Game:
                 and prePlayScoreDiff <= 0)
             # Critical drop on 3rd/4th in close game
             or (play.passIsDropped and downNum >= 3 and abs(scoreDiff) <= 7)
+            # Sack on 3rd/4th down in close game — drive-killing pressure
+            or (play.isSack and downNum >= 3 and abs(scoreDiff) <= 7)
         )
 
         if not (isClutchOutcome or isChokeOutcome):
@@ -2725,46 +2978,138 @@ class Game:
 
         # ── Step 2: Did any involved player actually clutch/choke? ──
         # Build the list of (name, modifier) for every player whose pressure
-        # roll could have driven the outcome, then split into clutch/choke
-        # performers based on direction. Multiple performers possible — e.g.
-        # on a clutch TD pass both the QB and receiver may have risen.
-        involved = []
+        # roll could have driven the outcome. Tracked separately for offense
+        # and defense — defenders who made plays during a chokeOutcome (offense
+        # turned the ball over / failed to convert) can be CLUTCH; offense
+        # players who failed during a clutchOutcome already get tagged as
+        # risers below.
+        offInvolved = []
         if play.playType == PlayType.Run and getattr(play, 'runner', None):
-            involved.append((play.runner.name, getattr(play, 'keyPressureMod', 0) or 0))
+            offInvolved.append((play.runner.name, getattr(play, 'keyPressureMod', 0) or 0))
         elif play.playType == PlayType.Pass:
             if getattr(play, 'passer', None):
-                involved.append((play.passer.name, getattr(play, 'qbPressureMod', 0) or 0))
+                offInvolved.append((play.passer.name, getattr(play, 'qbPressureMod', 0) or 0))
             if getattr(play, 'receiver', None):
-                involved.append((play.receiver.name, getattr(play, 'rcvPressureMod', 0) or 0))
+                offInvolved.append((play.receiver.name, getattr(play, 'rcvPressureMod', 0) or 0))
         elif play.playType == PlayType.FieldGoal and getattr(play, 'kicker', None):
-            involved.append((play.kicker.name, getattr(play, 'keyPressureMod', 0) or 0))
+            offInvolved.append((play.kicker.name, getattr(play, 'keyPressureMod', 0) or 0))
 
-        risers = [name for (name, mod) in involved if mod > 0]
-        fallers = [name for (name, mod) in involved if mod < 0]
+        # Defensive playmakers — only credit defenders who actually drove the
+        # outcome. Pressure mod is rolled here at evaluation time using the
+        # same formula as offense; it doesn't affect game outcome, just
+        # determines whether they "rose" or "crumbled" in the moment.
+        defenders = []
+        if getattr(play, 'interceptedBy', None):
+            defenders.append(play.interceptedBy)
+        if getattr(play, 'sackedBy', None) and play.sackedBy not in defenders:
+            defenders.append(play.sackedBy)
+        if getattr(play, 'forcedFumbleBy', None) and play.forcedFumbleBy not in defenders:
+            defenders.append(play.forcedFumbleBy)
+        # Tackler credit only when the stop was meaningful (TFL or 4th-down stop)
+        tackler = getattr(play, 'tackledBy', None)
+        if tackler and tackler not in defenders:
+            isStop = (play.yardage < 0
+                      or play.playResult == PlayResult.TurnoverOnDowns)
+            if isStop:
+                defenders.append(tackler)
 
-        # FGs are always-pressure plays — making or missing under high
-        # gamePressure is itself the clutch/choke moment. If the kicker's
-        # pressure roll landed neutral (mod == 0) we still credit/blame
-        # them, since the kick attempt under pressure is the entire story.
-        if play.playType == PlayType.FieldGoal and not (risers or fallers):
+        # Coverage bust — defender left a receiver WIDE OPEN on a pivotal TD
+        # pass. Rare but real: the kind of "where was the safety?" moment that
+        # decides games. Only fires for a clutch-outcome TD pass and only when
+        # the receiver's openness was very high (≥80 / 100).
+        if (isClutchOutcome and play.playType == PlayType.Pass
+                and getattr(play, 'isTd', False)):
+            selectedTarget = getattr(play, 'selectedTarget', None)
+            if selectedTarget:
+                openness = selectedTarget.get('openness', 0) or 0
+                coveringDefender = selectedTarget.get('coveringDefender')
+                if (openness >= 80 and coveringDefender
+                        and coveringDefender not in defenders):
+                    defenders.append(coveringDefender)
+
+        defInvolved = []
+        for defender in defenders:
+            try:
+                defMod = defender.attributes.getPressureModifier(self.gamePressure)
+            except Exception:
+                defMod = 0
+            defInvolved.append((defender.name, defMod))
+
+        offRisers = [name for (name, mod) in offInvolved if mod > 0]
+        offFallers = [name for (name, mod) in offInvolved if mod < 0]
+        defRisers = [name for (name, mod) in defInvolved if mod > 0]
+        defFallers = [name for (name, mod) in defInvolved if mod < 0]
+
+        # FGs are always-pressure plays — kicker is credited even on a
+        # neutral pressure roll, since the kick under pressure is the moment.
+        if play.playType == PlayType.FieldGoal and not (offRisers or offFallers):
             if getattr(play, 'kicker', None):
                 if isClutchOutcome:
-                    risers = [play.kicker.name]
+                    offRisers = [play.kicker.name]
                 elif isChokeOutcome:
-                    fallers = [play.kicker.name]
+                    offFallers = [play.kicker.name]
 
-        if isClutchOutcome and risers:
+        clutchPerformers = []
+        chokePerformers = []
+        if isClutchOutcome:
+            # Offense achieved — offensive risers are clutch, defenders who
+            # crumbled in coverage / on the stop attempt are choke.
+            clutchPerformers.extend(offRisers)
+            chokePerformers.extend(defFallers)
+        if isChokeOutcome:
+            # Offense failed — offensive fallers are choke, defenders who
+            # rose to make the play (INT / sack / forced fumble / 4th stop)
+            # are clutch.
+            chokePerformers.extend(offFallers)
+            clutchPerformers.extend(defRisers)
+
+        if clutchPerformers:
             play.isClutchPlay = True
-            play.clutchPerformers = risers
-            # Keep clutchPlayerName populated with the top performer for any
-            # legacy consumers (single-name display fallbacks)
-            topRiser = max(involved, key=lambda x: x[1]) if involved else (risers[0], 0)
-            play.clutchPlayerName = topRiser[0]
-        elif isChokeOutcome and fallers:
+            play.clutchPerformers = clutchPerformers
+            # Top performer name for legacy single-name consumers
+            allInvolved = offInvolved + defInvolved
+            risingPool = [(n, m) for (n, m) in allInvolved if n in clutchPerformers]
+            if risingPool:
+                topRiser = max(risingPool, key=lambda x: x[1])
+                play.clutchPlayerName = topRiser[0]
+        if chokePerformers:
             play.isChokePlay = True
-            play.chokePerformers = fallers
-            topFaller = min(involved, key=lambda x: x[1]) if involved else (fallers[0], 0)
-            play.clutchPlayerName = topFaller[0]
+            play.chokePerformers = chokePerformers
+            allInvolved = offInvolved + defInvolved
+            fallingPool = [(n, m) for (n, m) in allInvolved if n in chokePerformers]
+            if fallingPool:
+                topFaller = min(fallingPool, key=lambda x: x[1])
+                # Don't overwrite clutchPlayerName if already set (clutch wins display priority)
+                if not play.clutchPlayerName:
+                    play.clutchPlayerName = topFaller[0]
+
+        # Diagnostic: log clutch/choke tagging so defensive (and offensive)
+        # plays can be reviewed offline. Only fires when something actually
+        # got tagged.
+        if clutchPerformers or chokePerformers:
+            offNames = {n for n, _ in offInvolved}
+            defNames = {n for n, _ in defInvolved}
+            self._logLateGameDecision(
+                'clutchChokeTag',
+                branch='outcome',
+                playType=play.playType.name if play.playType else None,
+                isClutchOutcome=bool(isClutchOutcome),
+                isChokeOutcome=bool(isChokeOutcome),
+                clutchPerformers=clutchPerformers,
+                chokePerformers=chokePerformers,
+                clutchOffense=[n for n in clutchPerformers if n in offNames],
+                clutchDefense=[n for n in clutchPerformers if n in defNames],
+                chokeOffense=[n for n in chokePerformers if n in offNames],
+                chokeDefense=[n for n in chokePerformers if n in defNames],
+                gamePressure=round(play.gamePressure, 1),
+                yardage=play.yardage,
+                isTd=bool(getattr(play, 'isTd', False)),
+                isInterception=bool(getattr(play, 'isInterception', False)),
+                isSack=bool(getattr(play, 'isSack', False)),
+                isFumbleLost=bool(getattr(play, 'isFumbleLost', False)),
+                isFgGood=bool(getattr(play, 'isFgGood', False)),
+                scoreDiff=scoreDiff,
+            )
 
     def _accumulateOffenseStats(self, team, score):
         """Accumulate a team's offensive stats into season totals after a game."""
@@ -3516,7 +3861,7 @@ class Game:
                 # PLAY EXECUTION: Handle different play types
                 if self.play.playType is PlayType.FieldGoal:
                     self.play.fieldGoalTry()
-                    
+
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
                     self.consumeGameTime(playDuration)
@@ -5141,6 +5486,17 @@ class Game:
         q = self.currentQuarter
         garbageTime = self._isGarbageTime(scoreDiff)
 
+        # Setting up an end-of-game FG: drain ONLY when the play just chosen
+        # is the FG kick itself in a tight game. We want the clock to die on
+        # this snap. Earlier productive plays in the same drive use hurry-up
+        # tempo so the offense maximises chances at a TD before settling for
+        # the kick. iqOffset in calculatePreSnapTime tightens or loosens the
+        # FG-snap target per coach.
+        if (self._isFgDrainMode() and hasattr(self, 'play') and self.play is not None
+                and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
+            target = 7
+            return ('setupFG', max(8, secs - target))
+
         if (q >= 4) and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
         if q == 2 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0:
@@ -5199,6 +5555,11 @@ class Game:
             iqOffset = round(-6 * (gameIQ - 0.5))
         elif intent == 'burnClock':
             iqOffset = round(6 * (gameIQ - 0.5))
+        elif intent == 'setupFG':
+            # Smart coaches drain precisely (more time consumed, snap closer
+            # to the FG-snap target). Dumb coaches under-drain — they leave
+            # the opponent more time after the kick.
+            iqOffset = round(4 * (gameIQ - 0.5))
         else:
             iqOffset = 0
 
@@ -5984,12 +6345,34 @@ class Play():
         self.chokePerformers = []
         self.sackedBy = None             # Defender who made the sack
         self.interceptedBy = None        # Defender who intercepted
-        self.tackledBy = None            # Primary tackler on run plays
+        self.tackledBy = None            # Primary tackler (runs or completed passes)
         self.forcedFumbleBy = None       # Defender who forced the fumble
+        self.blitzedBy = None            # Blitzer on plays where defense brought pressure
+        self.blitzKind = None            # 'lb' / 'safety' / 'allOut' — for play text flavor
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
         self.insights = {}              # Play insights dict — populated during execution
+
+    def _captureBlitzer(self, scheme, defGameplanObj):
+        """If the defensive scheme called a blitz, stash the blitzer on the
+        Play so the play-text formatter can call it out. Models excitement —
+        even if nothing comes of it, the audience sees the pressure call."""
+        if not GAMEPLAN_AVAILABLE:
+            return
+        blitz = scheme.get('blitzPackage') if scheme else None
+        if blitz is None:
+            return
+        coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+        if blitz == BlitzPackage.LB_BLITZ:
+            self.blitzedBy = coverageAssignments.get('te')
+            self.blitzKind = 'lb'
+        elif blitz == BlitzPackage.SAFETY_BLITZ:
+            self.blitzedBy = coverageAssignments.get('rb')
+            self.blitzKind = 'safety'
+        elif blitz == BlitzPackage.ALL_OUT:
+            self.blitzedBy = None  # Multi-player blitz — no single name
+            self.blitzKind = 'allOut'
 
     def fieldGoalTry(self):
         self.game.gamePressure = self.game.calculateGamePressure()
@@ -6360,6 +6743,7 @@ class Play():
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
 
         # Track first-half run plays for halftime adjustment
@@ -6580,11 +6964,16 @@ class Play():
         # Logistic function: probability increases smoothly with rush advantage
         baseSackRate = 3.0
         steepness = 0.15
-        
+
         # Shift the curve so 0 differential = baseSackRate
         probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
-        
-        return max(0.5, min(15, probability))  # Reduced max from 25% to 15%, min from 1% to 0.5%
+
+        # Extra-long dropbacks (Hail Mary) leave QB exposed in pocket much
+        # longer than normal — the standard 15% cap underestimates real risk.
+        # Lift cap to 28% so a strong rush against thin protection can wreck
+        # the play before it leaves the QB's hand.
+        capMax = 28 if dropbackDepth >= 6 else 15
+        return max(0.5, min(capMax, probability))
     
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
@@ -6756,7 +7145,7 @@ class Play():
             PassType.short: 1.0,     # Easiest
             PassType.medium: 0.85,   # Moderate
             PassType.long: 0.7,      # Hardest
-            PassType.hailMary: 0.5   # Extremely difficult
+            PassType.hailMary: 0.45  # Last-ditch heave — accuracy degraded
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
 
@@ -6876,6 +7265,12 @@ class Play():
         self.blockingModifier = 0
         self.rushDifferential = 0
         self.passType = None
+        # Flag hail-mary plays at function start so the post-play log can
+        # detect them even when a sack short-circuits passType assignment.
+        self._isHailMaryPlay = any(
+            t == PassType.hailMary
+            for t in passPlayBook[playKey]['targets'].values()
+        )
         self.passBlockers = []  # Track who's blocking for insights
 
         if passPlayBook[playKey]['targets']['te'] is None:
@@ -6907,6 +7302,7 @@ class Play():
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
+        self._captureBlitzer(scheme, defGameplanObj)
         passRusher = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
         if passRusher:
             deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
@@ -6932,6 +7328,12 @@ class Play():
             self.blockingModifier,
             passPlayBook[playKey]['dropback'].value
         )
+        # Hail Mary plays leave the QB exposed in the pocket ~2-3x longer than
+        # a normal pass while every receiver runs deep — protection is short
+        # and the rush has time to win even average matchups. Multiply base
+        # sack probability and lift the cap further for these plays.
+        if getattr(self, '_isHailMaryPlay', False):
+            sackProbability = min(35, sackProbability * 2.5)
         
         sackRoll = batched_randint(1, 100)
 
@@ -7103,6 +7505,12 @@ class Play():
                                     rcvDefRating *= 0.6  # TE completely uncovered
                     else:
                         rcvDefRating = effectivePassDef
+
+                    # Hail Mary: defense is in prevent — every defender is
+                    # collapsing on the deep target. Triple coverage in the
+                    # endzone is the norm, not the exception.
+                    if targets[key] == PassType.hailMary:
+                        rcvDefRating *= 1.5
                     openness, routeQuality = self.calculateReceiverOpenness(receiver, rcvDefRating)
                     receiverStatusDict = {
                         'receiver': receiver,
@@ -7447,6 +7855,8 @@ class Play():
                     primaryTackler = coveringDefender
                     if safetyPlayer and self.yardage >= 15:
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
+                    # Surface tackler so play text can credit the defender
+                    self.tackledBy = primaryTackler
                     if primaryTackler and batched_randint(1, 100) > 97:
                         # ~3% chance of fumble on catch
                         rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
@@ -7498,4 +7908,35 @@ class Play():
                         safetyPlayer = coverageAssignments.get('rb')
                         if safetyPlayer and hasattr(safetyPlayer, 'stat_tracker'):
                             safetyPlayer.stat_tracker.add_pass_breakup(self.game.isRegularSeasonGame)
+
+        # Diagnostic: log every Hail Mary attempt with outcome so we can audit
+        # success rates over many seasons. Use the play-level flag (not
+        # self.passType) so sacks — which short-circuit before passType is set
+        # — are still counted.
+        if getattr(self, '_isHailMaryPlay', False):
+            if self.isSack:
+                outcome = 'sack'
+            elif self.isInterception:
+                outcome = 'interception'
+            elif self.isPassCompletion:
+                if self.yardage >= self.yardsToEndzone:
+                    outcome = 'touchdown'
+                else:
+                    outcome = 'completionShort'
+            elif getattr(self, 'passIsDropped', False):
+                outcome = 'dropped'
+            else:
+                outcome = 'incomplete'
+            try:
+                self.game._logLateGameDecision(
+                    'hailMaryAttempt',
+                    branch='hailMaryOutcome',
+                    outcome=outcome,
+                    yardsGained=self.yardage,
+                    yardsToEndzone=self.yardsToEndzone,
+                    qbAccuracy=getattr(self.passer.gameAttributes, 'accuracy', None) if self.passer else None,
+                    qbName=self.passer.name if self.passer else None,
+                )
+            except Exception:
+                pass
 
