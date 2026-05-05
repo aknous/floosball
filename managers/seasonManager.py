@@ -1161,6 +1161,12 @@ class SeasonManager:
                         if not template or template.season_created != season:
                             continue
                         prevStreak = getattr(prev, 'streak_count', 1) or 1
+                        # Preserve the All-Pro swap-bonus flag so a card that
+                        # granted an unused swap last week still shows as
+                        # "swap available" this week. Without this, every
+                        # week boundary silently flips active grants to
+                        # "used" — matching one of the swap-accounting bugs.
+                        prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
                         equippedRepo.save(EquippedCard(
                             user_id=userId,
                             season=season,
@@ -1169,6 +1175,7 @@ class SeasonManager:
                             user_card_id=prev.user_card_id,
                             locked=False,
                             streak_count=prevStreak,
+                            swap_bonus_active=prevSwapBonus,
                         ))
                     carried += 1
                     break
