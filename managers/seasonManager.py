@@ -1228,8 +1228,16 @@ class SeasonManager:
             logger.warning(f"Failed to grant All-Pro swaps for roster {roster.id}: {e}")
 
     def _grantRosterSwaps(self, season: int) -> None:
-        """Grant 1 swap to all locked rosters.
-        Cap is 1 normally, 2 if user has a Champion-classified card equipped."""
+        """Grant 1 organic swap to all locked rosters at week end.
+
+        Cap accounts for sources that legitimately push swaps_available above
+        the baseline:
+          +1 baseline organic
+          +1 if a Champion-classified card is equipped
+          +1 per equipped All-Pro card with an active grant this cycle
+        Without the AP component, an AP card's grant would push swaps to 1
+        and immediately suppress the next weekly organic refill (1 < 1 fails).
+        """
         try:
             from database.connection import get_session as _getSession
             from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
@@ -1239,7 +1247,7 @@ class SeasonManager:
             ).all()
             updated = 0
             for roster in rosters:
-                # Check if user has a Champion card equipped
+                # Champion bump
                 hasChampion = swapSession.query(EquippedCard).join(
                     UserCard, EquippedCard.user_card_id == UserCard.id
                 ).join(
@@ -1250,7 +1258,22 @@ class SeasonManager:
                     CardTemplate.classification.isnot(None),
                     CardTemplate.classification.contains("champion")
                 ).first() is not None
-                maxSwaps = 2 if hasChampion else 1
+                # AP bump — count equipped AP cards whose grants are still
+                # unused this cycle (swap_bonus_active=True). Each adds room
+                # for one extra outstanding swap so the weekly organic refill
+                # can stack on top of the AP grant.
+                apActiveCount = swapSession.query(EquippedCard).join(
+                    UserCard, EquippedCard.user_card_id == UserCard.id
+                ).join(
+                    CardTemplate, UserCard.card_template_id == CardTemplate.id
+                ).filter(
+                    EquippedCard.user_id == roster.user_id,
+                    EquippedCard.season == season,
+                    EquippedCard.swap_bonus_active == True,
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("all_pro"),
+                ).count()
+                maxSwaps = 1 + (1 if hasChampion else 0) + apActiveCount
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
                     updated += 1
