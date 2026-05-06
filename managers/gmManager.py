@@ -31,18 +31,79 @@ class GmManager:
 
     # ── Threshold & Probability ─────────────────────────────────────────
 
-    def calculateThreshold(self, engagedFanCount: int, voteType: str) -> int:
-        weight = GM_VOTE_WEIGHT.get(voteType, 1.0)
-        baseMin = 1 if self._lowQuorum else GM_VOTE_BASE_MIN.get(voteType, 2)
+    def calculateThreshold(self, teamFanCount: int, voteType: str = None) -> int:
+        """Threshold = the team's total fan count.
+
+        A fire / resign / cut directive passes when its vote tally meets or
+        exceeds the number of fans that team has. The bar moves with the
+        size of the fanbase, not with how actively those fans vote — that
+        keeps the math from punishing participation. A small turnout that
+        spends a few votes each can pass; a large turnout doesn't suddenly
+        need a mountain of votes just because more people showed up.
+
+        Each fan can still cast multiple votes (GM_VOTES_PER_TYPE) for
+        emphasis. Roughly: "every fan kicking in one vote" hits the
+        threshold; smaller groups can hit it with multi-votes.
+
+        Low-quorum / test mode keeps the threshold at 1.
+
+        voteType is unused — kept in the signature for caller compatibility.
+        """
+        if self._lowQuorum:
+            return 1
+        return max(1, teamFanCount)
+
+    def calculateBallotThreshold(self, engagedFanCount: int) -> int:
+        """Threshold for sign_fa ballots (ranked-choice).
+
+        Sign_fa is a different mechanic — fans submit ranked-choice ballots
+        rather than discrete votes — so it sticks to the original engaged-
+        fan-based threshold instead of the majority-of-cast-votes rule
+        used by fire/resign/cut.
+        """
+        weight = GM_VOTE_WEIGHT.get("sign_fa", 1.0)
+        baseMin = 1 if self._lowQuorum else GM_VOTE_BASE_MIN.get("sign_fa", 2)
         return max(baseMin, math.ceil(engagedFanCount * GM_THRESHOLD_USER_FACTOR * weight))
 
+    def hireCoachDisplay(self, votes: int, leaderVotes: int, leaderCount: int) -> Tuple[int, float]:
+        """Threshold + probability for a hire_coach candidate's UI display.
+
+        Returns (threshold, probability) where:
+          - probability is the bar-fill / label percentage
+          - threshold is the bar a candidate must cross for the UI's
+            "Will pass" label to trigger
+
+        Plurality resolution: most votes wins. The display has to handle
+        three cases:
+          - Sole leader: probability=1.0, threshold=leaderVotes → "Will pass"
+          - Tied for lead: probability=votes/(leaderVotes+1), threshold=leaderVotes+1
+            so the bar shows a non-100% fill and the "Will pass" label
+            does not trigger (leaders are competing, not winning yet)
+          - Trailing: probability=votes/threshold against the same gating
+            threshold, scaled down so they read as "behind"
+
+        Zero leaderVotes (no votes at all) returns (1, 0.0) so the meter
+        is empty and the auto-pick fires when resolution runs.
+        """
+        if leaderVotes <= 0:
+            return 1, 0.0
+        tied = leaderCount > 1
+        threshold = leaderVotes + 1 if tied else leaderVotes
+        probability = min(1.0, votes / threshold) if threshold > 0 else 0.0
+        return threshold, probability
+
     def calculateProbability(self, votes: int, threshold: int) -> float:
-        if votes < threshold:
-            return 0.0
-        if self._lowQuorum:
-            return 1.0
-        ratio = votes / threshold - 1.0
-        return min(GM_PROB_CAP, GM_PROB_BASE + GM_PROB_RANGE * min(1.0, ratio))
+        """Progress toward threshold for fire_coach / resign_player / cut_player.
+
+        Threshold-gated votes resolve deterministically: votes >= threshold
+        passes, otherwise fails. The returned value is a linear progress
+        meter (votes / threshold capped at 1.0) so the UI can render a
+        "how close are we?" bar. At 1.0 the vote will pass; below 1.0
+        it won't. No probability roll, no "70% chance" feel.
+        """
+        if threshold <= 0:
+            return 1.0 if votes > 0 else 0.0
+        return min(1.0, votes / threshold)
 
     @staticmethod
     def _rollSuccess(probability: float) -> bool:
@@ -66,23 +127,24 @@ class GmManager:
             if totalVotes == 0:
                 continue
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "fire_coach")
+            fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
+            threshold = self.calculateThreshold(fanCount)
             probability = self.calculateProbability(totalVotes, threshold)
 
-            if probability == 0.0:
+            if totalVotes < threshold:
                 outcome = "below_threshold"
-            elif self._rollSuccess(probability):
+            else:
                 outcome = "success"
                 oldCoachName = team.coach.name if team.coach else "None"
-                teamManager.fireCoach(team)
+                # Pass the gm session so fire DB write and result record share
+                # one connection — without this SQLite "database is locked"
+                # contention rolls back the entire resolution.
+                teamManager.fireCoach(team, session=self.session)
                 firedTeamIds.add(team.id)
                 logger.info(
                     f"GM: {team.name} fired coach {oldCoachName} "
-                    f"({totalVotes} votes, p={probability:.0%})"
+                    f"({totalVotes} of {threshold} required)"
                 )
-            else:
-                outcome = "failed_roll"
 
             self.voteRepo.recordResult(
                 teamId=team.id, season=season, voteType="fire_coach",
@@ -103,13 +165,19 @@ class GmManager:
                               teamManager, firedTeamIds: set) -> List[Dict]:
         """Resolve hire_coach votes for teams that fired their coach.
 
+        Hire-coach is deterministic plurality: whichever candidate has the
+        most votes wins, regardless of total vote count. One vote is enough
+        if nobody else has more. Ties broken by lowest coach ID for
+        stability. Only when zero hire votes were cast does the resolver
+        fall back to an auto-pick (random generated coach).
+
         For each team in firedTeamIds:
-        - Check hire_coach votes targeting specific coach IDs
-        - Candidates are sorted by vote count (descending); first to pass gets hired
-        - If no hire_coach vote meets threshold or passes roll, random coach is hired
+        - Tally hire_coach votes by candidate
+        - Pick the leader; if leader is no longer in the pool (e.g. another
+          team's resolution claimed them this offseason), try the next
+        - If no votes at all, generate a fallback coach
         """
         results = []
-        # Build a name lookup from the available coach pool
         availableCoaches = teamManager.getAvailableCoaches()
         coachNames = {c.id: c.name for c in availableCoaches}
         availableIds = {c.id for c in availableCoaches}
@@ -119,8 +187,6 @@ class GmManager:
                 continue
 
             votes = self.voteRepo.getVotesForTeam(team.id, season, "hire_coach")
-
-            # Group votes by target (coach DB ID stored as target_player_id)
             votesByTarget: Dict[int, int] = {}
             for v in votes:
                 if v.target_player_id:
@@ -128,47 +194,44 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "hire_coach")
-
+            leaderVotes = max(votesByTarget.values()) if votesByTarget else 0
+            leaderCount = sum(1 for v in votesByTarget.values() if v == leaderVotes) if leaderVotes > 0 else 0
             hired = False
-            # Evaluate candidates in order of most votes
-            for coachId, count in sorted(votesByTarget.items(),
-                                          key=lambda x: -x[1]):
-                probability = self.calculateProbability(count, threshold)
+            # Sort by votes desc, then coachId asc for stable tiebreak
+            ranked = sorted(
+                votesByTarget.items(), key=lambda x: (-x[1], x[0])
+            )
+            for coachId, count in ranked:
                 coachName = coachNames.get(coachId, f"Coach#{coachId}")
+                threshold, displayProb = self.hireCoachDisplay(
+                    count, leaderVotes, leaderCount
+                )
+                isLeader = (count == leaderVotes and not hired)
 
                 if coachId not in availableIds:
                     outcome = "ineligible"
-                elif probability == 0.0:
-                    outcome = "below_threshold"
-                elif self._rollSuccess(probability):
-                    # hireCoachFromPool can return False if the pool row was
-                    # already taken or removed since availableCoaches was
-                    # snapshotted. Treat that as a failed hire so the loop
-                    # tries the next candidate / fallback rather than
-                    # silently leaving the team coachless.
-                    if teamManager.hireCoachFromPool(team, coachId):
+                elif isLeader:
+                    if teamManager.hireCoachFromPool(team, coachId, session=self.session):
                         outcome = "success"
                         availableIds.discard(coachId)
                         hired = True
                         logger.info(
                             f"GM: {team.name} hired {coachName} by vote "
-                            f"({count} votes, p={probability:.0%})"
+                            f"({count} votes, leader of {leaderCount})"
                         )
                     else:
                         outcome = "ineligible"
                         logger.warning(
-                            f"GM: {team.name} hire of {coachName} (id={coachId}) "
-                            f"failed despite passing roll — pool entry missing/taken"
+                            f"GM: {team.name} leader {coachName} (id={coachId}) "
+                            f"unavailable in pool — falling through to next"
                         )
                 else:
-                    outcome = "failed_roll"
+                    outcome = "trailing"
 
                 self.voteRepo.recordResult(
                     teamId=team.id, season=season, voteType="hire_coach",
                     targetPlayerId=coachId, totalVotes=count,
-                    threshold=threshold, probability=probability,
+                    threshold=threshold, probability=displayProb,
                     outcome=outcome,
                 )
                 results.append({
@@ -176,18 +239,16 @@ class GmManager:
                     "voteType": "hire_coach",
                     "targetPlayerName": coachName,
                     "totalVotes": count, "threshold": threshold,
-                    "probability": probability, "outcome": outcome,
+                    "probability": displayProb, "outcome": outcome,
                 })
-                if hired:
-                    break
 
             if not hired:
-                # Fallback: hire a random coach
+                # No votes at all OR every vote target was unavailable — auto-pick
                 newCoach = teamManager.generateCoach()
                 teamManager.hireCoach(team, newCoach)
+                reason = "no hire_coach votes" if not votesByTarget else "all candidates unavailable"
                 logger.info(
-                    f"GM: {team.name} auto-hired {newCoach.name} "
-                    f"(no hire_coach vote met quorum)"
+                    f"GM: {team.name} auto-hired {newCoach.name} ({reason})"
                 )
 
         return results
@@ -215,8 +276,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "resign_player")
+            fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
+            threshold = self.calculateThreshold(fanCount)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
@@ -229,17 +290,15 @@ class GmManager:
                 elif getattr(player, 'willRetire', False):
                     # Player has already announced retirement — no resign possible.
                     outcome = "retiring"
-                elif probability == 0.0:
+                elif count < threshold:
                     outcome = "below_threshold"
-                elif self._rollSuccess(probability):
+                else:
                     outcome = "success"
                     player._gmResigned = True
                     logger.info(
                         f"GM: {team.name} re-signing {player.name} "
-                        f"({count} votes, p={probability:.0%})"
+                        f"({count} of {threshold} required)"
                     )
-                else:
-                    outcome = "failed_roll"
 
                 playerName = player.name if player else f"Player#{playerId}"
                 self.voteRepo.recordResult(
@@ -278,8 +337,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "cut_player")
+            fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
+            threshold = self.calculateThreshold(fanCount)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
@@ -287,18 +346,16 @@ class GmManager:
 
                 if player is None:
                     outcome = "ineligible"
-                elif probability == 0.0:
+                elif count < threshold:
                     outcome = "below_threshold"
-                elif self._rollSuccess(probability):
+                else:
                     outcome = "success"
                     # Release player to FA pool
                     playerManager.releasePlayerToFreeAgency(player, team, freeAgentLists)
                     logger.info(
                         f"GM: {team.name} cut {player.name} "
-                        f"({count} votes, p={probability:.0%})"
+                        f"({count} of {threshold} required)"
                     )
-                else:
-                    outcome = "failed_roll"
 
                 playerName = player.name if player else f"Player#{playerId}"
                 self.voteRepo.recordResult(
@@ -339,7 +396,7 @@ class GmManager:
                 continue
 
             engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "sign_fa")
+            threshold = self.calculateBallotThreshold(engagedFans)
             probability = self.calculateProbability(totalBallots, threshold)
 
             # Tally per-position rankings for EVERY team with ballots, even
