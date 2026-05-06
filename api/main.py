@@ -6922,6 +6922,25 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
             raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
 
+        # If a threshold-based directive (fire/resign/cut) has already cleared
+        # its bar, it's guaranteed to pass at resolution — no need to keep
+        # spending floobits on it. Hire_coach is plurality so additional
+        # votes always matter (they can shift the leader).
+        if req.voteType in ("fire_coach", "resign_player", "cut_player"):
+            existingTallies = voteRepo.getVoteTallies(teamId, currentSeason)
+            existingCount = next(
+                (t["votes"] for t in existingTallies
+                 if t["voteType"] == req.voteType
+                 and t["targetPlayerId"] == req.targetPlayerId),
+                0,
+            )
+            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
+            if existingCount >= max(1, teamFanCount):
+                raise HTTPException(
+                    400,
+                    "Directive already meets the threshold to pass — no further votes needed",
+                )
+
         # Escalating cost: base * 2^(votes already cast for this specific target)
         baseCost = GM_VOTE_COST[req.voteType]
         targetCount = counts["perTarget"].get(targetKey, 0)
