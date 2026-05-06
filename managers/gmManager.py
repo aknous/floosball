@@ -75,7 +75,10 @@ class GmManager:
             elif self._rollSuccess(probability):
                 outcome = "success"
                 oldCoachName = team.coach.name if team.coach else "None"
-                teamManager.fireCoach(team)
+                # Pass the gm session so fire DB write and result record share
+                # one connection — without this SQLite "database is locked"
+                # contention rolls back the entire resolution.
+                teamManager.fireCoach(team, session=self.session)
                 firedTeamIds.add(team.id)
                 logger.info(
                     f"GM: {team.name} fired coach {oldCoachName} "
@@ -148,7 +151,7 @@ class GmManager:
                     # snapshotted. Treat that as a failed hire so the loop
                     # tries the next candidate / fallback rather than
                     # silently leaving the team coachless.
-                    if teamManager.hireCoachFromPool(team, coachId):
+                    if teamManager.hireCoachFromPool(team, coachId, session=self.session):
                         outcome = "success"
                         availableIds.discard(coachId)
                         hired = True
