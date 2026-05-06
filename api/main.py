@@ -6866,7 +6866,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
     from database.models import User, Player, Coach
     from constants import (
         GM_VOTE_TYPES, GM_VOTE_COST, GM_VOTES_PER_SEASON,
-        GM_VOTES_PER_TYPE, GM_VOTES_PER_TARGET,
+        GM_VOTES_PER_TYPE, GM_VOTES_PER_TYPE_DEFAULT, GM_VOTES_PER_TARGET,
     )
     from managers.gmManager import GmManager
 
@@ -6915,8 +6915,9 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
 
         if counts["total"] >= GM_VOTES_PER_SEASON:
             raise HTTPException(400, f"Season vote limit reached ({GM_VOTES_PER_SEASON})")
-        if counts["perType"].get(req.voteType, 0) >= GM_VOTES_PER_TYPE:
-            raise HTTPException(400, f"Vote type limit reached ({GM_VOTES_PER_TYPE} per type)")
+        perTypeCap = GM_VOTES_PER_TYPE.get(req.voteType, GM_VOTES_PER_TYPE_DEFAULT)
+        if counts["perType"].get(req.voteType, 0) >= perTypeCap:
+            raise HTTPException(400, f"Vote type limit reached ({perTypeCap} per type)")
         targetKey = f"{req.voteType}:{req.targetPlayerId or 'none'}"
         if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
             raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")

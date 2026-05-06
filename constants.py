@@ -307,13 +307,20 @@ GM_VOTE_BASE_MIN = {
 }
 
 # Per-user limits.
-# GM_VOTES_PER_TYPE controls how many votes a single fan can spend on one
-# vote type per season (separately for fire, resign, cut, hire). With the
-# fan-count-based threshold (votes >= team fan count), a fan-budget of 4
-# keeps the math reachable: a 10-fan team needs 10 votes to pass, which a
-# 3-fan turnout could do at 4 votes each, or all 10 fans casting 1 each.
+# GM_VOTES_PER_TYPE caps how many votes a single fan can spend on one vote
+# type per season. Coach votes (fire/hire) cap at 4 — there's only one
+# coach to deal with, so more budget there is wasted. Player votes
+# (resign/cut) cap at 8 because a team often has multiple candidates worth
+# voting on, and fans need to spread their support.
 GM_VOTES_PER_SEASON = 20
-GM_VOTES_PER_TYPE = 4
+GM_VOTES_PER_TYPE = {
+    "fire_coach":     4,
+    "hire_coach":     4,
+    "resign_player":  8,
+    "cut_player":     8,
+    "sign_fa":        8,
+}
+GM_VOTES_PER_TYPE_DEFAULT = 4
 GM_VOTES_PER_TARGET = 4
 
 # Front Office voting window opens at this week. Before this, GM vote UIs show
