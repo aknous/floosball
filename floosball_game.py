@@ -3476,6 +3476,26 @@ class Game:
                     self.gameFeed.insert(0, {'play': self.play})
                     self.broadcastGameState(includeLastPlay=True)
                     lastPlayFormatted = True
+                    # The play was executed inside playCaller() but the
+                    # post-play turnover handler (lines ~3985+) never got to
+                    # run because the inner possession loop broke on
+                    # pre-snap clock expiry. Apply the turnover side-effects
+                    # here so possession actually flips, otherwise the next
+                    # quarter starts with the fumbling team still on offense.
+                    if self.play.isFumbleLost or self.play.isInterception:
+                        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+                        self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
+                        if self.offensiveTeam is self.homeTeam:
+                            self.homeTurnoversTotal += 1
+                        elif self.offensiveTeam is self.awayTeam:
+                            self.awayTurnoversTotal += 1
+                        # Spot the ball for the recovering team. Mirror the
+                        # main turnover-handler's positioning calc.
+                        recoverYards = (self.yardsToSafety + self.play.yardage)
+                        if recoverYards <= 0:
+                            recoverYards = 1
+                        self.turnover(self.offensiveTeam, self.defensiveTeam, recoverYards)
+                        self._pendingPossessionChange = True
                 elif getattr(self.play, 'playText', None):
                     # Already formatted (e.g. TD broadcast) — just mark as done
                     lastPlayFormatted = True
