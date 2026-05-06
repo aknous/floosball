@@ -1257,43 +1257,6 @@ class Game:
         except Exception:
             return False
 
-    def _logLateGameDecision(self, decision: str, **context) -> None:
-        """Append a structured entry for late-game FG/clock decisions to
-        logs/late_game_decisions.jsonl. Used for offline analysis of how
-        the decision logic plays out across many seasons. Never raises —
-        diagnostics must not break the game."""
-        try:
-            import json as _json
-            import os
-            from datetime import datetime
-            entry = {
-                'ts': datetime.utcnow().isoformat() + 'Z',
-                'decision': decision,
-                'season': getattr(self, 'seasonNumber', None),
-                'week': getattr(self, 'week', None),
-                'gameId': getattr(self, 'id', None),
-                'gameType': getattr(self, 'gameType', None),
-                'quarter': self.currentQuarter,
-                'secondsRemaining': self.gameClockSeconds,
-                'down': self.down,
-                'yardsToFirstDown': self.yardsToFirstDown,
-                'yardsToEndzone': self.yardsToEndzone,
-                'offenseAbbr': getattr(self.offensiveTeam, 'abbr', None),
-                'defenseAbbr': getattr(self.defensiveTeam, 'abbr', None),
-                'homeScore': self.homeScore,
-                'awayScore': self.awayScore,
-                'offTimeoutsRemaining': (
-                    self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
-                    else self.awayTimeoutsRemaining
-                ),
-                **context,
-            }
-            os.makedirs('logs', exist_ok=True)
-            with open('logs/late_game_decisions.jsonl', 'a') as f:
-                f.write(_json.dumps(entry) + '\n')
-        except Exception:
-            pass
-
     def _estimateAvailablePlays(self) -> int:
         """Conservative estimate of productive offensive plays remaining before
         regulation ends, RESERVING ~7s for a closing FG attempt.
@@ -3082,34 +3045,6 @@ class Game:
                 # Don't overwrite clutchPlayerName if already set (clutch wins display priority)
                 if not play.clutchPlayerName:
                     play.clutchPlayerName = topFaller[0]
-
-        # Diagnostic: log clutch/choke tagging so defensive (and offensive)
-        # plays can be reviewed offline. Only fires when something actually
-        # got tagged.
-        if clutchPerformers or chokePerformers:
-            offNames = {n for n, _ in offInvolved}
-            defNames = {n for n, _ in defInvolved}
-            self._logLateGameDecision(
-                'clutchChokeTag',
-                branch='outcome',
-                playType=play.playType.name if play.playType else None,
-                isClutchOutcome=bool(isClutchOutcome),
-                isChokeOutcome=bool(isChokeOutcome),
-                clutchPerformers=clutchPerformers,
-                chokePerformers=chokePerformers,
-                clutchOffense=[n for n in clutchPerformers if n in offNames],
-                clutchDefense=[n for n in clutchPerformers if n in defNames],
-                chokeOffense=[n for n in chokePerformers if n in offNames],
-                chokeDefense=[n for n in chokePerformers if n in defNames],
-                gamePressure=round(play.gamePressure, 1),
-                yardage=play.yardage,
-                isTd=bool(getattr(play, 'isTd', False)),
-                isInterception=bool(getattr(play, 'isInterception', False)),
-                isSack=bool(getattr(play, 'isSack', False)),
-                isFumbleLost=bool(getattr(play, 'isFumbleLost', False)),
-                isFgGood=bool(getattr(play, 'isFgGood', False)),
-                scoreDiff=scoreDiff,
-            )
 
     def _accumulateOffenseStats(self, team, score):
         """Accumulate a team's offensive stats into season totals after a game."""
@@ -7962,30 +7897,3 @@ class Play():
         # success rates over many seasons. Use the play-level flag (not
         # self.passType) so sacks — which short-circuit before passType is set
         # — are still counted.
-        if getattr(self, '_isHailMaryPlay', False):
-            if self.isSack:
-                outcome = 'sack'
-            elif self.isInterception:
-                outcome = 'interception'
-            elif self.isPassCompletion:
-                if self.yardage >= self.yardsToEndzone:
-                    outcome = 'touchdown'
-                else:
-                    outcome = 'completionShort'
-            elif getattr(self, 'passIsDropped', False):
-                outcome = 'dropped'
-            else:
-                outcome = 'incomplete'
-            try:
-                self.game._logLateGameDecision(
-                    'hailMaryAttempt',
-                    branch='hailMaryOutcome',
-                    outcome=outcome,
-                    yardsGained=self.yardage,
-                    yardsToEndzone=self.yardsToEndzone,
-                    qbAccuracy=getattr(self.passer.gameAttributes, 'accuracy', None) if self.passer else None,
-                    qbName=self.passer.name if self.passer else None,
-                )
-            except Exception:
-                pass
-
