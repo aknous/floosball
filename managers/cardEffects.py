@@ -2963,7 +2963,12 @@ def _computeStackedDeck(primary, ctx, cardPlayerId, eqId):
 
 def _computeCopycat(primary, ctx, cardPlayerId, eqId):
     """+FP equal to the highest flat FP bonus among other cards."""
-    breakdowns = ctx._firstPassBreakdowns or []
+    breakdowns = list(ctx._firstPassBreakdowns or [])
+    spBreakdowns = getattr(ctx, '_secondPassBreakdowns', None) or []
+    spEqIds = getattr(ctx, '_secondPassEqIds', None) or []
+    for spIdx, spEqId in enumerate(spEqIds):
+        if spEqId != eqId and spIdx < len(spBreakdowns):
+            breakdowns.append(spBreakdowns[spIdx])
     bestFP = 0
     for b in breakdowns:
         if b.totalFP > bestFP:
@@ -2981,6 +2986,8 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
                          if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
+    triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     if triggeredCount > 0:
         bonus = round(1 + perCard * triggeredCount, 2)
         eq = f"1 + ({perCard} × {triggeredCount} triggered cards) = {bonus}"
@@ -2995,6 +3002,8 @@ def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
                          if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
+    triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     if triggeredCount >= 4:
         eq = f"+{rewardValue} FP ({triggeredCount}/4+ cards triggered)"
         return EffectResult(fpBonus=rewardValue, equation=eq)
@@ -3007,7 +3016,12 @@ def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
 def _computeHighRoller(primary, ctx, cardPlayerId, eqId):
     """FPx scaling with how many chance cards triggered their enhanced payout."""
     perCardMult = primary.get("perCardMult", 0.10)
-    breakdowns = ctx._firstPassBreakdowns or []
+    breakdowns = list(ctx._firstPassBreakdowns or [])
+    spBreakdowns = getattr(ctx, '_secondPassBreakdowns', None) or []
+    spEqIds = getattr(ctx, '_secondPassEqIds', None) or []
+    for spIdx, spEqId in enumerate(spEqIds):
+        if spEqId != eqId and spIdx < len(spBreakdowns):
+            breakdowns.append(spBreakdowns[spIdx])
     chanceTriggered = sum(1 for b in breakdowns if b.chanceTriggered)
     if chanceTriggered > 0:
         bonus = round(1 + perCardMult * chanceTriggered, 2)
@@ -3069,6 +3083,8 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=baseMult, equation=f"{baseMult}x FPx (legacy)")
     breakdowns = ctx._firstPassBreakdowns or []
     failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0 and b.primaryMult <= 0)
+    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
+    failedCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and not t)
     if failedCount <= 0:
         eq = f"+{baseFP} FP. All cards triggered"
         return EffectResult(fpBonus=baseFP, equation=eq)
