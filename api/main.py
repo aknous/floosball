@@ -6986,8 +6986,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             threshold = gm.calculateBallotThreshold(engagedFans)
             probability = gm.calculateProbability(targetTally["votes"], threshold)
         else:
-            totalCastVotes = voteRepo.getTotalVotesCastForTeam(teamId, currentSeason)
-            threshold = gm.calculateThreshold(totalCastVotes)
+            threshold = gm.calculateThreshold(engagedFans)
             probability = gm.calculateProbability(targetTally["votes"], threshold)
 
         return build_success_response({
@@ -7041,10 +7040,9 @@ def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
             sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
             if hireLeaderVotes > 0 else 0
         )
-        # Threshold for fire/resign/cut: strict majority of total cast
-        # votes on this team (across all vote types).
-        totalCastVotes = voteRepo.getTotalVotesCastForTeam(teamId, currentSeason)
-        majorityThreshold = gm.calculateThreshold(totalCastVotes)
+        # Threshold for fire/resign/cut: strict majority of the engaged
+        # fanbase's combined vote budget for that type.
+        majorityThreshold = gm.calculateThreshold(engagedFans)
         enriched = []
         for t in tallies:
             if t["voteType"] == "hire_coach":

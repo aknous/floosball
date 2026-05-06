@@ -31,24 +31,35 @@ class GmManager:
 
     # ── Threshold & Probability ─────────────────────────────────────────
 
-    def calculateThreshold(self, totalCastVotes: int, voteType: str = None) -> int:
-        """Threshold = strict majority of all GM votes cast on this team.
+    def calculateThreshold(self, engagedFanCount: int, voteType: str = None) -> int:
+        """Threshold = strict majority of votes the engaged fanbase could cast
+        on this vote type.
 
-        Each fan has a multi-vote budget per season; the bar to pass a
-        fire/resign/cut decision is more than half of the team's total
-        cast votes (across all types and targets). That way a vote only
-        passes when fans clearly want it more than they want anything
-        else they've voted on for the team.
+        Each fan has a separate per-type vote budget (GM_VOTES_PER_TYPE) for
+        fire_coach, resign_player, and cut_player. The threshold to pass any
+        of those is more than half of the engaged fanbase's COMBINED budget
+        for that type — so fire passes only when fans collectively spend a
+        majority of their fire pool, and that pool isn't shared with their
+        resign or cut budgets.
 
-        voteType is unused now but kept for call-site compatibility.
-        Low-quorum/test mode keeps the threshold at 1 so single-user
-        tests still work.
+        Fan engagement = fans of this team who have cast at least one GM
+        vote this season. A fan who hasn't participated at all isn't
+        counted in the denominator (the bar shouldn't punish votes for
+        ghosts who weren't going to vote anyway).
+
+        Low-quorum / test mode keeps the threshold at 1.
+
+        voteType is currently unused — fire / resign / cut all share the
+        same per-type cap (GM_VOTES_PER_TYPE) — but kept in the signature
+        so callers stay readable.
         """
         if self._lowQuorum:
             return 1
-        if totalCastVotes <= 0:
+        if engagedFanCount <= 0:
             return 1
-        return totalCastVotes // 2 + 1
+        from constants import GM_VOTES_PER_TYPE
+        totalPossible = engagedFanCount * GM_VOTES_PER_TYPE
+        return totalPossible // 2 + 1
 
     def calculateBallotThreshold(self, engagedFanCount: int) -> int:
         """Threshold for sign_fa ballots (ranked-choice).
@@ -124,8 +135,8 @@ class GmManager:
             if totalVotes == 0:
                 continue
 
-            totalCast = self.voteRepo.getTotalVotesCastForTeam(team.id, season)
-            threshold = self.calculateThreshold(totalCast)
+            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
+            threshold = self.calculateThreshold(engagedFans)
             probability = self.calculateProbability(totalVotes, threshold)
 
             if totalVotes < threshold:
@@ -273,8 +284,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            totalCast = self.voteRepo.getTotalVotesCastForTeam(team.id, season)
-            threshold = self.calculateThreshold(totalCast)
+            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
+            threshold = self.calculateThreshold(engagedFans)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
@@ -334,8 +345,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            totalCast = self.voteRepo.getTotalVotesCastForTeam(team.id, season)
-            threshold = self.calculateThreshold(totalCast)
+            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
+            threshold = self.calculateThreshold(engagedFans)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
