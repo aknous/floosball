@@ -31,25 +31,63 @@ class GmManager:
 
     # ── Threshold & Probability ─────────────────────────────────────────
 
-    def calculateThreshold(self, engagedFanCount: int, voteType: str) -> int:
-        weight = GM_VOTE_WEIGHT.get(voteType, 1.0)
-        baseMin = 1 if self._lowQuorum else GM_VOTE_BASE_MIN.get(voteType, 2)
+    def calculateThreshold(self, totalCastVotes: int, voteType: str = None) -> int:
+        """Threshold = strict majority of all GM votes cast on this team.
+
+        Each fan has a multi-vote budget per season; the bar to pass a
+        fire/resign/cut decision is more than half of the team's total
+        cast votes (across all types and targets). That way a vote only
+        passes when fans clearly want it more than they want anything
+        else they've voted on for the team.
+
+        voteType is unused now but kept for call-site compatibility.
+        Low-quorum/test mode keeps the threshold at 1 so single-user
+        tests still work.
+        """
+        if self._lowQuorum:
+            return 1
+        if totalCastVotes <= 0:
+            return 1
+        return totalCastVotes // 2 + 1
+
+    def calculateBallotThreshold(self, engagedFanCount: int) -> int:
+        """Threshold for sign_fa ballots (ranked-choice).
+
+        Sign_fa is a different mechanic — fans submit ranked-choice ballots
+        rather than discrete votes — so it sticks to the original engaged-
+        fan-based threshold instead of the majority-of-cast-votes rule
+        used by fire/resign/cut.
+        """
+        weight = GM_VOTE_WEIGHT.get("sign_fa", 1.0)
+        baseMin = 1 if self._lowQuorum else GM_VOTE_BASE_MIN.get("sign_fa", 2)
         return max(baseMin, math.ceil(engagedFanCount * GM_THRESHOLD_USER_FACTOR * weight))
 
-    def hireCoachDisplayProbability(self, votes: int, leaderVotes: int) -> float:
-        """Probability shown in the UI for a hire_coach candidate.
+    def hireCoachDisplay(self, votes: int, leaderVotes: int, leaderCount: int) -> Tuple[int, float]:
+        """Threshold + probability for a hire_coach candidate's UI display.
 
-        Hire-coach resolution is deterministic — whichever candidate has
-        the most votes wins (no threshold roll, no random outcome). One
-        vote is enough as long as no other candidate has more. The displayed
-        probability reflects each candidate's share against the current
-        leader: the leader sits at 100%, everyone else scales by
-        `votes / leaderVotes`. With no votes anywhere, all candidates are
-        0% and the auto-pick fires.
+        Returns (threshold, probability) where:
+          - probability is the bar-fill / label percentage
+          - threshold is the bar a candidate must cross for the UI's
+            "Will pass" label to trigger
+
+        Plurality resolution: most votes wins. The display has to handle
+        three cases:
+          - Sole leader: probability=1.0, threshold=leaderVotes → "Will pass"
+          - Tied for lead: probability=votes/(leaderVotes+1), threshold=leaderVotes+1
+            so the bar shows a non-100% fill and the "Will pass" label
+            does not trigger (leaders are competing, not winning yet)
+          - Trailing: probability=votes/threshold against the same gating
+            threshold, scaled down so they read as "behind"
+
+        Zero leaderVotes (no votes at all) returns (1, 0.0) so the meter
+        is empty and the auto-pick fires when resolution runs.
         """
-        if leaderVotes <= 0 or votes <= 0:
-            return 0.0
-        return min(1.0, votes / leaderVotes)
+        if leaderVotes <= 0:
+            return 1, 0.0
+        tied = leaderCount > 1
+        threshold = leaderVotes + 1 if tied else leaderVotes
+        probability = min(1.0, votes / threshold) if threshold > 0 else 0.0
+        return threshold, probability
 
     def calculateProbability(self, votes: int, threshold: int) -> float:
         """Progress toward threshold for fire_coach / resign_player / cut_player.
@@ -86,8 +124,8 @@ class GmManager:
             if totalVotes == 0:
                 continue
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "fire_coach")
+            totalCast = self.voteRepo.getTotalVotesCastForTeam(team.id, season)
+            threshold = self.calculateThreshold(totalCast)
             probability = self.calculateProbability(totalVotes, threshold)
 
             if totalVotes < threshold:
@@ -154,6 +192,7 @@ class GmManager:
                     )
 
             leaderVotes = max(votesByTarget.values()) if votesByTarget else 0
+            leaderCount = sum(1 for v in votesByTarget.values() if v == leaderVotes) if leaderVotes > 0 else 0
             hired = False
             # Sort by votes desc, then coachId asc for stable tiebreak
             ranked = sorted(
@@ -161,7 +200,9 @@ class GmManager:
             )
             for coachId, count in ranked:
                 coachName = coachNames.get(coachId, f"Coach#{coachId}")
-                displayProb = self.hireCoachDisplayProbability(count, leaderVotes)
+                threshold, displayProb = self.hireCoachDisplay(
+                    count, leaderVotes, leaderCount
+                )
                 isLeader = (count == leaderVotes and not hired)
 
                 if coachId not in availableIds:
@@ -173,7 +214,7 @@ class GmManager:
                         hired = True
                         logger.info(
                             f"GM: {team.name} hired {coachName} by vote "
-                            f"({count} votes, leader)"
+                            f"({count} votes, leader of {leaderCount})"
                         )
                     else:
                         outcome = "ineligible"
@@ -187,14 +228,14 @@ class GmManager:
                 self.voteRepo.recordResult(
                     teamId=team.id, season=season, voteType="hire_coach",
                     targetPlayerId=coachId, totalVotes=count,
-                    threshold=leaderVotes, probability=displayProb,
+                    threshold=threshold, probability=displayProb,
                     outcome=outcome,
                 )
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "hire_coach",
                     "targetPlayerName": coachName,
-                    "totalVotes": count, "threshold": leaderVotes,
+                    "totalVotes": count, "threshold": threshold,
                     "probability": displayProb, "outcome": outcome,
                 })
 
@@ -232,8 +273,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "resign_player")
+            totalCast = self.voteRepo.getTotalVotesCastForTeam(team.id, season)
+            threshold = self.calculateThreshold(totalCast)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
@@ -293,8 +334,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "cut_player")
+            totalCast = self.voteRepo.getTotalVotesCastForTeam(team.id, season)
+            threshold = self.calculateThreshold(totalCast)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
@@ -352,7 +393,7 @@ class GmManager:
                 continue
 
             engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "sign_fa")
+            threshold = self.calculateBallotThreshold(engagedFans)
             probability = self.calculateProbability(totalBallots, threshold)
 
             # Tally per-position rankings for EVERY team with ballots, even

@@ -59,6 +59,21 @@ class GmVoteRepository:
             perTarget[key] = perTarget.get(key, 0) + 1
         return {"total": total, "perType": perType, "perTarget": perTarget}
 
+    def getTotalVotesCastForTeam(self, teamId: int, season: int) -> int:
+        """Total raw vote count cast on a team this season (any type/target).
+
+        Used as the denominator for majority-based thresholds: a fire/
+        resign/cut decision needs more than half of the team's cast votes
+        to pass. This way the bar scales with how engaged fans actually
+        are this season — quiet teams pass things on a few votes, hot
+        teams need a real consensus.
+        """
+        return int(
+            self.session.query(func.count(GmVote.id))
+            .filter_by(team_id=teamId, season=season)
+            .scalar() or 0
+        )
+
     def getVoteTallies(self, teamId: int, season: int) -> List[Dict]:
         """Aggregate votes by (vote_type, target_player_id) for a team."""
         rows = (

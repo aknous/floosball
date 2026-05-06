@@ -6970,14 +6970,24 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         )
         gm = GmManager(session)
         if req.voteType == "hire_coach":
-            hireLeaderVotes = max(
-                (t["votes"] for t in tallies if t["voteType"] == "hire_coach" and t.get("targetPlayerId")),
-                default=0,
+            hireVoteCounts = [
+                t["votes"] for t in tallies
+                if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
+            ]
+            hireLeaderVotes = max(hireVoteCounts) if hireVoteCounts else 0
+            hireLeaderCount = (
+                sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
+                if hireLeaderVotes > 0 else 0
             )
-            threshold = hireLeaderVotes
-            probability = gm.hireCoachDisplayProbability(targetTally["votes"], hireLeaderVotes)
+            threshold, probability = gm.hireCoachDisplay(
+                targetTally["votes"], hireLeaderVotes, hireLeaderCount
+            )
+        elif req.voteType == "sign_fa":
+            threshold = gm.calculateBallotThreshold(engagedFans)
+            probability = gm.calculateProbability(targetTally["votes"], threshold)
         else:
-            threshold = gm.calculateThreshold(engagedFans, req.voteType)
+            totalCastVotes = voteRepo.getTotalVotesCastForTeam(teamId, currentSeason)
+            threshold = gm.calculateThreshold(totalCastVotes)
             probability = gm.calculateProbability(targetTally["votes"], threshold)
 
         return build_success_response({
@@ -7018,21 +7028,34 @@ def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
 
         # Enrich with threshold/probability
         gm = GmManager(session)
-        # Hire-coach is plurality-wins, so probability is leader-relative:
-        # the candidate with the most votes is at 100%, others scale by
-        # share. threshold is reported as the leader's vote count (the bar
-        # to overtake).
-        hireLeaderVotes = max(
-            (t["votes"] for t in tallies if t["voteType"] == "hire_coach" and t.get("targetPlayerId")),
-            default=0,
+        # Hire-coach is plurality-wins. Display threshold + probability so
+        # the meter shows: sole leader at 100% ("Will pass"), tied leaders
+        # at <100% (no "Will pass" until tie breaks), trailing at fraction
+        # of leader. Tie detection lives in hireCoachDisplay.
+        hireVoteCounts = [
+            t["votes"] for t in tallies
+            if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
+        ]
+        hireLeaderVotes = max(hireVoteCounts) if hireVoteCounts else 0
+        hireLeaderCount = (
+            sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
+            if hireLeaderVotes > 0 else 0
         )
+        # Threshold for fire/resign/cut: strict majority of total cast
+        # votes on this team (across all vote types).
+        totalCastVotes = voteRepo.getTotalVotesCastForTeam(teamId, currentSeason)
+        majorityThreshold = gm.calculateThreshold(totalCastVotes)
         enriched = []
         for t in tallies:
             if t["voteType"] == "hire_coach":
-                threshold = hireLeaderVotes
-                probability = gm.hireCoachDisplayProbability(t["votes"], hireLeaderVotes)
+                threshold, probability = gm.hireCoachDisplay(
+                    t["votes"], hireLeaderVotes, hireLeaderCount
+                )
+            elif t["voteType"] == "sign_fa":
+                threshold = gm.calculateBallotThreshold(engagedFans)
+                probability = gm.calculateProbability(t["votes"], threshold)
             else:
-                threshold = gm.calculateThreshold(engagedFans, t["voteType"])
+                threshold = majorityThreshold
                 probability = gm.calculateProbability(t["votes"], threshold)
             enriched.append({
                 **t,
