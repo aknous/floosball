@@ -36,22 +36,20 @@ class GmManager:
         baseMin = 1 if self._lowQuorum else GM_VOTE_BASE_MIN.get(voteType, 2)
         return max(baseMin, math.ceil(engagedFanCount * GM_THRESHOLD_USER_FACTOR * weight))
 
-    def calculateHireCoachThreshold(self, baseThreshold: int, candidateCount: int) -> int:
-        """Hire-coach threshold scales with the number of competing candidates.
+    def hireCoachDisplayProbability(self, votes: int, leaderVotes: int) -> float:
+        """Probability shown in the UI for a hire_coach candidate.
 
-        With one candidate, the base threshold applies — a slate of votes can
-        push that candidate to 100%. With multiple candidates competing, the
-        effective threshold scales linearly: two candidates each need 2x
-        votes to hit 100%, three each need 3x, etc. This stops the situation
-        where multiple users (or one user splitting their votes) can push
-        several different replacement coaches to 100% simultaneously.
-
-        Low-quorum/test mode keeps the base threshold so one-user tests
-        still work.
+        Hire-coach resolution is deterministic — whichever candidate has
+        the most votes wins (no threshold roll, no random outcome). One
+        vote is enough as long as no other candidate has more. The displayed
+        probability reflects each candidate's share against the current
+        leader: the leader sits at 100%, everyone else scales by
+        `votes / leaderVotes`. With no votes anywhere, all candidates are
+        0% and the auto-pick fires.
         """
-        if candidateCount <= 1 or self._lowQuorum:
-            return baseThreshold
-        return baseThreshold * candidateCount
+        if leaderVotes <= 0 or votes <= 0:
+            return 0.0
+        return min(1.0, votes / leaderVotes)
 
     def calculateProbability(self, votes: int, threshold: int) -> float:
         if votes < threshold:
@@ -123,13 +121,19 @@ class GmManager:
                               teamManager, firedTeamIds: set) -> List[Dict]:
         """Resolve hire_coach votes for teams that fired their coach.
 
+        Hire-coach is deterministic plurality: whichever candidate has the
+        most votes wins, regardless of total vote count. One vote is enough
+        if nobody else has more. Ties broken by lowest coach ID for
+        stability. Only when zero hire votes were cast does the resolver
+        fall back to an auto-pick (random generated coach).
+
         For each team in firedTeamIds:
-        - Check hire_coach votes targeting specific coach IDs
-        - Candidates are sorted by vote count (descending); first to pass gets hired
-        - If no hire_coach vote meets threshold or passes roll, random coach is hired
+        - Tally hire_coach votes by candidate
+        - Pick the leader; if leader is no longer in the pool (e.g. another
+          team's resolution claimed them this offseason), try the next
+        - If no votes at all, generate a fallback coach
         """
         results = []
-        # Build a name lookup from the available coach pool
         availableCoaches = teamManager.getAvailableCoaches()
         coachNames = {c.id: c.name for c in availableCoaches}
         availableIds = {c.id for c in availableCoaches}
@@ -139,8 +143,6 @@ class GmManager:
                 continue
 
             votes = self.voteRepo.getVotesForTeam(team.id, season, "hire_coach")
-
-            # Group votes by target (coach DB ID stored as target_player_id)
             votesByTarget: Dict[int, int] = {}
             for v in votes:
                 if v.target_player_id:
@@ -148,71 +150,58 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            baseThreshold = self.calculateThreshold(engagedFans, "hire_coach")
-            # Scale threshold by candidate count so multiple competing
-            # candidates can't all reach 100% on the same vote pool.
-            threshold = self.calculateHireCoachThreshold(
-                baseThreshold, len(votesByTarget)
-            )
-
+            leaderVotes = max(votesByTarget.values()) if votesByTarget else 0
             hired = False
-            # Evaluate candidates in order of most votes
-            for coachId, count in sorted(votesByTarget.items(),
-                                          key=lambda x: -x[1]):
-                probability = self.calculateProbability(count, threshold)
+            # Sort by votes desc, then coachId asc for stable tiebreak
+            ranked = sorted(
+                votesByTarget.items(), key=lambda x: (-x[1], x[0])
+            )
+            for coachId, count in ranked:
                 coachName = coachNames.get(coachId, f"Coach#{coachId}")
+                displayProb = self.hireCoachDisplayProbability(count, leaderVotes)
+                isLeader = (count == leaderVotes and not hired)
 
                 if coachId not in availableIds:
                     outcome = "ineligible"
-                elif probability == 0.0:
-                    outcome = "below_threshold"
-                elif self._rollSuccess(probability):
-                    # hireCoachFromPool can return False if the pool row was
-                    # already taken or removed since availableCoaches was
-                    # snapshotted. Treat that as a failed hire so the loop
-                    # tries the next candidate / fallback rather than
-                    # silently leaving the team coachless.
+                elif isLeader:
                     if teamManager.hireCoachFromPool(team, coachId, session=self.session):
                         outcome = "success"
                         availableIds.discard(coachId)
                         hired = True
                         logger.info(
                             f"GM: {team.name} hired {coachName} by vote "
-                            f"({count} votes, p={probability:.0%})"
+                            f"({count} votes, leader)"
                         )
                     else:
                         outcome = "ineligible"
                         logger.warning(
-                            f"GM: {team.name} hire of {coachName} (id={coachId}) "
-                            f"failed despite passing roll — pool entry missing/taken"
+                            f"GM: {team.name} leader {coachName} (id={coachId}) "
+                            f"unavailable in pool — falling through to next"
                         )
                 else:
-                    outcome = "failed_roll"
+                    outcome = "trailing"
 
                 self.voteRepo.recordResult(
                     teamId=team.id, season=season, voteType="hire_coach",
                     targetPlayerId=coachId, totalVotes=count,
-                    threshold=threshold, probability=probability,
+                    threshold=leaderVotes, probability=displayProb,
                     outcome=outcome,
                 )
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "hire_coach",
                     "targetPlayerName": coachName,
-                    "totalVotes": count, "threshold": threshold,
-                    "probability": probability, "outcome": outcome,
+                    "totalVotes": count, "threshold": leaderVotes,
+                    "probability": displayProb, "outcome": outcome,
                 })
-                if hired:
-                    break
 
             if not hired:
-                # Fallback: hire a random coach
+                # No votes at all OR every vote target was unavailable — auto-pick
                 newCoach = teamManager.generateCoach()
                 teamManager.hireCoach(team, newCoach)
+                reason = "no hire_coach votes" if not votesByTarget else "all candidates unavailable"
                 logger.info(
-                    f"GM: {team.name} auto-hired {newCoach.name} "
-                    f"(no hire_coach vote met quorum)"
+                    f"GM: {team.name} auto-hired {newCoach.name} ({reason})"
                 )
 
         return results
