@@ -1301,7 +1301,7 @@ class TeamManager:
         team.coach = coach
         self._saveCoachToDatabase(team)
 
-    def fireCoach(self, team: FloosTeam.Team) -> None:
+    def fireCoach(self, team: FloosTeam.Team, session=None) -> None:
         """Remove a team's coach (leaves them coachless until next hire).
 
         Persists the change so a fired coach actually stays fired across
@@ -1309,17 +1309,25 @@ class TeamManager:
         the unassigned pool. Without this, _loadCoachFromDatabase would
         re-link the same coach via team_id on the next boot and the GM
         fire vote would silently undo itself.
+
+        Optional `session` lets callers (e.g. the GM resolution flow) write
+        through their own session so fire/hire DB updates and the GM
+        vote-result records share one connection. Without that, two
+        connections fight for SQLite's write lock and the resolution flow
+        hits "database is locked" and rolls back its result records —
+        leaving the coach fired but no records of which votes resolved.
         """
         oldCoach = team.coach
         team.coach = None
-        if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
+        targetSession = session if session is not None else self.db_session
+        if (DATABASE_AVAILABLE and USE_DATABASE and targetSession is not None
                 and oldCoach is not None and getattr(oldCoach, 'id', None)):
             try:
                 from database.models import Coach as DBCoach
-                dbCoach = self.db_session.get(DBCoach, oldCoach.id)
+                dbCoach = targetSession.get(DBCoach, oldCoach.id)
                 if dbCoach is not None:
                     dbCoach.team_id = None
-                    self.db_session.flush()
+                    targetSession.flush()
             except Exception as e:
                 self.logger.warning(
                     f"fireCoach: failed to clear DB team_id for "
@@ -1365,14 +1373,24 @@ class TeamManager:
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
 
     def generateCoachPool(self, count: int = 5) -> None:
-        """Generate unassigned coaches and persist them to the DB coach pool."""
+        """Top up the unassigned coach pool to `count` entries.
+
+        Preserves existing pool entries — earlier versions of this method
+        wiped and regenerated the pool on every boot, which invalidated any
+        outstanding GM hire_coach votes (target_player_id pointed at a
+        Coach DB row that no longer existed). With existing rows preserved,
+        an in-flight vote keeps its target through restarts and offseason
+        transitions, and only NEW coaches are added when the pool runs low.
+        """
         if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
             return
         from database.models import Coach as DBCoach
         try:
-            # Clear old pool entries (unassigned coaches)
-            self.db_session.query(DBCoach).filter(DBCoach.team_id == None).delete()
-            for _ in range(count):
+            existing = self.db_session.query(DBCoach).filter(DBCoach.team_id == None).count()
+            needed = max(0, count - existing)
+            if needed == 0:
+                return
+            for _ in range(needed):
                 coach = self.generateCoach()
                 dbCoach = DBCoach(
                     name=coach.name,
@@ -1390,9 +1408,11 @@ class TeamManager:
                 )
                 self.db_session.add(dbCoach)
             self.db_session.flush()
-            self.logger.info(f"Generated coach pool of {count} available coaches")
+            self.logger.info(
+                f"Topped up coach pool: added {needed} (existing {existing}, target {count})"
+            )
         except Exception as e:
-            self.logger.error(f"Failed to generate coach pool: {e}")
+            self.logger.error(f"Failed to top up coach pool: {e}")
             self.db_session.rollback()
 
     def getAvailableCoaches(self):
@@ -1402,12 +1422,18 @@ class TeamManager:
         from database.models import Coach as DBCoach
         return self.db_session.query(DBCoach).filter(DBCoach.team_id == None).all()
 
-    def hireCoachFromPool(self, team: FloosTeam.Team, coachId: int) -> bool:
-        """Hire a coach from the pool by DB id. Returns True on success."""
-        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+    def hireCoachFromPool(self, team: FloosTeam.Team, coachId: int, session=None) -> bool:
+        """Hire a coach from the pool by DB id. Returns True on success.
+
+        Optional `session` lets the GM resolution flow share its own session
+        so the team_id update and the gm_vote_results insert run on the same
+        connection, avoiding SQLite write-lock contention.
+        """
+        targetSession = session if session is not None else self.db_session
+        if not (DATABASE_AVAILABLE and USE_DATABASE and targetSession is not None):
             return False
         from database.models import Coach as DBCoach
-        dbCoach = self.db_session.get(DBCoach, coachId)
+        dbCoach = targetSession.get(DBCoach, coachId)
         if not dbCoach or dbCoach.team_id is not None:
             return False
         # Build in-memory coach and assign
@@ -1424,6 +1450,6 @@ class TeamManager:
         coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
         team.coach = coach
         dbCoach.team_id = team.id
-        self.db_session.flush()
+        targetSession.flush()
         self.logger.info(f"{team.name} hired coach {coach.name} from pool")
         return True

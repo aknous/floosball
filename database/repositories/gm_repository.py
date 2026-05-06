@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from database.models import GmVote, GmVoteResult, GmFaBallot, User
+from database.models import GmVote, GmVoteResult, GmFaBallot, User, Season
 
 
 class GmVoteRepository:
@@ -58,6 +58,21 @@ class GmVoteRepository:
             key = f"{v.vote_type}:{v.target_player_id or 'none'}"
             perTarget[key] = perTarget.get(key, 0) + 1
         return {"total": total, "perType": perType, "perTarget": perTarget}
+
+    def getTotalVotesCastForTeam(self, teamId: int, season: int) -> int:
+        """Total raw vote count cast on a team this season (any type/target).
+
+        Used as the denominator for majority-based thresholds: a fire/
+        resign/cut decision needs more than half of the team's cast votes
+        to pass. This way the bar scales with how engaged fans actually
+        are this season — quiet teams pass things on a few votes, hot
+        teams need a real consensus.
+        """
+        return int(
+            self.session.query(func.count(GmVote.id))
+            .filter_by(team_id=teamId, season=season)
+            .scalar() or 0
+        )
 
     def getVoteTallies(self, teamId: int, season: int) -> List[Dict]:
         """Aggregate votes by (vote_type, target_player_id) for a team."""
@@ -111,6 +126,53 @@ class GmVoteRepository:
             )
             .scalar()
         ) or 0
+
+    def getTeamFanCount(self, teamId: int, season: int = None) -> int:
+        """Active fans of a team — used as the GM vote threshold.
+
+        Prefers the per-team snapshot taken at front-office open (week 22).
+        That snapshot freezes the count, so a fan who creates an account
+        and logs in for the first time AFTER voting opens doesn't shift
+        the threshold mid-resolution.
+
+        Fall-back order:
+          1. season.front_office_fan_snapshot[teamId] — if the snapshot
+             was taken this season, use it.
+          2. Live count of users with favorite_team_id == teamId AND
+             last_login_at >= season.start_date — used pre-week-22 (the
+             threshold is still moving as fans log in).
+          3. Plain count of favorite-team users — used when season
+             metadata is missing.
+        """
+        if season is not None:
+            seasonRow = self.session.get(Season, season)
+            if seasonRow is not None:
+                # Frozen snapshot — preferred once front office has opened.
+                snapshotJson = getattr(seasonRow, 'front_office_fan_snapshot', None)
+                if snapshotJson:
+                    try:
+                        snapshot = json.loads(snapshotJson)
+                        if str(teamId) in snapshot:
+                            return int(snapshot[str(teamId)])
+                    except Exception:
+                        pass
+                # Live "active fans this season" — used before the snapshot
+                # is taken (pre-week-22).
+                if seasonRow.start_date is not None:
+                    return int(
+                        self.session.query(func.count(User.id))
+                        .filter(
+                            User.favorite_team_id == teamId,
+                            User.last_login_at >= seasonRow.start_date,
+                        )
+                        .scalar() or 0
+                    )
+        # Last-resort fallback: every fan with this favorite team.
+        return int(
+            self.session.query(func.count(User.id))
+            .filter(User.favorite_team_id == teamId)
+            .scalar() or 0
+        )
 
     def getResults(self, teamId: int, season: int) -> List[GmVoteResult]:
         return (

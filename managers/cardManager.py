@@ -169,7 +169,18 @@ class CardManager:
         templates: List[CardTemplate] = []
 
         for player in playerManager.activePlayers:
-            # Skip free agents — only rostered players get card templates
+            # Cards are for rostered players only — exclude every off-roster
+            # population:
+            # - Free agents (player.team is None or a 'Free Agent' string)
+            # - Prospects (is_prospect=True; player.team is the 'Prospect' string
+            #   once routing runs, but flag-checking is more reliable than
+            #   string comparison)
+            # - Upcoming rookies (is_upcoming_rookie=True)
+            # - Retired players (player.team == 'Retired' string)
+            if getattr(player, 'is_prospect', False):
+                continue
+            if getattr(player, 'is_upcoming_rookie', False):
+                continue
             teamObj = getattr(player, 'team', None)
             if teamObj is None or not hasattr(teamObj, 'id'):
                 continue
@@ -252,7 +263,12 @@ class CardManager:
             if player.id in existingPlayerIds:
                 continue
 
-            # Skip free agents — only rostered players get card templates
+            # Skip prospects, upcoming rookies, free agents — only rostered
+            # players get card templates.
+            if getattr(player, 'is_prospect', False):
+                continue
+            if getattr(player, 'is_upcoming_rookie', False):
+                continue
             teamObj = getattr(player, 'team', None)
             if teamObj is None or not hasattr(teamObj, 'id'):
                 continue
