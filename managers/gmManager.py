@@ -52,12 +52,17 @@ class GmManager:
         return min(1.0, votes / leaderVotes)
 
     def calculateProbability(self, votes: int, threshold: int) -> float:
-        if votes < threshold:
-            return 0.0
-        if self._lowQuorum:
-            return 1.0
-        ratio = votes / threshold - 1.0
-        return min(GM_PROB_CAP, GM_PROB_BASE + GM_PROB_RANGE * min(1.0, ratio))
+        """Progress toward threshold for fire_coach / resign_player / cut_player.
+
+        Threshold-gated votes resolve deterministically: votes >= threshold
+        passes, otherwise fails. The returned value is a linear progress
+        meter (votes / threshold capped at 1.0) so the UI can render a
+        "how close are we?" bar. At 1.0 the vote will pass; below 1.0
+        it won't. No probability roll, no "70% chance" feel.
+        """
+        if threshold <= 0:
+            return 1.0 if votes > 0 else 0.0
+        return min(1.0, votes / threshold)
 
     @staticmethod
     def _rollSuccess(probability: float) -> bool:
@@ -85,9 +90,9 @@ class GmManager:
             threshold = self.calculateThreshold(engagedFans, "fire_coach")
             probability = self.calculateProbability(totalVotes, threshold)
 
-            if probability == 0.0:
+            if totalVotes < threshold:
                 outcome = "below_threshold"
-            elif self._rollSuccess(probability):
+            else:
                 outcome = "success"
                 oldCoachName = team.coach.name if team.coach else "None"
                 # Pass the gm session so fire DB write and result record share
@@ -97,10 +102,8 @@ class GmManager:
                 firedTeamIds.add(team.id)
                 logger.info(
                     f"GM: {team.name} fired coach {oldCoachName} "
-                    f"({totalVotes} votes, p={probability:.0%})"
+                    f"({totalVotes} of {threshold} required)"
                 )
-            else:
-                outcome = "failed_roll"
 
             self.voteRepo.recordResult(
                 teamId=team.id, season=season, voteType="fire_coach",
@@ -243,17 +246,15 @@ class GmManager:
                 elif getattr(player, 'willRetire', False):
                     # Player has already announced retirement — no resign possible.
                     outcome = "retiring"
-                elif probability == 0.0:
+                elif count < threshold:
                     outcome = "below_threshold"
-                elif self._rollSuccess(probability):
+                else:
                     outcome = "success"
                     player._gmResigned = True
                     logger.info(
                         f"GM: {team.name} re-signing {player.name} "
-                        f"({count} votes, p={probability:.0%})"
+                        f"({count} of {threshold} required)"
                     )
-                else:
-                    outcome = "failed_roll"
 
                 playerName = player.name if player else f"Player#{playerId}"
                 self.voteRepo.recordResult(
@@ -301,18 +302,16 @@ class GmManager:
 
                 if player is None:
                     outcome = "ineligible"
-                elif probability == 0.0:
+                elif count < threshold:
                     outcome = "below_threshold"
-                elif self._rollSuccess(probability):
+                else:
                     outcome = "success"
                     # Release player to FA pool
                     playerManager.releasePlayerToFreeAgency(player, team, freeAgentLists)
                     logger.info(
                         f"GM: {team.name} cut {player.name} "
-                        f"({count} votes, p={probability:.0%})"
+                        f"({count} of {threshold} required)"
                     )
-                else:
-                    outcome = "failed_roll"
 
                 playerName = player.name if player else f"Player#{playerId}"
                 self.voteRepo.recordResult(
