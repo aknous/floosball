@@ -3411,6 +3411,22 @@ class Game:
         self._applyFundingMorale(self.homeTeam)
         self._applyFundingMorale(self.awayTeam)
 
+        # Diagnostic snapshot at game start — captures the effective scaled
+        # pressure modifier each team carries into this game. Regular-season
+        # base sits at 1.0 across the board, so this confirms whether market-
+        # tier scaling fires for non-playoff games (it shouldn't when delta=0).
+        try:
+            from managers.teamManager import logPressureDiag
+            seasonNum = getattr(self, 'seasonNumber', None)
+            weekNum = getattr(self, 'gameWeek', None) or getattr(self, 'weekNumber', None)
+            ctx = "game_start"
+            if not getattr(self, 'isRegularSeasonGame', True):
+                ctx = f"playoff_game_r{getattr(self, 'playoffRound', '?')}"
+            logPressureDiag(self.homeTeam, ctx, season=seasonNum, week=weekNum)
+            logPressureDiag(self.awayTeam, ctx, season=seasonNum, week=weekNum)
+        except Exception:
+            pass  # Diagnostic logging must never break the game loop
+
         # Apply fatigue penalties (accumulated over the season)
         self._applyFatigue(self.homeTeam)
         self._applyFatigue(self.awayTeam)

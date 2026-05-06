@@ -1960,10 +1960,13 @@ class SeasonManager:
         """
         # A. Reset team playoff state to prevent stacked modifiers and stale flags
         teamManager = self.serviceContainer.getService('team_manager')
+        from managers.teamManager import logPressureDiag
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else None
         for team in teamManager.teams:
             team.eliminated = False
             team.leagueChampion = False
             team.pressureModifier = 1.0
+            logPressureDiag(team, "playoff_reset", season=seasonNum, week=self.currentWeek)
 
         # B. Clear freeAgencyOrder — it gets rebuilt during playoffs
         self.currentSeason.freeAgencyOrder = []
@@ -3132,12 +3135,16 @@ class SeasonManager:
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
                             team.pressureModifier = 1.5
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, "playoff_r1", season=self.currentSeason.seasonNumber, week=self.currentWeek)
 
                     else:
                         teamsInRound.extend(playoffTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
                             team.pressureModifier += .2
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=self.currentWeek)
 
                     list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
@@ -3211,6 +3218,9 @@ class SeasonManager:
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
+                from managers.teamManager import logPressureDiag
+                logPressureDiag(newGame.homeTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=self.currentWeek)
+                logPressureDiag(newGame.awayTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=self.currentWeek)
 
             # Track playoff round so pick-em can use virtual week numbers (29+)
             self.currentSeason.currentPlayoffRound = currentRound

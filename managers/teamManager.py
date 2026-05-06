@@ -1174,25 +1174,14 @@ class TeamManager:
     def logPressureSnapshot(self, context: str, season: int = None, week: int = None) -> None:
         """Diagnostic dump of every team's pressure modifier — both the raw
         baseline value and the market-tier scaled effective value used at game
-        time. Tagged with context/season/week so you can grep PRESSURE_DIAG
-        across the log to track fluctuations over multiple seasons.
+        time. Writes to logs/pressure_diag.log via the dedicated pressure_diag
+        logger (separate from the main app log). Tagged with context/season/
+        week so you can grep across the file to track fluctuations.
         """
-        from constants import EXPECTATION_SCALE_BY_TIER
+        diagLogger = _getPressureDiagLogger()
         for team in self.teams:
-            base = getattr(team, 'pressureModifier', 1.0)
-            tier = getattr(team, 'fundingTier', 'UNKNOWN')
-            tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
-            delta = base - 1.0
-            if delta > 0:
-                scaled = 1.0 + delta * tierScale
-            else:
-                scaled = 1.0 + delta * (2.0 - tierScale)
-            self.logger.info(
-                f"PRESSURE_DIAG s={season if season is not None else '-'} "
-                f"w={week if week is not None else '-'} ctx={context} "
-                f"team={team.name} tier={tier} base={base:.2f} scaled={scaled:.2f}"
-            )
-    
+            diagLogger.info(formatPressureDiagLine(team, context, season=season, week=week))
+
     def getPressureStatistics(self) -> Dict[str, Any]:
         """Get pressure modifier statistics for all teams"""
         import statistics
@@ -1479,3 +1468,55 @@ class TeamManager:
         targetSession.flush()
         self.logger.info(f"{team.name} hired coach {coach.name} from pool")
         return True
+
+
+# ── Pressure diagnostic logging (module-level helpers) ──────────────────────
+
+_pressureDiagLogger = None
+
+
+def _getPressureDiagLogger():
+    """Lazy-init a dedicated logger that writes only to logs/pressure_diag.log.
+    Keeps PRESSURE_DIAG lines out of the main app log so testing this feature
+    doesn't drown out other diagnostic output.
+    """
+    global _pressureDiagLogger
+    if _pressureDiagLogger is not None:
+        return _pressureDiagLogger
+    import logging
+    import os
+    diagLogger = logging.getLogger("floosball.pressure_diag")
+    diagLogger.setLevel(logging.INFO)
+    diagLogger.propagate = False
+    if not diagLogger.handlers:
+        os.makedirs("logs", exist_ok=True)
+        handler = logging.FileHandler("logs/pressure_diag.log")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        diagLogger.addHandler(handler)
+    _pressureDiagLogger = diagLogger
+    return diagLogger
+
+
+def formatPressureDiagLine(team, context: str, season: int = None, week: int = None) -> str:
+    """Build a single PRESSURE_DIAG log line for one team."""
+    from constants import EXPECTATION_SCALE_BY_TIER
+    base = getattr(team, 'pressureModifier', 1.0)
+    tier = getattr(team, 'fundingTier', 'UNKNOWN')
+    tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+    delta = base - 1.0
+    if delta > 0:
+        scaled = 1.0 + delta * tierScale
+    else:
+        scaled = 1.0 + delta * (2.0 - tierScale)
+    return (
+        f"PRESSURE_DIAG s={season if season is not None else '-'} "
+        f"w={week if week is not None else '-'} ctx={context} "
+        f"team={team.name} tier={tier} base={base:.2f} scaled={scaled:.2f}"
+    )
+
+
+def logPressureDiag(team, context: str, season: int = None, week: int = None) -> None:
+    """Log one team's pressure state at a mutation site. Used by
+    seasonManager / leagueManager at the inline pressureModifier assignments.
+    """
+    _getPressureDiagLogger().info(formatPressureDiagLine(team, context, season=season, week=week))
