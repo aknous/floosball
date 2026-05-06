@@ -285,6 +285,13 @@ class SeasonManager:
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
 
+        # Set prior-season expectation pressure baselines (must run after
+        # statArchive is populated by season completion last year — which it
+        # has been by this point — and after funding tier is assigned so
+        # market scaling can read the right value at game time).
+        teamMgr = self.serviceContainer.getService('team_manager')
+        teamMgr.setPressureModifiersForNewSeason(seasonNumber)
+
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
@@ -508,6 +515,18 @@ class SeasonManager:
             # empty week).  For week 1, this was already set above.
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
+
+            # Recompute regular-season pressure blend: prior-season expectations
+            # wane over the first ~14 weeks while inSeasonPressure (set by
+            # standings/elimination logic) takes over. Playoff weeks set
+            # pressureModifier directly elsewhere and are not affected here.
+            try:
+                teamMgr = self.serviceContainer.getService('team_manager')
+                teamMgr.applyRegularSeasonPressureBlend(
+                    nextWeek, season=self.currentSeason.seasonNumber,
+                )
+            except Exception as e:
+                logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
 
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:

@@ -96,6 +96,13 @@ class Team:
         self.defenseRunTier = 0
         self.overallRating = 0
         self.pressureModifier = 1.0
+        # Prior-season expectations baseline: set once at season start from
+        # last year's playoff finish / win pct. Wanes across the regular
+        # season as inSeasonPressure (driven by current standings and
+        # elimination state) takes over. pressureModifier itself is the
+        # blended live value used at game time.
+        self.priorSeasonPressure = 1.0
+        self.inSeasonPressure = 1.0
         self.leagueChampionships = []
         self.floosbowlChampionships = []
         self.topSeeds = []
