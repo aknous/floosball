@@ -1052,6 +1052,7 @@ class TeamManager:
                 self.logger.debug(f"{team.name}: Pressure 1.0 (New team/First season)")
         
         self.logger.info("Pressure modifiers set for all teams based on previous season")
+        self.logPressureSnapshot("season_start", season=currentSeason, week=0)
     
     def updateInSeasonPressureModifiers(self, currentWeek: int, nonPlayoffTeamsList: List, lastTeamIn) -> List[Dict[str, str]]:
         """
@@ -1110,6 +1111,7 @@ class TeamManager:
                             self.logger.debug(f"{team.name}: Brink of elimination - pressure set to 2.0")
         
         self.logger.info(f"In-season pressure update complete for week {currentWeek}")
+        self.logPressureSnapshot("in_season", week=currentWeek)
         return leagueHighlights
     
     def setPlayoffPressureModifiers(self, playoffTeams: Dict[str, List], currentRound: int) -> None:
@@ -1139,6 +1141,7 @@ class TeamManager:
                     self.logger.debug(f"{team.name}: Round {currentRound} pressure increased to {team.pressureModifier}")
         
         self.logger.info(f"Playoff pressure modifiers set for round {currentRound}")
+        self.logPressureSnapshot(f"playoff_round_{currentRound}")
     
     def setFloosBowlPressure(self, homeTeam, awayTeam) -> None:
         """
@@ -1157,15 +1160,38 @@ class TeamManager:
         self.logger.debug(f"{awayTeam.name}: Floos Bowl pressure set to 2.5")
         
         self.logger.info("Floos Bowl pressure modifiers set")
+        self.logPressureSnapshot("floos_bowl")
     
     def resetPressureModifiers(self) -> None:
         """Reset all team pressure modifiers to default (1.0)"""
         self.logger.info("Resetting all pressure modifiers to default")
-        
+
         for team in self.teams:
             team.pressureModifier = 1.0
-        
+
         self.logger.info("All pressure modifiers reset to 1.0")
+
+    def logPressureSnapshot(self, context: str, season: int = None, week: int = None) -> None:
+        """Diagnostic dump of every team's pressure modifier — both the raw
+        baseline value and the market-tier scaled effective value used at game
+        time. Tagged with context/season/week so you can grep PRESSURE_DIAG
+        across the log to track fluctuations over multiple seasons.
+        """
+        from constants import EXPECTATION_SCALE_BY_TIER
+        for team in self.teams:
+            base = getattr(team, 'pressureModifier', 1.0)
+            tier = getattr(team, 'fundingTier', 'UNKNOWN')
+            tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+            delta = base - 1.0
+            if delta > 0:
+                scaled = 1.0 + delta * tierScale
+            else:
+                scaled = 1.0 + delta * (2.0 - tierScale)
+            self.logger.info(
+                f"PRESSURE_DIAG s={season if season is not None else '-'} "
+                f"w={week if week is not None else '-'} ctx={context} "
+                f"team={team.name} tier={tier} base={base:.2f} scaled={scaled:.2f}"
+            )
     
     def getPressureStatistics(self) -> Dict[str, Any]:
         """Get pressure modifier statistics for all teams"""

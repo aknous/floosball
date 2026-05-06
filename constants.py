@@ -137,6 +137,30 @@ FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMAL
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
 
+# ---- Market Expectation Scaling ----
+# Bigger markets carry heavier "expectations to win" pressure on top of
+# whatever the team's prior performance has earned. Smaller markets are more
+# forgiving when the team underperforms (less media spotlight, less fan
+# rage). Applied at game time as an asymmetric scalar on the delta of
+# team.pressureModifier from baseline (1.0):
+#   - positive delta (high expectations from prior playoff success, etc.)
+#     is scaled up for big markets — MEGA's win-it-all expectations weigh
+#     more than a SMALL team's same on-paper expectation.
+#   - negative delta (low expectations from a bad prior season) is scaled
+#     up for SMALL markets — small markets disengage and stop watching, big
+#     markets keep the spotlight on even during a rebuild.
+# Effect at game time:
+#   delta = team.pressureModifier - 1.0
+#   if delta > 0:  scaled = delta * EXPECTATION_SCALE[tier]
+#   else:          scaled = delta * (2.0 - EXPECTATION_SCALE[tier])
+#   effectivePressureMod = 1.0 + scaled
+EXPECTATION_SCALE_BY_TIER = {
+    'MEGA_MARKET':  1.5,
+    'LARGE_MARKET': 1.2,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 0.7,
+}
+
 # ---- Form-state Per-game Rating Multiplier ----
 # Applied to in-game player attributes at kickoff based on the team's current
 # form state. Multiplier acts on physical + skill-related mental attrs, then

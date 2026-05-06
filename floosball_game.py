@@ -4467,8 +4467,21 @@ class Game:
         earlyGameScale = {1: 0.3, 2: 0.5, 3: 0.7, 4: 1.0, 5: 1.0}
         pressure *= earlyGameScale.get(self.currentQuarter, 1.0)
 
-        # Apply the team pressure modifier (playoff importance, Floosbowl, etc.)
-        pressure = pressure * self.offensiveTeam.pressureModifier
+        # Apply the team pressure modifier (playoff importance, Floosbowl,
+        # prior-season expectations, in-season elimination state, etc.) with
+        # market-tier expectation scaling layered on top: big markets amplify
+        # high-expectation deltas, small markets amplify the relief side.
+        from constants import EXPECTATION_SCALE_BY_TIER
+        pressureMod = self.offensiveTeam.pressureModifier
+        delta = pressureMod - 1.0
+        tierScale = EXPECTATION_SCALE_BY_TIER.get(
+            getattr(self.offensiveTeam, 'fundingTier', None), 1.0,
+        )
+        if delta > 0:
+            scaledDelta = delta * tierScale
+        else:
+            scaledDelta = delta * (2.0 - tierScale)
+        pressure = pressure * (1.0 + scaledDelta)
 
         return min(100, pressure)  # Cap at 100
 
