@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from database.models import GmVote, GmVoteResult, GmFaBallot, User
+from database.models import GmVote, GmVoteResult, GmFaBallot, User, Season
 
 
 class GmVoteRepository:
@@ -127,21 +127,30 @@ class GmVoteRepository:
             .scalar()
         ) or 0
 
-    def getTeamFanCount(self, teamId: int) -> int:
-        """Total fans of a team — users with favorite_team_id == teamId.
+    def getTeamFanCount(self, teamId: int, season: int = None) -> int:
+        """Active fans of a team — users with favorite_team_id == teamId
+        who have logged in this season.
 
         Used as the threshold target for fire/resign/cut votes: a directive
-        passes when its vote tally meets or exceeds the team's fan count.
-        That's roughly "each fan contributes one vote on average," which
-        scales linearly with the fanbase without punishing engagement —
-        the bar moves with how many fans EXIST, not with how many actually
-        vote, so cost doesn't blow up just because more people participate.
+        passes when its vote tally meets or exceeds this count. Filtering
+        by recent login keeps the threshold honest — dormant accounts don't
+        inflate the bar, so an active fanbase doesn't get punished by the
+        existence of users who haven't shown up this season.
+
+        If `season` is provided and that season has a start_date, only
+        users with last_login_at >= start_date are counted. Otherwise the
+        method falls back to counting every favorite-team user (legacy
+        behavior — used when season metadata isn't available, e.g. on
+        very fresh installs).
         """
-        return int(
-            self.session.query(func.count(User.id))
-            .filter(User.favorite_team_id == teamId)
-            .scalar() or 0
+        query = self.session.query(func.count(User.id)).filter(
+            User.favorite_team_id == teamId
         )
+        if season is not None:
+            seasonRow = self.session.get(Season, season)
+            if seasonRow is not None and seasonRow.start_date is not None:
+                query = query.filter(User.last_login_at >= seasonRow.start_date)
+        return int(query.scalar() or 0)
 
     def getResults(self, teamId: int, season: int) -> List[GmVoteResult]:
         return (

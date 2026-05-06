@@ -127,7 +127,7 @@ class GmManager:
             if totalVotes == 0:
                 continue
 
-            fanCount = self.voteRepo.getTeamFanCount(team.id)
+            fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
             threshold = self.calculateThreshold(fanCount)
             probability = self.calculateProbability(totalVotes, threshold)
 
@@ -276,7 +276,7 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            fanCount = self.voteRepo.getTeamFanCount(team.id)
+            fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
             threshold = self.calculateThreshold(fanCount)
 
             for playerId, count in votesByTarget.items():
@@ -337,7 +337,7 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            fanCount = self.voteRepo.getTeamFanCount(team.id)
+            fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
             threshold = self.calculateThreshold(fanCount)
 
             for playerId, count in votesByTarget.items():

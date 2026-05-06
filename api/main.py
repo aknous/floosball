@@ -6986,7 +6986,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             threshold = gm.calculateBallotThreshold(engagedFans)
             probability = gm.calculateProbability(targetTally["votes"], threshold)
         else:
-            teamFanCount = voteRepo.getTeamFanCount(teamId)
+            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
             threshold = gm.calculateThreshold(teamFanCount)
             probability = gm.calculateProbability(targetTally["votes"], threshold)
 
@@ -7042,8 +7042,9 @@ def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
             if hireLeaderVotes > 0 else 0
         )
         # Threshold for fire/resign/cut: votes must meet or exceed the
-        # team's total fan count.
-        teamFanCount = voteRepo.getTeamFanCount(teamId)
+        # team's active fan count (favorite_team_id == teamId AND logged
+        # in this season).
+        teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
         majorityThreshold = gm.calculateThreshold(teamFanCount)
         enriched = []
         for t in tallies:
