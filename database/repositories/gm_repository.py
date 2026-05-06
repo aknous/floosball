@@ -127,6 +127,22 @@ class GmVoteRepository:
             .scalar()
         ) or 0
 
+    def getTeamFanCount(self, teamId: int) -> int:
+        """Total fans of a team — users with favorite_team_id == teamId.
+
+        Used as the threshold target for fire/resign/cut votes: a directive
+        passes when its vote tally meets or exceeds the team's fan count.
+        That's roughly "each fan contributes one vote on average," which
+        scales linearly with the fanbase without punishing engagement —
+        the bar moves with how many fans EXIST, not with how many actually
+        vote, so cost doesn't blow up just because more people participate.
+        """
+        return int(
+            self.session.query(func.count(User.id))
+            .filter(User.favorite_team_id == teamId)
+            .scalar() or 0
+        )
+
     def getResults(self, teamId: int, season: int) -> List[GmVoteResult]:
         return (
             self.session.query(GmVoteResult)

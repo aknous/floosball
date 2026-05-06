@@ -31,35 +31,27 @@ class GmManager:
 
     # ── Threshold & Probability ─────────────────────────────────────────
 
-    def calculateThreshold(self, engagedFanCount: int, voteType: str = None) -> int:
-        """Threshold = strict majority of votes the engaged fanbase could cast
-        on this vote type.
+    def calculateThreshold(self, teamFanCount: int, voteType: str = None) -> int:
+        """Threshold = the team's total fan count.
 
-        Each fan has a separate per-type vote budget (GM_VOTES_PER_TYPE) for
-        fire_coach, resign_player, and cut_player. The threshold to pass any
-        of those is more than half of the engaged fanbase's COMBINED budget
-        for that type — so fire passes only when fans collectively spend a
-        majority of their fire pool, and that pool isn't shared with their
-        resign or cut budgets.
+        A fire / resign / cut directive passes when its vote tally meets or
+        exceeds the number of fans that team has. The bar moves with the
+        size of the fanbase, not with how actively those fans vote — that
+        keeps the math from punishing participation. A small turnout that
+        spends a few votes each can pass; a large turnout doesn't suddenly
+        need a mountain of votes just because more people showed up.
 
-        Fan engagement = fans of this team who have cast at least one GM
-        vote this season. A fan who hasn't participated at all isn't
-        counted in the denominator (the bar shouldn't punish votes for
-        ghosts who weren't going to vote anyway).
+        Each fan can still cast multiple votes (GM_VOTES_PER_TYPE) for
+        emphasis. Roughly: "every fan kicking in one vote" hits the
+        threshold; smaller groups can hit it with multi-votes.
 
         Low-quorum / test mode keeps the threshold at 1.
 
-        voteType is currently unused — fire / resign / cut all share the
-        same per-type cap (GM_VOTES_PER_TYPE) — but kept in the signature
-        so callers stay readable.
+        voteType is unused — kept in the signature for caller compatibility.
         """
         if self._lowQuorum:
             return 1
-        if engagedFanCount <= 0:
-            return 1
-        from constants import GM_VOTES_PER_TYPE
-        totalPossible = engagedFanCount * GM_VOTES_PER_TYPE
-        return totalPossible // 2 + 1
+        return max(1, teamFanCount)
 
     def calculateBallotThreshold(self, engagedFanCount: int) -> int:
         """Threshold for sign_fa ballots (ranked-choice).
@@ -135,8 +127,8 @@ class GmManager:
             if totalVotes == 0:
                 continue
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans)
+            fanCount = self.voteRepo.getTeamFanCount(team.id)
+            threshold = self.calculateThreshold(fanCount)
             probability = self.calculateProbability(totalVotes, threshold)
 
             if totalVotes < threshold:
@@ -284,8 +276,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans)
+            fanCount = self.voteRepo.getTeamFanCount(team.id)
+            threshold = self.calculateThreshold(fanCount)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
@@ -345,8 +337,8 @@ class GmManager:
                         votesByTarget.get(v.target_player_id, 0) + 1
                     )
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans)
+            fanCount = self.voteRepo.getTeamFanCount(team.id)
+            threshold = self.calculateThreshold(fanCount)
 
             for playerId, count in votesByTarget.items():
                 probability = self.calculateProbability(count, threshold)
