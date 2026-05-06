@@ -285,6 +285,12 @@ class SeasonManager:
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
 
+        # Dev-only: spread teams across all 4 funding tiers so single-user
+        # testing produces a realistic tier distribution. Set DEV_SPREAD_TIERS=1
+        # in the environment to enable. Teams are assigned by ID into 4 equal
+        # buckets (deterministic — same team gets same tier every season).
+        self._applyDevTierOverride()
+
         # Set prior-season expectation pressure baselines (must run after
         # statArchive is populated by season completion last year — which it
         # has been by this point — and after funding tier is assigned so
@@ -7429,6 +7435,36 @@ class SeasonManager:
                 session.close()
         except ImportError:
             logger.info("First season — all teams default to MID_MARKET funding tier")
+
+    def _applyDevTierOverride(self) -> None:
+        """Dev/testing only: when DEV_SPREAD_TIERS=1 is set, redistribute teams
+        across all four funding tiers (MEGA / LARGE / MID / SMALL) regardless
+        of actual fan contributions. Bypasses the funding-derived tier assignment
+        from `_assignFundingTiers` so single-user test runs produce a realistic
+        4-tier distribution for diagnostic.
+
+        Bucketing is deterministic by team.id — chunks of 8 teams per tier in a
+        32-team league. Same team gets the same tier every season for clean
+        trajectory tracking in logs/pressure_diag.log.
+        """
+        import os
+        if os.environ.get("DEV_SPREAD_TIERS") != "1":
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        sortedTeams = sorted(teamManager.teams, key=lambda t: getattr(t, 'id', 0))
+        n = len(sortedTeams)
+        if n == 0:
+            return
+        chunk = max(1, n // 4)
+        tiers = ["MEGA_MARKET", "LARGE_MARKET", "MID_MARKET", "SMALL_MARKET"]
+        for idx, team in enumerate(sortedTeams):
+            tierIdx = min(idx // chunk, 3)
+            team.fundingTier = tiers[tierIdx]
+            team.fundingTierRank = tierIdx + 1
+        logger.info(
+            "DEV_SPREAD_TIERS active — overrode fundingTier on "
+            f"{n} teams: 4 tiers × {chunk} teams each (deterministic by team.id)"
+        )
 
     def _getPickemWeek(self) -> int:
         """Return the effective week number for pick-em storage.
