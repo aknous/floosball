@@ -1631,7 +1631,7 @@ async def get_stat_leaders(
     response: Response,
     category: str = Query(default="fantasy_points"),
     position: str = Query(default="ALL"),
-    limit: int = Query(default=10, ge=1, le=50),
+    limit: int = Query(default=10, ge=1, le=300),
 ):
     """Get statistical leaders filtered by position and category"""
     response.headers["Cache-Control"] = "public, max-age=120"
