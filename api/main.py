@@ -3106,14 +3106,22 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
             User.last_login_at < fourteenDaysAgo,
         ).scalar()
 
-        # Daily active users (last 28 days)
-        twentyEightDaysAgo = now - timedelta(days=28)
+        # Daily active users (last 28 days). Driven by UserLoginDay so the
+        # historical numbers stay stable — last_login_at-based queries
+        # silently shrunk past-day counts every time a returning user
+        # logged in again (their date moved forward, leaving older days
+        # with a smaller "users whose most recent login was that day"
+        # count). UserLoginDay records every distinct (user, calendar
+        # date) login, so DAU counts only grow as more users return on
+        # any given day.
+        from database.models import UserLoginDay
+        twentyEightDaysAgo = (now - timedelta(days=28)).date()
         dailyActiveRows = session.query(
-            func.date(User.last_login_at),
-            func.count(User.id),
+            UserLoginDay.login_date,
+            func.count(func.distinct(UserLoginDay.user_id)),
         ).filter(
-            User.last_login_at >= twentyEightDaysAgo,
-        ).group_by(func.date(User.last_login_at)).order_by(func.date(User.last_login_at)).all()
+            UserLoginDay.login_date >= twentyEightDaysAgo,
+        ).group_by(UserLoginDay.login_date).order_by(UserLoginDay.login_date).all()
         dailyActiveUsers = [{"date": str(d), "count": c} for d, c in dailyActiveRows if d]
 
         # Onboarding funnel

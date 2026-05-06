@@ -367,10 +367,27 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                     logger.info(f"Updating user email: {user.email} -> {jwtEmail}")
                     user.email = jwtEmail
                     needsCommit = True
-            # Stamp last login
+            # Stamp last login + record today's DAU bucket. UserLoginDay
+            # has a unique (user_id, login_date) constraint so re-logins
+            # within the same day collapse into one row, but each new
+            # calendar day gets its own row — that's what makes the
+            # admin DAU chart historically stable.
             from datetime import datetime as _dt
-            user.last_login_at = _dt.utcnow()
+            now = _dt.utcnow()
+            user.last_login_at = now
             needsCommit = True
+            try:
+                from database.models import UserLoginDay
+                from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
+                stmt = _sqlite_insert(UserLoginDay).values(
+                    user_id=user.id,
+                    login_date=now.date(),
+                ).on_conflict_do_nothing(
+                    index_elements=['user_id', 'login_date']
+                )
+                session.execute(stmt)
+            except Exception as e:
+                logger.warning(f"Failed to record UserLoginDay for {user.id}: {e}")
             if needsCommit:
                 session.commit()
 
