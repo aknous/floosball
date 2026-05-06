@@ -36,6 +36,23 @@ class GmManager:
         baseMin = 1 if self._lowQuorum else GM_VOTE_BASE_MIN.get(voteType, 2)
         return max(baseMin, math.ceil(engagedFanCount * GM_THRESHOLD_USER_FACTOR * weight))
 
+    def calculateHireCoachThreshold(self, baseThreshold: int, candidateCount: int) -> int:
+        """Hire-coach threshold scales with the number of competing candidates.
+
+        With one candidate, the base threshold applies — a slate of votes can
+        push that candidate to 100%. With multiple candidates competing, the
+        effective threshold scales linearly: two candidates each need 2x
+        votes to hit 100%, three each need 3x, etc. This stops the situation
+        where multiple users (or one user splitting their votes) can push
+        several different replacement coaches to 100% simultaneously.
+
+        Low-quorum/test mode keeps the base threshold so one-user tests
+        still work.
+        """
+        if candidateCount <= 1 or self._lowQuorum:
+            return baseThreshold
+        return baseThreshold * candidateCount
+
     def calculateProbability(self, votes: int, threshold: int) -> float:
         if votes < threshold:
             return 0.0
@@ -132,7 +149,12 @@ class GmManager:
                     )
 
             engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateThreshold(engagedFans, "hire_coach")
+            baseThreshold = self.calculateThreshold(engagedFans, "hire_coach")
+            # Scale threshold by candidate count so multiple competing
+            # candidates can't all reach 100% on the same vote pool.
+            threshold = self.calculateHireCoachThreshold(
+                baseThreshold, len(votesByTarget)
+            )
 
             hired = False
             # Evaluate candidates in order of most votes

@@ -6969,7 +6969,14 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             {"votes": 1}
         )
         gm = GmManager(session)
-        threshold = gm.calculateThreshold(engagedFans, req.voteType)
+        baseThreshold = gm.calculateThreshold(engagedFans, req.voteType)
+        if req.voteType == "hire_coach":
+            hireCandidateCount = sum(
+                1 for t in tallies if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
+            )
+            threshold = gm.calculateHireCoachThreshold(baseThreshold, hireCandidateCount)
+        else:
+            threshold = baseThreshold
         probability = gm.calculateProbability(targetTally["votes"], threshold)
 
         return build_success_response({
@@ -7010,9 +7017,19 @@ def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
 
         # Enrich with threshold/probability
         gm = GmManager(session)
+        # For hire_coach, count distinct candidates so the threshold can
+        # scale with competition (one candidate = base threshold, two
+        # candidates competing = 2x threshold, etc.).
+        hireCandidateCount = sum(
+            1 for t in tallies if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
+        )
         enriched = []
         for t in tallies:
-            threshold = gm.calculateThreshold(engagedFans, t["voteType"])
+            baseThreshold = gm.calculateThreshold(engagedFans, t["voteType"])
+            if t["voteType"] == "hire_coach":
+                threshold = gm.calculateHireCoachThreshold(baseThreshold, hireCandidateCount)
+            else:
+                threshold = baseThreshold
             probability = gm.calculateProbability(t["votes"], threshold)
             enriched.append({
                 **t,
