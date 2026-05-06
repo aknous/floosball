@@ -756,6 +756,10 @@ class SeasonManager:
             from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
             if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
                 self._evaluateRetirementCandidates()
+                # Snapshot per-team active fan counts at this moment so
+                # the GM vote threshold doesn't shift if new fans log in
+                # for the first time after the front office opens.
+                self._snapshotActiveFanCounts()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -4869,6 +4873,53 @@ class SeasonManager:
         
         self.playerManager.unusedNames.append(name)
     
+    def _snapshotActiveFanCounts(self) -> None:
+        """Freeze per-team active fan counts at front office open (week 22).
+
+        Stored as JSON {teamId: count} on the season row. The GM vote
+        threshold reads this snapshot for fire / resign / cut votes so a
+        fan who logs in for the first time AFTER the voting window has
+        opened doesn't suddenly raise the bar mid-resolution.
+
+        "Active" = users with favorite_team_id == teamId AND
+        last_login_at >= season.start_date.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        if not self.currentSeason:
+            return
+        try:
+            import json as _json
+            from database.connection import get_session as _getSession
+            from database.models import Season as DBSeason, User
+            from sqlalchemy import func
+            session = _getSession()
+            try:
+                seasonRow = session.get(DBSeason, self.currentSeason.seasonNumber)
+                if seasonRow is None:
+                    return
+                snapshotStart = seasonRow.start_date
+                rows = session.query(
+                    User.favorite_team_id,
+                    func.count(User.id),
+                ).filter(
+                    User.favorite_team_id.isnot(None),
+                )
+                if snapshotStart is not None:
+                    rows = rows.filter(User.last_login_at >= snapshotStart)
+                rows = rows.group_by(User.favorite_team_id).all()
+                snapshot = {str(teamId): int(count) for teamId, count in rows}
+                seasonRow.front_office_fan_snapshot = _json.dumps(snapshot)
+                session.commit()
+                logger.info(
+                    f"Front Office fan snapshot: {len(snapshot)} teams, "
+                    f"total active fans = {sum(snapshot.values())}"
+                )
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Failed to snapshot active fan counts: {e}")
+
     # ── GM Mode offseason helpers ─────────────────────────────────────────
 
     async def _resolveGmFireCoachVotes(self, gmResults: list) -> None:

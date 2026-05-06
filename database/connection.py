@@ -72,6 +72,10 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # GM threshold snapshot: per-team active fan count frozen at
+            # the front-office open (week 22) so post-week-22 logins
+            # don't inflate the threshold mid-vote.
+            ('front_office_fan_snapshot', 'TEXT'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE seasons ADD COLUMN {col} {colDef}"))

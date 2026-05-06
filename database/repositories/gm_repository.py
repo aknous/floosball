@@ -128,29 +128,51 @@ class GmVoteRepository:
         ) or 0
 
     def getTeamFanCount(self, teamId: int, season: int = None) -> int:
-        """Active fans of a team — users with favorite_team_id == teamId
-        who have logged in this season.
+        """Active fans of a team — used as the GM vote threshold.
 
-        Used as the threshold target for fire/resign/cut votes: a directive
-        passes when its vote tally meets or exceeds this count. Filtering
-        by recent login keeps the threshold honest — dormant accounts don't
-        inflate the bar, so an active fanbase doesn't get punished by the
-        existence of users who haven't shown up this season.
+        Prefers the per-team snapshot taken at front-office open (week 22).
+        That snapshot freezes the count, so a fan who creates an account
+        and logs in for the first time AFTER voting opens doesn't shift
+        the threshold mid-resolution.
 
-        If `season` is provided and that season has a start_date, only
-        users with last_login_at >= start_date are counted. Otherwise the
-        method falls back to counting every favorite-team user (legacy
-        behavior — used when season metadata isn't available, e.g. on
-        very fresh installs).
+        Fall-back order:
+          1. season.front_office_fan_snapshot[teamId] — if the snapshot
+             was taken this season, use it.
+          2. Live count of users with favorite_team_id == teamId AND
+             last_login_at >= season.start_date — used pre-week-22 (the
+             threshold is still moving as fans log in).
+          3. Plain count of favorite-team users — used when season
+             metadata is missing.
         """
-        query = self.session.query(func.count(User.id)).filter(
-            User.favorite_team_id == teamId
-        )
         if season is not None:
             seasonRow = self.session.get(Season, season)
-            if seasonRow is not None and seasonRow.start_date is not None:
-                query = query.filter(User.last_login_at >= seasonRow.start_date)
-        return int(query.scalar() or 0)
+            if seasonRow is not None:
+                # Frozen snapshot — preferred once front office has opened.
+                snapshotJson = getattr(seasonRow, 'front_office_fan_snapshot', None)
+                if snapshotJson:
+                    try:
+                        snapshot = json.loads(snapshotJson)
+                        if str(teamId) in snapshot:
+                            return int(snapshot[str(teamId)])
+                    except Exception:
+                        pass
+                # Live "active fans this season" — used before the snapshot
+                # is taken (pre-week-22).
+                if seasonRow.start_date is not None:
+                    return int(
+                        self.session.query(func.count(User.id))
+                        .filter(
+                            User.favorite_team_id == teamId,
+                            User.last_login_at >= seasonRow.start_date,
+                        )
+                        .scalar() or 0
+                    )
+        # Last-resort fallback: every fan with this favorite team.
+        return int(
+            self.session.query(func.count(User.id))
+            .filter(User.favorite_team_id == teamId)
+            .scalar() or 0
+        )
 
     def getResults(self, teamId: int, season: int) -> List[GmVoteResult]:
         return (

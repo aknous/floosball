@@ -653,6 +653,11 @@ class Season(Base):
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
     mvp_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs
+    # Snapshot of per-team active fan counts taken when the Front Office
+    # opens (week 22). JSON object: {teamId: activeFanCount}. Used as the
+    # GM vote threshold so a fan who logs in for the first time after the
+    # voting window opens doesn't inflate the bar mid-vote.
+    front_office_fan_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Indexes
