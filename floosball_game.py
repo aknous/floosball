@@ -3483,6 +3483,19 @@ class Game:
                     # here so possession actually flips, otherwise the next
                     # quarter starts with the fumbling team still on offense.
                     if self.play.isFumbleLost or self.play.isInterception:
+                        # Logging this at warning level so it shows up in
+                        # any test run. Lets us confirm the recovery path
+                        # is firing on the rare end-of-quarter turnover
+                        # scenario where this bug otherwise hides.
+                        kind = 'INT' if self.play.isInterception else 'FUMBLE'
+                        logging.warning(
+                            f"[end-of-quarter turnover recovery] {kind} on play "
+                            f"that was orphaned by pre-snap clock expiry — "
+                            f"flipping possession from {self.offensiveTeam.abbr} to "
+                            f"{self.defensiveTeam.abbr} (Q{self.currentQuarter}, "
+                            f"yardLine={self.yardLine}, yardsToEndzone={self.yardsToEndzone}, "
+                            f"playYardage={self.play.yardage})"
+                        )
                         self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
                         self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
                         if self.offensiveTeam is self.homeTeam:
@@ -3496,6 +3509,10 @@ class Game:
                             recoverYards = 1
                         self.turnover(self.offensiveTeam, self.defensiveTeam, recoverYards)
                         self._pendingPossessionChange = True
+                        logging.warning(
+                            f"[end-of-quarter turnover recovery] possession now "
+                            f"{self.offensiveTeam.abbr} at yardsToEndzone={self.yardsToEndzone}"
+                        )
                 elif getattr(self.play, 'playText', None):
                     # Already formatted (e.g. TD broadcast) — just mark as done
                     lastPlayFormatted = True
