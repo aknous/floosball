@@ -7649,11 +7649,14 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isProspect": True,
                 })
 
-        # Live ballot tally — aggregates fan votes in real time during the
-        # voting window so users can see who's leading before IRV resolution.
-        # Counts each ballot's mention of a candidate as one vote, with a
-        # separate first-choice count for depth.
+        # Live ballot tally — runs the same instant-runoff (IRV) tally the
+        # offseason resolver uses, so the order shown matches the order the
+        # FA draft would actually pull. With one ballot, IRV produces that
+        # ballot's exact ranking. With multiple, it resolves through
+        # elimination rounds — a candidate who's nobody's #1 still climbs
+        # if they're consistently ranked high.
         from database.repositories.gm_repository import GmFaBallotRepository
+        from managers.gmManager import GmManager
         ballotRepo = GmFaBallotRepository(session)
         ballots = ballotRepo.getRankingsForTeam(favTeam.id, seasonNum) if favTeam else []
 
@@ -7681,23 +7684,48 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     if p is not None:
                         playerLookup[p.id] = p
 
+        # Group every candidate by position value for the IRV input. The
+        # tally function flattens these regardless of dict key, so any
+        # bucket scheme works as long as each candidate appears once.
+        candidatesByPos: Dict[int, list] = {1: [], 2: [], 3: [], 4: [], 5: []}
+        for p in playerLookup.values():
+            posVal = getattr(getattr(p, 'position', None), 'value', None)
+            if posVal in candidatesByPos:
+                candidatesByPos[posVal].append(p)
+
+        favProspectIds = {p.id for p in getattr(favTeam, 'prospects', [])} if favTeam else set()
+        gmTally = GmManager(session)
+
         ballotTally: Dict[str, List[Dict]] = {}
-        for pid, count in mentionCount.items():
+        # Drive ranking via IRV per position so the live tally order matches
+        # what the resolver would produce. Only include positions that
+        # actually had at least one mention on a ballot.
+        mentionedPositions: set = set()
+        for pid in mentionCount.keys():
             p = playerLookup.get(pid)
-            if not p:
-                continue
-            posName = p.position.name
-            ballotTally.setdefault(posName, []).append({
-                "id": p.id,
-                "name": p.name,
-                "position": posName,
-                "rating": round(getattr(p, 'playerRating', 0), 1),
-                "votes": count,
-                "firstChoice": firstChoiceCount.get(pid, 0),
-                "isProspect": bool(getattr(p, 'is_prospect', False)),
-            })
-        for posName in ballotTally:
-            ballotTally[posName].sort(key=lambda x: (-x['votes'], -x['firstChoice'], -x['rating']))
+            if p is not None:
+                mentionedPositions.add(p.position.value)
+
+        for posVal in sorted(mentionedPositions):
+            posProspectIds = {pid for pid in favProspectIds
+                              if playerLookup.get(pid) and playerLookup[pid].position.value == posVal}
+            rankedIds = gmTally._tallyFullRanking(
+                ballots, posVal, candidatesByPos, prospectIds=posProspectIds,
+            )
+            for pid in rankedIds:
+                p = playerLookup.get(pid)
+                if not p:
+                    continue
+                posName = p.position.name
+                ballotTally.setdefault(posName, []).append({
+                    "id": p.id,
+                    "name": p.name,
+                    "position": posName,
+                    "rating": round(getattr(p, 'playerRating', 0), 1),
+                    "votes": mentionCount.get(pid, 0),
+                    "firstChoice": firstChoiceCount.get(pid, 0),
+                    "isProspect": bool(getattr(p, 'is_prospect', False)),
+                })
 
         return build_success_response({
             "openSlots": openSlots,

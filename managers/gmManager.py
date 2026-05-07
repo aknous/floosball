@@ -171,7 +171,13 @@ class GmManager:
         stability. Only when zero hire votes were cast does the resolver
         fall back to an auto-pick (random generated coach).
 
-        For each team in firedTeamIds:
+        Resolution order (when multiple teams target the same coach):
+            1. Market tier — MEGA > LARGE > MID > SMALL
+            2. Fan count desc as tiebreaker within tier
+        Higher-priority team gets first dibs; lower-priority teams fall
+        through to their next-ranked candidate.
+
+        For each team in priority order:
         - Tally hire_coach votes by candidate
         - Pick the leader; if leader is no longer in the pool (e.g. another
           team's resolution claimed them this offseason), try the next
@@ -182,9 +188,21 @@ class GmManager:
         coachNames = {c.id: c.name for c in availableCoaches}
         availableIds = {c.id for c in availableCoaches}
 
-        for team in teams:
-            if team.id not in firedTeamIds:
-                continue
+        # Resolution priority: market tier asc (MEGA first), then fan count desc.
+        _TIER_RANK = {
+            'MEGA_MARKET': 0,
+            'LARGE_MARKET': 1,
+            'MID_MARKET': 2,
+            'SMALL_MARKET': 3,
+        }
+        firedTeams = [t for t in teams if t.id in firedTeamIds]
+        firedTeams.sort(key=lambda t: (
+            _TIER_RANK.get(getattr(t, 'fundingTier', None), 99),
+            -self.voteRepo.getTeamFanCount(t.id, season),
+            t.id,  # final stable tiebreaker
+        ))
+
+        for team in firedTeams:
 
             votes = self.voteRepo.getVotesForTeam(team.id, season, "hire_coach")
             votesByTarget: Dict[int, int] = {}
