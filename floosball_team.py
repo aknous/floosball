@@ -103,6 +103,11 @@ class Team:
         # blended live value used at game time.
         self.priorSeasonPressure = 1.0
         self.inSeasonPressure = 1.0
+        # Streak pressure: builds with consecutive wins (regular season +
+        # playoffs), resets on any loss. Adds to the live pressureModifier
+        # at game-time scaling. See constants.STREAK_PRESSURE_*.
+        self.currentWinStreak = 0
+        self.streakPressure = 0.0
         self.leagueChampionships = []
         self.floosbowlChampionships = []
         self.topSeeds = []

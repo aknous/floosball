@@ -1043,6 +1043,8 @@ class TeamManager:
             team.priorSeasonPressure = prior
             team.inSeasonPressure = 1.0
             team.pressureModifier = prior  # Game-time value starts at full prior expectation
+            team.currentWinStreak = 0
+            team.streakPressure = 0.0
             self.logger.debug(f"{team.name}: priorSeasonPressure={prior}")
 
         self.logger.info("Prior-season pressure baselines set")
@@ -1509,8 +1511,11 @@ def formatPressureDiagLine(team, context: str, season: int = None, week: int = N
         CHAMPIONSHIP_OVERFLOW_FACTOR,
     )
     base = getattr(team, 'pressureModifier', 1.0)
+    streakAdd = getattr(team, 'streakPressure', 0.0)
+    streak = getattr(team, 'currentWinStreak', 0)
+    effective = base + streakAdd
     tier = getattr(team, 'fundingTier', 'UNKNOWN')
-    delta = base - 1.0
+    delta = effective - 1.0
     if delta > 0:
         tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
         cap = min(delta, EXPECTATION_DELTA_CAP)
@@ -1523,7 +1528,8 @@ def formatPressureDiagLine(team, context: str, season: int = None, week: int = N
     return (
         f"PRESSURE_DIAG s={season if season is not None else '-'} "
         f"w={week if week is not None else '-'} ctx={context} "
-        f"team={team.name} tier={tier} base={base:.2f} scaled={scaled:.2f}"
+        f"team={team.name} tier={tier} base={base:.2f} streak={streak} "
+        f"streakP={streakAdd:.2f} scaled={scaled:.2f}"
     )
 
 

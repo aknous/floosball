@@ -186,6 +186,19 @@ CHAMPIONSHIP_OVERFLOW_FACTOR = 1.0  # overflow unscaled — preserves nominal
                                      # baseline so MEGA/MID/SMALL keep the
                                      # right ordering at the top end.
 
+# ---- Streak Pressure ----
+# Pressure that builds as a team's consecutive-win streak grows. Active in
+# both regular season and playoffs — an undefeated team chasing a perfect
+# season feels the spotlight, and that spotlight follows them through the
+# postseason. Resets to 0 on any loss.
+#   streakPressure = min(CAP, max(0, streak - FLOOR) * PER_WIN)
+# Added to team.pressureModifier at game-time scaling, so market-tier
+# amplification applies (MEGA on a 10-win streak gets a heavier scaled
+# bump than SMALL on the same streak).
+STREAK_PRESSURE_FLOOR   = 3      # streaks 1-3 add nothing (normal hot start)
+STREAK_PRESSURE_PER_WIN = 0.10   # each win past the floor adds +0.10
+STREAK_PRESSURE_CAP     = 0.80   # caps at streak 11+ to avoid runaway
+
 # ---- Form-state Per-game Rating Multiplier ----
 # Applied to in-game player attributes at kickoff based on the team's current
 # form state. Multiplier acts on physical + skill-related mental attrs, then

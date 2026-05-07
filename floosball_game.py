@@ -1279,8 +1279,9 @@ class Game:
             except Exception:
                 _Trb = None
 
-            def _scaledPressure(base, tier):
-                delta = base - 1.0
+            def _scaledPressure(base, tier, streakAdd=0.0):
+                effective = base + streakAdd
+                delta = effective - 1.0
                 if delta > 0:
                     ts = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
                     cap = min(delta, EXPECTATION_DELTA_CAP)
@@ -1317,15 +1318,19 @@ class Game:
             def _rosterPressureHandlingAvg(team):
                 return _rosterAttrAvg(team, 'pressureHandling')
 
-            for team, opp, score, oppScore, preElo, prePressure, preTier in (
+            for team, opp, score, oppScore, preElo, prePressure, preTier, preStreak, preStreakP in (
                 (self.homeTeam, self.awayTeam, self.homeScore, self.awayScore,
                  getattr(self, '_preGameHomeElo', 1500),
                  getattr(self, '_preGameHomePressureMod', 1.0),
-                 getattr(self, '_preGameHomeTier', 'UNKNOWN')),
+                 getattr(self, '_preGameHomeTier', 'UNKNOWN'),
+                 getattr(self, '_preGameHomeStreak', 0),
+                 getattr(self, '_preGameHomeStreakP', 0.0)),
                 (self.awayTeam, self.homeTeam, self.awayScore, self.homeScore,
                  getattr(self, '_preGameAwayElo', 1500),
                  getattr(self, '_preGameAwayPressureMod', 1.0),
-                 getattr(self, '_preGameAwayTier', 'UNKNOWN')),
+                 getattr(self, '_preGameAwayTier', 'UNKNOWN'),
+                 getattr(self, '_preGameAwayStreak', 0),
+                 getattr(self, '_preGameAwayStreakP', 0.0)),
             ):
                 preEloOpp = (getattr(self, '_preGameAwayElo', 1500)
                              if team is self.homeTeam
@@ -1349,9 +1354,11 @@ class Game:
                     'opponent': opp.name,
                     'tier': preTier,
                     'pressureBase': round(prePressure, 3),
-                    'pressureScaled': round(_scaledPressure(prePressure, preTier), 3),
+                    'pressureScaled': round(_scaledPressure(prePressure, preTier, preStreakP), 3),
                     'priorSeasonPressure': round(getattr(team, 'priorSeasonPressure', 1.0), 3),
                     'inSeasonPressure': round(getattr(team, 'inSeasonPressure', 1.0), 3),
+                    'preGameWinStreak': preStreak,
+                    'streakPressure': round(preStreakP, 3),
                     'won': won,
                     'tied': tied,
                     'score': score,
@@ -3259,6 +3266,26 @@ class Game:
             )
             self._accumulateDefenseStats(self.losingTeam)
 
+        # Streak pressure update — runs for ALL games (regular + playoff)
+        # so an undefeated team carries the spotlight from regular season
+        # through the playoffs. Independent of seasonTeamStats['streak']
+        # which is regular-season-only.
+        if self.winningTeam is not None and self.losingTeam is not None and self.winningTeam is not self.losingTeam:
+            try:
+                from constants import (
+                    STREAK_PRESSURE_FLOOR,
+                    STREAK_PRESSURE_PER_WIN,
+                    STREAK_PRESSURE_CAP,
+                )
+                self.winningTeam.currentWinStreak = getattr(self.winningTeam, 'currentWinStreak', 0) + 1
+                self.losingTeam.currentWinStreak = 0
+                for team in (self.winningTeam, self.losingTeam):
+                    streak = getattr(team, 'currentWinStreak', 0)
+                    over = max(0, streak - STREAK_PRESSURE_FLOOR)
+                    team.streakPressure = round(min(STREAK_PRESSURE_CAP, over * STREAK_PRESSURE_PER_WIN), 3)
+            except Exception:
+                pass
+
         self._calculateDefenseFantasyPoints(self.homeTeam)
         self._calculateDefenseFantasyPoints(self.awayTeam)
 
@@ -3483,6 +3510,10 @@ class Game:
             self._preGameAwayPressureMod = getattr(self.awayTeam, 'pressureModifier', 1.0)
             self._preGameHomeTier = getattr(self.homeTeam, 'fundingTier', 'UNKNOWN')
             self._preGameAwayTier = getattr(self.awayTeam, 'fundingTier', 'UNKNOWN')
+            self._preGameHomeStreak = getattr(self.homeTeam, 'currentWinStreak', 0)
+            self._preGameAwayStreak = getattr(self.awayTeam, 'currentWinStreak', 0)
+            self._preGameHomeStreakP = getattr(self.homeTeam, 'streakPressure', 0.0)
+            self._preGameAwayStreakP = getattr(self.awayTeam, 'streakPressure', 0.0)
         except Exception:
             pass
 
@@ -4551,6 +4582,8 @@ class Game:
         # prior-season expectations, in-season elimination state, etc.) with
         # market-tier expectation scaling layered on top: big markets amplify
         # high-expectation deltas, small markets amplify the relief side.
+        # Streak pressure (built from consecutive wins) is added to the base
+        # modifier before scaling so it gets the same market amplification.
         from constants import (
             EXPECTATION_SCALE_BY_TIER,
             EXPECTATION_RELIEF_BY_TIER,
@@ -4558,7 +4591,9 @@ class Game:
             CHAMPIONSHIP_OVERFLOW_FACTOR,
         )
         pressureMod = self.offensiveTeam.pressureModifier
-        delta = pressureMod - 1.0
+        streakAdd = getattr(self.offensiveTeam, 'streakPressure', 0.0)
+        effective = pressureMod + streakAdd
+        delta = effective - 1.0
         tier = getattr(self.offensiveTeam, 'fundingTier', None)
         if delta > 0:
             tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
