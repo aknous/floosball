@@ -1289,7 +1289,10 @@ class Game:
                 rs = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
                 return 1.0 + delta * rs
 
-            def _rosterResolveAvg(team):
+            def _rosterAttrAvg(team, attrName):
+                """Generic roster average for a player.attributes value or method.
+                Returns None if no roster players carry the attr.
+                """
                 roster = getattr(team, 'rosterDict', None) or {}
                 vals = []
                 for p in roster.values():
@@ -1298,15 +1301,21 @@ class Game:
                     attrs = getattr(p, 'attributes', None)
                     if attrs is None:
                         continue
-                    fn = getattr(attrs, 'adversityResolve', None)
-                    if fn is None:
+                    val = getattr(attrs, attrName, None)
+                    if val is None:
                         continue
                     try:
-                        v = fn() if callable(fn) else fn
+                        v = val() if callable(val) else val
                         vals.append(float(v))
                     except Exception:
                         continue
                 return round(sum(vals) / len(vals), 3) if vals else None
+
+            def _rosterResolveAvg(team):
+                return _rosterAttrAvg(team, 'adversityResolve')
+
+            def _rosterPressureHandlingAvg(team):
+                return _rosterAttrAvg(team, 'pressureHandling')
 
             for team, opp, score, oppScore, preElo, prePressure, preTier in (
                 (self.homeTeam, self.awayTeam, self.homeScore, self.awayScore,
@@ -1351,6 +1360,7 @@ class Game:
                     'preElo': round(preElo, 1),
                     'formState': formState,
                     'rosterResolveAvg': _rosterResolveAvg(team),
+                    'rosterPressureHandlingAvg': _rosterPressureHandlingAvg(team),
                 }
                 os.makedirs('logs', exist_ok=True)
                 with open('logs/pressure_correlation.jsonl', 'a') as f:
