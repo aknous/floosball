@@ -1290,20 +1290,23 @@ class Game:
                 return 1.0 + delta * rs
 
             def _rosterResolveAvg(team):
-                roster = getattr(team, 'roster', None) or []
-                if not roster:
-                    return None
+                roster = getattr(team, 'rosterDict', None) or {}
                 vals = []
-                for p in roster:
+                for p in roster.values():
+                    if p is None:
+                        continue
                     attrs = getattr(p, 'attributes', None)
                     if attrs is None:
                         continue
-                    v = getattr(attrs, 'adversityResolve', None)
-                    if v is None:
-                        v = getattr(attrs, 'adversity_resolve', None)
-                    if v is not None:
+                    fn = getattr(attrs, 'adversityResolve', None)
+                    if fn is None:
+                        continue
+                    try:
+                        v = fn() if callable(fn) else fn
                         vals.append(float(v))
-                return round(sum(vals) / len(vals), 2) if vals else None
+                    except Exception:
+                        continue
+                return round(sum(vals) / len(vals), 3) if vals else None
 
             for team, opp, score, oppScore, preElo, prePressure, preTier in (
                 (self.homeTeam, self.awayTeam, self.homeScore, self.awayScore,
@@ -1318,7 +1321,6 @@ class Game:
                 preEloOpp = (getattr(self, '_preGameAwayElo', 1500)
                              if team is self.homeTeam
                              else getattr(self, '_preGameHomeElo', 1500))
-                postElo = getattr(team, 'elo', preElo)
                 won = score > oppScore
                 tied = score == oppScore
                 formState = None
@@ -1330,7 +1332,7 @@ class Game:
                 entry = {
                     'ts': datetime.utcnow().isoformat() + 'Z',
                     'season': getattr(self, 'seasonNumber', None),
-                    'week': getattr(self, 'gameWeek', None) or getattr(self, 'weekNumber', None),
+                    'week': getattr(self, 'week', None),
                     'gameId': getattr(self, 'id', None),
                     'gameType': getattr(self, 'gameType', None),
                     'playoffRound': getattr(self, 'playoffRound', None),
@@ -1347,8 +1349,6 @@ class Game:
                     'opponentScore': oppScore,
                     'preEloDiff': round(preElo - preEloOpp, 1),
                     'preElo': round(preElo, 1),
-                    'postElo': round(postElo, 1),
-                    'eloDelta': round(postElo - preElo, 2),
                     'formState': formState,
                     'rosterResolveAvg': _rosterResolveAvg(team),
                 }
