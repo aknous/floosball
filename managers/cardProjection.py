@@ -567,7 +567,7 @@ def _shapeCardPayload(breakdown, amplifier: Optional[Dict[str, Any]], effectConf
             if float(breakdown.preMatchMult) > 1.0:
                 projectedMult = round(float(breakdown.preMatchMult), 2)
             else:
-                projectedMult = 2.0
+                projectedMult = 1.5  # typical mid-tier (5-9 FP lowest)
         except Exception:
             pass
 

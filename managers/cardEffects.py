@@ -564,7 +564,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
     "rng": "Random +{minFP}–{maxFP} FP each week",
-    "snake_eyes": "FPx based on lowest roster FP: 0 FP=3x · 1-4 FP=2.5x · 5-9 FP=2x · 10-14 FP=1.5x · 15-19 FP=1.2x",
+    "snake_eyes": "FPx based on lowest roster FP: 0 FP=2x · 1-4 FP=1.7x · 5-9 FP=1.5x · 10-14 FP=1.3x · 15-19 FP=1.1x",
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged. Resets on swap",
@@ -976,8 +976,11 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         # Tiered FPx: lower lowest-FP player = higher multiplier
         # Tiers read as (maxFP_inclusive, xMult). Applies to the whole
         # weekly FP total, so multipliers are tuned more conservatively
-        # than single-card mults.
-        return {"tiers": [(0, 3.0), (4, 2.5), (9, 2.0), (14, 1.5), (19, 1.2)],
+        # than single-card mults. Top tier capped at 2.0 — match bonus
+        # stacks on top and can push the visible multiplier up to ~3x
+        # on Diamond, so anything higher than 2.0 base crowded out other
+        # cards.
+        return {"tiers": [(0, 2.0), (4, 1.7), (9, 1.5), (14, 1.3), (19, 1.1)],
                 "minMult": 1.0}
     if effectName == "luminary":
         return {"fpShareScale": round((0.25 + rn * 0.012) * editionScale, 2)}
