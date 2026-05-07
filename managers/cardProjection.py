@@ -812,3 +812,31 @@ def _wrapUserCardAsEquipped(userCard):
             self.streak_count = 1
             self.user_card = uc
     return _FauxEquipped(userCard)
+
+
+def _wrapTemplateAsUserCard(template, fauxId: int = -1):
+    """Wrap a CardTemplate in a UserCard-shaped object so projection logic
+    that expects userCard.card_template / userCard.id can run against
+    not-yet-owned templates (pack reveal, shop preview)."""
+    class _FauxUserCard:
+        __slots__ = ('id', 'card_template')
+        def __init__(self, tpl):
+            self.id = fauxId
+            self.card_template = tpl
+    return _FauxUserCard(template)
+
+
+def computeTemplateProjection(template, session, userId, season, week,
+                              seasonManager, playerManager) -> Optional[Dict[str, Any]]:
+    """Project what a CardTemplate would output if equipped, using the
+    user's current roster + recent stats. Used for not-yet-owned cards
+    (pack reveal-then-select flow, shop preview). Solo projection — the
+    template gets evaluated against the user's existing equipped hand
+    plus the candidate, but only the candidate's own breakdown is
+    returned for the UI pill.
+    """
+    fauxUserCard = _wrapTemplateAsUserCard(template, fauxId=-(template.id or 1))
+    return computeCandidateProjection(
+        fauxUserCard, session, userId, season, week,
+        seasonManager, playerManager, replaceSlot=None,
+    )

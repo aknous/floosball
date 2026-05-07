@@ -5219,6 +5219,57 @@ def get_card_projection(user: _User = Depends(_getCurrentUser),
         session.close()
 
 
+@app.post("/api/cards/template-projection")
+def post_template_projection(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Batch-project unowned CardTemplates against the requesting user's
+    roster + season-to-date stats. Used by the pack reveal-then-select
+    flow and the shop preview to surface expected weekly output before
+    the user commits to a card.
+
+    Request: {"templateIds": [int, int, ...]}
+    Response.data.projections: list of payloads (same shape as
+        computeCandidateProjection) keyed by templateId.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    templateIds = payload.get("templateIds") or []
+    if not isinstance(templateIds, list) or not templateIds:
+        return build_success_response({"projections": []})
+    # Cap the batch to keep the calc bounded
+    templateIds = [int(t) for t in templateIds[:20] if isinstance(t, (int, float))]
+
+    from database.connection import get_session
+    from database.models import CardTemplate
+    from managers.cardProjection import computeTemplateProjection
+
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not season:
+        return build_success_response({"projections": []})
+
+    session = get_session()
+    try:
+        templates = (
+            session.query(CardTemplate)
+            .filter(CardTemplate.id.in_(templateIds))
+            .all()
+        )
+        projections = []
+        for tpl in templates:
+            proj = computeTemplateProjection(
+                tpl, session, user.id, season, week, sm, pm,
+            )
+            if proj is None:
+                continue
+            proj["templateId"] = tpl.id
+            projections.append(proj)
+        return build_success_response({"projections": projections})
+    finally:
+        session.close()
+
+
 @app.get("/api/fantasy/leaderboard")
 def get_fantasy_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
     """Get fantasy leaderboard for a season (defaults to current)."""
