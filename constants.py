@@ -161,6 +161,31 @@ EXPECTATION_SCALE_BY_TIER = {
     'SMALL_MARKET': 0.7,
 }
 
+# Relief side: when the team's prior baseline is below 1.0 (bad season last
+# year, eliminated mid-season, etc.), how much that relief gets amplified by
+# market tier. Big markets keep the spotlight on even during a rebuild
+# (less relief); small markets disengage entirely (much more relief).
+# Replaces the prior `(2 - tierScale)` inverse, which gave too narrow a
+# spread (LARGE 0.8, SMALL 1.3) — diagnostic showed LARGE/SMALL barely
+# differed from MID in the relief direction.
+EXPECTATION_RELIEF_BY_TIER = {
+    'MEGA_MARKET':  0.4,
+    'LARGE_MARKET': 0.65,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 1.6,
+}
+
+# Championship-band softening: delta above this threshold (i.e. baselines
+# above 2.0 — Floos Bowl 2.5, brink-of-elimination 2.0, deep playoff round
+# 1.9+) gets a much weaker market scale. Without softening, MEGA Floos Bowl
+# hits 3.25 which caps in-game pressure at 100 on every play. Overflow
+# portion of the delta uses CHAMPIONSHIP_OVERFLOW_FACTOR instead of the
+# full tier scale.
+EXPECTATION_DELTA_CAP = 1.0
+CHAMPIONSHIP_OVERFLOW_FACTOR = 1.0  # overflow unscaled — preserves nominal
+                                     # baseline so MEGA/MID/SMALL keep the
+                                     # right ordering at the top end.
+
 # ---- Form-state Per-game Rating Multiplier ----
 # Applied to in-game player attributes at kickoff based on the team's current
 # form state. Multiplier acts on physical + skill-related mental attrs, then

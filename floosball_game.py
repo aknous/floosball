@@ -1257,6 +1257,107 @@ class Game:
         except Exception:
             return False
 
+    def _logPressureCorrelation(self) -> None:
+        """Append one JSONL entry per team to logs/pressure_correlation.jsonl
+        capturing pressure level, game outcome, ELO delta, form state, and
+        roster resolve average. Used to look for correlation between market
+        expectation pressure and on-field outcomes. Never raises — diagnostic
+        must not break the game loop.
+        """
+        try:
+            import json as _json
+            import os
+            from datetime import datetime
+            from constants import (
+                EXPECTATION_SCALE_BY_TIER,
+                EXPECTATION_RELIEF_BY_TIER,
+                EXPECTATION_DELTA_CAP,
+                CHAMPIONSHIP_OVERFLOW_FACTOR,
+            )
+            try:
+                from api_response_builders import TeamResponseBuilder as _Trb
+            except Exception:
+                _Trb = None
+
+            def _scaledPressure(base, tier):
+                delta = base - 1.0
+                if delta > 0:
+                    ts = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+                    cap = min(delta, EXPECTATION_DELTA_CAP)
+                    overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+                    return 1.0 + cap * ts + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
+                rs = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+                return 1.0 + delta * rs
+
+            def _rosterResolveAvg(team):
+                roster = getattr(team, 'roster', None) or []
+                if not roster:
+                    return None
+                vals = []
+                for p in roster:
+                    attrs = getattr(p, 'attributes', None)
+                    if attrs is None:
+                        continue
+                    v = getattr(attrs, 'adversityResolve', None)
+                    if v is None:
+                        v = getattr(attrs, 'adversity_resolve', None)
+                    if v is not None:
+                        vals.append(float(v))
+                return round(sum(vals) / len(vals), 2) if vals else None
+
+            for team, opp, score, oppScore, preElo, prePressure, preTier in (
+                (self.homeTeam, self.awayTeam, self.homeScore, self.awayScore,
+                 getattr(self, '_preGameHomeElo', 1500),
+                 getattr(self, '_preGameHomePressureMod', 1.0),
+                 getattr(self, '_preGameHomeTier', 'UNKNOWN')),
+                (self.awayTeam, self.homeTeam, self.awayScore, self.homeScore,
+                 getattr(self, '_preGameAwayElo', 1500),
+                 getattr(self, '_preGameAwayPressureMod', 1.0),
+                 getattr(self, '_preGameAwayTier', 'UNKNOWN')),
+            ):
+                preEloOpp = (getattr(self, '_preGameAwayElo', 1500)
+                             if team is self.homeTeam
+                             else getattr(self, '_preGameHomeElo', 1500))
+                postElo = getattr(team, 'elo', preElo)
+                won = score > oppScore
+                tied = score == oppScore
+                formState = None
+                try:
+                    if _Trb is not None:
+                        formState = _Trb.computeFormState(team)
+                except Exception:
+                    formState = None
+                entry = {
+                    'ts': datetime.utcnow().isoformat() + 'Z',
+                    'season': getattr(self, 'seasonNumber', None),
+                    'week': getattr(self, 'gameWeek', None) or getattr(self, 'weekNumber', None),
+                    'gameId': getattr(self, 'id', None),
+                    'gameType': getattr(self, 'gameType', None),
+                    'playoffRound': getattr(self, 'playoffRound', None),
+                    'team': team.name,
+                    'opponent': opp.name,
+                    'tier': preTier,
+                    'pressureBase': round(prePressure, 3),
+                    'pressureScaled': round(_scaledPressure(prePressure, preTier), 3),
+                    'priorSeasonPressure': round(getattr(team, 'priorSeasonPressure', 1.0), 3),
+                    'inSeasonPressure': round(getattr(team, 'inSeasonPressure', 1.0), 3),
+                    'won': won,
+                    'tied': tied,
+                    'score': score,
+                    'opponentScore': oppScore,
+                    'preEloDiff': round(preElo - preEloOpp, 1),
+                    'preElo': round(preElo, 1),
+                    'postElo': round(postElo, 1),
+                    'eloDelta': round(postElo - preElo, 2),
+                    'formState': formState,
+                    'rosterResolveAvg': _rosterResolveAvg(team),
+                }
+                os.makedirs('logs', exist_ok=True)
+                with open('logs/pressure_correlation.jsonl', 'a') as f:
+                    f.write(_json.dumps(entry) + '\n')
+        except Exception:
+            pass
+
     def _estimateAvailablePlays(self) -> int:
         """Conservative estimate of productive offensive plays remaining before
         regulation ends, RESERVING ~7s for a closing FG attempt.
@@ -3362,6 +3463,19 @@ class Game:
         except Exception:
             pass  # Diagnostic logging must never break the game loop
 
+        # Snapshot pre-game ELO + pressure modifier for the correlation log
+        # written at game end. Stored on the game instance so we can compute
+        # ELO delta and have a record of conditions entering the game.
+        try:
+            self._preGameHomeElo = getattr(self.homeTeam, 'elo', 1500)
+            self._preGameAwayElo = getattr(self.awayTeam, 'elo', 1500)
+            self._preGameHomePressureMod = getattr(self.homeTeam, 'pressureModifier', 1.0)
+            self._preGameAwayPressureMod = getattr(self.awayTeam, 'pressureModifier', 1.0)
+            self._preGameHomeTier = getattr(self.homeTeam, 'fundingTier', 'UNKNOWN')
+            self._preGameAwayTier = getattr(self.awayTeam, 'fundingTier', 'UNKNOWN')
+        except Exception:
+            pass
+
         # Apply fatigue penalties (accumulated over the season)
         self._applyFatigue(self.homeTeam)
         self._applyFatigue(self.awayTeam)
@@ -4289,6 +4403,11 @@ class Game:
         # Player postgame processing: sync stats, update confidence/determination, compute derived stats
         self._processPlayerPostgame()
 
+        # Per-team correlation log: pressure level, outcome, ELO delta,
+        # form state, roster resolve average. Written to logs/pressure_correlation.jsonl
+        # for offline analysis of how pressure relates to outcomes/metrics.
+        self._logPressureCorrelation()
+
         # Postgame personality reactions — winners go positive, losers go negative.
         # Inserted into gameFeed as cutaway-style entries so they render alongside
         # plays in the modal feed and survive page reloads via /api/games/{id}.
@@ -4422,16 +4541,27 @@ class Game:
         # prior-season expectations, in-season elimination state, etc.) with
         # market-tier expectation scaling layered on top: big markets amplify
         # high-expectation deltas, small markets amplify the relief side.
-        from constants import EXPECTATION_SCALE_BY_TIER
+        from constants import (
+            EXPECTATION_SCALE_BY_TIER,
+            EXPECTATION_RELIEF_BY_TIER,
+            EXPECTATION_DELTA_CAP,
+            CHAMPIONSHIP_OVERFLOW_FACTOR,
+        )
         pressureMod = self.offensiveTeam.pressureModifier
         delta = pressureMod - 1.0
-        tierScale = EXPECTATION_SCALE_BY_TIER.get(
-            getattr(self.offensiveTeam, 'fundingTier', None), 1.0,
-        )
+        tier = getattr(self.offensiveTeam, 'fundingTier', None)
         if delta > 0:
-            scaledDelta = delta * tierScale
+            tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+            # Soften scaling above the championship band so MEGA Floos Bowl
+            # doesn't auto-cap pressure at 100 on every play. Cap portion
+            # gets full market amplification; overflow gets a weaker factor
+            # (default 1.0 — overflow added unscaled).
+            cap = min(delta, EXPECTATION_DELTA_CAP)
+            overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+            scaledDelta = cap * tierScale + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
         else:
-            scaledDelta = delta * (2.0 - tierScale)
+            reliefScale = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+            scaledDelta = delta * reliefScale
         pressure = pressure * (1.0 + scaledDelta)
 
         return min(100, pressure)  # Cap at 100

@@ -1498,16 +1498,28 @@ def _getPressureDiagLogger():
 
 
 def formatPressureDiagLine(team, context: str, season: int = None, week: int = None) -> str:
-    """Build a single PRESSURE_DIAG log line for one team."""
-    from constants import EXPECTATION_SCALE_BY_TIER
+    """Build a single PRESSURE_DIAG log line for one team. Mirrors the
+    game-time scaling in floosball_game.calculateGamePressure exactly so
+    the log values match what the simulation actually applies.
+    """
+    from constants import (
+        EXPECTATION_SCALE_BY_TIER,
+        EXPECTATION_RELIEF_BY_TIER,
+        EXPECTATION_DELTA_CAP,
+        CHAMPIONSHIP_OVERFLOW_FACTOR,
+    )
     base = getattr(team, 'pressureModifier', 1.0)
     tier = getattr(team, 'fundingTier', 'UNKNOWN')
-    tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
     delta = base - 1.0
     if delta > 0:
-        scaled = 1.0 + delta * tierScale
+        tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+        cap = min(delta, EXPECTATION_DELTA_CAP)
+        overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+        scaledDelta = cap * tierScale + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
     else:
-        scaled = 1.0 + delta * (2.0 - tierScale)
+        reliefScale = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+        scaledDelta = delta * reliefScale
+    scaled = 1.0 + scaledDelta
     return (
         f"PRESSURE_DIAG s={season if season is not None else '-'} "
         f"w={week if week is not None else '-'} ctx={context} "
