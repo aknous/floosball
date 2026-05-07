@@ -131,6 +131,23 @@ async def startup_event():
     # competing with live play feed.
     _asyncio.create_task(_offDayFlavorLoop())
 
+    # Sweep stale pending pack reveals — users who paid for a pack but never
+    # confirmed selection (crash / abandoned tab) get auto-resolved with a
+    # random keep-pick so they don't lose the cards they paid for.
+    try:
+        from database.connection import get_session
+        from managers.cardManager import CardManager
+        sweepSession = get_session()
+        try:
+            cm = CardManager(None)
+            resolved = cm.cleanupStalePendingPacks(sweepSession, ageHours=24)
+            if resolved:
+                logger.info(f"Resolved {resolved} stale pending pack opening(s) on startup")
+        finally:
+            sweepSession.close()
+    except Exception as e:
+        logger.warning(f"Stale pending-pack sweep failed on startup: {e}")
+
     # The FloosballApplication will be injected by the main entry point
     # For now, log that we're ready
     logger.info("API server ready - waiting for FloosballApplication initialization")
@@ -6009,84 +6026,154 @@ def _requireShopOpen():
 
 @app.get("/api/packs/types")
 def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
-    """Get available pack types with costs and daily purchase limits."""
-    response.headers["Cache-Control"] = "public, max-age=600"
+    """Get available pack types with costs and daily purchase limits.
+
+    Filtered by the current week's pack rotation: only packs visible in
+    the daily shop are returned (plus the starter pack as a separate
+    `starter` field). Pack revamp design — 'proper' tier deprecated and
+    Exquisite gated to week 2+ for season-progression feel.
+    """
+    # No public cache — response is user-specific (starter claim status +
+    # per-pack daily-limit counters). A shared cache here would mix users.
+    response.headers["Cache-Control"] = "private, no-store"
     from database.connection import get_session
-    from database.models import PackOpening
+    from database.models import PackOpening, PendingPackOpening, User
     from database.repositories.card_repositories import PackTypeRepository
-    from managers.cardManager import DAILY_PACK_LIMITS
+    from managers.cardManager import DAILY_PACK_LIMITS, getActivePackNames, shopDayOfSeason
     from datetime import datetime
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 1
+    shopDay = shopDayOfSeason(currentWeek)
+    activeNames = set(getActivePackNames(shopDay))
 
     session = get_session()
     try:
         packRepo = PackTypeRepository(session)
         packs = packRepo.getAll()
+        rotated = [p for p in packs if p.name in activeNames]
+        starterPack = next((p for p in packs if p.name == 'starter'), None)
 
-        # Count today's purchases per pack type if user is authenticated
+        # Count today's purchases per pack type (committed + pending) if authed
         todayCounts = {}
+        starterClaimed = False
         if user:
             dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            for p in packs:
-                todayCounts[p.id] = session.query(PackOpening).filter(
+            for p in rotated:
+                committed = session.query(PackOpening).filter(
                     PackOpening.user_id == user.id,
                     PackOpening.pack_type_id == p.id,
                     PackOpening.opened_at >= dayStart,
                 ).count()
+                pending = session.query(PendingPackOpening).filter(
+                    PendingPackOpening.user_id == user.id,
+                    PendingPackOpening.pack_type_id == p.id,
+                    PendingPackOpening.opened_at >= dayStart,
+                ).count()
+                todayCounts[p.id] = committed + pending
+            dbUser = session.query(User).filter_by(id=user.id).first()
+            starterClaimed = (dbUser and dbUser.starter_pack_claimed_season == currentSeason)
+
+        def _packDict(p):
+            return {
+                "id": p.id,
+                "name": p.name,
+                "displayName": p.display_name,
+                "cost": p.cost,
+                "cardsPerPack": p.cards_per_pack,
+                "cardsKept": p.cards_kept,
+                "description": p.description,
+                "dailyLimit": DAILY_PACK_LIMITS.get(p.name),
+                "remainingToday": max(0, DAILY_PACK_LIMITS.get(p.name, 99) - todayCounts.get(p.id, 0)) if user else None,
+            }
 
         return build_success_response({
-            "packs": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "displayName": p.display_name,
-                    "cost": p.cost,
-                    "cardsPerPack": p.cards_per_pack,
-                    "guaranteedRarity": p.guaranteed_rarity,
-                    "description": p.description,
-                    "dailyLimit": DAILY_PACK_LIMITS.get(p.name),
-                    "remainingToday": max(0, DAILY_PACK_LIMITS.get(p.name, 99) - todayCounts.get(p.id, 0)) if user else None,
-                }
-                for p in packs
-            ],
+            "packs": [_packDict(p) for p in rotated],
+            "starter": ({
+                **_packDict(starterPack),
+                "claimedThisSeason": starterClaimed,
+            } if starterPack else None),
+            "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
         })
     finally:
         session.close()
 
 
-class OpenPackRequest(BaseModel):
+class RevealPackRequest(BaseModel):
     packTypeId: int
 
 
-@app.post("/api/packs/open")
-def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
-    """Buy and open a card pack."""
+@app.post("/api/packs/reveal")
+def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
+    """Step 1 of the user purchase flow: spend Floobits + reveal cards.
+
+    Cards are NOT yet committed to the user's collection — they're held in
+    a PendingPackOpening row until /api/packs/select confirms which to keep.
+    """
     _requireShopOpen()
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    from managers.cardManager import shopDayOfSeason
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 1
+    shopDay = shopDayOfSeason(currentWeek)
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Pack reveal failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reveal pack")
+    finally:
+        session.close()
+
+
+class SelectPackRequest(BaseModel):
+    pendingId: int
+    keptIndices: List[int]
+
+
+@app.post("/api/packs/select")
+def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
+    """Step 2 of the user purchase flow: commit which revealed cards to keep.
+
+    Discarded cards are dropped (no refund). Daily limit was already debited
+    on /reveal, so this endpoint is the side-effecting one that creates the
+    UserCard rows + records the PackOpening + fires achievement hooks.
+    """
     from database.connection import get_session
     from managers.cardManager import CardManager
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
     session = get_session()
     try:
-        result = cardManager.openPack(session, user.id, req.packTypeId, currentSeason)
-        # Achievement hooks
+        result = cardManager.selectPackKeeps(
+            session, user.id, req.pendingId, req.keptIndices, currentSeason,
+        )
+        # Achievement hooks fire on the kept cards (matches old single-step behavior)
         from managers import achievementManager as _am
         _am.onPackOpened(session, user.id)
         _am.syncCuratorProgress(session, user.id, currentSeason)
-        # Sparkler: if any diamond-edition card dropped
-        if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
+        if any(c.get("edition") == "diamond" for c in (result.get("kept") or [])):
             _am.onDiamondOpened(session, user.id, currentSeason)
-
-        # Secret — Completist (all 4 editions of the same player this season)
+        # Secret: Completist (all 4 editions of the same player this season)
         try:
             from database.models import UserCard as _UC, CardTemplate as _CT
             from sqlalchemy import func
-            # For each player the user owns a card of this season, count distinct editions.
-            # Unlocks when any player has all 4 (base, holographic, prismatic, diamond).
             editionRows = (
                 session.query(_CT.player_id, func.count(func.distinct(_CT.edition)).label("editionCount"))
                 .join(_UC, _UC.card_template_id == _CT.id)
@@ -6107,8 +6194,41 @@ def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         session.rollback()
-        logger.error(f"Pack opening failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to open pack")
+        logger.error(f"Pack selection failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to commit pack selection")
+    finally:
+        session.close()
+
+
+@app.post("/api/packs/starter")
+def claimStarterPack(user: _User = Depends(_getCurrentUser)):
+    """Claim the free once-per-season starter pack (5 base cards, no selection).
+
+    Sets User.starter_pack_claimed_season so the offer disappears until
+    the next season. Achievement hooks still fire.
+    """
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.claimStarterPack(session, user.id, currentSeason)
+        from managers import achievementManager as _am
+        _am.onPackOpened(session, user.id)
+        _am.syncCuratorProgress(session, user.id, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Starter pack claim failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to claim starter pack")
     finally:
         session.close()
 
@@ -8877,19 +8997,16 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             if not packType:
                 raise HTTPException(status_code=500, detail=f"Unknown pack type: {reward.slug}")
             cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-            result = cardManager.openPack(
+            # Achievement-granted packs go through the same reveal+select
+            # flow as purchased packs — the user picks which cards to keep
+            # rather than the system auto-granting everything. Daily limit
+            # and rotation guards are skipped (skipCurrency=True).
+            # Achievement hooks fire on /api/packs/select after the user
+            # confirms their selection, not here.
+            result = cardManager.revealPack(
                 session, user.id, packType.id, currentSeason,
-                skipCurrency=True, source=reward.source,
+                skipCurrency=True,
             )
-            # Mirror the hooks from the normal pack-open endpoint so claimed
-            # pack rewards update achievements the same way. Without these,
-            # Pack Popper / Curator / Sparkler would only progress when the
-            # user spent Floobits, not when they claimed a free pack.
-            from managers import achievementManager as _am
-            _am.onPackOpened(session, user.id)
-            _am.syncCuratorProgress(session, user.id, currentSeason)
-            if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
-                _am.onDiamondOpened(session, user.id, currentSeason)
             reward.claimed_at = datetime.utcnow()
             session.commit()
             return build_success_response({"kind": "pack", **result})

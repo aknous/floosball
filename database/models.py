@@ -724,6 +724,9 @@ class User(Base):
     # Vacancy fallback preference: prospect | fa | best_available (default)
     vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
+    # Season number the user last claimed their free starter pack in.
+    # Resets each season — null means never claimed.
+    starter_pack_claimed_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -1169,12 +1172,40 @@ class PackType(Base):
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     cost: Mapped[int] = mapped_column(Integer, nullable=False)
     cards_per_pack: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Number of cards the user keeps from cards_per_pack revealed. Null/equal-to
+    # cards_per_pack = no selection (user keeps everything, e.g. starter pack).
+    cards_kept: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     guaranteed_rarity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     rarity_weights: Mapped[dict] = mapped_column(JSON, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
 
     def __repr__(self):
         return f"<PackType(name='{self.name}', cost={self.cost})>"
+
+
+class PendingPackOpening(Base):
+    """Pack opens where the user has paid + revealed cards but hasn't yet
+    chosen which to keep. Closed when user selects, or auto-closed (random
+    pick) by the stale-pending sweep on app startup.
+    """
+    __tablename__ = "pending_pack_openings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    pack_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("pack_types.id"), nullable=False)
+    # Revealed card-template ids the user is choosing from. Order is preserved;
+    # frontend references cards by index in this list when submitting selection.
+    revealed_template_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+    pack_type: Mapped["PackType"] = relationship("PackType")
+
+    __table_args__ = (
+        Index("idx_pending_pack_openings_user", "user_id"),
+    )
 
 
 class PackOpening(Base):
