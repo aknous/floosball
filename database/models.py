@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -653,6 +654,11 @@ class Season(Base):
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
     mvp_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs
+    # Snapshot of per-team active fan counts taken when the Front Office
+    # opens (week 22). JSON object: {teamId: activeFanCount}. Used as the
+    # GM vote threshold so a fan who logs in for the first time after the
+    # voting window opens doesn't inflate the bar mid-vote.
+    front_office_fan_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Indexes
@@ -821,6 +827,26 @@ class FantasyRosterSwap(Base):
 
     def __repr__(self):
         return f"<FantasyRosterSwap(roster_id={self.roster_id}, slot='{self.slot}', old={self.old_player_id}, new={self.new_player_id})>"
+
+
+class UserLoginDay(Base):
+    """One row per (user, calendar date) the user logged in.
+
+    Lets the admin DAU chart count distinct users per day instead of
+    relying on User.last_login_at, which only stores each user's MOST
+    RECENT login — so when a user returns the next day, the previous
+    day's count silently drops by one. Inserts are UPSERT-ignore so a
+    user logging in multiple times in one day produces one row.
+    """
+    __tablename__ = "user_login_days"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    login_date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "login_date", name="uq_user_login_day"),
+    )
 
 
 class UnusedName(Base):

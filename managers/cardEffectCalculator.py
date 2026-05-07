@@ -140,6 +140,17 @@ class CardCalcContext:
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
     _firstPassBreakdowns: Optional[List] = None  # Set for second-pass effects
+    # Map of eq.id → bool: would this second-pass card produce non-zero output
+    # given only first-pass results? Used by trigger-chain effects (Chain
+    # Reaction, Bonus Round, Last Resort) to count other second-pass cards
+    # without circularity — the boolean is determined from first-pass data so
+    # CR-A counting CR-B (and vice-versa) resolves cleanly.
+    _secondPassPreTriggers: Dict[int, bool] = field(default_factory=dict)
+    # Set during the convergence pass so effects (Copycat, High Roller) can
+    # scan other second-pass cards' actual breakdowns. Index-aligned with
+    # _secondPassEqIds.
+    _secondPassBreakdowns: Optional[List] = None
+    _secondPassEqIds: Optional[List[int]] = None
 
 
 @dataclass
@@ -329,6 +340,43 @@ _SECOND_PASS_EFFECTS = frozenset({
 _TRADEOFF_EFFECTS = frozenset({
     "double_down", "last_resort",
 })
+
+
+def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
+    """Heuristic: would this second-pass card produce non-zero output given
+    only first-pass results? Used to let trigger-chain effects count each
+    other without circularity. The actual-trigger correction happens later
+    in the convergence pass.
+    """
+    template = eq.user_card.card_template
+    ec = template.effect_config or {}
+    effectName = ec.get("effectName", "")
+    primary = ec.get("primary", {}) or {}
+    fpTriggered = sum(1 for b in firstPassBreakdowns
+                      if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    if effectName == "chain_reaction":
+        return fpTriggered > 0
+    if effectName == "bonus_round":
+        return fpTriggered >= 4
+    if effectName == "last_resort":
+        # Modern config (baseFP) always pays out → triggered.
+        # Legacy config (rewardValue only) fires only when nothing else
+        # triggered → inverse condition.
+        if "baseFP" in primary:
+            return True
+        if "rewardValue" in primary and "baseFP" not in primary:
+            return fpTriggered == 0
+        return True
+    if effectName == "copycat":
+        return any(b.totalFP > 0 for b in firstPassBreakdowns)
+    if effectName == "double_down":
+        return any(b.totalFP > 0 and b.effectName != "double_down" for b in firstPassBreakdowns)
+    if effectName == "high_roller":
+        return any(b.chanceTriggered for b in firstPassBreakdowns)
+    if effectName == "fortitude":
+        # Heat Check fires whenever there's at least one active streak card.
+        return getattr(ctx, 'activeStreakCount', 0) > 0
+    return False
 
 
 def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
@@ -716,11 +764,47 @@ def calculateWeekCardBonuses(
         breakdown = _computeCardPass(eq, ctx)
         firstPassBreakdowns.append(breakdown)
 
+    # Pre-trigger pass: for each second-pass card, determine whether it would
+    # produce non-zero output given only first-pass results. Stash on ctx so
+    # trigger-chain effects (Chain Reaction, Bonus Round, Last Resort) can
+    # count other second-pass cards in their tallies.
+    ctx._secondPassPreTriggers = {
+        eq.id: _wouldSecondPassTrigger(eq, firstPassBreakdowns, ctx)
+        for eq in secondPassCards
+    }
+
     # Second pass: compute second-pass cards with first-pass results
     secondPassBreakdowns = []
     for eq in secondPassCards:
         breakdown = _computeCardPass(eq, ctx, firstPassBreakdowns=firstPassBreakdowns)
         secondPassBreakdowns.append(breakdown)
+
+    # Convergence: re-run effects that depend on other second-pass cards using
+    # *actual* second-pass results instead of pre-trigger heuristics. Closes
+    # asymmetries — e.g. CR pushing BR over its threshold without getting
+    # credit, or Copycat missing a higher FP value coming from Bonus Round.
+    # Last Resort is excluded (its chance roll would destabilize on re-run);
+    # Lemons / fortitude don't depend on cross-second-pass info.
+    if secondPassCards:
+        actualTriggers = {
+            eq.id: (b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+            for eq, b in zip(secondPassCards, secondPassBreakdowns)
+        }
+        savedPreTriggers = ctx._secondPassPreTriggers
+        ctx._secondPassPreTriggers = actualTriggers
+        ctx._secondPassBreakdowns = secondPassBreakdowns
+        ctx._secondPassEqIds = [eq.id for eq in secondPassCards]
+        try:
+            for idx, eq in enumerate(secondPassCards):
+                effectName = (eq.user_card.card_template.effect_config or {}).get("effectName", "")
+                if effectName in {"chain_reaction", "bonus_round", "copycat", "high_roller"}:
+                    secondPassBreakdowns[idx] = _computeCardPass(
+                        eq, ctx, firstPassBreakdowns=firstPassBreakdowns,
+                    )
+        finally:
+            ctx._secondPassPreTriggers = savedPreTriggers
+            ctx._secondPassBreakdowns = None
+            ctx._secondPassEqIds = None
 
     allBreakdowns = firstPassBreakdowns + secondPassBreakdowns
 

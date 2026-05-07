@@ -137,6 +137,68 @@ FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMAL
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
 
+# ---- Market Expectation Scaling ----
+# Bigger markets carry heavier "expectations to win" pressure on top of
+# whatever the team's prior performance has earned. Smaller markets are more
+# forgiving when the team underperforms (less media spotlight, less fan
+# rage). Applied at game time as an asymmetric scalar on the delta of
+# team.pressureModifier from baseline (1.0):
+#   - positive delta (high expectations from prior playoff success, etc.)
+#     is scaled up for big markets — MEGA's win-it-all expectations weigh
+#     more than a SMALL team's same on-paper expectation.
+#   - negative delta (low expectations from a bad prior season) is scaled
+#     up for SMALL markets — small markets disengage and stop watching, big
+#     markets keep the spotlight on even during a rebuild.
+# Effect at game time:
+#   delta = team.pressureModifier - 1.0
+#   if delta > 0:  scaled = delta * EXPECTATION_SCALE[tier]
+#   else:          scaled = delta * (2.0 - EXPECTATION_SCALE[tier])
+#   effectivePressureMod = 1.0 + scaled
+EXPECTATION_SCALE_BY_TIER = {
+    'MEGA_MARKET':  1.5,
+    'LARGE_MARKET': 1.2,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 0.7,
+}
+
+# Relief side: when the team's prior baseline is below 1.0 (bad season last
+# year, eliminated mid-season, etc.), how much that relief gets amplified by
+# market tier. Big markets keep the spotlight on even during a rebuild
+# (less relief); small markets disengage entirely (much more relief).
+# Replaces the prior `(2 - tierScale)` inverse, which gave too narrow a
+# spread (LARGE 0.8, SMALL 1.3) — diagnostic showed LARGE/SMALL barely
+# differed from MID in the relief direction.
+EXPECTATION_RELIEF_BY_TIER = {
+    'MEGA_MARKET':  0.4,
+    'LARGE_MARKET': 0.65,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 1.6,
+}
+
+# Championship-band softening: delta above this threshold (i.e. baselines
+# above 2.0 — Floos Bowl 2.5, brink-of-elimination 2.0, deep playoff round
+# 1.9+) gets a much weaker market scale. Without softening, MEGA Floos Bowl
+# hits 3.25 which caps in-game pressure at 100 on every play. Overflow
+# portion of the delta uses CHAMPIONSHIP_OVERFLOW_FACTOR instead of the
+# full tier scale.
+EXPECTATION_DELTA_CAP = 1.0
+CHAMPIONSHIP_OVERFLOW_FACTOR = 1.0  # overflow unscaled — preserves nominal
+                                     # baseline so MEGA/MID/SMALL keep the
+                                     # right ordering at the top end.
+
+# ---- Streak Pressure ----
+# Pressure that builds as a team's consecutive-win streak grows. Active in
+# both regular season and playoffs — an undefeated team chasing a perfect
+# season feels the spotlight, and that spotlight follows them through the
+# postseason. Resets to 0 on any loss.
+#   streakPressure = min(CAP, max(0, streak - FLOOR) * PER_WIN)
+# Added to team.pressureModifier at game-time scaling, so market-tier
+# amplification applies (MEGA on a 10-win streak gets a heavier scaled
+# bump than SMALL on the same streak).
+STREAK_PRESSURE_FLOOR   = 3      # streaks 1-3 add nothing (normal hot start)
+STREAK_PRESSURE_PER_WIN = 0.10   # each win past the floor adds +0.10
+STREAK_PRESSURE_CAP     = 0.80   # caps at streak 11+ to avoid runaway
+
 # ---- Form-state Per-game Rating Multiplier ----
 # Applied to in-game player attributes at kickoff based on the team's current
 # form state. Multiplier acts on physical + skill-related mental attrs, then
@@ -306,10 +368,22 @@ GM_VOTE_BASE_MIN = {
     "hire_coach": 2,
 }
 
-# Per-user limits
+# Per-user limits.
+# GM_VOTES_PER_TYPE caps how many votes a single fan can spend on one vote
+# type per season. Coach votes (fire/hire) cap at 4 — there's only one
+# coach to deal with, so more budget there is wasted. Player votes
+# (resign/cut) cap at 8 because a team often has multiple candidates worth
+# voting on, and fans need to spread their support.
 GM_VOTES_PER_SEASON = 20
-GM_VOTES_PER_TYPE = 8
-GM_VOTES_PER_TARGET = 5
+GM_VOTES_PER_TYPE = {
+    "fire_coach":     4,
+    "hire_coach":     4,
+    "resign_player":  8,
+    "cut_player":     8,
+    "sign_fa":        8,
+}
+GM_VOTES_PER_TYPE_DEFAULT = 4
+GM_VOTES_PER_TARGET = 4
 
 # Front Office voting window opens at this week. Before this, GM vote UIs show
 # a "convening..." state. Mirrors the frontend const GM_ACTIVE_WEEK in

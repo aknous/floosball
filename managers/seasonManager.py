@@ -285,6 +285,19 @@ class SeasonManager:
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
 
+        # Dev-only: spread teams across all 4 funding tiers so single-user
+        # testing produces a realistic tier distribution. Set DEV_SPREAD_TIERS=1
+        # in the environment to enable. Teams are assigned by ID into 4 equal
+        # buckets (deterministic — same team gets same tier every season).
+        self._applyDevTierOverride()
+
+        # Set prior-season expectation pressure baselines (must run after
+        # statArchive is populated by season completion last year — which it
+        # has been by this point — and after funding tier is assigned so
+        # market scaling can read the right value at game time).
+        teamMgr = self.serviceContainer.getService('team_manager')
+        teamMgr.setPressureModifiersForNewSeason(seasonNumber)
+
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
@@ -509,6 +522,18 @@ class SeasonManager:
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
 
+            # Recompute regular-season pressure blend: prior-season expectations
+            # wane over the first ~14 weeks while inSeasonPressure (set by
+            # standings/elimination logic) takes over. Playoff weeks set
+            # pressureModifier directly elsewhere and are not affected here.
+            try:
+                teamMgr = self.serviceContainer.getService('team_manager')
+                teamMgr.applyRegularSeasonPressureBlend(
+                    nextWeek, season=self.currentSeason.seasonNumber,
+                )
+            except Exception as e:
+                logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
+
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
                 self._cachedNextGameStart = weekStartTime
@@ -617,6 +642,15 @@ class SeasonManager:
                                     rp.player_id, self.currentSeason.seasonNumber
                                 ) if tracker else 0
                             )
+                        # Replay All-Pro swap grants now that the roster is
+                        # locked. Users who equipped AP cards before lock had
+                        # the grant skipped (the equip endpoint requires a
+                        # locked roster); without this, swap_bonus_active
+                        # stays False and the UI shows "Swap used" even
+                        # though no swap was consumed.
+                        self._grantAllProSwapsForRoster(
+                            lockSession, roster, seasonNum, currentWeek
+                        )
                         logger.info(f"Auto-locked roster for user {roster.user_id}")
                 lockSession.commit()
                 lockSession.close()
@@ -747,6 +781,10 @@ class SeasonManager:
             from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
             if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
                 self._evaluateRetirementCandidates()
+                # Snapshot per-team active fan counts at this moment so
+                # the GM vote threshold doesn't shift if new fans log in
+                # for the first time after the front office opens.
+                self._snapshotActiveFanCounts()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -1161,6 +1199,12 @@ class SeasonManager:
                         if not template or template.season_created != season:
                             continue
                         prevStreak = getattr(prev, 'streak_count', 1) or 1
+                        # Preserve the All-Pro swap-bonus flag so a card that
+                        # granted an unused swap last week still shows as
+                        # "swap available" this week. Without this, every
+                        # week boundary silently flips active grants to
+                        # "used" — matching one of the swap-accounting bugs.
+                        prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
                         equippedRepo.save(EquippedCard(
                             user_id=userId,
                             season=season,
@@ -1169,6 +1213,7 @@ class SeasonManager:
                             user_card_id=prev.user_card_id,
                             locked=False,
                             streak_count=prevStreak,
+                            swap_bonus_active=prevSwapBonus,
                         ))
                     carried += 1
                     break
@@ -1176,30 +1221,89 @@ class SeasonManager:
             session.flush()
             logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
 
+    def _grantAllProSwapsForRoster(self, session, roster, season: int, currentWeek: int) -> None:
+        """Replay All-Pro swap grants for an equipped roster.
+
+        Mirrors the All-Pro grant block in PUT /api/cards/equipped: for each
+        equipped All-Pro card whose UserCard.last_swap_grant_cycle is below
+        the current cycle, grant +1 swap, advance the cycle marker, and flag
+        the EquippedCard's swap_bonus_active=True. Idempotent — cards that
+        already granted in this cycle are skipped.
+        """
+        if not currentWeek or currentWeek < 1:
+            return
+        try:
+            from database.models import EquippedCard, UserCard, CardTemplate
+            swapCycle = (currentWeek - 1) // 7 + 1
+            equippedAP = (
+                session.query(EquippedCard, UserCard, CardTemplate)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(
+                    EquippedCard.user_id == roster.user_id,
+                    EquippedCard.season == season,
+                    EquippedCard.week == currentWeek,
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("all_pro"),
+                )
+                .all()
+            )
+            for eqCard, uc, _tmpl in equippedAP:
+                if uc.last_swap_grant_cycle < swapCycle:
+                    roster.swaps_available += 1
+                    uc.last_swap_grant_cycle = swapCycle
+                    eqCard.swap_bonus_active = True
+        except Exception as e:
+            logger.warning(f"Failed to grant All-Pro swaps for roster {roster.id}: {e}")
+
     def _grantRosterSwaps(self, season: int) -> None:
-        """Grant 1 swap to all locked rosters.
-        Cap is 1 normally, 2 if user has a Champion-classified card equipped."""
+        """Grant 1 organic swap to all locked rosters at week end.
+
+        Cap = 1 baseline + 1 per equipped All-Pro card whose grant is still
+        unused this cycle (swap_bonus_active=True). The AP bump exists so an
+        AP grant doesn't immediately suppress the next weekly organic refill
+        (without it, swaps would already be at the cap of 1 and the refill
+        check `1 < 1` would fail).
+
+        Champion used to bump this cap by 1 — leftover from when adding a
+        FLEX player consumed a swap. That cost was removed long ago (empty
+        FLEX adds are free), so the Champion bump no longer has a purpose
+        and was removed.
+        """
         try:
             from database.connection import get_session as _getSession
             from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
             swapSession = _getSession()
+            currentWeek = (
+                self.currentSeason.currentWeek
+                if self.currentSeason and self.currentSeason.currentWeek
+                else 0
+            )
             rosters = swapSession.query(FantasyRoster).filter_by(
                 season=season, is_locked=True
             ).all()
             updated = 0
             for roster in rosters:
-                # Check if user has a Champion card equipped
-                hasChampion = swapSession.query(EquippedCard).join(
+                # AP bump — count equipped AP cards (THIS WEEK only) whose
+                # grants are still unused this cycle (swap_bonus_active=True).
+                # Each adds room for one extra outstanding swap so the weekly
+                # organic refill can stack on top of the AP grant.
+                # Without the week filter, carry-forward rows from earlier
+                # weeks would inflate the count and the cap would ratchet up
+                # by 1 every week.
+                apActiveCount = swapSession.query(EquippedCard).join(
                     UserCard, EquippedCard.user_card_id == UserCard.id
                 ).join(
                     CardTemplate, UserCard.card_template_id == CardTemplate.id
                 ).filter(
                     EquippedCard.user_id == roster.user_id,
                     EquippedCard.season == season,
+                    EquippedCard.week == currentWeek,
+                    EquippedCard.swap_bonus_active == True,
                     CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("champion")
-                ).first() is not None
-                maxSwaps = 2 if hasChampion else 1
+                    CardTemplate.classification.contains("all_pro"),
+                ).count() if currentWeek > 0 else 0
+                maxSwaps = 1 + apActiveCount
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
                     updated += 1
@@ -1881,10 +1985,13 @@ class SeasonManager:
         """
         # A. Reset team playoff state to prevent stacked modifiers and stale flags
         teamManager = self.serviceContainer.getService('team_manager')
+        from managers.teamManager import logPressureDiag
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else None
         for team in teamManager.teams:
             team.eliminated = False
             team.leagueChampion = False
             team.pressureModifier = 1.0
+            logPressureDiag(team, "playoff_reset", season=seasonNum, week=getattr(self.currentSeason, 'currentWeek', None))
 
         # B. Clear freeAgencyOrder — it gets rebuilt during playoffs
         self.currentSeason.freeAgencyOrder = []
@@ -1952,7 +2059,14 @@ class SeasonManager:
             from database.repositories.notification_repository import NotificationRepository
 
             session = _getSession()
-            # Find all power-ups that expired last week
+            # Defensive sweep: catch any stale FLEX rosterPlayers whose powerup
+            # expired before this week (covers cases where the precise
+            # week-boundary notification didn't fire — server downtime, week
+            # skip, etc.). Runs first so the per-week notifications below get
+            # a clean state to compare against.
+            self._sweepStaleFlexPlayers(session, season, currentWeek)
+            # Find all power-ups that expired last week — this drives the
+            # one-shot user notification (fires once per purchase).
             expiredPurchases = session.query(ShopPurchase).filter(
                 ShopPurchase.item_slug.in_(["temp_card_slot", "temp_flex"]),
                 ShopPurchase.season == season,
@@ -2047,6 +2161,78 @@ class SeasonManager:
             session.close()
         except Exception as e:
             logger.warning(f"Failed to notify expired power-ups: {e}")
+
+    def _sweepStaleFlexPlayers(self, session, season: int, currentWeek: int) -> None:
+        """Remove FLEX rosterPlayers that no longer have backing entitlement.
+
+        A FLEX slot is granted by an active temp_flex powerup OR a Champion-
+        classified card equipped this week. If neither is true, any FLEX
+        rosterPlayer is stranded and should be removed. This is a defensive
+        sweep — the precise expiration handler runs alongside it but only
+        catches the exact week-boundary case.
+        """
+        try:
+            from database.models import (
+                ShopPurchase, FantasyRoster, FantasyRosterPlayer,
+                EquippedCard, UserCard, CardTemplate,
+            )
+            staleFlex = (
+                session.query(FantasyRosterPlayer)
+                .join(FantasyRoster, FantasyRosterPlayer.roster_id == FantasyRoster.id)
+                .filter(
+                    FantasyRosterPlayer.slot == "FLEX",
+                    FantasyRoster.season == season,
+                )
+                .all()
+            )
+            removed = 0
+            for rp in staleFlex:
+                userId = rp.roster.user_id
+                # Active temp_flex?
+                hasActiveFlex = session.query(ShopPurchase.id).filter(
+                    ShopPurchase.user_id == userId,
+                    ShopPurchase.season == season,
+                    ShopPurchase.item_slug == "temp_flex",
+                    ShopPurchase.expires_at_week >= currentWeek,
+                ).first() is not None
+                if hasActiveFlex:
+                    continue
+                # Champion card equipped recently? The sweep runs at week
+                # rollover BEFORE carry-forward fills the new week's rows,
+                # so checking week == currentWeek would miss a Champion that
+                # the user clearly still has equipped (just not yet copied
+                # over). Use the latest week we have equipped data for to
+                # answer "is Champion still in the loadout?".
+                from sqlalchemy import func
+                latestEqWeek = session.query(func.max(EquippedCard.week)).filter(
+                    EquippedCard.user_id == userId,
+                    EquippedCard.season == season,
+                    EquippedCard.week <= currentWeek,
+                ).scalar()
+                hasChampion = False
+                if latestEqWeek is not None:
+                    hasChampion = (
+                        session.query(EquippedCard.id)
+                        .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                        .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                        .filter(
+                            EquippedCard.user_id == userId,
+                            EquippedCard.season == season,
+                            EquippedCard.week == latestEqWeek,
+                            CardTemplate.classification.isnot(None),
+                            CardTemplate.classification.contains("champion"),
+                        )
+                        .limit(1).count()
+                    ) > 0
+                if hasChampion:
+                    continue
+                session.delete(rp)
+                removed += 1
+            if removed:
+                session.commit()
+                logger.info(f"Swept {removed} stale FLEX rosterPlayer(s) at week {currentWeek}")
+        except Exception as e:
+            logger.warning(f"Failed to sweep stale FLEX players: {e}")
 
     def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
         """Save a completed game to the database"""
@@ -2974,12 +3160,16 @@ class SeasonManager:
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
                             team.pressureModifier = 1.5
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, "playoff_r1", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
                     else:
                         teamsInRound.extend(playoffTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
                             team.pressureModifier += .2
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
                     list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
@@ -3053,6 +3243,9 @@ class SeasonManager:
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
+                from managers.teamManager import logPressureDiag
+                logPressureDiag(newGame.homeTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
+                logPressureDiag(newGame.awayTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
             # Track playoff round so pick-em can use virtual week numbers (29+)
             self.currentSeason.currentPlayoffRound = currentRound
@@ -4715,6 +4908,53 @@ class SeasonManager:
         
         self.playerManager.unusedNames.append(name)
     
+    def _snapshotActiveFanCounts(self) -> None:
+        """Freeze per-team active fan counts at front office open (week 22).
+
+        Stored as JSON {teamId: count} on the season row. The GM vote
+        threshold reads this snapshot for fire / resign / cut votes so a
+        fan who logs in for the first time AFTER the voting window has
+        opened doesn't suddenly raise the bar mid-resolution.
+
+        "Active" = users with favorite_team_id == teamId AND
+        last_login_at >= season.start_date.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        if not self.currentSeason:
+            return
+        try:
+            import json as _json
+            from database.connection import get_session as _getSession
+            from database.models import Season as DBSeason, User
+            from sqlalchemy import func
+            session = _getSession()
+            try:
+                seasonRow = session.get(DBSeason, self.currentSeason.seasonNumber)
+                if seasonRow is None:
+                    return
+                snapshotStart = seasonRow.start_date
+                rows = session.query(
+                    User.favorite_team_id,
+                    func.count(User.id),
+                ).filter(
+                    User.favorite_team_id.isnot(None),
+                )
+                if snapshotStart is not None:
+                    rows = rows.filter(User.last_login_at >= snapshotStart)
+                rows = rows.group_by(User.favorite_team_id).all()
+                snapshot = {str(teamId): int(count) for teamId, count in rows}
+                seasonRow.front_office_fan_snapshot = _json.dumps(snapshot)
+                session.commit()
+                logger.info(
+                    f"Front Office fan snapshot: {len(snapshot)} teams, "
+                    f"total active fans = {sum(snapshot.values())}"
+                )
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Failed to snapshot active fan counts: {e}")
+
     # ── GM Mode offseason helpers ─────────────────────────────────────────
 
     async def _resolveGmFireCoachVotes(self, gmResults: list) -> None:
@@ -7195,6 +7435,36 @@ class SeasonManager:
                 session.close()
         except ImportError:
             logger.info("First season — all teams default to MID_MARKET funding tier")
+
+    def _applyDevTierOverride(self) -> None:
+        """Dev/testing only: when DEV_SPREAD_TIERS=1 is set, redistribute teams
+        across all four funding tiers (MEGA / LARGE / MID / SMALL) regardless
+        of actual fan contributions. Bypasses the funding-derived tier assignment
+        from `_assignFundingTiers` so single-user test runs produce a realistic
+        4-tier distribution for diagnostic.
+
+        Bucketing is deterministic by team.id — chunks of 8 teams per tier in a
+        32-team league. Same team gets the same tier every season for clean
+        trajectory tracking in logs/pressure_diag.log.
+        """
+        import os
+        if os.environ.get("DEV_SPREAD_TIERS") != "1":
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        sortedTeams = sorted(teamManager.teams, key=lambda t: getattr(t, 'id', 0))
+        n = len(sortedTeams)
+        if n == 0:
+            return
+        chunk = max(1, n // 4)
+        tiers = ["MEGA_MARKET", "LARGE_MARKET", "MID_MARKET", "SMALL_MARKET"]
+        for idx, team in enumerate(sortedTeams):
+            tierIdx = min(idx // chunk, 3)
+            team.fundingTier = tiers[tierIdx]
+            team.fundingTierRank = tierIdx + 1
+        logger.info(
+            "DEV_SPREAD_TIERS active — overrode fundingTier on "
+            f"{n} teams: 4 tiers × {chunk} teams each (deterministic by team.id)"
+        )
 
     def _getPickemWeek(self) -> int:
         """Return the effective week number for pick-em storage.

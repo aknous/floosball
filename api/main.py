@@ -1631,7 +1631,7 @@ async def get_stat_leaders(
     response: Response,
     category: str = Query(default="fantasy_points"),
     position: str = Query(default="ALL"),
-    limit: int = Query(default=10, ge=1, le=50),
+    limit: int = Query(default=10, ge=1, le=300),
 ):
     """Get statistical leaders filtered by position and category"""
     response.headers["Cache-Control"] = "public, max-age=120"
@@ -3106,14 +3106,22 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
             User.last_login_at < fourteenDaysAgo,
         ).scalar()
 
-        # Daily active users (last 28 days)
-        twentyEightDaysAgo = now - timedelta(days=28)
+        # Daily active users (last 28 days). Driven by UserLoginDay so the
+        # historical numbers stay stable — last_login_at-based queries
+        # silently shrunk past-day counts every time a returning user
+        # logged in again (their date moved forward, leaving older days
+        # with a smaller "users whose most recent login was that day"
+        # count). UserLoginDay records every distinct (user, calendar
+        # date) login, so DAU counts only grow as more users return on
+        # any given day.
+        from database.models import UserLoginDay
+        twentyEightDaysAgo = (now - timedelta(days=28)).date()
         dailyActiveRows = session.query(
-            func.date(User.last_login_at),
-            func.count(User.id),
+            UserLoginDay.login_date,
+            func.count(func.distinct(UserLoginDay.user_id)),
         ).filter(
-            User.last_login_at >= twentyEightDaysAgo,
-        ).group_by(func.date(User.last_login_at)).order_by(func.date(User.last_login_at)).all()
+            UserLoginDay.login_date >= twentyEightDaysAgo,
+        ).group_by(UserLoginDay.login_date).order_by(UserLoginDay.login_date).all()
         dailyActiveUsers = [{"date": str(d), "count": c} for d, c in dailyActiveRows if d]
 
         # Onboarding funnel
@@ -4448,9 +4456,12 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
         if roster is None:
             return build_success_response({"roster": None, "season": displaySeason, "hasFlexSlot": hasFlexSlot})
 
-        # If roster already has a FLEX player, ensure hasFlexSlot stays true
-        if not hasFlexSlot and any(rp.slot == "FLEX" for rp in roster.players):
-            hasFlexSlot = True
+        # Note: hasFlexSlot reflects only the user's current entitlement
+        # (active temp_flex powerup OR equipped Champion card). A stale FLEX
+        # rosterPlayer left behind from an expired powerup does NOT keep
+        # hasFlexSlot true — the seasonManager sweeps those at week start so
+        # this should rarely matter, but the swap endpoint also re-validates
+        # before any add/swap action.
 
         rosterPlayers = []
         for rp in roster.players:
@@ -4690,7 +4701,9 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
 def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
     """Lock the user's fantasy roster for the current season."""
     from database.connection import get_session
-    from database.models import FantasyRoster, FantasyRosterPlayer
+    from database.models import (
+        FantasyRoster, FantasyRosterPlayer, EquippedCard, UserCard, CardTemplate,
+    )
 
     currentSeasonNum = _getCurrentSeasonNumber()
     if currentSeasonNum is None:
@@ -4726,6 +4739,36 @@ def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
 
         roster.is_locked = True
         roster.locked_at = datetime.utcnow()
+
+        # Retroactively grant All-Pro swap bonuses for any equipped AP cards.
+        # The equip endpoint only grants when the roster is already locked, so
+        # equipping before locking — the natural flow when a user fills slots
+        # then equips cards, then locks — silently skipped the grant. Replay
+        # it here so the swap_bonus_active flag and last_swap_grant_cycle
+        # markers reflect reality.
+        sm = floosball_app.seasonManager
+        currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
+        if currentWeek > 0:
+            swapCycle = (currentWeek - 1) // 7 + 1
+            equippedAP = (
+                session.query(EquippedCard, UserCard, CardTemplate)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(
+                    EquippedCard.user_id == user.id,
+                    EquippedCard.season == currentSeasonNum,
+                    EquippedCard.week == currentWeek,
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("all_pro"),
+                )
+                .all()
+            )
+            for eqCard, uc, _tmpl in equippedAP:
+                if uc.last_swap_grant_cycle < swapCycle:
+                    roster.swaps_available += 1
+                    uc.last_swap_grant_cycle = swapCycle
+                    eqCard.swap_bonus_active = True
+
         session.commit()
         return build_success_response({"message": "Roster locked", "lockedAt": roster.locked_at.isoformat() + 'Z'})
     except HTTPException:
@@ -4909,10 +4952,24 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         rosterPlayer.player_id = req.newPlayerId
         rosterPlayer.points_at_lock = float(newPlayerSeasonFP)
 
-        # Consume purchased swaps first, then organic
+        # Consume purchased swaps first, then organic.
+        # When consuming from swaps_available, mark one equipped All-Pro card's
+        # grant as used (swap_bonus_active=False). Without this, the card's
+        # grant looks "still active" — letting users equip an All-Pro card,
+        # use the granted swap, unequip the card (which would otherwise refund
+        # because swap_bonus_active was True), and re-equip later for another
+        # grant. Marking the grant as used keeps last_swap_grant_cycle pinned
+        # at the current cycle on the UserCard, preventing re-grant.
         if roster.purchased_swaps > 0:
             roster.purchased_swaps -= 1
         else:
+            from database.models import EquippedCard
+            cardGrantRow = session.query(EquippedCard).filter_by(
+                user_id=user.id, season=currentSeasonNum, week=currentWeek,
+                swap_bonus_active=True,
+            ).first()
+            if cardGrantRow:
+                cardGrantRow.swap_bonus_active = False
             roster.swaps_available -= 1
         session.commit()
 
@@ -5631,6 +5688,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     continue
                 # Carry forward existing streak count — actual increment happens at week end
                 prevStreak = getattr(prev, 'streak_count', 1) or 1
+                # Carry forward the All-Pro swap-bonus flag too. Without this,
+                # a card that granted a swap last week looks like a fresh equip
+                # this week, and unequipping it skips the refund — letting users
+                # accumulate swaps by equip/unequip cycles.
+                prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
                 equippedRepo.save(EquippedCard(
                     user_id=user.id,
                     season=currentSeason,
@@ -5639,6 +5701,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     user_card_id=prev.user_card_id,
                     locked=gamesActive,
                     streak_count=prevStreak,
+                    swap_bonus_active=prevSwapBonus,
                 ))
             session.commit()
             equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
@@ -5655,6 +5718,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         for eq in equipped:
             cardData = cardManager.serializeCard(eq.user_card, currentSeason)
             template = eq.user_card.card_template
+            # All-Pro cards carry a swap-grant state per equipped instance:
+            # True = grant unused (refundable on unequip), False = grant used.
+            # Non-All-Pro cards return None (UI shows the badge normally).
+            isAllPro = bool(template.classification and "all_pro" in template.classification)
+            swapBonusActive = bool(getattr(eq, 'swap_bonus_active', False)) if isAllPro else None
             result.append({
                 "slotNumber": eq.slot_number,
                 "card": cardData,
@@ -5664,6 +5732,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 "streakCount": getattr(eq, 'streak_count', 1) or 1,
                 "cardTeamId": template.team_id,
                 "templatePosition": template.position,
+                "swapBonusActive": swapBonusActive,
             })
 
         # Check if user qualifies for 6th slot: MVP card equipped OR active temp_card_slot power-up
@@ -5841,14 +5910,20 @@ def setEquippedCards(
                 if template.classification and "all_pro" in template.classification:
                     newAllProIds.add(c.userCardId)
 
-            # Cards being unequipped (were equipped, now aren't)
+            # Cards being unequipped (were equipped with their grant unused —
+            # prevAllProIds is filtered on swap_bonus_active=True, so a card
+            # whose grant was already consumed via a swap won't be in this
+            # set and won't be refunded here).
             unequippedAllPro = prevAllProIds - newAllProIds
             for ucId in unequippedAllPro:
                 uc = cardUserCards.get(ucId) or session.get(UserCard, ucId)
                 if uc and roster.swaps_available > 0:
                     roster.swaps_available -= 1
+                    # Reset the cycle marker so re-equipping later in the same
+                    # cycle re-grants. (If the swap had been used we'd never
+                    # reach this branch — the card's swap_bonus_active would
+                    # already be False, excluding it from prevAllProIds.)
                     uc.last_swap_grant_cycle = 0
-                # If swap was used (swaps_available == 0), keep exhaustion
 
             # Cards being newly equipped
             freshAllPro = newAllProIds - prevAllProIds
@@ -6491,7 +6566,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             # If games are running, the current partial week can't actually be
             # used (rosters/cards locked), so defer the effective start to next
             # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6511,7 +6590,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             # If games are running, the current partial week can't actually be
             # used (rosters/cards locked), so defer the effective start to next
             # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6528,7 +6611,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 3)
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6548,7 +6635,11 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             # If games are running, the current partial week can't actually be
             # used (rosters/cards locked), so defer the effective start to next
             # week. Otherwise start this week.
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            # Defer start to next week only if games have actually started.
+            # bool(activeGames) was returning True for merely-Scheduled games
+            # at week setup, deferring purchases that should activate this
+            # week. _areGamesStarted() requires Active/Final status.
+            gamesRunning = _areGamesStarted()
             effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
@@ -6705,7 +6796,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Income boost (Endowment) — raises weekly FP floobit cap
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            gamesRunning = _areGamesStarted()
             weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
             from constants import POWERUP_INCOME_BOOST, WEEKLY_FP_FLOOBIT_CAP
             active.append({
@@ -6721,7 +6812,7 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Fortune's Favor (Patronage) — boosts chance card trigger rates
         activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
         if activeFavor:
-            gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None))
+            gamesRunning = _areGamesStarted()
             weeksRemaining = activeFavor.expires_at_week - currentWeek + (0 if gamesRunning else 1)
             active.append({
                 "slug": "fortunes_favor",
@@ -6783,7 +6874,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
     from database.models import User, Player, Coach
     from constants import (
         GM_VOTE_TYPES, GM_VOTE_COST, GM_VOTES_PER_SEASON,
-        GM_VOTES_PER_TYPE, GM_VOTES_PER_TARGET,
+        GM_VOTES_PER_TYPE, GM_VOTES_PER_TYPE_DEFAULT, GM_VOTES_PER_TARGET,
     )
     from managers.gmManager import GmManager
 
@@ -6832,11 +6923,31 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
 
         if counts["total"] >= GM_VOTES_PER_SEASON:
             raise HTTPException(400, f"Season vote limit reached ({GM_VOTES_PER_SEASON})")
-        if counts["perType"].get(req.voteType, 0) >= GM_VOTES_PER_TYPE:
-            raise HTTPException(400, f"Vote type limit reached ({GM_VOTES_PER_TYPE} per type)")
+        perTypeCap = GM_VOTES_PER_TYPE.get(req.voteType, GM_VOTES_PER_TYPE_DEFAULT)
+        if counts["perType"].get(req.voteType, 0) >= perTypeCap:
+            raise HTTPException(400, f"Vote type limit reached ({perTypeCap} per type)")
         targetKey = f"{req.voteType}:{req.targetPlayerId or 'none'}"
         if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
             raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
+
+        # If a threshold-based directive (fire/resign/cut) has already cleared
+        # its bar, it's guaranteed to pass at resolution — no need to keep
+        # spending floobits on it. Hire_coach is plurality so additional
+        # votes always matter (they can shift the leader).
+        if req.voteType in ("fire_coach", "resign_player", "cut_player"):
+            existingTallies = voteRepo.getVoteTallies(teamId, currentSeason)
+            existingCount = next(
+                (t["votes"] for t in existingTallies
+                 if t["voteType"] == req.voteType
+                 and t["targetPlayerId"] == req.targetPlayerId),
+                0,
+            )
+            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
+            if existingCount >= max(1, teamFanCount):
+                raise HTTPException(
+                    400,
+                    "Directive already meets the threshold to pass — no further votes needed",
+                )
 
         # Escalating cost: base * 2^(votes already cast for this specific target)
         baseCost = GM_VOTE_COST[req.voteType]
@@ -6886,8 +6997,26 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             {"votes": 1}
         )
         gm = GmManager(session)
-        threshold = gm.calculateThreshold(engagedFans, req.voteType)
-        probability = gm.calculateProbability(targetTally["votes"], threshold)
+        if req.voteType == "hire_coach":
+            hireVoteCounts = [
+                t["votes"] for t in tallies
+                if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
+            ]
+            hireLeaderVotes = max(hireVoteCounts) if hireVoteCounts else 0
+            hireLeaderCount = (
+                sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
+                if hireLeaderVotes > 0 else 0
+            )
+            threshold, probability = gm.hireCoachDisplay(
+                targetTally["votes"], hireLeaderVotes, hireLeaderCount
+            )
+        elif req.voteType == "sign_fa":
+            threshold = gm.calculateBallotThreshold(engagedFans)
+            probability = gm.calculateProbability(targetTally["votes"], threshold)
+        else:
+            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
+            threshold = gm.calculateThreshold(teamFanCount)
+            probability = gm.calculateProbability(targetTally["votes"], threshold)
 
         return build_success_response({
             "voteId": vote.id,
@@ -6927,10 +7056,36 @@ def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
 
         # Enrich with threshold/probability
         gm = GmManager(session)
+        # Hire-coach is plurality-wins. Display threshold + probability so
+        # the meter shows: sole leader at 100% ("Will pass"), tied leaders
+        # at <100% (no "Will pass" until tie breaks), trailing at fraction
+        # of leader. Tie detection lives in hireCoachDisplay.
+        hireVoteCounts = [
+            t["votes"] for t in tallies
+            if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
+        ]
+        hireLeaderVotes = max(hireVoteCounts) if hireVoteCounts else 0
+        hireLeaderCount = (
+            sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
+            if hireLeaderVotes > 0 else 0
+        )
+        # Threshold for fire/resign/cut: votes must meet or exceed the
+        # team's active fan count (favorite_team_id == teamId AND logged
+        # in this season).
+        teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
+        majorityThreshold = gm.calculateThreshold(teamFanCount)
         enriched = []
         for t in tallies:
-            threshold = gm.calculateThreshold(engagedFans, t["voteType"])
-            probability = gm.calculateProbability(t["votes"], threshold)
+            if t["voteType"] == "hire_coach":
+                threshold, probability = gm.hireCoachDisplay(
+                    t["votes"], hireLeaderVotes, hireLeaderCount
+                )
+            elif t["voteType"] == "sign_fa":
+                threshold = gm.calculateBallotThreshold(engagedFans)
+                probability = gm.calculateProbability(t["votes"], threshold)
+            else:
+                threshold = majorityThreshold
+                probability = gm.calculateProbability(t["votes"], threshold)
             enriched.append({
                 **t,
                 "threshold": threshold,
@@ -8756,7 +8911,7 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             if durationWeeks:
                 # Defer start to next week if games are live (current week can't
                 # be used). Active through the last week of the duration.
-                gamesRunning = bool(getattr(sm.currentSeason, 'activeGames', None)) if sm and sm.currentSeason else False
+                gamesRunning = _areGamesStarted()
                 effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
                 expiresAtWeek = effectiveStartWeek + durationWeeks - 1
                 purchaseWeek = effectiveStartWeek

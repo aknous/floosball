@@ -59,6 +59,7 @@ def init_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    _seedUnusedNames()
     logger.info(f"Database initialized at {DB_PATH}")
 
 
@@ -71,6 +72,10 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # GM threshold snapshot: per-team active fan count frozen at
+            # the front-office open (week 22) so post-week-22 logins
+            # don't inflate the threshold mid-vote.
+            ('front_office_fan_snapshot', 'TEXT'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE seasons ADD COLUMN {col} {colDef}"))
@@ -1050,8 +1055,11 @@ def clear_db():
     # Tables to preserve across fresh starts. app_settings holds
     # admin-editable runtime config (feedback URL, survey toggles, etc.) —
     # those are operator settings, not season data, and should survive
-    # a DB wipe.
-    preserveTables = {"users", "beta_allowlist", "app_settings"}
+    # a DB wipe. unused_names holds the player/coach name pool, which
+    # admins can add to from the dashboard; that curation should not be
+    # wiped by a fresh start. New names from config.json are merged in
+    # on every boot via _seedUnusedNames().
+    preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names"}
 
     # Drop all non-preserved tables (reverse dependency order), then recreate
     tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
@@ -1068,6 +1076,7 @@ def clear_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    _seedUnusedNames()
 
 
 def _seedPackTypes():
@@ -1410,6 +1419,41 @@ def _seedBetaAllowlist():
         session.commit()
     except Exception:
         session.rollback()
+    finally:
+        session.close()
+
+
+def _seedUnusedNames():
+    """Merge player/coach names from config.json into the unused_names table.
+
+    Idempotent — only inserts names that aren't already in the table. Runs on
+    every startup so new names added to config.json get picked up without
+    wiping admin-curated additions. The unused_names table is preserved
+    across fresh starts (see clear_db()), so admin-added names survive.
+    """
+    from database.models import UnusedName
+    try:
+        from config_manager import get_config
+        names = get_config().get("players", [])
+    except Exception:
+        return
+    if not names:
+        return
+    session = SessionLocal()
+    try:
+        existing = {row.name for row in session.query(UnusedName.name).all()}
+        added = 0
+        for name in names:
+            if name not in existing:
+                session.add(UnusedName(name=name))
+                existing.add(name)
+                added += 1
+        if added:
+            session.commit()
+            logger.info(f"Seeded {added} new names from config into unused_names pool")
+    except Exception as exc:
+        session.rollback()
+        logger.warning(f"Failed to seed unused_names: {exc}")
     finally:
         session.close()
 
