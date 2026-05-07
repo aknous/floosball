@@ -3266,26 +3266,6 @@ class Game:
             )
             self._accumulateDefenseStats(self.losingTeam)
 
-        # Streak pressure update — runs for ALL games (regular + playoff)
-        # so an undefeated team carries the spotlight from regular season
-        # through the playoffs. Independent of seasonTeamStats['streak']
-        # which is regular-season-only.
-        if self.winningTeam is not None and self.losingTeam is not None and self.winningTeam is not self.losingTeam:
-            try:
-                from constants import (
-                    STREAK_PRESSURE_FLOOR,
-                    STREAK_PRESSURE_PER_WIN,
-                    STREAK_PRESSURE_CAP,
-                )
-                self.winningTeam.currentWinStreak = getattr(self.winningTeam, 'currentWinStreak', 0) + 1
-                self.losingTeam.currentWinStreak = 0
-                for team in (self.winningTeam, self.losingTeam):
-                    streak = getattr(team, 'currentWinStreak', 0)
-                    over = max(0, streak - STREAK_PRESSURE_FLOOR)
-                    team.streakPressure = round(min(STREAK_PRESSURE_CAP, over * STREAK_PRESSURE_PER_WIN), 3)
-            except Exception:
-                pass
-
         self._calculateDefenseFantasyPoints(self.homeTeam)
         self._calculateDefenseFantasyPoints(self.awayTeam)
 
