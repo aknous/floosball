@@ -1208,16 +1208,25 @@ class TeamManager:
             coach.generateName()
         return coach
 
-    def _saveCoachToDatabase(self, team: FloosTeam.Team) -> None:
-        """Persist team.coach to the coaches table and update team.coach_id FK."""
-        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session and team.coach):
+    def _saveCoachToDatabase(self, team: FloosTeam.Team, session=None) -> None:
+        """Persist team.coach to the coaches table and update team.coach_id FK.
+
+        Optional `session` lets callers (e.g. the GM hire-coach resolution
+        flow) write through their own session so this save shares one
+        connection with the surrounding resolution. Without that, two
+        connections fight for SQLite's write lock and the auto-pick
+        fallback path hits "database is locked" while gmManager still
+        holds its session.
+        """
+        targetSession = session if session is not None else self.db_session
+        if not (DATABASE_AVAILABLE and USE_DATABASE and targetSession and team.coach):
             return
         try:
             from database.models import Coach as DBCoach
-            dbCoach = self.db_session.get(DBCoach, team.coach.id) if team.coach.id else None
+            dbCoach = targetSession.get(DBCoach, team.coach.id) if team.coach.id else None
             if dbCoach is None:
                 dbCoach = DBCoach(team_id=team.id)
-                self.db_session.add(dbCoach)
+                targetSession.add(dbCoach)
             dbCoach.name = team.coach.name
             dbCoach.team_id = team.id
             dbCoach.seasons_coached = team.coach.seasonsCoached
@@ -1230,16 +1239,26 @@ class TeamManager:
             dbCoach.scouting = getattr(team.coach, 'scouting', 80)
             dbCoach.attitude = getattr(team.coach, 'attitude', 80)
             dbCoach.overall_rating = team.coach.overallRating
-            self.db_session.flush()
+            targetSession.flush()
             team.coach.id = dbCoach.id
-            # Link team → coach via coach_id FK
-            dbTeam = self.team_repo.get_by_id(team.id)
+            # Link team → coach via coach_id FK. Re-resolve via the same
+            # session as the rest of this write so the FK update lands on
+            # the same transaction.
+            from database.models import Team as DBTeam
+            dbTeam = targetSession.get(DBTeam, team.id)
             if dbTeam:
                 dbTeam.coach_id = dbCoach.id
-            self.db_session.commit()
+            # Only commit when we own the session. When a caller passes in
+            # their own session they're responsible for the commit/rollback
+            # lifecycle so we don't trip nested-transaction errors.
+            if session is None:
+                targetSession.commit()
         except Exception as e:
             self.logger.error(f"Failed to save coach for {team.name}: {e}")
-            self.db_session.rollback()
+            if session is None:
+                targetSession.rollback()
+            else:
+                raise
 
     def _loadCoachFromDatabase(self, team: FloosTeam.Team) -> bool:
         """Try to load a coach from DB for this team. Returns True if found and loaded."""
@@ -1290,16 +1309,20 @@ class TeamManager:
                     self._saveCoachToDatabase(team)
                     self.logger.debug(f"Generated and saved coach {team.coach.name} for {team.name}")
 
-    def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach) -> None:
+    def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach, session=None) -> None:
         """Assign a specific coach to a team and persist the assignment.
 
         Without _saveCoachToDatabase, the new coach exists only in memory —
         the GM hire-coach fallback path (no vote met threshold → auto-generate
         a coach) leaves the team coachless on the next restart, since
         _loadCoachFromDatabase finds no Coach row tied to team_id.
+
+        Optional `session` is forwarded to _saveCoachToDatabase so callers
+        like the GM resolution flow can keep all writes on one connection
+        and avoid SQLite write-lock contention.
         """
         team.coach = coach
-        self._saveCoachToDatabase(team)
+        self._saveCoachToDatabase(team, session=session)
 
     def fireCoach(self, team: FloosTeam.Team, session=None) -> None:
         """Remove a team's coach (leaves them coachless until next hire).
