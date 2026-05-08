@@ -712,17 +712,71 @@ class PlayerManager:
                     self.activePlayers.append(player)
                     self.addToPositionList(player)
     
+    def isNameInUse(self, name: str) -> bool:
+        """True if `name` is already attached to an active player or any
+        Coach row (assigned or pool). Used by name-pool readers to skip
+        polluted entries — defensive guard against the same name showing
+        up on a player after living simultaneously in unused_names.
+        """
+        # In-memory active player check is the cheapest path.
+        for p in self.activePlayers:
+            if getattr(p, 'name', None) == name:
+                return True
+        # Coach check: scan rostered coaches (in-memory on Team objects)
+        # AND the unassigned pool (DB) so we catch both cases.
+        teamMgr = None
+        try:
+            teamMgr = self.serviceContainer.getService('team_manager')
+        except Exception:
+            pass
+        if teamMgr:
+            for team in getattr(teamMgr, 'teams', []):
+                coach = getattr(team, 'coach', None)
+                if coach and getattr(coach, 'name', None) == name:
+                    return True
+        if DATABASE_AVAILABLE and USE_DATABASE and self.db_session is not None:
+            try:
+                from database.models import Coach as DBCoach
+                if self.db_session.query(DBCoach).filter(DBCoach.name == name).first():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def popUniqueName(self) -> Optional[str]:
+        """Pop a name from unusedNames, skipping any already attached to a
+        live player or coach. Polluted names are dropped from the pool
+        rather than put back — they're not actually 'unused', and leaving
+        them in would just defer the same collision to a later draw.
+        Returns None when the pool is empty.
+        """
+        from random import randint
+        skipped: List[str] = []
+        try:
+            while self.unusedNames:
+                idx = randint(0, len(self.unusedNames) - 1)
+                candidate = self.unusedNames.pop(idx)
+                if not self.isNameInUse(candidate):
+                    return candidate
+                skipped.append(candidate)
+            return None
+        finally:
+            if skipped:
+                logger.warning(
+                    f"Name pool had {len(skipped)} polluted entr"
+                    f"{'y' if len(skipped) == 1 else 'ies'} dropped during draw: "
+                    f"{', '.join(repr(n) for n in skipped[:5])}"
+                    f"{'...' if len(skipped) > 5 else ''}"
+                )
+
     def createPlayer(self, position: FloosPlayer.Position, physicalSeed: int = None, mentalSeed: int = None) -> Optional[FloosPlayer.Player]:
         """Create a single player of specified position"""
         from random import randint
-        
-        if not self.unusedNames:
-            logger.warning("No more unused names available")
+
+        name = self.popUniqueName()
+        if name is None:
+            logger.warning("No usable unused names available")
             return None
-        
-        # Use same logic as original: pick random index and pop
-        nameIndex = randint(0, len(self.unusedNames) - 1)
-        name = self.unusedNames.pop(nameIndex)
         
         # Generate default seeds if not provided
         if physicalSeed is None:

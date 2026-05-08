@@ -5621,14 +5621,17 @@ class SeasonManager:
         logger.info(f"Generated {numOfPlayers} new players to replace retirees")
     
     def _getUnusedName(self) -> str:
-        """Get an unused name from the pool"""
+        """Get an unused name from the pool, skipping any already attached to
+        a live player or coach. Goes through playerManager.popUniqueName so
+        polluted entries get dropped instead of producing a duplicate.
+        Falls back to a numeric placeholder if the pool is exhausted.
+        """
         from random import randint
-        
-        if not self.playerManager.unusedNames:
+        name = self.playerManager.popUniqueName()
+        if name is None:
             logger.error("No unused names available!")
             return f"Player {randint(1000, 9999)}"
-        
-        return self.playerManager.unusedNames.pop(randint(0, len(self.playerManager.unusedNames) - 1))
+        return name
     
     async def _updateTeamRatings(self) -> None:
         """Update team ratings and defenses based on current rosters"""

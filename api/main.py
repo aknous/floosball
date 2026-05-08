@@ -1815,8 +1815,13 @@ def _checkAdminAuth(
 
 @app.post("/api/admin/names")
 async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
-    """Add names to the unused player name pool"""
+    """Add names to the unused player name pool.
 
+    Filters out names already in use by an active player or coach (and any
+    duplicates within the submitted batch) so unused_names can't shadow a
+    live entity. Returns the accepted count plus rejected lists so the
+    admin sees what was skipped and why.
+    """
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     names = payload.get("names", [])
@@ -1824,12 +1829,46 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
         raise HTTPException(status_code=400, detail="'names' must be a non-empty list of strings")
     if len(names) > 500:
         raise HTTPException(status_code=400, detail="Too many names; maximum 500 per request")
+
     pm = floosball_app.playerManager
-    pm.unusedNames.extend(names)
-    if getattr(pm, 'name_repo', None):
-        pm.name_repo.add_names_batch(names)
-        pm.db_session.commit()
-    return {"added": len(names), "total": len(pm.unusedNames)}
+
+    # Dedupe the submitted batch first (preserves order)
+    seen: set = set()
+    deduped: list = []
+    duplicatesInBatch: list = []
+    for n in names:
+        if not isinstance(n, str):
+            continue
+        n = n.strip()
+        if not n:
+            continue
+        if n in seen:
+            duplicatesInBatch.append(n)
+            continue
+        seen.add(n)
+        deduped.append(n)
+
+    # Reject anything already attached to a live player or coach.
+    rejectedInUse: list = []
+    accepted: list = []
+    for n in deduped:
+        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(n):
+            rejectedInUse.append(n)
+        else:
+            accepted.append(n)
+
+    if accepted:
+        pm.unusedNames.extend(accepted)
+        if getattr(pm, 'name_repo', None):
+            pm.name_repo.add_names_batch(accepted)
+            pm.db_session.commit()
+
+    return {
+        "added": len(accepted),
+        "total": len(pm.unusedNames),
+        "rejectedInUse": rejectedInUse,
+        "duplicatesInBatch": duplicatesInBatch,
+    }
 
 
 @app.get("/api/app-settings")

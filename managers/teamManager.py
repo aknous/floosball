@@ -1227,20 +1227,39 @@ class TeamManager:
     # -------------------------------------------------------------------------
 
     def generateCoach(self, seed: int = None) -> FloosCoach.Coach:
-        """Create a new Coach with generated attributes and a unique name from the pool."""
+        """Create a new Coach with generated attributes and a unique name from the pool.
+
+        Prefers playerManager.popUniqueName when available so any name
+        already attached to a live player or coach is dropped from the
+        pool rather than handed to the new coach. Defensive against the
+        kind of pollution that produced coach/player and player/player
+        collisions in past seasons.
+        """
         coach = FloosCoach.Coach()
         coach.generateAttributes(seed=seed)
-        pool = self._liveCoachPool()
-        if pool:
-            name = _random.choice(pool)
-            pool.remove(name)
-            coach.name = name
-            # Persist removal so restarts don't reassign this name to a player.
-            # We mutated playerManager.unusedNames directly via the live ref,
-            # so saveUnusedNames writes the now-shorter list.
-            playerMgr = getattr(self.serviceContainer, 'playerManager', None)
-            if playerMgr:
+        playerMgr = None
+        try:
+            playerMgr = self.serviceContainer.getService('player_manager')
+        except Exception:
+            pass
+
+        name = None
+        if playerMgr and hasattr(playerMgr, 'popUniqueName'):
+            name = playerMgr.popUniqueName()
+            if name is not None:
                 playerMgr.saveUnusedNames()
+        else:
+            # Fallback: legacy path against the local pool. Still mutates
+            # the live unusedNames via _liveCoachPool when present.
+            pool = self._liveCoachPool()
+            if pool:
+                name = _random.choice(pool)
+                pool.remove(name)
+                if playerMgr and hasattr(playerMgr, 'saveUnusedNames'):
+                    playerMgr.saveUnusedNames()
+
+        if name is not None:
+            coach.name = name
         else:
             coach.generateName()
         return coach
