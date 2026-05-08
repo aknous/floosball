@@ -1,17 +1,21 @@
-"""Fix coach/player name collisions caused by the stale _coachNamePool
-reference bug.
+"""Fix coach/player AND player/player name collisions.
 
 Resolution rules:
-  1. Coach is unhired (in POOL, team_id IS NULL) → rename the COACH
-     (no game-history attribution to disturb).
-  2. Coach is on a team AND player is a free agent → rename the PLAYER
-     (preserve coach identity that fans may have voted on / hired).
-  3. Both coach and player are on a team → SKIP (leave for manual review).
+  Coach + player collisions:
+    1. Coach is unhired (POOL, team_id IS NULL) → rename the COACH.
+       Clears any number of player collisions sharing the coach name.
+    2. Coach on a team AND player is a free agent → rename the PLAYER.
+       Preserves coach identity that fans may have voted on or hired.
+    3. Both coach and player are rostered → SKIP for manual review.
 
-Renames pull a fresh name from unused_names, delete that row, and
-update the entity's .name in one transaction. Old (collided) name is
-NOT returned to the pool — at least one of the duplicates still uses
-it, so it's not "unused".
+  Player + player duplicates (multiple Player rows with same .name):
+    4. ≥1 rostered + ≥1 FA → rename every FA among the duplicates.
+    5. 0 rostered + ≥2 FA → keep one FA, rename the rest.
+    6. ≥2 rostered → SKIP for manual review.
+
+Renames pull a fresh name from unused_names and delete that row in
+one transaction. Old (collided) name is NOT returned to the pool —
+at least one entity still uses it.
 
 Dry-run by default — prints proposed changes. Pass --apply to commit.
 
@@ -31,6 +35,34 @@ from database.connection import get_session
 from database.models import Coach, Player, UnusedName
 
 
+def _resolvePlayerDupes(name, playerList, takeName, playerRenames, skipped):
+    """Apply rules 4-6 for a set of Player rows sharing a name.
+    Mutates playerRenames / skipped in place.
+    """
+    rostered = [p for p in playerList if p.team_id is not None]
+    fas = [p for p in playerList if p.team_id is None]
+    # Rule 4: ≥1 rostered + ≥1 FA → rename every FA, leave the rostered alone.
+    if rostered and fas:
+        for p in fas:
+            newName = takeName(f"FA player rename {p.name!r}")
+            if newName is None:
+                return
+            playerRenames.append((p, p.name, newName, "FA vs rostered"))
+        return
+    # Rule 5: 0 rostered + ≥2 FA → keep one, rename the rest.
+    if not rostered and len(fas) >= 2:
+        keeper = fas[0]
+        for p in fas[1:]:
+            newName = takeName(f"FA player rename {p.name!r}")
+            if newName is None:
+                return
+            playerRenames.append((p, p.name, newName, "FA-only dupe"))
+        return
+    # Rule 6: ≥2 rostered → skip.
+    if len(rostered) >= 2:
+        skipped.append((name, "player+player", [], playerList))
+
+
 def main(apply: bool) -> None:
     session = get_session()
     try:
@@ -45,21 +77,29 @@ def main(apply: bool) -> None:
         for p in players:
             playerByName[p.name].append(p)
 
-        collidingNames = sorted(set(coachByName.keys()) & set(playerByName.keys()))
-        if not collidingNames:
-            print("No coach/player name collisions found.")
+        coachPlayerCollisions = sorted(set(coachByName.keys()) & set(playerByName.keys()))
+        playerOnlyDupes = sorted(
+            n for n, plist in playerByName.items()
+            if len(plist) > 1 and n not in coachByName
+        )
+        if not coachPlayerCollisions and not playerOnlyDupes:
+            print("No name collisions found.")
             return
 
         unusedByName: dict = {r.name: r for r in unusedRows}
-        # Defensive guard: skip names that are themselves coach names so we
-        # don't pick a name that's already known-collided.
+        # Defensive guard: skip names that are themselves coach OR
+        # duplicated player names so we don't pick a known-collided name.
         coachNames = set(coachByName.keys())
-        availablePool = [name for name in unusedByName.keys() if name not in coachNames]
+        dupePlayerNames = {n for n, plist in playerByName.items() if len(plist) > 1}
+        availablePool = [
+            name for name in unusedByName.keys()
+            if name not in coachNames and name not in dupePlayerNames
+        ]
         random.shuffle(availablePool)
 
         coachRenames: list = []   # (Coach, oldName, newName)
-        playerRenames: list = []  # (Player, oldName, newName)
-        skipped: list = []        # (name, coachList, playerList) — both on teams
+        playerRenames: list = []  # (Player, oldName, newName, reason)
+        skipped: list = []        # (name, kind, coachList, playerList)
         consumed: list = []       # UnusedName rows to delete
 
         def takeName(reasonLabel: str) -> str | None:
@@ -70,7 +110,8 @@ def main(apply: bool) -> None:
             consumed.append(unusedByName[name])
             return name
 
-        for name in collidingNames:
+        # ── Coach / player collisions ────────────────────────────────
+        for name in coachPlayerCollisions:
             coachList = list(coachByName[name])
             playerList = list(playerByName[name])
 
@@ -83,8 +124,12 @@ def main(apply: bool) -> None:
                     if newName is None:
                         return
                     coachRenames.append((coach, coach.name, newName))
-                # Pool-coach rename also resolves any team-coach collision
-                # under the same name, so we're done with this name. Move on.
+                # If players ALSO duplicate among themselves under this name
+                # (mix of rostered + FA), still need rule 4/5 to handle that
+                # second tier of dupes — fall through after the coach rename
+                # via the player-only path below.
+                if len(playerList) > 1:
+                    _resolvePlayerDupes(name, playerList, takeName, playerRenames, skipped)
                 continue
 
             # Rule 2: coach on team + player is FA → rename the FA.
@@ -95,13 +140,20 @@ def main(apply: bool) -> None:
                     newName = takeName(f"player rename {player.name!r}")
                     if newName is None:
                         return
-                    playerRenames.append((player, player.name, newName))
+                    playerRenames.append((player, player.name, newName, "coach+FA"))
                 continue
 
             # Rule 3: any rostered player AND no pool coach → leave it.
-            skipped.append((name, coachList, playerList))
+            skipped.append((name, "coach+player", coachList, playerList))
 
-        print(f"Found {len(collidingNames)} colliding names")
+        # ── Player / player duplicates (no coach involvement) ────────
+        for name in playerOnlyDupes:
+            _resolvePlayerDupes(
+                name, list(playerByName[name]), takeName, playerRenames, skipped,
+            )
+
+        print(f"Found {len(coachPlayerCollisions)} coach+player collision(s) and "
+              f"{len(playerOnlyDupes)} player+player duplicate(s)")
         print(f"Available fresh names in pool: {len(availablePool) + len(consumed)}")
         if not apply:
             print("(dry run — pass --apply to commit changes)")
@@ -115,16 +167,20 @@ def main(apply: bool) -> None:
 
         if playerRenames:
             print(f"Player renames ({len(playerRenames)}):")
-            for player, oldName, newName in playerRenames:
-                print(f"  player(id={player.id}, FA, pos={player.position})  {oldName!r}  →  {newName!r}")
+            for player, oldName, newName, reason in playerRenames:
+                print(f"  player(id={player.id}, FA, pos={player.position}) [{reason}]  {oldName!r}  →  {newName!r}")
             print()
 
         if skipped:
-            print(f"Skipped ({len(skipped)} — both on teams, leave for manual review):")
-            for name, coachList, playerList in skipped:
-                cTeams = ", ".join(f"team_id={c.team_id}" for c in coachList)
-                pTeams = ", ".join(f"team_id={p.team_id}" for p in playerList)
-                print(f"  {name!r}: coach({cTeams})  +  player({pTeams})")
+            print(f"Skipped ({len(skipped)} — leave for manual review):")
+            for name, kind, coachList, playerList in skipped:
+                if kind == "coach+player":
+                    cTeams = ", ".join(f"team_id={c.team_id}" for c in coachList)
+                    pTeams = ", ".join(f"team_id={p.team_id}" for p in playerList)
+                    print(f"  {name!r} [{kind}]: coach({cTeams})  +  player({pTeams})")
+                else:
+                    pTeams = ", ".join(f"team_id={p.team_id}" for p in playerList)
+                    print(f"  {name!r} [{kind}]: player({pTeams})")
             print()
 
         if not apply:
@@ -132,7 +188,7 @@ def main(apply: bool) -> None:
 
         for coach, _old, newName in coachRenames:
             coach.name = newName
-        for player, _old, newName in playerRenames:
+        for player, _old, newName, _reason in playerRenames:
             player.name = newName
         for row in consumed:
             session.delete(row)
