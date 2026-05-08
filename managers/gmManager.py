@@ -261,9 +261,14 @@ class GmManager:
                 })
 
             if not hired:
-                # No votes at all OR every vote target was unavailable — auto-pick
+                # No votes at all OR every vote target was unavailable — auto-pick.
+                # Pass session=self.session so the new-coach insert + team
+                # coach_id FK update share this resolution's connection. Without
+                # it, _saveCoachToDatabase opens a second connection and
+                # deadlocks with our session, sitting ~30s on the SQLite write
+                # lock before failing "database is locked".
                 newCoach = teamManager.generateCoach()
-                teamManager.hireCoach(team, newCoach)
+                teamManager.hireCoach(team, newCoach, session=self.session)
                 reason = "no hire_coach votes" if not votesByTarget else "all candidates unavailable"
                 logger.info(
                     f"GM: {team.name} auto-hired {newCoach.name} ({reason})"
