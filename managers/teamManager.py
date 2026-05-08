@@ -49,7 +49,28 @@ class TeamManager:
         else:
             self.logger.info("TeamManager using JSON file storage")
 
+        # Fallback name pool, used only when playerManager.unusedNames isn't
+        # available. The primary path now looks up the live unusedNames each
+        # call (via _liveCoachPool) so that mutations always land on the
+        # actual list, not a stale reference left over from before
+        # playerManager re-assigned its unusedNames.
         self._coachNamePool: List[str] = []
+
+    def _liveCoachPool(self) -> Optional[List[str]]:
+        """Return the live unusedNames list from playerManager, or fall
+        back to the local seed pool. Crucially, this re-resolves the
+        list on every call — playerManager.loadNameLists reassigns
+        self.unusedNames to a new list (DB / JSON paths both do this),
+        so caching the reference once at generateTeams time made coach
+        name removals land on a dead list and the same name showed up
+        on a player generated later in the session.
+        """
+        playerMgr = getattr(self.serviceContainer, 'playerManager', None)
+        if playerMgr is not None:
+            live = getattr(playerMgr, 'unusedNames', None)
+            if isinstance(live, list):
+                return live
+        return self._coachNamePool if self._coachNamePool else None
 
     def generateTeams(self, config: Dict[str, Any]) -> None:
         """
@@ -57,14 +78,10 @@ class TeamManager:
         Replaces getTeams() function from floosball.py
         """
         self.teams.clear()
-        # Use names not yet assigned to players (playerManager depletes unusedNames first).
-        # Shared reference so removals here also remove from playerManager.unusedNames,
-        # preventing future players from getting a coach's name.
-        playerMgr = getattr(self.serviceContainer, 'playerManager', None)
-        if playerMgr and getattr(playerMgr, 'unusedNames', None):
-            self._coachNamePool = playerMgr.unusedNames
-        else:
-            self._coachNamePool = list(config.get('players', []))
+        # Seed the fallback pool from config — only consumed when playerManager
+        # isn't available. Live coach naming reads playerManager.unusedNames
+        # via _liveCoachPool so removals stay in sync.
+        self._coachNamePool = list(config.get('players', []))
 
         # Try database first if enabled
         if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
@@ -1213,11 +1230,14 @@ class TeamManager:
         """Create a new Coach with generated attributes and a unique name from the pool."""
         coach = FloosCoach.Coach()
         coach.generateAttributes(seed=seed)
-        if self._coachNamePool:
-            name = _random.choice(self._coachNamePool)
-            self._coachNamePool.remove(name)
+        pool = self._liveCoachPool()
+        if pool:
+            name = _random.choice(pool)
+            pool.remove(name)
             coach.name = name
-            # Persist removal so restarts don't reassign this name to a player
+            # Persist removal so restarts don't reassign this name to a player.
+            # We mutated playerManager.unusedNames directly via the live ref,
+            # so saveUnusedNames writes the now-shorter list.
             playerMgr = getattr(self.serviceContainer, 'playerManager', None)
             if playerMgr:
                 playerMgr.saveUnusedNames()
@@ -1308,9 +1328,17 @@ class TeamManager:
             coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
             coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
             team.coach = coach
-            # Remove coach name from unused pool so no future player gets it
-            if coach.name in self._coachNamePool:
-                self._coachNamePool.remove(coach.name)
+            # Remove coach name from the LIVE unused-names pool so no future
+            # player gets it. Goes through _liveCoachPool to read whatever
+            # list playerManager currently considers authoritative — caching
+            # the reference at generateTeams time was unsafe because
+            # loadNameLists reassigns it.
+            pool = self._liveCoachPool()
+            if pool and coach.name in pool:
+                pool.remove(coach.name)
+                playerMgr = getattr(self.serviceContainer, 'playerManager', None)
+                if playerMgr:
+                    playerMgr.saveUnusedNames()
             self.logger.debug(f"Loaded coach {coach.name} from DB for {team.name}")
             return True
         except Exception as e:
