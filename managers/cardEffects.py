@@ -924,14 +924,18 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"perTdFP": round((4 + rn * 0.15) * editionScale, 1)}
     # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
     if effectName == "crescendo":
-        # Position-specific tuning set at compute time; params store rarity-scaled values
-        return {"baseFP": round((1.0 + rn * 0.04) * editionScale, 1),
+        # Position-specific tuning set at compute time; params store rarity-scaled values.
+        # Base lifted to 4 (was 1) so a no-trigger week pays competitively with other
+        # prismatic chance floors (Babysitter / Martyr / Underdog at 5).
+        return {"baseFP": round((4.0 + rn * 0.06) * editionScale, 1),
                 "bonusFP": round((8.0 + rn * 0.3) * editionScale, 1),
                 "baseChance": 15, "chanceStep": 12,  # QB defaults; compute overrides per position
                 "isChanceEffect": True}
     # ── Yardage chance: Traverse (end-of-game roll scaled by yards)
     if effectName == "traverse":
-        return {"baseFP": round((0.5 + rn * 0.03) * editionScale, 1),
+        # Base lifted to 4 (was 0.5) so missed rolls aren't punishing — Traverse's appeal
+        # is its big jackpot, but a 0.5 floor felt like punishment for not hitting.
+        return {"baseFP": round((4.0 + rn * 0.06) * editionScale, 1),
                 "bonusFP": round((15.0 + rn * 0.5) * editionScale, 1),
                 "baseChance": 2, "chancePerStep": 5, "yardStep": 50, "yardType": "passing",
                 "isChanceEffect": True}
@@ -946,8 +950,10 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"floobitsPerFP": floobitsPerFP, "maxFP": maxFP}
     # ── Strategy-Warping: Alchemy (FG → TD upgrade)
     if effectName == "alchemy":
-        # Bonus FP per FG = TD FP value (6) minus FG FP value (~3) = ~3 base
-        return {"perFgBonusFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+        # Diamond-tier card. Bumped from 3 to 6 base so a 3-FG game pays ~24 FP
+        # rather than ~14, putting Alchemy in line with other diamond outputs
+        # while preserving the FG → TD secondary-effect combo upside.
+        return {"perFgBonusFP": round((6.0 + rn * 0.20) * editionScale, 1)}
     # ── Strategy-Warping: Consolation (base FP + loss bonus)
     # ── Strategy-Warping: Overtime (Q4 FP multiplier)
     if effectName == "closer":
