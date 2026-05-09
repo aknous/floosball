@@ -93,6 +93,7 @@ _AMPLIFIER_DEPENDS = {
     "catalyst":      lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "advantage":     lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "cascade":       lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "mult"),
+    "conductor":     lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "fp"),
 }
 
 
@@ -149,6 +150,9 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         return "Chance rolls twice" if active else "Needs chance card"
     if effectName == "cascade":
         return "Stacks with FPx cards" if active else "Needs FPx card"
+    if effectName == "conductor":
+        boost = primary.get("boostPct", 20)
+        return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"
     return ""
 
 
@@ -349,6 +353,27 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     streakWeeksSinceBreak = {
         eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0) for eq in equipped
     }
+    # Roster-trait card data (Castaway, Rookie Hype) — projection uses the
+    # same lookups as live calc so the pill reflects what they'll pay.
+    teamRecords = {}
+    if teamManager:
+        for team in teamManager.teams:
+            stats = getattr(team, 'seasonTeamStats', {}) or {}
+            wp = stats.get('winPerc')
+            if wp is None:
+                w = stats.get('wins', 0) or 0
+                l = stats.get('losses', 0) or 0
+                wp = w / (w + l) if (w + l) > 0 else 0.5
+            teamRecords[team.id] = float(wp)
+    rosterRookieFlags = {}
+    if playerManager:
+        for pid in rosterPlayerIds:
+            player = playerManager.getPlayerById(pid)
+            if player:
+                rosterRookieFlags[pid] = bool(
+                    getattr(player, 'is_rookie', False)
+                    or (getattr(player, 'seasonsPlayed', 99) or 99) == 0
+                )
 
     lastSwap = (session.query(FantasyRosterSwap.swap_week)
                 .filter_by(roster_id=roster.id)
@@ -412,6 +437,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         streakCounts=streakCounts,
         streakPeakOutputs=streakPeakOutputs,
         streakWeeksSinceBreak=streakWeeksSinceBreak,
+        _teamRecords=teamRecords,
+        _rosterRookieFlags=rosterRookieFlags,
         userFavoriteTeamId=favTeamId,
         favoriteTeamElo=favElo,
         leagueAverageElo=leagueAverageElo,

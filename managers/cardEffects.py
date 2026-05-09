@@ -81,6 +81,20 @@ EFFECT_CATEGORY = {
     "closer": "flat_fp", "dark_horse": "multiplier",
     "vagabond": "multiplier", "fat_cat": "flat_fp", "surplus": "floobits",
     "bonsai": "streak",
+    # ── New cards (FP/FPx rebalance, see card_balance_fp_vs_fpx memory) ──
+    # Hand-composition synergy
+    "anthem": "cross",          # threshold based on flat_fp card count in hand
+    "conductor": "cross",       # diamond amplifier, no own output
+    # Roster-trait flat_fp
+    "castaway": "flat_fp",      # roster has player from sub-.500 team
+    "sleeper": "flat_fp",       # chance card, odds scale with low-rated roster players
+    "patient": "flat_fp",       # per-week reward for keeping a low-rated slot
+    "rookie_hype": "flat_fp",   # per rookie on roster
+    "wanderer": "flat_fp",      # per unique team represented across roster
+    # Inverse streak (peak-decay shared with existing streaks)
+    "sandbagger": "streak",     # streak grows when a slot scores ≤5 FP
+    "quiet_storm": "streak",    # streak grows when no roster player ≥15 FP
+    "drought": "streak",        # streak grows when roster total <50 FP
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -147,6 +161,13 @@ EFFECT_EDITION_TIER = {
     "fortitude": "diamond",
     "full_roster": "diamond", "stacked_deck": "diamond",
     "double_down": "diamond",
+
+    # ── New cards (FP/FPx rebalance) ──
+    "patient": "holographic", "rookie_hype": "holographic",
+    "castaway": "holographic", "wanderer": "holographic",
+    "anthem": "prismatic", "sleeper": "prismatic",
+    "sandbagger": "prismatic", "quiet_storm": "prismatic", "drought": "prismatic",
+    "conductor": "diamond",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -294,6 +315,17 @@ EFFECT_DISPLAY_NAMES = {
     "fat_cat": "Fat Cat",
     "surplus": "Surplus",
     "bonsai": "Bonsai",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "Anthem",
+    "conductor": "Conductor",
+    "castaway": "Castaway",
+    "sleeper": "Sleeper",
+    "patient": "Patient",
+    "rookie_hype": "Rookie Hype",
+    "wanderer": "Wanderer",
+    "sandbagger": "Sandbagger",
+    "quiet_storm": "Quiet Storm",
+    "drought": "Drought",
 }
 
 # ─── Three-Tier Description System ───────────────────────────────────────────
@@ -430,6 +462,17 @@ EFFECT_TAGLINES = {
     # ── Chance Synergy Effects ──
     "advantage": "Double or nothing (minus the nothing)",
     "catalyst": "Points in, luck out",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "All together now",
+    "conductor": "Wave the baton",
+    "castaway": "Diamond in the basement",
+    "sleeper": "Rest easy",
+    "patient": "Time on the wood",
+    "rookie_hype": "Trust the kids",
+    "wanderer": "Spread thin",
+    "sandbagger": "Save it for later",
+    "quiet_storm": "Calm before the chaos",
+    "drought": "When even the rain dries up",
 }
 
 EFFECT_TOOLTIPS = {
@@ -550,6 +593,17 @@ EFFECT_TOOLTIPS = {
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
     "surplus": "Raise the ceiling. Increases the maximum Floobits you can earn per week while equipped.",
     "bonsai": "Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "Power in numbers. Flat FP that pops when your hand is heavy on flat-FP cards: 3 or more triggers a bonus, 4 raises it, 5 maxes it out.",
+    "conductor": "Orchestrates the rest of your hand. Every other flat-FP card you have equipped outputs more. Produces nothing on its own.",
+    "castaway": "Find the gem on a bad team and they pay you. Bonus FP when your roster includes any player whose team is below .500.",
+    "sleeper": "Diamond in the rough territory. Guaranteed FP floor plus a chance at enhanced FP. Odds rise the more low-rated players you keep on your roster.",
+    "patient": "Loyalty to the bench rewarded. Pays each week you keep a sub-3-star roster slot intact, with the bonus growing the longer you hold.",
+    "rookie_hype": "Believe in the new class. Bonus FP per rookie on your roster.",
+    "wanderer": "A bit of everywhere. Output scales with how many different teams your roster players come from. Max payout when no two share a team.",
+    "sandbagger": "Hold a weak slot, get paid. Streak grows each week one of your roster slots scores 5 FP or less. After a slot finally pops, the bonus carries over and fades over the next several weeks.",
+    "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP. After a big game finally lands, the bonus carries over and fades.",
+    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total. After a productive week finally arrives, the bonus carries over and fades.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -671,6 +725,17 @@ EFFECT_DETAIL_TEMPLATES = {
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
     "surplus": "Weekly Floobits cap raised by +{ceilingBonus} while equipped",
     "bonsai": "+{baseFP} FP base. Each week {triggerLabel} earn a chance to permanently grow by {growthFP} FP. Higher levels need bigger weeks to keep growing.",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "+{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5",
+    "conductor": "Boosts each other flat-FP card's output by +{boostPct}%",
+    "castaway": "+{rewardFP} FP when at least one roster player is on a sub-.500 team",
+    "sleeper": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Base 15% chance, +{chancePerLow}% per roster player rated below 3 stars",
+    "patient": "+{baseFP} FP per week a sub-3-star roster slot stays unchanged",
+    "rookie_hype": "+{perRookieFP} FP per rookie on your roster",
+    "wanderer": "+{perTeamFP} FP per unique team represented across your roster",
+    "sandbagger": "+{baseReward} FP, +{growthPerTick} per consecutive week any roster slot scored 5 FP or less. After the streak breaks, the bonus carries over and decays each week",
+    "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. After the streak breaks, the bonus carries over and decays each week",
+    "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -720,6 +785,10 @@ SHARED_EFFECT_POOL = [
     # strategy-warping
     "home_alone", "closer", "dark_horse",
     "vagabond", "fat_cat", "surplus", "bonsai",
+    # New cards (FP/FPx rebalance)
+    "anthem", "conductor",
+    "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
+    "sandbagger", "quiet_storm", "drought",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -759,6 +828,13 @@ STREAK_CONFIGS = {
     "leg_day":           {"resetCondition": "kicker_35plus", "isWeekly": False},
     "automatic":         {"resetCondition": "kicker_no_miss", "isWeekly": False},
     "momentum":          {"resetCondition": "roster_75fp", "isWeekly": False},
+    # Inverse streaks — grow when the roster underperforms; break when
+    # production picks up. Get peak-decay carryover the same as forward
+    # streaks so a built-up underperformance bonus doesn't vanish on the
+    # first hot week.
+    "sandbagger":        {"resetCondition": "roster_slot_low_5fp", "isWeekly": False},
+    "quiet_storm":       {"resetCondition": "no_player_15fp", "isWeekly": False},
+    "drought":           {"resetCondition": "roster_under_50fp", "isWeekly": False},
     "house_money":       {"resetCondition": "favorite_team_upset_win", "isWeekly": False, "noReset": True},
     "bonsai":       {"resetCondition": "equipped", "isWeekly": False, "noReset": True},
 }
@@ -857,6 +933,23 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "baseFP": round(5.0 * editionScale, 1),
                 "enhancedFP": round((20 + rn * 0.4) * editionScale, 1),
                 "isChanceEffect": True}
+    # ── New cards (FP/FPx rebalance) ──
+    if effectName == "anthem":
+        # Threshold-based flat FP. Pops when 3+ flat-FP cards are equipped,
+        # bigger pop at 4, biggest at 5. Numbers tuned so a 3-FP-card hand
+        # gets ~25 FP from Anthem; full-FP hands hit 50.
+        return {"rewardType": "fp",
+                "tier3FP": round((22 + rn * 0.6) * editionScale, 1),
+                "tier4FP": round((32 + rn * 0.8) * editionScale, 1),
+                "tier5FP": round((48 + rn * 1.0) * editionScale, 1)}
+    if effectName == "conductor":
+        # Pure amplifier. Boosts every other flat-FP card in the hand by
+        # +20% (tunable via boostPct). Produces nothing on its own —
+        # marker-style, output applied via _applyConductorBoost in the
+        # calculator's tradeoff phase.
+        return {"rewardType": "mult",
+                "boostPct": int(round(20 + rn * 0.2)),
+                "isAmplifier": True}
     return None
 
 
@@ -958,6 +1051,31 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     # ── Strategy-Warping: Overtime (Q4 FP multiplier)
     if effectName == "closer":
         return {"q4MultFactor": round((1.5 + rn * 0.03) * editionScale, 1)}
+    # ── Roster-trait flat FP cards (FP/FPx rebalance) ──
+    if effectName == "castaway":
+        # Sub-.500 team player check; flat reward when at least one is on roster.
+        return {"rewardFP": round((14.0 + rn * 0.40) * editionScale, 1)}
+    if effectName == "sleeper":
+        # Chance card; enhanced odds scale with how many low-rated (<3★) players
+        # the user keeps on roster. Floor stays competitive with other prismatic
+        # chance cards (Babysitter / Underdog at 5).
+        return {"baseFP": round((5.0 + rn * 0.10) * editionScale, 1),
+                "enhancedFP": round((22.0 + rn * 0.35) * editionScale, 1),
+                "baseChance": 15, "chancePerLow": 12,
+                "isChanceEffect": True}
+    if effectName == "patient":
+        # Per-week reward for keeping a sub-3★ slot intact. Small base FP
+        # multiplied by weeks-held; effectively growing flat FP as long as
+        # the user resists swapping out the underperformer.
+        return {"baseFP": round((1.5 + rn * 0.04) * editionScale, 1)}
+    if effectName == "rookie_hype":
+        # Per-rookie FP. Pays meaningful reward if the user trusts the
+        # rookie draft class instead of grabbing safe vets.
+        return {"perRookieFP": round((4.5 + rn * 0.12) * editionScale, 1)}
+    if effectName == "wanderer":
+        # Per unique team represented. Scales with roster diversity; max
+        # payout when no two roster players share a team.
+        return {"perTeamFP": round((3.0 + rn * 0.08) * editionScale, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(2 * editionScale, 1)}
 
 
@@ -1199,6 +1317,23 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
+    # ── Inverse streaks (FP/FPx rebalance) — grow when roster underperforms
+    if effectName == "sandbagger":
+        # Roster slot scoring ≤5 FP. Most achievable trigger of the three;
+        # smaller per-tick reward, smaller cap.
+        return {"rewardType": "fp",
+                "baseReward": round((6.0 + rn * 0.15) * editionScale, 1),
+                "growthPerTick": round((4.0 + rn * 0.10) * editionScale, 1)}
+    if effectName == "quiet_storm":
+        # No roster player ≥15 FP. Whole-roster spread-thin; medium reward.
+        return {"rewardType": "fp",
+                "baseReward": round((14.0 + rn * 0.30) * editionScale, 1),
+                "growthPerTick": round((8.0 + rn * 0.20) * editionScale, 1)}
+    if effectName == "drought":
+        # Roster total <50 FP. Nuclear-cold week; biggest reward, rarest trigger.
+        return {"rewardType": "fp",
+                "baseReward": round((20.0 + rn * 0.45) * editionScale, 1),
+                "growthPerTick": round((12.0 + rn * 0.30) * editionScale, 1)}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
@@ -2193,6 +2328,146 @@ def _conditionalReward(primary) -> EffectResult:
     elif rewardType == "floobits":
         return EffectResult(floobits=int(rewardValue))
     return EffectResult()
+
+
+# ── New cards (FP/FPx rebalance) ─────────────────────────────────────────────
+
+def _computeAnthem(primary, ctx, cardPlayerId, eqId):
+    """Threshold-based flat FP. Pops when the hand carries 3+ flat-FP cards;
+    larger pop at 4, biggest at 5. Counts only OTHER flat-FP cards in the
+    hand, plus this card itself, against the thresholds.
+    """
+    flatFPCount = sum(
+        1 for outType in (ctx.equippedCardOutputTypes or [])
+        if outType == "fp"
+    )
+    tier3 = primary.get("tier3FP", 25)
+    tier4 = primary.get("tier4FP", 35)
+    tier5 = primary.get("tier5FP", 50)
+    if flatFPCount >= 5:
+        eq = f"+{tier5} FP (5 flat-FP cards equipped)"
+        return EffectResult(fpBonus=tier5, equation=eq)
+    if flatFPCount >= 4:
+        eq = f"+{tier4} FP (4 flat-FP cards equipped)"
+        return EffectResult(fpBonus=tier4, equation=eq)
+    if flatFPCount >= 3:
+        eq = f"+{tier3} FP (3 flat-FP cards equipped)"
+        return EffectResult(fpBonus=tier3, equation=eq)
+    return EffectResult(equation=f"{flatFPCount}/3 flat-FP cards (need 3+)")
+
+
+def _computeConductor(primary, ctx, cardPlayerId, eqId):
+    """Pure amplifier. Produces no own output. The actual boost is applied
+    by the calculator's tradeoff phase (_applyConductorBoost), which
+    multiplies every other flat-FP card's output by (1 + boostPct/100).
+    Returning an empty EffectResult here marks the card as "present"
+    so the amplifier-status pill can read its config.
+    """
+    return EffectResult()
+
+
+def _computeCastaway(primary, ctx, cardPlayerId, eqId):
+    """Flat FP bonus when at least one roster player is on a sub-.500 team.
+    Reads team records via ctx.teamResults if available; falls back to a
+    'no signal' state during projection if records aren't loaded yet.
+    """
+    rewardFP = primary.get("rewardFP", 14)
+    rosterTeamIds = ctx.rosterPlayerTeamIds or {}
+    teamRecords = getattr(ctx, '_teamRecords', None) or {}
+    # ctx may carry team records directly via teamResults (boolean wins
+    # this week) — for season win pct we look at teamRecords mapping.
+    found = False
+    for pid, teamId in rosterTeamIds.items():
+        if pid not in (ctx.rosterPlayerIds or set()):
+            continue
+        rec = teamRecords.get(teamId)
+        if rec is not None and rec < 0.5:
+            found = True
+            break
+    if found:
+        return EffectResult(fpBonus=rewardFP, equation=f"+{rewardFP} FP (sub-.500 player on roster)")
+    return EffectResult(equation="No sub-.500 player on roster")
+
+
+def _computeSleeper(primary, ctx, cardPlayerId, eqId):
+    """Chance card. Enhanced-roll odds scale per <3★ player on roster.
+    Floor pays a guaranteed baseFP; enhanced FP fires more often the more
+    sub-3★ players are committed to the roster.
+    """
+    baseFP = primary.get("baseFP", 5)
+    enhancedFP = primary.get("enhancedFP", 22)
+    baseChance = primary.get("baseChance", 15) / 100.0
+    chancePerLow = primary.get("chancePerLow", 12) / 100.0
+    lowStarCount = sum(
+        1 for pid in (ctx.rosterPlayerIds or set())
+        if (ctx.rosterPlayerRatings or {}).get(pid, 80) < 76
+    )
+    threshold = min(0.85, baseChance + chancePerLow * lowStarCount)
+    threshold = min(0.95, threshold + getattr(ctx, 'chanceBonus', 0.0))
+    rng = _chanceRoll(ctx, eqId)
+    roll = rng.random()
+    triggered = roll <= threshold and not getattr(ctx, 'gamesActive', False)
+    fp = enhancedFP if triggered else baseFP
+    eq = _chanceEq(baseChance + chancePerLow * lowStarCount,
+                   getattr(ctx, 'chanceBonus', 0.0), threshold, triggered,
+                   f"+{enhancedFP} FP", f"{lowStarCount} low-rated players",
+                   ctx=ctx, base=f"+{baseFP} FP")
+    return EffectResult(fpBonus=fp, equation=eq,
+                        chanceRoll=round(roll, 4),
+                        chanceThreshold=round(threshold, 4),
+                        chanceTriggered=triggered)
+
+
+def _computePatient(primary, ctx, cardPlayerId, eqId):
+    """Per-week reward for keeping a sub-3★ roster slot intact. Reads how
+    many weeks the user has gone without swapping out a low-rated slot;
+    pays baseFP * weeks_held until they swap or the player rises to 3★+.
+    Uses ctx.rosterUnchangedWeeks as a proxy when slot-level history isn't
+    available.
+    """
+    baseFP = primary.get("baseFP", 1.5)
+    lowStarCount = sum(
+        1 for pid in (ctx.rosterPlayerIds or set())
+        if (ctx.rosterPlayerRatings or {}).get(pid, 80) < 76
+    )
+    if lowStarCount == 0:
+        return EffectResult(equation="No sub-3★ roster slot to reward")
+    weeksHeld = max(1, getattr(ctx, 'rosterUnchangedWeeks', 1))
+    fp = round(baseFP * weeksHeld, 1)
+    eq = f"+{baseFP}/wk × {weeksHeld} weeks unchanged = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+def _computeRookieHype(primary, ctx, cardPlayerId, eqId):
+    """Per-rookie FP. Uses _isRookie attached on player or rosterPlayerNames
+    plus a fallback to ctx-stored rookie set if available.
+    """
+    perRookieFP = primary.get("perRookieFP", 4.5)
+    rookieFlags = getattr(ctx, '_rosterRookieFlags', None) or {}
+    count = sum(1 for pid in (ctx.rosterPlayerIds or set())
+                if rookieFlags.get(pid))
+    if count == 0:
+        return EffectResult(equation="No rookies on roster")
+    fp = round(perRookieFP * count, 1)
+    eq = f"+{perRookieFP}/rookie × {count} = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+def _computeWanderer(primary, ctx, cardPlayerId, eqId):
+    """Per unique team represented across the roster. Counts distinct
+    team_ids from rosterPlayerTeamIds; max payout when no two roster
+    players share a team.
+    """
+    perTeamFP = primary.get("perTeamFP", 3)
+    teamIds = set(
+        teamId for pid, teamId in (ctx.rosterPlayerTeamIds or {}).items()
+        if pid in (ctx.rosterPlayerIds or set()) and teamId is not None
+    )
+    if not teamIds:
+        return EffectResult(equation="No team affiliation data on roster")
+    fp = round(perTeamFP * len(teamIds), 1)
+    eq = f"+{perTeamFP}/team × {len(teamIds)} unique teams = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
 
 
 # ── Streak (K) ───────────────────────────────────────────────────────────────
@@ -3506,6 +3781,17 @@ EFFECT_REGISTRY = {
     "fat_cat": _computeOpulence,
     "surplus": _computeProsperity,
     "bonsai": _computeCultivation,
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": _computeAnthem,
+    "conductor": _computeConductor,
+    "castaway": _computeCastaway,
+    "sleeper": _computeSleeper,
+    "patient": _computePatient,
+    "rookie_hype": _computeRookieHype,
+    "wanderer": _computeWanderer,
+    "sandbagger": _computeStreakEffect,
+    "quiet_storm": _computeStreakEffect,
+    "drought": _computeStreakEffect,
 }
 
 
@@ -3604,5 +3890,28 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
 
     if condition == "favorite_team_upset_win":
         return ctx.favoriteTeamWonThisWeek and ctx.favoriteTeamOpponentElo > ctx.favoriteTeamElo
+
+    # ── Inverse-streak triggers (FP/FPx rebalance) ──
+    # All three return True when the roster is UNDERPERFORMING; the streak
+    # grows on bad weeks, breaks on good ones (peak-decay handles the tail).
+    if condition == "roster_slot_low_5fp":
+        # Streak grows if any roster slot scored ≤5 FP this week.
+        for pid in (ctx.rosterPlayerIds or set()):
+            stats = (ctx.weekPlayerStats or {}).get(pid, {}) or {}
+            if float(stats.get("fantasyPoints", 0) or 0) <= 5:
+                return True
+        return False
+
+    if condition == "no_player_15fp":
+        # Streak grows if NO roster player scored 15+ FP this week.
+        for pid in (ctx.rosterPlayerIds or set()):
+            stats = (ctx.weekPlayerStats or {}).get(pid, {}) or {}
+            if float(stats.get("fantasyPoints", 0) or 0) >= 15:
+                return False
+        return True
+
+    if condition == "roster_under_50fp":
+        # Streak grows if total roster FP this week was under 50.
+        return (ctx.weekRawFP or 0) < 50
 
     return True

@@ -1531,6 +1531,30 @@ class SeasonManager:
                         for eq in userEquipped
                     }
 
+                    # Roster-trait card data (for Castaway, Rookie Hype) ──
+                    # Team records: team_id → win pct, used by Castaway to detect
+                    # sub-.500 team players on the roster.
+                    teamRecords = {}
+                    if teamManager:
+                        for team in teamManager.teams:
+                            stats = getattr(team, 'seasonTeamStats', {}) or {}
+                            wp = stats.get('winPerc')
+                            if wp is None:
+                                w = stats.get('wins', 0) or 0
+                                l = stats.get('losses', 0) or 0
+                                wp = w / (w + l) if (w + l) > 0 else 0.5
+                            teamRecords[team.id] = float(wp)
+                    # Rookie flags: playerId → True if rookie. Used by Rookie Hype.
+                    rosterRookieFlags = {}
+                    if self.playerManager:
+                        for pid in rosterPlayerIds:
+                            player = self.playerManager.getPlayerById(pid)
+                            if player:
+                                rosterRookieFlags[pid] = bool(
+                                    getattr(player, 'is_rookie', False)
+                                    or (getattr(player, 'seasonsPlayed', 99) or 99) == 0
+                                )
+
                     # User's favorite team data
                     userRow = session.get(User, userId)
                     userFavoriteTeamId = userRow.favorite_team_id if userRow else None
@@ -1670,6 +1694,8 @@ class SeasonManager:
                         streakCounts=streakCounts,
                         streakPeakOutputs=streakPeakOutputs,
                         streakWeeksSinceBreak=streakWeeksSinceBreak,
+                        _teamRecords=teamRecords,
+                        _rosterRookieFlags=rosterRookieFlags,
                         userFavoriteTeamId=userFavoriteTeamId,
                         favoriteTeamElo=favoriteTeamElo,
                         leagueAverageElo=leagueAverageElo,

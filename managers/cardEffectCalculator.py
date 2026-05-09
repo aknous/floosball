@@ -127,6 +127,13 @@ class CardCalcContext:
     streakPeakOutputs: Dict[int, float] = field(default_factory=dict)  # eqId → peakOutput
     streakWeeksSinceBreak: Dict[int, int] = field(default_factory=dict)  # eqId → cold weeks since break
 
+    # Roster-trait card lookups (FP/FPx rebalance)
+    # _teamRecords: teamId → win pct (0.0-1.0). Used by Castaway to detect
+    # sub-.500 team players on the roster.
+    _teamRecords: Dict[int, float] = field(default_factory=dict)
+    # _rosterRookieFlags: playerId → True if rookie. Used by Rookie Hype.
+    _rosterRookieFlags: Dict[int, bool] = field(default_factory=dict)
+
     # Eminence: per-position league avg FP/game and per-player season FP/game
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
     playerSeasonFPPerGame: Dict[int, float] = field(default_factory=dict)  # playerId → FP/game
@@ -819,6 +826,12 @@ def calculateWeekCardBonuses(
     # Apply tradeoff effects that modify other cards' bonuses
     _applyTradeoffEffects(allBreakdowns)
 
+    # Conductor amplifier — if a Conductor card is in the hand, every other
+    # flat-FP card gets a percentage boost on its primary FP output. Mirrors
+    # the Lemons/double_down marker pattern: Conductor's own breakdown carries
+    # no FP, but its presence amplifies neighbors.
+    _applyConductorBoost(allBreakdowns, equippedCards)
+
     # Aggregate totals from all breakdowns
     for breakdown in allBreakdowns:
         result.totalBonusFP += breakdown.totalFP
@@ -864,5 +877,42 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
         # Clear the marker mult so it doesn't stack on the global FPx aggregation
         if ddBreakdown:
             ddBreakdown.primaryMult = 0
+
+
+def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None:
+    """Conductor diamond amplifier: when present in the hand, every other
+    flat-FP card's primary output is multiplied by (1 + boostPct/100).
+    Conductor's own breakdown produces no output. Reads boostPct from
+    Conductor's effectConfig.primary so seeded variance is honored.
+    """
+    conductorBreakdown = next(
+        (b for b in breakdowns if b.effectName == "conductor"), None,
+    )
+    if conductorBreakdown is None:
+        return
+    boostPct = 20
+    for eq in (equippedCards or []):
+        ec = (eq.user_card.card_template.effect_config or {})
+        if ec.get("effectName") == "conductor":
+            boostPct = (ec.get("primary", {}) or {}).get("boostPct", 20)
+            break
+    factor = 1.0 + (boostPct / 100.0)
+    boosted = 0
+    for b in breakdowns:
+        if b.effectName == "conductor":
+            continue
+        if b.outputType != "fp":
+            continue
+        if b.totalFP <= 0:
+            continue
+        bonus = round(b.totalFP * (factor - 1.0), 1)
+        b.primaryFP = round(b.primaryFP + bonus, 1)
+        b.totalFP = round(b.totalFP + bonus, 1)
+        b.equation = f"{b.equation} +{boostPct}% (Conductor)"
+        boosted += 1
+    if boosted > 0:
+        conductorBreakdown.equation = f"+{boostPct}% on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
+    else:
+        conductorBreakdown.equation = "No flat-FP cards to amplify"
 
 
