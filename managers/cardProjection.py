@@ -340,6 +340,15 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                         EquippedCard.week == week)
                 .all())
     streakCounts = {eq.id: getattr(eq, 'streak_count', 1) for eq in equipped}
+    # Peak-decay state — projection mirrors the live computation so the
+    # pill shows the decaying tail when a streak's broken, not just base.
+    streakPeakOutputs = {
+        eq.id: float(eq.peak_output) for eq in equipped
+        if getattr(eq, 'peak_output', None) is not None
+    }
+    streakWeeksSinceBreak = {
+        eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0) for eq in equipped
+    }
 
     lastSwap = (session.query(FantasyRosterSwap.swap_week)
                 .filter_by(roster_id=roster.id)
@@ -401,6 +410,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         rosterTotalTds=int(round(rosterTotalTds)),
         rosterPlayerPositions=rosterPlayerPositions,
         streakCounts=streakCounts,
+        streakPeakOutputs=streakPeakOutputs,
+        streakWeeksSinceBreak=streakWeeksSinceBreak,
         userFavoriteTeamId=favTeamId,
         favoriteTeamElo=favElo,
         leagueAverageElo=leagueAverageElo,
