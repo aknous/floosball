@@ -3563,13 +3563,16 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
     if condition == "equipped":
         return True  # Always met as long as card is equipped
 
+    # Kicker conditions all share a "no attempt = streak holds" rule:
+    # if the offense never reached FG range, the kicker had no chance to
+    # fail, so the streak shouldn't reset through no fault of their own.
     if condition == "kicker_fg":
-        fgMade, _, _, _ = _getKickerFgStats(ctx)
-        return fgMade > 0
+        fgMade, fgAtt, _, _ = _getKickerFgStats(ctx)
+        return fgAtt == 0 or fgMade > 0
 
     if condition == "kicker_2fg":
-        fgMade, _, _, _ = _getKickerFgStats(ctx)
-        return fgMade >= 2
+        fgMade, fgAtt, _, _ = _getKickerFgStats(ctx)
+        return fgAtt == 0 or fgMade >= 2
 
     if condition == "roster_td":
         return ctx.rosterTotalTds > 0
@@ -3578,8 +3581,8 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return ctx.favoriteTeamWonThisWeek
 
     if condition == "kicker_45plus":
-        _, _, longest, _ = _getKickerFgStats(ctx)
-        return longest >= 45
+        _, fgAtt, longest, _ = _getKickerFgStats(ctx)
+        return fgAtt == 0 or longest >= 45
 
     if condition == "kicker_35plus":
         fgMade, fgAtt, longest, _ = _getKickerFgStats(ctx)
