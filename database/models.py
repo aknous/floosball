@@ -1022,6 +1022,14 @@ class EquippedCard(Base):
     card_bonus_at_lock: Mapped[float] = mapped_column(Float, default=0.0)  # Card bonus snapshot at lock time
     streak_count: Mapped[int] = mapped_column(Integer, default=1)
     swap_bonus_active: Mapped[bool] = mapped_column(Boolean, default=False)  # All-Pro swap bonus tracking
+    # Streak peak-decay state. peak_output captures the in-streak output of
+    # the card the last week the streak was active; weeks_since_break counts
+    # cold weeks since then. Together they feed the decay tail formula:
+    # output = max(base, peak_output * decay**weeks_since_break) when streak
+    # is broken. Both reset to 0/null when a new streak starts. Only used by
+    # streak-type cards; ignored for other categories.
+    peak_output: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    weeks_since_break: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     user: Mapped["User"] = relationship("User")

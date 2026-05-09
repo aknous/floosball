@@ -564,6 +564,24 @@ def _runPendingMigrations():
             logger.info("  Migration: added team_season_stats.big_plays")
         except Exception:
             conn.rollback()
+
+        # Streak peak-decay state on equipped_cards. peak_output snapshots the
+        # in-streak output the last week the streak was active; weeks_since_break
+        # counts cold weeks since then. Together they let a broken streak
+        # decay from peak rather than dropping straight to base on the first
+        # cold week. NULL peak = no prior streak to decay from.
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN peak_output REAL"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.peak_output")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN weeks_since_break INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.weeks_since_break")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 

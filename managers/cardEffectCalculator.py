@@ -118,6 +118,14 @@ class CardCalcContext:
     streakCardCount: int = 0  # Number of streak cards in hand (for synergy effects)
     activeStreakCount: int = 0  # Number of season streak cards whose condition is met this week
     liveStreakConditionsMet: Dict[int, bool] = field(default_factory=dict)  # eqId → conditionMet this game
+    # Peak-decay state for streak cards. peakOutput is the in-streak output of
+    # the card the last week the streak was active; weeksSinceBreak counts cold
+    # weeks since then. Together they let _computeStreakEffect compute a decay
+    # tail when the streak isn't met this week, instead of dropping straight
+    # to base. Loaded from EquippedCard.peak_output / weeks_since_break;
+    # persistence updates both after each week's calc.
+    streakPeakOutputs: Dict[int, float] = field(default_factory=dict)  # eqId → peakOutput
+    streakWeeksSinceBreak: Dict[int, int] = field(default_factory=dict)  # eqId → cold weeks since break
 
     # Eminence: per-position league avg FP/game and per-player season FP/game
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game

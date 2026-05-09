@@ -1519,6 +1519,17 @@ class SeasonManager:
                     streakCounts = {
                         eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
                     }
+                    # Streak peak-decay state — feeds _computeStreakEffect so a
+                    # cold week after a recent streak pays a decaying tail
+                    # instead of dropping straight to base.
+                    streakPeakOutputs = {
+                        eq.id: float(eq.peak_output) for eq in userEquipped
+                        if getattr(eq, 'peak_output', None) is not None
+                    }
+                    streakWeeksSinceBreak = {
+                        eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0)
+                        for eq in userEquipped
+                    }
 
                     # User's favorite team data
                     userRow = session.get(User, userId)
@@ -1657,6 +1668,8 @@ class SeasonManager:
                         rosterTotalTds=rosterTotalTds,
                         rosterPlayerPositions=rosterPlayerPositions,
                         streakCounts=streakCounts,
+                        streakPeakOutputs=streakPeakOutputs,
+                        streakWeeksSinceBreak=streakWeeksSinceBreak,
                         userFavoriteTeamId=userFavoriteTeamId,
                         favoriteTeamElo=favoriteTeamElo,
                         leagueAverageElo=leagueAverageElo,
@@ -1825,9 +1838,32 @@ class SeasonManager:
                                 conditionMet = checkStreakCondition(
                                     effectName, calcCtx, eq.user_card.card_template.player_id
                                 )
+                            cfg = STREAK_CONFIGS.get(effectName, {})
+                            isNoReset = cfg.get("noReset", False)
+                            isWeekly = cfg.get("isWeekly", False)
                             if conditionMet:
                                 eq.streak_count = getattr(eq, 'streak_count', 0) + 1
-                            elif not STREAK_CONFIGS.get(effectName, {}).get("noReset", False):
+                                # Snapshot the in-streak output as the new peak
+                                # so a future streak-break can decay from it.
+                                # peak-decay only applies to season streaks
+                                # (skip weekly accumulators and noReset cards).
+                                if not isWeekly and not isNoReset:
+                                    weekOutput = self._extractStreakOutput(result, eq, effectConfig)
+                                    if weekOutput is not None:
+                                        eq.peak_output = weekOutput
+                                    eq.weeks_since_break = 0
+                            elif not isNoReset:
+                                # Streak just broke OR has been broken. Track decay tail.
+                                if not isWeekly:
+                                    if (eq.streak_count or 0) > 0:
+                                        # First cold week: streak just broke. The compute
+                                        # this week already paid the held peak; from next
+                                        # week we begin decaying.
+                                        eq.weeks_since_break = 1
+                                    elif eq.peak_output is not None:
+                                        # Already in decay tail — increment week counter
+                                        # so next compute decays one step further.
+                                        eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
                                 eq.streak_count = 0
                             # If noReset=True and condition not met, streak stays unchanged
 
@@ -6253,6 +6289,34 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
+
+    def _extractStreakOutput(self, calcResult, eq, effectConfig):
+        """Pull the in-streak output value of a streak card from a calc result.
+        Returns the FP, FPx, or floobits value depending on the card's rewardType
+        — or None if no matching breakdown was found.
+
+        Used by the peak-decay tracker to snapshot the card's output during an
+        active streak so a future streak break can decay from it.
+        """
+        if calcResult is None or not getattr(calcResult, 'cardBreakdowns', None):
+            return None
+        primary = (effectConfig or {}).get("primary", {})
+        rewardType = primary.get("rewardType", "fp")
+        slot = getattr(eq, 'slot_number', None)
+        if slot is None:
+            return None
+        for b in calcResult.cardBreakdowns:
+            if getattr(b, 'slotNumber', None) != slot:
+                continue
+            if rewardType == "mult":
+                v = float(getattr(b, 'primaryMult', 0) or 0)
+                return v if v > 0 else None
+            if rewardType == "floobits":
+                v = float(getattr(b, 'primaryFloobits', 0) or 0)
+                return v if v > 0 else None
+            v = float(getattr(b, 'primaryFP', 0) or 0)
+            return v if v > 0 else None
+        return None
 
     def _rollCultivationGrowth(self, eq, effectConfig, calcCtx, weekBonus=None):
         """Roll for Cultivation card growth. streak_count tracks growth level."""

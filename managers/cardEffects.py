@@ -2198,8 +2198,20 @@ def _conditionalReward(primary) -> EffectResult:
 # ── Streak (K) ───────────────────────────────────────────────────────────────
 
 def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
-    """Generic streak computation. Uses streak_count from ctx for season streaks,
-    or computes within-week accumulation for weekly streaks."""
+    """Generic streak computation with peak-decay carryover.
+
+    Active streak (condition met): output = base + perWeek * (streak - 1),
+    plus the existing peer synergy bonus per other streak card.
+
+    Streak broken (condition not met) but card has a recorded peak from a
+    prior streak: output = max(base, peak * decay**weeksSinceBreak). FPx
+    cards use a slower decay (0.85) since their output range is narrow;
+    flat-FP and floobits cards use 0.7. Long streaks therefore pay a
+    multi-week tail instead of dropping straight to base on the first
+    cold week.
+
+    No peak recorded (never had a streak): output = base, current behavior.
+    """
     streakConfig = STREAK_CONFIGS.get(ctx._currentEffectName, {})
     isWeekly = streakConfig.get("isWeekly", False)
 
@@ -2211,27 +2223,44 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         ticks = _countWeeklyTicks(ctx._currentEffectName, primary, ctx)
         totalReward = sum(baseReward + growthPerTick * i for i in range(ticks))
         eq = f"{baseReward} base + ({growthPerTick}/TD × {ticks} TDs)"
-    else:
-        # Season streaks: live-aware computation
-        # streakCounts already includes +1 increment if condition was met live
-        streakCount = ctx.streakCounts.get(eqId, 1)
-        conditionMet = ctx.liveStreakConditionsMet.get(eqId, True)
+        result = _streakReward(primary, totalReward)
+        result.equation = eq
+        return result
 
-        if not conditionMet:
-            # Condition not yet met → show base only (no growth)
+    # Season streaks: live-aware computation
+    streakCount = ctx.streakCounts.get(eqId, 1)
+    conditionMet = ctx.liveStreakConditionsMet.get(eqId, True)
+    rewardType = primary.get("rewardType", "fp")
+
+    if not conditionMet:
+        # Streak isn't active this week. Apply peak-decay if a peak is recorded.
+        peak = ctx.streakPeakOutputs.get(eqId)
+        if peak is None or peak <= baseReward:
+            # No prior peak above base — pay base as usual.
             result = _streakReward(primary, baseReward)
             result.equation = f"{baseReward} base"
             return result
-
-        peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
-        effectiveCount = streakCount + peerBonus
-        growthTicks = max(0, effectiveCount - 1)
-        totalReward = baseReward + growthPerTick * growthTicks
-        if peerBonus > 0:
-            eq = f"{baseReward} base + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+        weeksSince = ctx.streakWeeksSinceBreak.get(eqId, 0)
+        decay = 0.85 if rewardType == "mult" else 0.7
+        decayed = peak * (decay ** weeksSince)
+        output = max(baseReward, decayed)
+        result = _streakReward(primary, output)
+        if weeksSince == 0:
+            result.equation = f"{round(peak, 2)} (streak broke, holding peak)"
         else:
-            eq = f"{baseReward} base + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
+            result.equation = (
+                f"{round(output, 2)} (peak {round(peak, 2)} × decay^{weeksSince})"
+            )
+        return result
 
+    peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
+    effectiveCount = streakCount + peerBonus
+    growthTicks = max(0, effectiveCount - 1)
+    totalReward = baseReward + growthPerTick * growthTicks
+    if peerBonus > 0:
+        eq = f"{baseReward} base + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+    else:
+        eq = f"{baseReward} base + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
     result = _streakReward(primary, totalReward)
     result.equation = eq
     return result
