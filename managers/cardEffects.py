@@ -966,7 +966,10 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
 
     # ── FPx effects (delta-based, wrapped as 1+val in compute) ──
     if effectName == "cornucopia":
-        return {"perTdMult": round((0.05 + rn * 0.003) * editionScale, 2)}
+        # `perTdMult` is now the log-curve coefficient (mult = 1 + perTd*ln(1 + TDs/3))
+        # rather than per-TD delta. Scaled so 5 TDs ≈ 1.39x, plateauing toward
+        # ~1.7x on monster TD weeks. See _computeTriggerHappy.
+        return {"perTdMult": round((0.40 + rn * 0.006) * editionScale, 2)}
     if effectName == "babysitter":
         return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "fpThreshold": 8, "isChanceEffect": True}
@@ -991,8 +994,11 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "luminary":
         return {"fpShareScale": round((0.25 + rn * 0.012) * editionScale, 2)}
     if effectName == "juggernaut":
+        # `growthPerWin` is now the log-curve coefficient (mult = base + growth*ln(1 + streak/3))
+        # rather than per-win delta. Scaled so a 5-win streak ≈ 1.37x, plateauing
+        # toward ~1.7x on long undefeated runs. See _computeJuggernaut.
         return {"baseXMult": round(1 + (0.05 + rn * 0.002) * editionScale, 2),
-                "growthPerWin": round((0.05 + rn * 0.002) * editionScale, 2)}
+                "growthPerWin": round((0.25 + rn * 0.005) * editionScale, 2)}
     if effectName == "underdog":
         return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "isChanceEffect": True}
@@ -1695,11 +1701,20 @@ def _computeBigDeal(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeTriggerHappy(primary, ctx, cardPlayerId, eqId):
+    """Cornucopia FPx scales with roster TDs using a log taper. Linear
+    growth let strong-offense rosters with 10+ TDs run away (2.0x and up);
+    log curve rewards 3-5 TD weeks similarly to before but plateaus around
+    1.7x on monster TD weeks. `perTdMult` is now the log-curve coefficient.
+    """
+    import math
     perTd = primary.get("perTdMult", 0)
-    tds = ctx.rosterTotalTds
-    bonus = perTd * tds
-    eq = f"1 + ({perTd}/TD × {tds} roster TDs) = {1 + bonus:.2f}x"
-    return EffectResult(multBonus=1 + bonus, equation=eq)
+    tds = ctx.rosterTotalTds or 0
+    if tds <= 0:
+        return EffectResult(multBonus=1.0, equation="No roster TDs this week")
+    bonus = perTd * math.log(1 + tds / 3.0)
+    mult = round(1 + bonus, 3)
+    eq = f"1 + log-taper({tds} roster TDs) = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeMainCharacter(primary, ctx, cardPlayerId, eqId):
@@ -1785,14 +1800,24 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeJuggernaut(primary, ctx, cardPlayerId, eqId):
+    """Juggernaut FPx scales with the favorite team's win streak using a log
+    taper: early wins are very rewarding, gains plateau as the streak grows.
+    Replaces the prior linear baseX + growth × streak which made 10+ win
+    runs explosive (e.g. a 15-win streak produced ~2.3x). New shape peaks
+    around 1.7x on long streaks. Coefficient `growth` now scales the log
+    curve rather than the per-win delta.
+    """
+    import math
     streak = max(0, ctx.favoriteTeamStreak)
-    baseX = primary.get("baseXMult", 1.1)
-    growth = primary.get("growthPerWin", 0.1)
+    baseX = primary.get("baseXMult", 1.08)
+    growth = primary.get("growthPerWin", 0.30)  # repurposed: log-curve scale
     # Only pay out once the team wins this week, extending their streak
     if not ctx.favoriteTeamWonThisWeek or streak <= 0:
         return EffectResult(multBonus=1.0, equation="Waiting for win to extend streak")
-    eq = f"{baseX}x base + ({growth}x × {streak} win streak)"
-    return EffectResult(multBonus=baseX + growth * streak, equation=eq)
+    bonus = growth * math.log(1 + streak / 3.0)
+    mult = round(baseX + bonus, 3)
+    eq = f"{baseX}x base + log-taper({streak} win streak) = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeHotRoster(primary, ctx, cardPlayerId, eqId):
