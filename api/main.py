@@ -5415,15 +5415,23 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
 
         # ─── Card bonus per week ───────────────────────────────────────
         # storedBonuses[userId][week] = bonus_fp  (from completed weeks)
+        # storedBreakdowns[userId][week] = parsed breakdowns_json list
         storedBonuses = {}
+        storedBreakdowns: Dict[int, Dict[int, list]] = {}
         rosterIds = [info["roster"].id for info in rostersByUser.values()]
         if rosterIds:
             bonusRows = session.query(WeeklyCardBonus).filter(
                 WeeklyCardBonus.roster_id.in_(rosterIds),
                 WeeklyCardBonus.season == seasonNum,
             ).all()
+            import json as _json
             for row in bonusRows:
                 storedBonuses.setdefault(row.user_id, {})[row.week] = row.bonus_fp
+                if row.breakdowns_json:
+                    try:
+                        storedBreakdowns.setdefault(row.user_id, {})[row.week] = _json.loads(row.breakdowns_json)
+                    except (ValueError, TypeError):
+                        pass
 
         # Compute live card bonus for the current week when games are active
         liveCardBonusByUser = {}
@@ -5514,6 +5522,7 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                     "weekPoints": round(data["weekPoints"], 1),
                     "cardBonusPoints": round(data.get("cardBonusPoints", 0), 1),
                     "players": players,
+                    "cardBreakdowns": storedBreakdowns.get(userId, {}).get(week, []),
                 })
             entries.sort(key=lambda e: e["weekPoints"], reverse=True)
             for i, entry in enumerate(entries, 1):
