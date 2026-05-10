@@ -1379,11 +1379,12 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "tipster":
         # FPx multiplier scaling with weekly pickem points via log-taper.
         # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
-        # Counts auto-picks. coef grows with edition; kPoints fixed at 40.
+        # Counts auto-picks. kPoints=80 tunes the curve to span the realistic
+        # weekly score range (20–120 pts). coef grows with player rating.
         return {"rewardType": "mult",
                 "baseXMult": 1.0,
-                "coef": round((0.10 + rn * 0.006) * editionScale, 3),
-                "kPoints": 40}
+                "coef": round((0.30 + rn * 0.012) * editionScale, 3),
+                "kPoints": 80}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
