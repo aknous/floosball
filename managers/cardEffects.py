@@ -1369,8 +1369,8 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         # linearly. Same shape as Tipster:
         #   output = baseReward + coef × ln(1 + streakWeeks / kStreak)
         return {"rewardType": "fp",
-                "baseReward": round((4.0 + rn * 0.10) * editionScale, 1),
-                "coef": round((6.0 + rn * 0.20) * editionScale, 2),
+                "baseReward": round((5.0 + rn * 0.12) * editionScale, 1),
+                "coef": round((9.0 + rn * 0.30) * editionScale, 2),
                 "kStreak": 4,
                 # growthPerTick kept for legacy callers / detail template
                 "growthPerTick": 0}
