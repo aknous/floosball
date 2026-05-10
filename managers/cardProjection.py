@@ -370,9 +370,15 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         for pid in rosterPlayerIds:
             player = playerManager.getPlayerById(pid)
             if player:
+                # Rookie = canonical "Rookie" service tier, which the game
+                # applies for the first 2 seasons of play (seasonsPlayed
+                # 0 or 1). Matches what shows on the player card and what
+                # users see as "Rookie".
+                svc = getattr(player, 'serviceTime', None)
+                isRookieSvc = bool(svc and getattr(svc, 'name', '') == 'Rookie')
                 rosterRookieFlags[pid] = bool(
-                    getattr(player, 'is_rookie', False)
-                    or (getattr(player, 'seasonsPlayed', 99) or 99) == 0
+                    isRookieSvc
+                    or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
                 )
 
     lastSwap = (session.query(FantasyRosterSwap.swap_week)

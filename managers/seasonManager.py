@@ -1545,14 +1545,19 @@ class SeasonManager:
                                 wp = w / (w + l) if (w + l) > 0 else 0.5
                             teamRecords[team.id] = float(wp)
                     # Rookie flags: playerId → True if rookie. Used by Rookie Hype.
+                    # Matches the "Rookie" service tier (seasonsPlayed 0–1) so
+                    # the card fires for the same players the UI labels as
+                    # rookies, not just the strict first-year subset.
                     rosterRookieFlags = {}
                     if self.playerManager:
                         for pid in rosterPlayerIds:
                             player = self.playerManager.getPlayerById(pid)
                             if player:
+                                svc = getattr(player, 'serviceTime', None)
+                                isRookieSvc = bool(svc and getattr(svc, 'name', '') == 'Rookie')
                                 rosterRookieFlags[pid] = bool(
-                                    getattr(player, 'is_rookie', False)
-                                    or (getattr(player, 'seasonsPlayed', 99) or 99) == 0
+                                    isRookieSvc
+                                    or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
                                 )
 
                     # User's favorite team data
