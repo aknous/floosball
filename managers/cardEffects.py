@@ -486,7 +486,7 @@ EFFECT_TAGLINES = {
     "drought": "When even the rain dries up",
     # ── Prognostication cards ──
     "nose_picker": "Pick it yourself",
-    "medium": "Sees it coming",
+    "medium": "Crystal clear",
     "parlay": "Let it ride",
 }
 
