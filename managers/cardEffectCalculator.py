@@ -134,6 +134,14 @@ class CardCalcContext:
     # _rosterRookieFlags: playerId → True if rookie. Used by Rookie Hype.
     _rosterRookieFlags: Dict[int, bool] = field(default_factory=dict)
 
+    # Pick-em stats for the displayed week. Used by Conviction (streak on
+    # manual submit), Augur (accuracy bonus), Tipster (FPx scaling with
+    # weekly points).
+    userManualPickSubmittedThisWeek: bool = False
+    userWeeklyPickemCorrect: int = 0
+    userWeeklyPickemTotal: int = 0
+    userWeeklyPickemPoints: int = 0
+
     # Eminence: per-position league avg FP/game and per-player season FP/game
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
     playerSeasonFPPerGame: Dict[int, float] = field(default_factory=dict)  # playerId → FP/game

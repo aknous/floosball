@@ -381,6 +381,28 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                     or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
                 )
 
+    # Pick-em stats this week — drives Conviction, Augur, Tipster.
+    userManualPickSubmittedThisWeek = False
+    userWeeklyPickemCorrect = 0
+    userWeeklyPickemTotal = 0
+    userWeeklyPickemPoints = 0
+    try:
+        from database.models import PickEmPick
+        weekPicks = session.query(PickEmPick).filter_by(
+            user_id=userId, season=season, week=week,
+        ).all()
+        if weekPicks:
+            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+            for p in weekPicks:
+                if p.correct is True:
+                    userWeeklyPickemCorrect += 1
+                    userWeeklyPickemTotal += 1
+                elif p.correct is False:
+                    userWeeklyPickemTotal += 1
+                userWeeklyPickemPoints += int(p.points_earned or 0)
+    except Exception:
+        pass
+
     lastSwap = (session.query(FantasyRosterSwap.swap_week)
                 .filter_by(roster_id=roster.id)
                 .order_by(FantasyRosterSwap.swap_week.desc()).first())
@@ -445,6 +467,10 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         streakWeeksSinceBreak=streakWeeksSinceBreak,
         _teamRecords=teamRecords,
         _rosterRookieFlags=rosterRookieFlags,
+        userManualPickSubmittedThisWeek=userManualPickSubmittedThisWeek,
+        userWeeklyPickemCorrect=userWeeklyPickemCorrect,
+        userWeeklyPickemTotal=userWeeklyPickemTotal,
+        userWeeklyPickemPoints=userWeeklyPickemPoints,
         userFavoriteTeamId=favTeamId,
         favoriteTeamElo=favElo,
         leagueAverageElo=leagueAverageElo,

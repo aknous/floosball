@@ -1560,6 +1560,30 @@ class SeasonManager:
                                     or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
                                 )
 
+                    # Pick-em stats this user/week — drives Conviction (manual
+                    # submit streak), Augur (accuracy bonus), Tipster (FPx
+                    # scaling with weekly points).
+                    userManualPickSubmittedThisWeek = False
+                    userWeeklyPickemCorrect = 0
+                    userWeeklyPickemTotal = 0
+                    userWeeklyPickemPoints = 0
+                    try:
+                        from database.models import PickEmPick
+                        weekPicks = session.query(PickEmPick).filter_by(
+                            user_id=userId, season=season, week=week,
+                        ).all()
+                        if weekPicks:
+                            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+                            for p in weekPicks:
+                                if p.correct is True:
+                                    userWeeklyPickemCorrect += 1
+                                    userWeeklyPickemTotal += 1
+                                elif p.correct is False:
+                                    userWeeklyPickemTotal += 1
+                                userWeeklyPickemPoints += int(p.points_earned or 0)
+                    except Exception as e:
+                        logger.debug(f"Pick-em ctx hydration skipped for user={userId} wk={week}: {e}")
+
                     # User's favorite team data
                     userRow = session.get(User, userId)
                     userFavoriteTeamId = userRow.favorite_team_id if userRow else None
@@ -1701,6 +1725,10 @@ class SeasonManager:
                         streakWeeksSinceBreak=streakWeeksSinceBreak,
                         _teamRecords=teamRecords,
                         _rosterRookieFlags=rosterRookieFlags,
+                        userManualPickSubmittedThisWeek=userManualPickSubmittedThisWeek,
+                        userWeeklyPickemCorrect=userWeeklyPickemCorrect,
+                        userWeeklyPickemTotal=userWeeklyPickemTotal,
+                        userWeeklyPickemPoints=userWeeklyPickemPoints,
                         userFavoriteTeamId=userFavoriteTeamId,
                         favoriteTeamElo=favoriteTeamElo,
                         leagueAverageElo=leagueAverageElo,

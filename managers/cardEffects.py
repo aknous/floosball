@@ -95,6 +95,10 @@ EFFECT_CATEGORY = {
     "sandbagger": "streak",     # streak grows when a slot scores ≤5 FP
     "quiet_storm": "streak",    # streak grows when no roster player ≥15 FP
     "drought": "streak",        # streak grows when roster total <50 FP
+    # Prognostication-driven
+    "conviction": "streak",     # streak grows when user manually submits picks (no auto-pick)
+    "augur": "conditional",     # weekly accuracy bonus (counts auto-picks)
+    "tipster": "multiplier",    # FPx — log-taper on weekly pick-em point total
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -168,6 +172,9 @@ EFFECT_EDITION_TIER = {
     "anthem": "prismatic", "sleeper": "prismatic",
     "sandbagger": "prismatic", "quiet_storm": "prismatic", "drought": "prismatic",
     "conductor": "diamond",
+
+    # ── Prognostication cards ──
+    "conviction": "holographic", "augur": "holographic", "tipster": "holographic",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -326,6 +333,10 @@ EFFECT_DISPLAY_NAMES = {
     "sandbagger": "Sandbagger",
     "quiet_storm": "Quiet Storm",
     "drought": "Drought",
+    # ── Prognostication cards ──
+    "conviction": "Conviction",
+    "augur": "Augur",
+    "tipster": "Tipster",
 }
 
 # ─── Three-Tier Description System ───────────────────────────────────────────
@@ -473,6 +484,10 @@ EFFECT_TAGLINES = {
     "sandbagger": "Save it for later",
     "quiet_storm": "Calm before the chaos",
     "drought": "When even the rain dries up",
+    # ── Prognostication cards ──
+    "conviction": "Pick your own poison",
+    "augur": "Read the signs",
+    "tipster": "Inside scoop pays off",
 }
 
 EFFECT_TOOLTIPS = {
@@ -604,6 +619,10 @@ EFFECT_TOOLTIPS = {
     "sandbagger": "Hold the line on a weak slot. Streak grows each week one of your roster slots scores 5 FP or less.",
     "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP.",
     "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total.",
+    # ── Prognostication cards ──
+    "conviction": "Show up for every Prognostication. Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
+    "augur": "Reward for reading the matchups right. Bonus FP when your weekly Prognostication accuracy is high.",
+    "tipster": "FPx that scales with your weekly Prognostication points. Bigger weeks multiply more, with a soft taper so monster weeks don't run away.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -736,6 +755,10 @@ EFFECT_DETAIL_TEMPLATES = {
     "sandbagger": "+{baseReward} FP, +{growthPerTick} per consecutive week any roster slot scored 5 FP or less. After the streak breaks, the bonus carries over and decays each week",
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. After the streak breaks, the bonus carries over and decays each week",
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
+    # ── Prognostication cards ──
+    "conviction": "+{baseReward} FP, +{growthPerTick} per consecutive week you submitted Prognostications manually (no auto-picks). After the streak breaks, the bonus carries over and decays each week",
+    "augur": "+{lowFP} FP at 50% accuracy, +{midFP} FP at 75%+, +{highFP} FP on a near-perfect week (95%+). Counts auto-picks",
+    "tipster": "FPx = 1.0 + log-taper on your weekly Prognostication points. Counts auto-picks",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -789,6 +812,8 @@ SHARED_EFFECT_POOL = [
     "anthem", "conductor",
     "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
     "sandbagger", "quiet_storm", "drought",
+    # Prognostication cards
+    "conviction", "augur", "tipster",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -835,6 +860,8 @@ STREAK_CONFIGS = {
     "sandbagger":        {"resetCondition": "roster_slot_low_5fp", "isWeekly": False},
     "quiet_storm":       {"resetCondition": "no_player_15fp", "isWeekly": False},
     "drought":           {"resetCondition": "roster_under_50fp", "isWeekly": False},
+    # Prognostication
+    "conviction":        {"resetCondition": "pickem_manual_submit", "isWeekly": False},
     "house_money":       {"resetCondition": "favorite_team_upset_win", "isWeekly": False, "noReset": True},
     "bonsai":       {"resetCondition": "equipped", "isWeekly": False, "noReset": True},
 }
@@ -1334,6 +1361,29 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp",
                 "baseReward": round((20.0 + rn * 0.45) * editionScale, 1),
                 "growthPerTick": round((12.0 + rn * 0.30) * editionScale, 1)}
+    # ── Prognostication cards ─────────────────────────────────────────
+    if effectName == "conviction":
+        # Streak — pays for showing up to Prognostications manually each
+        # week. Modest per-tick because the trigger is fully under user
+        # control (no luck involved).
+        return {"rewardType": "fp",
+                "baseReward": round((4.0 + rn * 0.12) * editionScale, 1),
+                "growthPerTick": round((2.0 + rn * 0.08) * editionScale, 1)}
+    if effectName == "augur":
+        # Weekly accuracy bonus, three tiers (50% / 75% / 95%+). Counts
+        # auto-picks. midFP / highFP scale up sharply to reward strong reads.
+        return {"rewardType": "fp",
+                "lowFP": round((2.0 + rn * 0.06) * editionScale, 1),
+                "midFP": round((6.0 + rn * 0.18) * editionScale, 1),
+                "highFP": round((12.0 + rn * 0.30) * editionScale, 1)}
+    if effectName == "tipster":
+        # FPx multiplier scaling with weekly pickem points via log-taper.
+        # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
+        # Counts auto-picks. coef grows with edition; kPoints fixed at 40.
+        return {"rewardType": "mult",
+                "baseXMult": 1.0,
+                "coef": round((0.10 + rn * 0.006) * editionScale, 3),
+                "kPoints": 40}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
@@ -2469,6 +2519,59 @@ def _computeWanderer(primary, ctx, cardPlayerId, eqId):
     fp = round(perTeamFP * len(teamIds), 1)
     eq = f"+{perTeamFP}/team × {len(teamIds)} unique teams = +{fp} FP"
     return EffectResult(fpBonus=fp, equation=eq)
+
+
+# ── Prognostication cards ──────────────────────────────────────────────────
+
+def _computeAugur(primary, ctx, cardPlayerId, eqId):
+    """Weekly Prognostication accuracy bonus.
+
+    Three tiers based on correct/total ratio for the displayed week:
+      - 50% to 74%: lowFP
+      - 75% to 94%: midFP
+      - 95%+: highFP (near-perfect)
+    Counts auto-picks. Returns no output if the user submitted nothing.
+    """
+    correct = int(getattr(ctx, 'userWeeklyPickemCorrect', 0) or 0)
+    total = int(getattr(ctx, 'userWeeklyPickemTotal', 0) or 0)
+    if total <= 0:
+        return EffectResult(equation="No Prognostications submitted this week")
+    accuracy = correct / total
+    lowFP = primary.get("lowFP", 2.0)
+    midFP = primary.get("midFP", 6.0)
+    highFP = primary.get("highFP", 12.0)
+    if accuracy >= 0.95:
+        fp = highFP
+        tier = "95%+ (near-perfect)"
+    elif accuracy >= 0.75:
+        fp = midFP
+        tier = "75%+"
+    elif accuracy >= 0.50:
+        fp = lowFP
+        tier = "50%+"
+    else:
+        return EffectResult(equation=f"{correct}/{total} picks ({accuracy:.0%}) — below 50% threshold")
+    eq = f"{correct}/{total} picks ({accuracy:.0%}) — {tier} = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+def _computeTipster(primary, ctx, cardPlayerId, eqId):
+    """FPx scaling with weekly Prognostication points via log-taper.
+
+    Same shape as Cornucopia: mult = baseXMult + coef × ln(1 + pts/kPoints).
+    Counts auto-picks. Returns 1.0x when the user submitted no picks.
+    """
+    import math
+    points = int(getattr(ctx, 'userWeeklyPickemPoints', 0) or 0)
+    baseXMult = primary.get("baseXMult", 1.0)
+    coef = primary.get("coef", 0.10)
+    k = primary.get("kPoints", 40)
+    if points <= 0:
+        return EffectResult(multBonus=baseXMult, equation="No Prognostication points this week")
+    mult = baseXMult + coef * math.log(1 + points / k)
+    mult = round(mult, 2)
+    eq = f"1.0 + {coef:.2f} × ln(1 + {points}/{k}) = {mult:.2f}x"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 # ── Streak (K) ───────────────────────────────────────────────────────────────
@@ -3791,6 +3894,10 @@ EFFECT_REGISTRY = {
     "sandbagger": _computeStreakEffect,
     "quiet_storm": _computeStreakEffect,
     "drought": _computeStreakEffect,
+    # ── Prognostication cards ──
+    "conviction": _computeStreakEffect,
+    "augur": _computeAugur,
+    "tipster": _computeTipster,
 }
 
 
@@ -3912,5 +4019,10 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
     if condition == "roster_under_50fp":
         # Streak grows if total roster FP this week was under 50.
         return (ctx.weekRawFP or 0) < 50
+
+    if condition == "pickem_manual_submit":
+        # Streak grows when the user submitted Prognostications manually
+        # this week (any auto-pick fill-in breaks the streak).
+        return bool(getattr(ctx, 'userManualPickSubmittedThisWeek', False))
 
     return True
