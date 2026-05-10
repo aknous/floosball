@@ -381,8 +381,13 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                     or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
                 )
 
-    # Pick-em stats this week — drives Conviction, Augur, Tipster.
-    userManualPickSubmittedThisWeek = False
+    # Pick-em stats — drives Nose Picker (Conviction), Medium (Augur),
+    # Parlay (Tipster). Projection mode estimates forward:
+    #   - Current week (live or already resolved): use those rows directly.
+    #   - Otherwise: average the user's historical resolved weeks this
+    #     season. New users with no history fall back to plausible
+    #     defaults (70% accuracy, ~60 weekly pts, manual submission).
+    userManualPickSubmittedThisWeek = True
     userWeeklyPickemCorrect = 0
     userWeeklyPickemTotal = 0
     userWeeklyPickemPoints = 0
@@ -391,7 +396,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         weekPicks = session.query(PickEmPick).filter_by(
             user_id=userId, season=season, week=week,
         ).all()
-        if weekPicks:
+        hasLiveData = bool(weekPicks) and any(p.correct is not None for p in weekPicks)
+        if hasLiveData:
             userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
             for p in weekPicks:
                 if p.correct is True:
@@ -400,6 +406,44 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                 elif p.correct is False:
                     userWeeklyPickemTotal += 1
                 userWeeklyPickemPoints += int(p.points_earned or 0)
+        else:
+            # Use historical averages from prior weeks this season
+            priorPicks = session.query(PickEmPick).filter(
+                PickEmPick.user_id == userId,
+                PickEmPick.season == season,
+                PickEmPick.week < week,
+                PickEmPick.correct.isnot(None),
+            ).all()
+            if priorPicks:
+                # Manual-submit projection: extend prior behavior unless
+                # the user has switched to auto-pick lately
+                weeksByNum: Dict[int, list] = {}
+                for p in priorPicks:
+                    weeksByNum.setdefault(p.week, []).append(p)
+                manualWeeks = sum(
+                    1 for wk_picks in weeksByNum.values()
+                    if any(not p.is_auto for p in wk_picks)
+                )
+                userManualPickSubmittedThisWeek = manualWeeks >= max(1, len(weeksByNum) // 2)
+
+                correct = sum(1 for p in priorPicks if p.correct is True)
+                total = len(priorPicks)
+                # Project current-week values by scaling accuracy to the
+                # number of games this week (assume same picks-per-week
+                # the user has been getting on average).
+                avgPicksPerWeek = total / max(1, len(weeksByNum))
+                projectedTotal = round(avgPicksPerWeek)
+                projectedAccuracy = correct / total if total else 0.7
+                userWeeklyPickemCorrect = round(projectedAccuracy * projectedTotal)
+                userWeeklyPickemTotal = projectedTotal
+                avgPoints = sum(int(p.points_earned or 0) for p in priorPicks) / max(1, len(weeksByNum))
+                userWeeklyPickemPoints = round(avgPoints)
+            else:
+                # No history: fall back to league-typical estimates so the
+                # projection isn't pinned to 0.
+                userWeeklyPickemCorrect = 8
+                userWeeklyPickemTotal = 12
+                userWeeklyPickemPoints = 60
     except Exception:
         pass
 
