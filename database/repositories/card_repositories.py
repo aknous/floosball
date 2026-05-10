@@ -15,6 +15,20 @@ from database.models import (
 )
 
 
+# Transaction types that fire a per-user `floobits_received` toast event.
+# Add types here when introducing a new passive earning source.
+_PASSIVE_GRANT_TYPES = frozenset({
+    'weekly_fp_bonus',
+    'leaderboard_season',
+    'leaderboard_weekly',
+    'pickem_correct',
+    'pickem_leaderboard_season',
+    'pickem_leaderboard_weekly',
+    'card_effect',
+    'admin_grant',
+})
+
+
 class CardTemplateRepository:
     """Repository for card template operations."""
 
@@ -302,6 +316,25 @@ class CurrencyRepository:
                 _am.onFloobitsEarned(self.session, userId, season)
             except Exception:
                 pass  # never break a grant over an achievement hook
+
+        # Toast hook — fire a per-user `floobits_received` WS event for passive
+        # grants. Achievements have their own toast; user-initiated grants
+        # (refunds, etc.) carry no surprise so they're skipped.
+        if amount > 0 and transactionType in _PASSIVE_GRANT_TYPES:
+            try:
+                from api.event_models import CurrencyEvent
+                from api.game_broadcaster import broadcaster
+                event = CurrencyEvent.received(
+                    amount=amount,
+                    transactionType=transactionType,
+                    description=description,
+                    balanceAfter=int(currency.balance),
+                    season=season,
+                    week=week,
+                )
+                broadcaster.broadcast_to_user_sync(userId, event)
+            except Exception:
+                pass  # never break a grant over a toast broadcast
 
         return currency
 
