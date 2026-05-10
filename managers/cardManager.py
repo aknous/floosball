@@ -202,17 +202,20 @@ class CardManager:
             # Cards are for rostered players only — exclude every off-roster
             # population:
             # - Free agents (player.team is None or a 'Free Agent' string)
-            # - Prospects (is_prospect=True; player.team is the 'Prospect' string
-            #   once routing runs, but flag-checking is more reliable than
-            #   string comparison)
+            # - Prospects (is_prospect=True OR drafting_team_id set; the flag
+            #   is the canonical marker but drafting_team_id catches
+            #   half-promoted state where one of the two got cleared)
             # - Upcoming rookies (is_upcoming_rookie=True)
             # - Retired players (player.team == 'Retired' string)
             if getattr(player, 'is_prospect', False):
                 continue
+            if getattr(player, 'drafting_team_id', None):
+                continue
             if getattr(player, 'is_upcoming_rookie', False):
                 continue
             teamObj = getattr(player, 'team', None)
-            if teamObj is None or not hasattr(teamObj, 'id'):
+            teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
+            if not teamId:  # None or 0 — both invalid; rules out string-team values too
                 continue
 
             rating = getattr(player, 'playerRating', None)
@@ -221,8 +224,6 @@ class CardManager:
 
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
             isRookie = getattr(player, 'seasonsPlayed', 1) == 0
-
-            teamId = teamObj.id
 
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
@@ -294,13 +295,18 @@ class CardManager:
                 continue
 
             # Skip prospects, upcoming rookies, free agents — only rostered
-            # players get card templates.
+            # players get card templates. Belt-and-suspenders on the prospect
+            # check via drafting_team_id since the flag has gotten out of
+            # sync before.
             if getattr(player, 'is_prospect', False):
+                continue
+            if getattr(player, 'drafting_team_id', None):
                 continue
             if getattr(player, 'is_upcoming_rookie', False):
                 continue
             teamObj = getattr(player, 'team', None)
-            if teamObj is None or not hasattr(teamObj, 'id'):
+            teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
+            if not teamId:
                 continue
 
             # Only create rookie templates for actual rookies (just generated this offseason)
@@ -312,7 +318,6 @@ class CardManager:
                 continue
 
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
-            teamId = teamObj.id
 
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
