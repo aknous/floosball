@@ -5890,6 +5890,52 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+@app.get("/api/cards/equipped/public/{user_id}")
+def getEquippedCardsPublic(user_id: int, season: int, week: int):
+    """Public read of a user's equipped cards for a given (season, week).
+
+    Used by the fantasy leaderboard expand to show each user's equipped
+    hand alongside their roster. No auth — leaderboards are public.
+    """
+    from database.connection import get_session
+    from database.models import EquippedCard, UserCard, CardTemplate, FantasyRoster
+    from database.repositories.card_repositories import EquippedCardRepository
+    from managers.cardManager import CardManager
+
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+    session = get_session()
+    try:
+        equippedRepo = EquippedCardRepository(session)
+        equipped = equippedRepo.getByUserWeek(user_id, season, week)
+
+        roster = session.query(FantasyRoster).filter_by(user_id=user_id, season=season).first()
+        rosterPlayerIds = set()
+        if roster:
+            for rp in roster.players:
+                rosterPlayerIds.add(rp.player_id)
+
+        result = []
+        for eq in equipped:
+            cardData = cardManager.serializeCard(eq.user_card, season)
+            template = eq.user_card.card_template
+            result.append({
+                "slotNumber": eq.slot_number,
+                "card": cardData,
+                "playerId": template.player_id,
+                "isMatch": template.player_id in rosterPlayerIds,
+                "streakCount": getattr(eq, 'streak_count', 1) or 1,
+                "cardTeamId": template.team_id,
+                "templatePosition": template.position,
+            })
+        return build_success_response({
+            "equippedCards": result,
+            "userId": user_id,
+            "season": season,
+            "week": week,
+        })
+    finally:
+        session.close()
+
 
 class EquipCardSlot(BaseModel):
     slotNumber: int
