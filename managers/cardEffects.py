@@ -757,7 +757,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
     # ── Prognostication cards ──
     "conviction": "+{baseReward} FP, +{growthPerTick} per consecutive week you submitted Prognostications manually (no auto-picks). After the streak breaks, the bonus carries over and decays each week",
-    "augur": "+{lowFP} FP at 50% accuracy, +{midFP} FP at 75%+, +{highFP} FP on a near-perfect week (95%+). Counts auto-picks",
+    "augur": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 75%+, +{highFP} FP at 90%+ (chase tier). Counts auto-picks",
     "tipster": "FPx = 1.0 + log-taper on your weekly Prognostication points. Counts auto-picks",
 }
 
@@ -1370,12 +1370,13 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((4.0 + rn * 0.12) * editionScale, 1),
                 "growthPerTick": round((2.0 + rn * 0.08) * editionScale, 1)}
     if effectName == "augur":
-        # Weekly accuracy bonus, three tiers (50% / 75% / 95%+). Counts
-        # auto-picks. midFP / highFP scale up sharply to reward strong reads.
+        # Weekly accuracy bonus, three tiers (50% / 75% / 90%+). Counts
+        # auto-picks. mid is the typical-hit zone; high triggers roughly
+        # once a season (11/12 or 12/12 correct).
         return {"rewardType": "fp",
-                "lowFP": round((2.0 + rn * 0.06) * editionScale, 1),
-                "midFP": round((6.0 + rn * 0.18) * editionScale, 1),
-                "highFP": round((12.0 + rn * 0.30) * editionScale, 1)}
+                "lowFP": round((4.0 + rn * 0.10) * editionScale, 1),
+                "midFP": round((11.0 + rn * 0.25) * editionScale, 1),
+                "highFP": round((20.0 + rn * 0.40) * editionScale, 1)}
     if effectName == "tipster":
         # FPx multiplier scaling with weekly pickem points via log-taper.
         # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
@@ -2529,8 +2530,8 @@ def _computeAugur(primary, ctx, cardPlayerId, eqId):
 
     Three tiers based on correct/total ratio for the displayed week:
       - 50% to 74%: lowFP
-      - 75% to 94%: midFP
-      - 95%+: highFP (near-perfect)
+      - 75% to 89%: midFP (the typical hit zone)
+      - 90%+: highFP (chase tier — roughly once a season)
     Counts auto-picks. Returns no output if the user submitted nothing.
     """
     correct = int(getattr(ctx, 'userWeeklyPickemCorrect', 0) or 0)
@@ -2538,12 +2539,12 @@ def _computeAugur(primary, ctx, cardPlayerId, eqId):
     if total <= 0:
         return EffectResult(equation="No Prognostications submitted this week")
     accuracy = correct / total
-    lowFP = primary.get("lowFP", 2.0)
-    midFP = primary.get("midFP", 6.0)
-    highFP = primary.get("highFP", 12.0)
-    if accuracy >= 0.95:
+    lowFP = primary.get("lowFP", 4.0)
+    midFP = primary.get("midFP", 11.0)
+    highFP = primary.get("highFP", 20.0)
+    if accuracy >= 0.90:
         fp = highFP
-        tier = "95%+ (near-perfect)"
+        tier = "90%+"
     elif accuracy >= 0.75:
         fp = midFP
         tier = "75%+"
