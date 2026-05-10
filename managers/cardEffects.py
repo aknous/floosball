@@ -98,7 +98,7 @@ EFFECT_CATEGORY = {
     # Prognostication-driven
     "nose_picker": "streak",     # streak grows when user manually submits picks (no auto-pick)
     "medium": "conditional",     # weekly accuracy bonus (counts auto-picks)
-    "tipster": "multiplier",    # FPx — log-taper on weekly pick-em point total
+    "parlay": "multiplier",    # FPx — log-taper on weekly pick-em point total
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -174,7 +174,7 @@ EFFECT_EDITION_TIER = {
     "conductor": "diamond",
 
     # ── Prognostication cards ──
-    "nose_picker": "holographic", "medium": "holographic", "tipster": "holographic",
+    "nose_picker": "holographic", "medium": "holographic", "parlay": "holographic",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -336,7 +336,7 @@ EFFECT_DISPLAY_NAMES = {
     # ── Prognostication cards ──
     "nose_picker": "Nose Picker",
     "medium": "Medium",
-    "tipster": "Tipster",
+    "parlay": "Parlay",
 }
 
 # ─── Three-Tier Description System ───────────────────────────────────────────
@@ -487,7 +487,7 @@ EFFECT_TAGLINES = {
     # ── Prognostication cards ──
     "nose_picker": "Pick it yourself",
     "medium": "Sees it coming",
-    "tipster": "Inside scoop pays off",
+    "parlay": "Let it ride",
 }
 
 EFFECT_TOOLTIPS = {
@@ -622,7 +622,7 @@ EFFECT_TOOLTIPS = {
     # ── Prognostication cards ──
     "nose_picker": "Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
     "medium": "Bonus FP when your weekly Prognostication accuracy is high.",
-    "tipster": "FPx that grows with your weekly Prognostication points.",
+    "parlay": "FPx that grows with your weekly Prognostication points.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -758,7 +758,7 @@ EFFECT_DETAIL_TEMPLATES = {
     # ── Prognostication cards ──
     "nose_picker": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds. After the streak breaks, the bonus carries over and decays each week",
     "medium": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
-    "tipster": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
+    "parlay": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -813,7 +813,7 @@ SHARED_EFFECT_POOL = [
     "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
     "sandbagger", "quiet_storm", "drought",
     # Prognostication cards
-    "nose_picker", "medium", "tipster",
+    "nose_picker", "medium", "parlay",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -1382,7 +1382,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "lowFP": round((4.0 + rn * 0.15) * editionScale, 1),
                 "midFP": round((10.0 + rn * 0.22) * editionScale, 1),
                 "highFP": round((20.0 + rn * 0.40) * editionScale, 1)}
-    if effectName == "tipster":
+    if effectName == "parlay":
         # FPx multiplier scaling with weekly pickem points via log-taper.
         # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
         # Counts auto-picks. kPoints=80 tunes the curve to span the realistic
@@ -2563,7 +2563,7 @@ def _computeMedium(primary, ctx, cardPlayerId, eqId):
     return EffectResult(fpBonus=fp, equation=eq)
 
 
-def _computeTipster(primary, ctx, cardPlayerId, eqId):
+def _computeParlay(primary, ctx, cardPlayerId, eqId):
     """FPx scaling with weekly Prognostication points via log-taper.
 
     Same shape as Cornucopia: mult = baseXMult + coef × ln(1 + pts/kPoints).
@@ -3922,7 +3922,7 @@ EFFECT_REGISTRY = {
     # ── Prognostication cards ──
     "nose_picker": _computeStreakEffect,
     "medium": _computeMedium,
-    "tipster": _computeTipster,
+    "parlay": _computeParlay,
 }
 
 
