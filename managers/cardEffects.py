@@ -97,7 +97,7 @@ EFFECT_CATEGORY = {
     "drought": "streak",        # streak grows when roster total <50 FP
     # Prognostication-driven
     "conviction": "streak",     # streak grows when user manually submits picks (no auto-pick)
-    "augur": "conditional",     # weekly accuracy bonus (counts auto-picks)
+    "medium": "conditional",     # weekly accuracy bonus (counts auto-picks)
     "tipster": "multiplier",    # FPx — log-taper on weekly pick-em point total
 }
 
@@ -174,7 +174,7 @@ EFFECT_EDITION_TIER = {
     "conductor": "diamond",
 
     # ── Prognostication cards ──
-    "conviction": "holographic", "augur": "holographic", "tipster": "holographic",
+    "conviction": "holographic", "medium": "holographic", "tipster": "holographic",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -335,7 +335,7 @@ EFFECT_DISPLAY_NAMES = {
     "drought": "Drought",
     # ── Prognostication cards ──
     "conviction": "Conviction",
-    "augur": "Augur",
+    "medium": "Medium",
     "tipster": "Tipster",
 }
 
@@ -486,7 +486,7 @@ EFFECT_TAGLINES = {
     "drought": "When even the rain dries up",
     # ── Prognostication cards ──
     "conviction": "Pick your own poison",
-    "augur": "Read the signs",
+    "medium": "Sees it coming",
     "tipster": "Inside scoop pays off",
 }
 
@@ -621,7 +621,7 @@ EFFECT_TOOLTIPS = {
     "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total.",
     # ── Prognostication cards ──
     "conviction": "Show up for every Prognostication. Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
-    "augur": "Reward for reading the matchups right. Bonus FP when your weekly Prognostication accuracy is high.",
+    "medium": "Channeling pays off. Bonus FP when your weekly Prognostication accuracy is high.",
     "tipster": "FPx that grows with your weekly Prognostication points.",
 }
 
@@ -757,7 +757,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
     # ── Prognostication cards ──
     "conviction": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds. After the streak breaks, the bonus carries over and decays each week",
-    "augur": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
+    "medium": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
     "tipster": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
 }
 
@@ -813,7 +813,7 @@ SHARED_EFFECT_POOL = [
     "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
     "sandbagger", "quiet_storm", "drought",
     # Prognostication cards
-    "conviction", "augur", "tipster",
+    "conviction", "medium", "tipster",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -1374,7 +1374,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "kStreak": 4,
                 # growthPerTick kept for legacy callers / detail template
                 "growthPerTick": 0}
-    if effectName == "augur":
+    if effectName == "medium":
         # Weekly accuracy bonus, three tiers tuned for ~70% user average.
         # 65-84% is the "typical good week" payout — mid lands HOLO-band.
         # 85%+ is the chase tier (~15% of weeks).
@@ -2530,7 +2530,7 @@ def _computeWanderer(primary, ctx, cardPlayerId, eqId):
 
 # ── Prognostication cards ──────────────────────────────────────────────────
 
-def _computeAugur(primary, ctx, cardPlayerId, eqId):
+def _computeMedium(primary, ctx, cardPlayerId, eqId):
     """Weekly Prognostication accuracy bonus.
 
     Thresholds tuned for a 70% season-long user accuracy average — the
@@ -3921,7 +3921,7 @@ EFFECT_REGISTRY = {
     "drought": _computeStreakEffect,
     # ── Prognostication cards ──
     "conviction": _computeStreakEffect,
-    "augur": _computeAugur,
+    "medium": _computeMedium,
     "tipster": _computeTipster,
 }
 
