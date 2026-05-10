@@ -5511,6 +5511,7 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                         "slot": info["playerSlots"].get(playerId, "?"),
                         "playerName": playerObj.name if playerObj else "Unknown",
                         "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
+                        "teamId": getattr(playerObj.team, 'id', None) if playerObj and hasattr(playerObj.team, 'name') else None,
                         "weekPoints": round(fp, 1),
                     })
                 players.sort(key=lambda p: p["weekPoints"], reverse=True)

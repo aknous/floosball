@@ -520,6 +520,11 @@ class FantasyTracker:
                             if pObj and hasattr(pObj, 'team') and pObj.team
                             else ""
                         ),
+                        "teamId": (
+                            getattr(pObj.team, 'id', None)
+                            if pObj and hasattr(pObj, 'team') and pObj.team
+                            else None
+                        ),
                         "earnedPoints": round(playerEarnedFP, 1),
                         "weekFP": round(adjustedWeekFP, 1),
                     })
@@ -537,6 +542,7 @@ class FantasyTracker:
                         "playerName": "Previous Players",
                         "position": "",
                         "teamAbbr": "",
+                        "teamId": None,
                         "earnedPoints": round(previousPlayersFP, 1),
                         "weekFP": 0,
                     })
