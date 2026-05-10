@@ -756,7 +756,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. After the streak breaks, the bonus carries over and decays each week",
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
     # ── Prognostication cards ──
-    "conviction": "+{baseReward} FP, +{growthPerTick} per consecutive week you submitted Prognostications manually (no auto-picks). After the streak breaks, the bonus carries over and decays each week",
+    "conviction": "+{baseReward} FP + log-tapered bonus per consecutive week you submitted Prognostications manually (no auto-picks). After the streak breaks, the bonus carries over and decays each week",
     "augur": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
     "tipster": "FPx = 1.0 + log-taper on your weekly Prognostication points. Counts auto-picks",
 }
@@ -1363,12 +1363,17 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "growthPerTick": round((12.0 + rn * 0.30) * editionScale, 1)}
     # ── Prognostication cards ─────────────────────────────────────────
     if effectName == "conviction":
-        # Streak — pays for showing up to Prognostications manually each
-        # week. Modest per-tick because the trigger is fully under user
-        # control (no luck involved).
+        # Log-tapered streak — pays for showing up to Prognostications
+        # manually each week. The trigger is fully under user control
+        # (no luck/skill), so the curve plateaus rather than scaling
+        # linearly. Same shape as Tipster:
+        #   output = baseReward + coef × ln(1 + streakWeeks / kStreak)
         return {"rewardType": "fp",
-                "baseReward": round((4.0 + rn * 0.12) * editionScale, 1),
-                "growthPerTick": round((2.0 + rn * 0.08) * editionScale, 1)}
+                "baseReward": round((4.0 + rn * 0.10) * editionScale, 1),
+                "coef": round((6.0 + rn * 0.20) * editionScale, 2),
+                "kStreak": 4,
+                # growthPerTick kept for legacy callers / detail template
+                "growthPerTick": 0}
     if effectName == "augur":
         # Weekly accuracy bonus, three tiers tuned for ~70% user average.
         # 65-84% is the "typical good week" payout — mid lands HOLO-band.
@@ -2637,6 +2642,23 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
 
     peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
     effectiveCount = streakCount + peerBonus
+
+    # Log-tapered streaks (Conviction): set when `coef` is in primary.
+    # output = baseReward + coef × ln(1 + effectiveCount / kStreak)
+    # Naturally plateaus on long streaks rather than scaling linearly.
+    if "coef" in primary:
+        import math
+        coef = primary.get("coef", 0.0)
+        kStreak = primary.get("kStreak", 4)
+        totalReward = baseReward + coef * math.log(1 + effectiveCount / kStreak)
+        if peerBonus > 0:
+            eq = f"{baseReward} + {coef} × ln(1 + {effectiveCount}/{kStreak}) [{streakCount} wk + {peerBonus} synergy]"
+        else:
+            eq = f"{baseReward} + {coef} × ln(1 + {streakCount}/{kStreak})"
+        result = _streakReward(primary, totalReward)
+        result.equation = eq
+        return result
+
     growthTicks = max(0, effectiveCount - 1)
     totalReward = baseReward + growthPerTick * growthTicks
     if peerBonus > 0:
