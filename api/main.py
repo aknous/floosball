@@ -7771,48 +7771,35 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     if p is not None:
                         playerLookup[p.id] = p
 
-        # Group every candidate by position value for the IRV input. The
-        # tally function flattens these regardless of dict key, so any
-        # bucket scheme works as long as each candidate appears once.
-        candidatesByPos: Dict[int, list] = {1: [], 2: [], 3: [], 4: [], 5: []}
-        for p in playerLookup.values():
+        # Eligible candidates for the IRV: every player at an open position
+        # (open right now OR projected to open). Mirrors the resolver's
+        # eligibility logic so the live tally matches what would resolve.
+        POS_NAME_TO_VAL = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+        openPosVals = {POS_NAME_TO_VAL[s['position']] for s in openSlots
+                       if s.get('position') in POS_NAME_TO_VAL}
+        eligibleCandidates: set = set()
+        for pid, p in playerLookup.items():
             posVal = getattr(getattr(p, 'position', None), 'value', None)
-            if posVal in candidatesByPos:
-                candidatesByPos[posVal].append(p)
+            if posVal in openPosVals:
+                eligibleCandidates.add(pid)
 
-        favProspectIds = {p.id for p in getattr(favTeam, 'prospects', [])} if favTeam else set()
         gmTally = GmManager(session)
+        rankedIds = gmTally._tallyFullRankingOverall(ballots, eligibleCandidates)
 
-        ballotTally: Dict[str, List[Dict]] = {}
-        # Drive ranking via IRV per position so the live tally order matches
-        # what the resolver would produce. Only include positions that
-        # actually had at least one mention on a ballot.
-        mentionedPositions: set = set()
-        for pid in mentionCount.keys():
+        ballotTally: List[Dict] = []
+        for pid in rankedIds:
             p = playerLookup.get(pid)
-            if p is not None:
-                mentionedPositions.add(p.position.value)
-
-        for posVal in sorted(mentionedPositions):
-            posProspectIds = {pid for pid in favProspectIds
-                              if playerLookup.get(pid) and playerLookup[pid].position.value == posVal}
-            rankedIds = gmTally._tallyFullRanking(
-                ballots, posVal, candidatesByPos, prospectIds=posProspectIds,
-            )
-            for pid in rankedIds:
-                p = playerLookup.get(pid)
-                if not p:
-                    continue
-                posName = p.position.name
-                ballotTally.setdefault(posName, []).append({
-                    "id": p.id,
-                    "name": p.name,
-                    "position": posName,
-                    "rating": round(getattr(p, 'playerRating', 0), 1),
-                    "votes": mentionCount.get(pid, 0),
-                    "firstChoice": firstChoiceCount.get(pid, 0),
-                    "isProspect": bool(getattr(p, 'is_prospect', False)),
-                })
+            if not p:
+                continue
+            ballotTally.append({
+                "id": p.id,
+                "name": p.name,
+                "position": p.position.name,
+                "rating": round(getattr(p, 'playerRating', 0), 1),
+                "votes": mentionCount.get(pid, 0),
+                "firstChoice": firstChoiceCount.get(pid, 0),
+                "isProspect": bool(getattr(p, 'is_prospect', False)),
+            })
 
         return build_success_response({
             "openSlots": openSlots,
@@ -7857,6 +7844,28 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         if not boardActive:
             raise HTTPException(400, f"FA requisitions open in Week {GM_ACTIVE_WEEK}")
 
+        # Sanity-check: every ranked player ID must resolve to a known
+        # candidate (FA, prospect, or rostered player). The frontend modal
+        # already restricts the picker to candidates at open positions, so
+        # this is mainly to keep stale or malformed submissions from
+        # filling the ballot with unresolvable IDs that would silently
+        # drop out at resolution time.
+        pm = floosball_app.playerManager if floosball_app else None
+        teamManager = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        knownIds: set = set()
+        if pm:
+            knownIds.update(p.id for p in pm.freeAgents)
+        if teamManager:
+            for t in teamManager.teams:
+                for p in getattr(t, 'prospects', []):
+                    knownIds.add(p.id)
+                for _slot, p in t.rosterDict.items():
+                    if p is not None:
+                        knownIds.add(p.id)
+        cleanedRankings = [pid for pid in req.rankings if pid in knownIds]
+        if not cleanedRankings:
+            raise HTTPException(400, "No valid candidates in ballot")
+
         ballotRepo = GmFaBallotRepository(session)
         existing = ballotRepo.getUserBallot(user.id, teamId, currentSeason)
 
@@ -7874,13 +7883,13 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
 
         ballot = ballotRepo.submitBallot(
             userId=user.id, teamId=teamId, season=currentSeason,
-            rankings=req.rankings, costPaid=costPaid,
+            rankings=cleanedRankings, costPaid=costPaid,
         )
         session.commit()
 
         return build_success_response({
             "ballotId": ballot.id,
-            "rankings": req.rankings,
+            "rankings": cleanedRankings,
             "costPaid": costPaid,
             "isUpdate": existing is not None,
         })

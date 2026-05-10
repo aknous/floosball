@@ -5472,7 +5472,7 @@ class SeasonManager:
             }
 
             gm = GmManager(session, lowQuorum=self._isTestMode)
-            directives, positionRankings = gm.resolveSignFaVotes(
+            directives, overallRankings = gm.resolveSignFaVotes(
                 teamManager.teams, season,
                 freeAgentLists, teamOpenPositions
             )
@@ -5483,12 +5483,9 @@ class SeasonManager:
             if directives:
                 logger.info(f"GM FA directives for {len(directives)} team(s)")
 
-            # Build enriched per-team per-position ranking structure so the
-            # UI can show fans' tallied votes for every open position across
-            # the league (not just the user's favorite team). Uses team's
-            # prospects pool in addition to FAs so promoted prospects still
-            # resolve by ID.
-            POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+            # Build enriched per-team flat ranking. Each entry carries its
+            # own position name so the UI can render position chips on a
+            # single ordered list.
             playerLookup = {p.id: p for p in self.playerManager.freeAgents}
             for t in teamManager.teams:
                 for p in getattr(t, 'prospects', []):
@@ -5497,32 +5494,27 @@ class SeasonManager:
                     if p is not None:
                         playerLookup[p.id] = p
             teamLookup = {t.id: t for t in teamManager.teams}
-            enrichedPositionRankings = {}
-            for tId, perPos in positionRankings.items():
+            enrichedFaRankings: Dict[str, list] = {}
+            for tId, playerIds in overallRankings.items():
                 team = teamLookup.get(tId)
                 teamAbbr = getattr(team, 'abbr', None) if team else None
                 if not teamAbbr:
                     continue
-                posEntry = {}
-                for posValue, playerIds in perPos.items():
-                    posName = POS_NAMES.get(posValue, str(posValue))
-                    entries = []
-                    for pid in playerIds:
-                        p = playerLookup.get(pid)
-                        if not p:
-                            continue
-                        entries.append({
-                            "id": p.id,
-                            "name": p.name,
-                            "position": p.position.name,
-                            "rating": round(getattr(p, 'playerRating', 0), 1),
-                            "isProspect": bool(getattr(p, 'is_prospect', False)),
-                        })
-                    if entries:
-                        posEntry[posName] = entries
-                if posEntry:
-                    enrichedPositionRankings[teamAbbr] = posEntry
-            self._offseasonFaVoteResults = enrichedPositionRankings
+                entries = []
+                for pid in playerIds:
+                    p = playerLookup.get(pid)
+                    if not p:
+                        continue
+                    entries.append({
+                        "id": p.id,
+                        "name": p.name,
+                        "position": p.position.name,
+                        "rating": round(getattr(p, 'playerRating', 0), 1),
+                        "isProspect": bool(getattr(p, 'is_prospect', False)),
+                    })
+                if entries:
+                    enrichedFaRankings[teamAbbr] = entries
+            self._offseasonFaVoteResults = enrichedFaRankings
 
             # Broadcast directives to frontend with player details
             if BROADCASTING_AVAILABLE and broadcaster and directives:
@@ -5543,7 +5535,7 @@ class SeasonManager:
                                 })
                     from api.event_models import GmEvent
                     event = GmEvent.faDirectives(enriched)
-                    event['positionRankings'] = enrichedPositionRankings
+                    event['faRankings'] = enrichedFaRankings
                     await broadcaster.broadcast_season_event(event)
                 except Exception as e:
                     logger.warning(f"Could not broadcast FA directives: {e}")
