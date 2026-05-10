@@ -598,9 +598,13 @@ class CardManager:
         allTemplates = templateRepo.getBySeason(currentSeason)
         minRating = EDITION_THRESHOLDS.get(resultEdition, 0)
 
-        # Get unique eligible players
+        # Get unique eligible players. Skip templates with NULL team_id —
+        # those are leftovers from past prospect/rookie pollution, and
+        # picking one as a blend source would propagate the bad state.
         eligiblePlayers = {}
         for t in allTemplates:
+            if t.team_id is None:
+                continue
             if t.player_rating >= minRating and t.player_id not in eligiblePlayers:
                 eligiblePlayers[t.player_id] = t
 
@@ -778,6 +782,9 @@ class CardManager:
         from database.repositories.card_repositories import CardTemplateRepository
         templateRepo = CardTemplateRepository(session)
         allTemplates = templateRepo.getBySeason(currentSeason)
+        # Skip any templates with NULL team_id — defensive guard against legacy
+        # prospect/rookie templates polluting fresh pack rolls.
+        allTemplates = [t for t in allTemplates if t.team_id is not None]
         if not allTemplates:
             raise ValueError("No card templates available for the current season")
 
@@ -1158,6 +1165,9 @@ class CardManager:
             # Generate fresh selection for this user
             templateRepo = CardTemplateRepository(session)
             allTemplates = templateRepo.getBySeason(currentSeason)
+            # Skip NULL-team templates so legacy prospect/rookie pollution
+            # doesn't bleed into the shop's featured rotation.
+            allTemplates = [t for t in allTemplates if t.team_id is not None]
 
             if not allTemplates:
                 return []

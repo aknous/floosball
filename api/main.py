@@ -2453,16 +2453,37 @@ def admin_grant_card(payload: Dict[str, Any],
 
     pm = floosball_app.playerManager
 
+    def _isCardEligiblePlayer(p) -> bool:
+        """Same eligibility rules as season-template generation: no prospects,
+        no upcoming rookies, must have a real team. Prevents admin grants
+        from leaving NULL-team_id templates that pollute pack rolls + blend
+        eligibility downstream."""
+        if getattr(p, 'is_prospect', False):
+            return False
+        if getattr(p, 'drafting_team_id', None):
+            return False
+        if getattr(p, 'is_upcoming_rookie', False):
+            return False
+        teamObj = getattr(p, 'team', None)
+        teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
+        return bool(teamId)
+
     if playerId:
         playerObj = pm.getPlayerById(playerId)
         if playerObj is None:
             raise HTTPException(status_code=404, detail=f"Player {playerId} not found")
+        if not _isCardEligiblePlayer(playerObj):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Player {playerObj.name} is a prospect / upcoming rookie / unrostered — cards require a rostered player",
+            )
     else:
         # Pick a random player eligible for this edition's rating threshold
         import random as _rand
         from managers.cardManager import EDITION_THRESHOLDS
         threshold = EDITION_THRESHOLDS.get(edition, 0)
-        eligible = [p for p in pm.activePlayers if round(p.playerRating) >= threshold]
+        eligible = [p for p in pm.activePlayers
+                    if round(p.playerRating) >= threshold and _isCardEligiblePlayer(p)]
         if not eligible:
             raise HTTPException(status_code=400, detail=f"No players eligible for {edition} edition")
         playerObj = _rand.choice(eligible)
