@@ -96,7 +96,7 @@ EFFECT_CATEGORY = {
     "quiet_storm": "streak",    # streak grows when no roster player ≥15 FP
     "drought": "streak",        # streak grows when roster total <50 FP
     # Prognostication-driven
-    "conviction": "streak",     # streak grows when user manually submits picks (no auto-pick)
+    "nose_picker": "streak",     # streak grows when user manually submits picks (no auto-pick)
     "medium": "conditional",     # weekly accuracy bonus (counts auto-picks)
     "tipster": "multiplier",    # FPx — log-taper on weekly pick-em point total
 }
@@ -174,7 +174,7 @@ EFFECT_EDITION_TIER = {
     "conductor": "diamond",
 
     # ── Prognostication cards ──
-    "conviction": "holographic", "medium": "holographic", "tipster": "holographic",
+    "nose_picker": "holographic", "medium": "holographic", "tipster": "holographic",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -334,7 +334,7 @@ EFFECT_DISPLAY_NAMES = {
     "quiet_storm": "Quiet Storm",
     "drought": "Drought",
     # ── Prognostication cards ──
-    "conviction": "Conviction",
+    "nose_picker": "Nose Picker",
     "medium": "Medium",
     "tipster": "Tipster",
 }
@@ -485,7 +485,7 @@ EFFECT_TAGLINES = {
     "quiet_storm": "Calm before the chaos",
     "drought": "When even the rain dries up",
     # ── Prognostication cards ──
-    "conviction": "Pick your own poison",
+    "nose_picker": "Pick it yourself",
     "medium": "Sees it coming",
     "tipster": "Inside scoop pays off",
 }
@@ -620,8 +620,8 @@ EFFECT_TOOLTIPS = {
     "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP.",
     "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total.",
     # ── Prognostication cards ──
-    "conviction": "Show up for every Prognostication. Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
-    "medium": "Channeling pays off. Bonus FP when your weekly Prognostication accuracy is high.",
+    "nose_picker": "Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
+    "medium": "Bonus FP when your weekly Prognostication accuracy is high.",
     "tipster": "FPx that grows with your weekly Prognostication points.",
 }
 
@@ -756,7 +756,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. After the streak breaks, the bonus carries over and decays each week",
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
     # ── Prognostication cards ──
-    "conviction": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds. After the streak breaks, the bonus carries over and decays each week",
+    "nose_picker": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds. After the streak breaks, the bonus carries over and decays each week",
     "medium": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
     "tipster": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
 }
@@ -813,7 +813,7 @@ SHARED_EFFECT_POOL = [
     "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
     "sandbagger", "quiet_storm", "drought",
     # Prognostication cards
-    "conviction", "medium", "tipster",
+    "nose_picker", "medium", "tipster",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -861,7 +861,7 @@ STREAK_CONFIGS = {
     "quiet_storm":       {"resetCondition": "no_player_15fp", "isWeekly": False},
     "drought":           {"resetCondition": "roster_under_50fp", "isWeekly": False},
     # Prognostication
-    "conviction":        {"resetCondition": "pickem_manual_submit", "isWeekly": False},
+    "nose_picker":        {"resetCondition": "pickem_manual_submit", "isWeekly": False},
     "house_money":       {"resetCondition": "favorite_team_upset_win", "isWeekly": False, "noReset": True},
     "bonsai":       {"resetCondition": "equipped", "isWeekly": False, "noReset": True},
 }
@@ -1362,7 +1362,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((20.0 + rn * 0.45) * editionScale, 1),
                 "growthPerTick": round((12.0 + rn * 0.30) * editionScale, 1)}
     # ── Prognostication cards ─────────────────────────────────────────
-    if effectName == "conviction":
+    if effectName == "nose_picker":
         # Log-tapered streak — pays for showing up to Prognostications
         # manually each week. The trigger is fully under user control
         # (no luck/skill), so the curve plateaus rather than scaling
@@ -3920,7 +3920,7 @@ EFFECT_REGISTRY = {
     "quiet_storm": _computeStreakEffect,
     "drought": _computeStreakEffect,
     # ── Prognostication cards ──
-    "conviction": _computeStreakEffect,
+    "nose_picker": _computeStreakEffect,
     "medium": _computeMedium,
     "tipster": _computeTipster,
 }
