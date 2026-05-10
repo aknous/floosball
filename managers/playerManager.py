@@ -1797,7 +1797,7 @@ class PlayerManager:
             self.name_repo.add_names_batch(self.unusedNames)
             self.db_session.commit()
             
-            logger.info(f"Saved {len(self.unusedNames)} unused names to database")
+            logger.debug(f"Saved {len(self.unusedNames)} unused names to database")
         except Exception as e:
             logger.error(f"Failed to save unused names to database: {e}")
             self.db_session.rollback()
