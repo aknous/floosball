@@ -594,16 +594,16 @@ EFFECT_TOOLTIPS = {
     "surplus": "Raise the ceiling. Increases the maximum Floobits you can earn per week while equipped.",
     "bonsai": "Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
     # ── New cards (FP/FPx rebalance) ──
-    "anthem": "Power in numbers. Flat FP that pops when your hand is heavy on flat-FP cards: 3 or more triggers a bonus, 4 raises it, 5 maxes it out.",
+    "anthem": "Power in numbers. Flat FP that fires when your hand is heavy on flat-FP cards. 3 or more pays a bonus, 4 raises it, 5 maxes it out.",
     "conductor": "Orchestrates the rest of your hand. Every other flat-FP card you have equipped outputs more. Produces nothing on its own.",
     "castaway": "Find the gem on a bad team and they pay you. Bonus FP when your roster includes any player whose team is below .500.",
     "sleeper": "Diamond in the rough territory. Guaranteed FP floor plus a chance at enhanced FP. Odds rise the more low-rated players you keep on your roster.",
-    "patient": "Loyalty to the bench rewarded. Pays each week you keep a sub-3-star roster slot intact, with the bonus growing the longer you hold.",
+    "patient": "Stick with the bench. Earns FP each week you keep a sub-3-star roster slot intact, with the bonus growing the longer you hold.",
     "rookie_hype": "Believe in the new class. Bonus FP per rookie on your roster.",
     "wanderer": "A bit of everywhere. Output scales with how many different teams your roster players come from. Max payout when no two share a team.",
-    "sandbagger": "Hold a weak slot, get paid. Streak grows each week one of your roster slots scores 5 FP or less. After a slot finally pops, the bonus carries over and fades over the next several weeks.",
-    "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP. After a big game finally lands, the bonus carries over and fades.",
-    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total. After a productive week finally arrives, the bonus carries over and fades.",
+    "sandbagger": "Hold the line on a weak slot. Streak grows each week one of your roster slots scores 5 FP or less.",
+    "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP.",
+    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
