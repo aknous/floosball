@@ -2394,6 +2394,7 @@ def _computeSleeper(primary, ctx, cardPlayerId, eqId):
     Floor pays a guaranteed baseFP; enhanced FP fires more often the more
     sub-3★ players are committed to the roster.
     """
+    from managers.cardEffectCalculator import _chanceRoll
     baseFP = primary.get("baseFP", 5)
     enhancedFP = primary.get("enhancedFP", 22)
     baseChance = primary.get("baseChance", 15) / 100.0
