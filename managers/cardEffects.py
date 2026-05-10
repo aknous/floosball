@@ -400,7 +400,7 @@ EFFECT_TAGLINES = {
     "dark_horse": "Nobody saw them coming",
     "vagabond": "A restless spirit",
     "fat_cat": "Rolling in it",
-    "surplus": "More where that came from",
+    "surplus": "Steady stipend",
     "bonsai": "Snip snip",
     "pedigree": "Pedigree",
     # Streak (K)
@@ -591,7 +591,7 @@ EFFECT_TOOLTIPS = {
     "dark_horse": "The stars shine brightest from below. FPx that scales inversely with the star rating of your roster's {posLabel}.",
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
-    "surplus": "Raise the ceiling. Increases the maximum Floobits you can earn per week while equipped.",
+    "surplus": "A reliable kickback. Adds a flat Floobits bonus to your weekly earnings while equipped.",
     "bonsai": "Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "Power in numbers. Flat FP that fires when your hand is heavy on flat-FP cards. 3 or more pays a bonus, 4 raises it, 5 maxes it out.",
@@ -723,7 +723,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "dark_horse": "+{perStarMult} FPx per star under 5 of your rostered {posLabel}",
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
-    "surplus": "Weekly Floobits cap raised by +{ceilingBonus} while equipped",
+    "surplus": "+{flatBonus}F added to weekly earnings while equipped",
     "bonsai": "+{baseFP} FP base. Each week {triggerLabel} earn a chance to permanently grow by {growthFP} FP. Higher levels need bigger weeks to keep growing.",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "+{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5",
@@ -1213,8 +1213,8 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"perReceptionFloobits": int(round((1.5 + rn * 0.06) * editionScale))}
     # ── Strategy-Warping: Prosperity (Floobits payout ceiling raiser)
     if effectName == "surplus":
-        ceilingBonus = int(round((10 + rn * 0.4) * editionScale))
-        return {"ceilingBonus": ceilingBonus}
+        flatBonus = int(round((6 + rn * 0.18) * editionScale))
+        return {"flatBonus": flatBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
         # Diamond tier — big chance boost + meaningful Floobits output
@@ -3594,12 +3594,10 @@ def _computeOpulence(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeProsperity(primary, ctx, cardPlayerId, eqId):
-    """Raises the weekly Floobits payout cap. Output is informational only —
-    the actual cap raise is applied in seasonManager._awardWeeklyFpFloobits()."""
-    ceilingBonus = primary.get("ceilingBonus", 10)
-    from constants import WEEKLY_FP_FLOOBIT_CAP
-    newCap = WEEKLY_FP_FLOOBIT_CAP + ceilingBonus
-    return EffectResult(floobits=0, equation=f"+{ceilingBonus} cap raise (effective cap: {newCap}F)")
+    """Adds a flat F bonus to weekly earnings. Output is informational only —
+    the actual bonus is applied in seasonManager._awardWeeklyFpFloobits()."""
+    flatBonus = primary.get("flatBonus", primary.get("ceilingBonus", 6))
+    return EffectResult(floobits=0, equation=f"+{flatBonus}F flat weekly bonus")
 
 
 def _getCultivationStepSize(triggerEvent):

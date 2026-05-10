@@ -110,9 +110,23 @@ SEASON_LEADERBOARD_TOP_PCT = 0.25
 ROSTER_SWAP_COST = 15          # Base cost per swap (escalates per slot)
 ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same slot
 
-# Weekly FP → Floobits conversion (participation reward)
-WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
-WEEKLY_FP_FLOOBIT_CAP = 40      # Max Floobits earned from FP conversion per week
+# Weekly FP → Floobits conversion (participation reward).
+# Tapering power curve: F = round(SCALE * FP^EXPONENT), no hard cap. Big
+# weeks always pay more than small weeks, but with diminishing returns so
+# the system can't run away. Tunable knobs:
+#   SCALE     — overall payout scale (raises floor + ceiling together)
+#   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
+# Sample profile (default):
+#   100 FP → 17 F        (vs. old linear 15 F, capped at 40)
+#   500 FP → 67 F        (old: capped at 40)
+#  1000 FP → 121 F       (old: capped at 40)
+WEEKLY_FP_FLOOBIT_SCALE = 0.34
+WEEKLY_FP_FLOOBIT_EXPONENT = 0.85
+# Endowment (income_boost powerup) replaces the curve with a flatter one.
+# Less taper = monster weeks pay more; low weeks pay slightly less than
+# the default curve. Same cost (100 F).
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.20
+WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.95
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -308,11 +322,16 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Raises your weekly FP earnings cap to 65 Floobits for 4 weeks.",
+    "description": "Bumps your weekly FP-to-Floobits curve to a flatter taper for 4 weeks. Big weeks pay more; routine weeks roughly the same.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    "boostedCap": 65,
+    # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
+    # small dip on low-FP weeks for a meaningful bump on monster weeks
+    # (e.g. 500 FP: 67 F normal → 73 F endowment; 1000 FP: 121 → 142;
+    # 5000 FP: 474 → 653).
+    "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
+    "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
 }
 
 POWERUP_CATALOG = {

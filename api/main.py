@@ -3004,30 +3004,26 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
         else:
             medianBalance = 0
 
-        # Weekly FP cap hit rate
-        from constants import WEEKLY_FP_FLOOBIT_CAP
+        # Weekly FP→F payout summary (curve-based, no cap)
         lastPaidWeek = session.query(func.max(CurrencyTransaction.week)).filter(
             CurrencyTransaction.season == seasonNum,
             CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
         ).scalar()
         if lastPaidWeek:
-            totalFpRecipients = session.query(func.count(CurrencyTransaction.id)).filter(
+            weekPayouts = session.query(CurrencyTransaction.amount).filter(
                 CurrencyTransaction.season == seasonNum,
                 CurrencyTransaction.week == lastPaidWeek,
                 CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
-            ).scalar()
-            capHitters = session.query(func.count(CurrencyTransaction.id)).filter(
-                CurrencyTransaction.season == seasonNum,
-                CurrencyTransaction.week == lastPaidWeek,
-                CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
-                CurrencyTransaction.amount >= WEEKLY_FP_FLOOBIT_CAP,
-            ).scalar()
-            capHitRate = round((capHitters / totalFpRecipients * 100), 1) if totalFpRecipients > 0 else 0
+            ).all()
+            amounts = [int(p[0]) for p in weekPayouts]
+            totalFpRecipients = len(amounts)
+            avgWeeklyPayout = round(sum(amounts) / totalFpRecipients, 1) if totalFpRecipients else 0
+            maxWeeklyPayout = max(amounts) if amounts else 0
             capHitWeek = lastPaidWeek
         else:
-            capHitRate = 0
-            capHitters = 0
             totalFpRecipients = 0
+            avgWeeklyPayout = 0
+            maxWeeklyPayout = 0
             capHitWeek = None
 
         # Richest users (top 5)
@@ -3244,9 +3240,10 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
                 "seasonSpending": int(seasonSpending),
                 "avgBalance": avgBalance,
                 "medianBalance": medianBalance,
-                "capHitRate": capHitRate,
-                "capHitters": capHitters,
-                "capHitWeek": capHitWeek,
+                "avgWeeklyPayout": avgWeeklyPayout,
+                "maxWeeklyPayout": maxWeeklyPayout,
+                "weeklyPayoutRecipients": totalFpRecipients,
+                "lastPayoutWeek": capHitWeek,
                 "richestUsers": richestUsers,
             },
             "cards": {
@@ -7003,20 +7000,25 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
                 "pending": deferred,
             })
 
-        # Income boost (Endowment) — raises weekly FP floobit cap
+        # Income boost (Endowment) — flatter FP→F curve while active
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
             gamesRunning = _areGamesStarted()
             weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
-            from constants import POWERUP_INCOME_BOOST, WEEKLY_FP_FLOOBIT_CAP
+            from constants import (
+                WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
+                WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+            )
             active.append({
                 "slug": "income_boost",
                 "displayName": "Endowment",
                 "expiresAtWeek": activeBoost.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining <= 1,
-                "boostedCap": POWERUP_INCOME_BOOST.get("boostedCap", 65),
-                "standardCap": WEEKLY_FP_FLOOBIT_CAP,
+                "scale": WEEKLY_FP_FLOOBIT_SCALE,
+                "exponent": WEEKLY_FP_FLOOBIT_EXPONENT,
+                "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
+                "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
             })
 
         # Fortune's Favor (Patronage) — boosts chance card trigger rates

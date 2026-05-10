@@ -6394,9 +6394,11 @@ class SeasonManager:
                 pass
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
-        """Award Floobits to all users based on a percentage of their weekly FP."""
-        import math
-        from constants import WEEKLY_FP_FLOOBIT_RATE, WEEKLY_FP_FLOOBIT_CAP
+        """Award Floobits via the FP→F curve: scale × FP^exponent (Endowment shifts to flatter taper)."""
+        from constants import (
+            WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
+            WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+        )
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
         if not fantasyTracker:
@@ -6422,11 +6424,9 @@ class SeasonManager:
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)
                 from database.repositories.shop_repository import ShopPurchaseRepository
-                from constants import POWERUP_INCOME_BOOST
                 shopRepo = ShopPurchaseRepository(session)
-                boostedCap = POWERUP_INCOME_BOOST.get("boostedCap", 40)
-                # Pre-load Prosperity card ceiling bonuses per user
-                prosperityCaps = {}
+                # Pre-load Prosperity card flat-F bonuses per user
+                prosperityBonuses = {}
                 try:
                     from database.repositories.card_repositories import EquippedCardRepository
                     eqRepo = EquippedCardRepository(session)
@@ -6435,35 +6435,42 @@ class SeasonManager:
                         ec = eq.user_card.card_template.effect_config or {}
                         if ec.get("effectName") == "surplus":
                             ownerId = eq.user_id
-                            bonus = ec.get("primary", {}).get("ceilingBonus", 0)
-                            prosperityCaps[ownerId] = prosperityCaps.get(ownerId, 0) + bonus
+                            bonus = ec.get("primary", {}).get("flatBonus", ec.get("primary", {}).get("ceilingBonus", 0))
+                            prosperityBonuses[ownerId] = prosperityBonuses.get(ownerId, 0) + int(bonus)
                 except Exception as e:
-                    logger.warning(f"Could not load Prosperity caps: {e}")
+                    logger.warning(f"Could not load Prosperity bonuses: {e}")
                 awarded = 0
                 for entry in entries:
                     weekFp = entry.get('weekTotal', 0)
                     if weekFp <= 0:
                         continue
                     userId = entry['userId']
-                    # Check for active income boost powerup
                     activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
-                    cap = boostedCap if activeBoost else WEEKLY_FP_FLOOBIT_CAP
-                    # Apply Prosperity card ceiling bonus
-                    cap += prosperityCaps.get(userId, 0)
-                    raw = weekFp * WEEKLY_FP_FLOOBIT_RATE
-                    reward = min(math.floor(raw), cap)
+                    if activeBoost:
+                        scale, exponent = WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT
+                    else:
+                        scale, exponent = WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
+                    base = round(scale * (weekFp ** exponent))
+                    prosperity = prosperityBonuses.get(userId, 0)
+                    reward = int(base + prosperity)
                     if reward <= 0:
                         continue
+                    descCore = f'Week {week}: {weekFp:.0f} FP → {base}F'
+                    if prosperity:
+                        descCore += f' (+{prosperity} Prosperity)'
+                    if activeBoost:
+                        descCore += ' [Endowment]'
                     currencyRepo.addFunds(
                         userId, reward, 'weekly_fp_bonus',
-                        description=f'Week {week}: {int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP',
+                        description=descCore,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         userId, 'weekly_fp_bonus',
                         f'Week {week} Earnings',
-                        f'+{reward} Floobits ({int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP)',
-                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward},
+                        f'+{reward} Floobits from {weekFp:.0f} FP',
+                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward,
+                              'base': base, 'prosperity': prosperity, 'boosted': bool(activeBoost)},
                     )
                     # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
                     try:
