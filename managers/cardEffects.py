@@ -622,7 +622,7 @@ EFFECT_TOOLTIPS = {
     # ── Prognostication cards ──
     "conviction": "Show up for every Prognostication. Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
     "augur": "Reward for reading the matchups right. Bonus FP when your weekly Prognostication accuracy is high.",
-    "tipster": "FPx that scales up with your weekly Prognostication points. Climbs fast at first, then evens out on huge weeks.",
+    "tipster": "FPx that grows with your weekly Prognostication points.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -756,9 +756,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. After the streak breaks, the bonus carries over and decays each week",
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
     # ── Prognostication cards ──
-    "conviction": "+{baseReward} FP base. Bonus climbs each week your manual-pick streak holds and evens out on long runs. After the streak breaks, the bonus carries over and decays each week",
+    "conviction": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds. After the streak breaks, the bonus carries over and decays each week",
     "augur": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
-    "tipster": "FPx scales up with your weekly Prognostication points. Climbs fast at first, evens out at high totals. Counts auto-picks",
+    "tipster": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
