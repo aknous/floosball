@@ -1093,6 +1093,98 @@ async def get_recent_off_day(limit: int = 30):
     return build_success_response(list(_recentOffDayEvents)[:capped])
 
 
+@app.get("/api/quotes/offday", response_model=Dict[str, Any])
+async def get_personalized_off_day_quotes(
+    count: int = 1,
+    user: Optional[_User] = Depends(_getOptionalUser),
+):
+    """Compose off-day quotes for players the calling user cares about
+    (favorite team roster, fantasy roster, followed players). Frontend
+    polls this when no games are live so the feed always surfaces
+    relevant content instead of broadcast-and-filter.
+
+    Returns the same payload shape as the WS `player_off_day` event.
+    Falls back to an empty array when the user has no scope (anon,
+    no favorite team / fantasy roster / followed players) or when
+    no eligible player happens to be rostered right now.
+    """
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    personalityMgr = getattr(floosball_app, 'personalityManager', None)
+    if personalityMgr is None or user is None:
+        return build_success_response([])
+
+    capped = max(1, min(count, 5))
+
+    # Build the user's player scope: favorite-team roster + fantasy
+    # roster + followed players. We resolve through the in-memory
+    # activePlayers list so personality data is already attached.
+    from database.models import FollowedPlayer, FantasyRoster, FantasyRosterPlayer, User as _UserModel
+    from database.connection import get_session as _getSession
+
+    scopedIds: set[int] = set()
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+
+    _s = _getSession()
+    try:
+        dbUser = _s.query(_UserModel).filter_by(id=user.id).first()
+        if dbUser and dbUser.favorite_team_id:
+            for p in floosball_app.playerManager.activePlayers:
+                team = getattr(p, 'team', None)
+                if getattr(team, 'id', None) == dbUser.favorite_team_id:
+                    scopedIds.add(p.id)
+        # Fantasy roster — current season's rostered player ids
+        roster = _s.query(FantasyRoster).filter_by(
+            user_id=user.id, season=currentSeason,
+        ).first()
+        if roster:
+            for rp in _s.query(FantasyRosterPlayer).filter_by(roster_id=roster.id).all():
+                if rp.player_id is not None:
+                    scopedIds.add(rp.player_id)
+        for fid, in _s.query(FollowedPlayer.player_id).filter_by(user_id=user.id).all():
+            scopedIds.add(fid)
+    finally:
+        _s.close()
+
+    if not scopedIds:
+        return build_success_response([])
+
+    def _isRostered(p):
+        if getattr(p, 'is_prospect', False):
+            return False
+        team = getattr(p, 'team', None)
+        return getattr(team, 'id', None) is not None
+
+    eligible = [
+        p for p in floosball_app.playerManager.activePlayers
+        if p.id in scopedIds
+        and getattr(getattr(p, 'attributes', None), 'personality', None)
+        and _isRostered(p)
+    ]
+    if not eligible:
+        return build_success_response([])
+
+    import random as _random
+    pickN = min(capped, len(eligible))
+    chosen = _random.sample(eligible, pickN)
+
+    out = []
+    for pl in chosen:
+        payload = personalityMgr.composeOffDay(pl)
+        if not payload:
+            continue
+        out.append(PlayerOffDayEvent.offDay(
+            playerId=payload.get('playerId'),
+            playerName=payload.get('playerName'),
+            teamId=payload.get('teamId'),
+            teamAbbr=payload.get('teamAbbr'),
+            personality=payload.get('personality'),
+            text=payload.get('text'),
+        ))
+    return build_success_response(out)
+
+
 # ============================================================================
 # REST API - SEASON & GAMES
 # ============================================================================
