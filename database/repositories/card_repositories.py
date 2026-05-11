@@ -446,10 +446,10 @@ class PackTypeRepository:
                 display_name='Exquisite Pack',
                 cost=750,
                 cards_per_pack=5,
-                cards_kept=4,
+                cards_kept=3,
                 guaranteed_rarity=None,
                 rarity_weights={'base': 15, 'holographic': 35, 'prismatic': 45, 'diamond': 12},
-                description='Reveal 5 cards, keep 4. Greatly increased drop rates.',
+                description='Reveal 5 cards, keep 3. Greatly increased drop rates.',
             ),
         ]
         for pt in defaults:
