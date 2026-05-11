@@ -6669,15 +6669,20 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
         if user:
             dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             for p in rotated:
+                # Only paid openings count toward the daily shop limit.
+                # Free grants (achievement rewards, starter packs) have
+                # cost=0 and must not consume the shop allowance.
                 committed = session.query(PackOpening).filter(
                     PackOpening.user_id == user.id,
                     PackOpening.pack_type_id == p.id,
                     PackOpening.opened_at >= dayStart,
+                    PackOpening.cost > 0,
                 ).count()
                 pending = session.query(PendingPackOpening).filter(
                     PendingPackOpening.user_id == user.id,
                     PendingPackOpening.pack_type_id == p.id,
                     PendingPackOpening.opened_at >= dayStart,
+                    PendingPackOpening.cost_paid > 0,
                 ).count()
                 todayCounts[p.id] = committed + pending
             dbUser = session.query(User).filter_by(id=user.id).first()
