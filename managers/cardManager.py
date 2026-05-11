@@ -713,7 +713,9 @@ class CardManager:
         if not packType:
             raise ValueError("Invalid pack type")
 
-        # Enforce daily purchase limit (skipped for free grants)
+        # Enforce daily purchase limit (skipped for free grants).
+        # Only count paid openings — free grants (cost=0) must not
+        # consume the daily limit.
         if not skipCurrency:
             dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
             if dailyLimit is not None:
@@ -725,6 +727,7 @@ class CardManager:
                     PackOpening.user_id == userId,
                     PackOpening.pack_type_id == packType.id,
                     PackOpening.opened_at >= dayStart,
+                    PackOpening.cost > 0,
                 ).count()
                 if todayCount >= dailyLimit:
                     raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
@@ -833,7 +836,8 @@ class CardManager:
                     raise ValueError(f"{packType.display_name} is not available in the shop right now")
 
             # Daily limit — counts both committed openings AND pending reveals
-            # so a user can't open + abandon + open again for the same pack today.
+            # so a user can't open + abandon + open again for the same pack
+            # today. Only paid openings count; free grants (cost=0) do not.
             dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
             if dailyLimit is not None:
                 now = datetime.utcnow()
@@ -842,11 +846,13 @@ class CardManager:
                     PackOpening.user_id == userId,
                     PackOpening.pack_type_id == packType.id,
                     PackOpening.opened_at >= dayStart,
+                    PackOpening.cost > 0,
                 ).count()
                 pendingCount = session.query(PendingPackOpening).filter(
                     PendingPackOpening.user_id == userId,
                     PendingPackOpening.pack_type_id == packType.id,
                     PendingPackOpening.opened_at >= dayStart,
+                    PendingPackOpening.cost_paid > 0,
                 ).count()
                 if committedCount + pendingCount >= dailyLimit:
                     raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
