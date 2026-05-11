@@ -479,6 +479,16 @@ class SeasonManager:
 
             weekStartTime = week['startTime']
 
+            # Pre-set the countdown cache so the /api/season `next_game_start_time`
+            # field is correct during the long pre-game await below. Without this,
+            # the cache stays None until `await waitForWeekSetup` returns, and the
+            # API's fallback path (`getNextGameStartTime(currentWeek)`) lands on
+            # `schedule[currentWeek]` which is *next* week — off by one hour.
+            # Reproduced after a server restart that lands between rounds with
+            # `activeGames` reset to the upcoming week but no cache.
+            if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
+                self._cachedNextGameStart = weekStartTime
+
             # Detect catch-up: current time is past this week's scheduled start
             if self.timingManager._isScheduledMode:
                 isBehindSchedule = datetime.datetime.utcnow() > weekStartTime
