@@ -1632,7 +1632,10 @@ async def get_history_seasons(response: Response):
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     from database.connection import get_session
-    from database.models import Season as DBSeason, Team as DBTeam, Player as DBPlayer
+    from database.models import (
+        Season as DBSeason, Team as DBTeam, Player as DBPlayer,
+        PlayerSeasonStats as DBPlayerSeasonStats,
+    )
     session = get_session()
     try:
         sm = floosball_app.seasonManager
@@ -1648,6 +1651,23 @@ async def get_history_seasons(response: Response):
         for s in rows:
             team = session.get(DBTeam, s.champion_team_id) if s.champion_team_id else None
             mvp = session.get(DBPlayer, s.mvp_player_id) if s.mvp_player_id else None
+            # MVP team for that season — pulled from player_season_stats so it
+            # reflects who they played for at the time, not who they're on now.
+            mvpTeamId: Optional[int] = None
+            mvpTeamAbbr: Optional[str] = None
+            if s.mvp_player_id:
+                pss = session.query(DBPlayerSeasonStats).filter_by(
+                    player_id=s.mvp_player_id, season=s.season_number,
+                ).first()
+                if pss and pss.team_id:
+                    mvpTeamId = pss.team_id
+                    mvpTeam = session.get(DBTeam, pss.team_id)
+                    if mvpTeam:
+                        mvpTeamAbbr = mvpTeam.abbr
+            # Player.position is stored as the FloosPlayer.Position enum value
+            # (1=QB, 2=RB, 3=WR, 4=TE, 5=K). Surface the readable name.
+            _POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+            mvpPositionName = _POS_NAMES.get(getattr(mvp, 'position', None)) if mvp else None
             seasons.append({
                 "seasonNumber": s.season_number,
                 "championTeamId": s.champion_team_id,
@@ -1656,7 +1676,9 @@ async def get_history_seasons(response: Response):
                 "championTeamColor": getattr(team, 'color', None),
                 "mvpPlayerId": s.mvp_player_id,
                 "mvpPlayerName": getattr(mvp, 'name', None),
-                "mvpPosition": getattr(mvp, 'position', None),
+                "mvpPosition": mvpPositionName,
+                "mvpTeamId": mvpTeamId,
+                "mvpTeamAbbr": mvpTeamAbbr,
             })
         return build_success_response({"seasons": seasons})
     finally:
