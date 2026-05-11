@@ -1896,6 +1896,94 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
         session.close()
 
 
+@app.get("/api/history/user-records")
+async def get_history_user_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
+    """Top-N fantasy records across users.
+
+    weeklyFP — best single-week FP total (roster player FP + card bonus)
+    seasonFP — best single-season FP total
+    Both pull from WeeklyPlayerFP (per player per week) joined to a user's
+    locked FantasyRoster, summed with WeeklyCardBonus. Swap nuance is
+    ignored for record-book purposes; the order is dominated by
+    consistent-roster users either way.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from sqlalchemy import text
+    from database.connection import get_session
+    from database.models import User
+    session = get_session()
+    try:
+        # Weekly per-user player FP totals (sum across the user's roster).
+        weeklyPlayerRows = session.execute(text("""
+            SELECT fr.user_id AS user_id, fr.season AS season, wpf.week AS week,
+                   SUM(wpf.fantasy_points) AS player_fp
+            FROM fantasy_rosters fr
+            JOIN fantasy_roster_players frp ON frp.roster_id = fr.id
+            JOIN weekly_player_fp wpf ON wpf.player_id = frp.player_id AND wpf.season = fr.season
+            GROUP BY fr.user_id, fr.season, wpf.week
+        """)).fetchall()
+        # Weekly card bonuses keyed by (user, season, week).
+        cardWeekRows = session.execute(text("""
+            SELECT user_id, season, week, bonus_fp FROM weekly_card_bonuses
+        """)).fetchall()
+        cardByWeek: Dict[tuple, float] = {
+            (r.user_id, r.season, r.week): float(r.bonus_fp or 0) for r in cardWeekRows
+        }
+
+        weeklyTotals = []
+        for r in weeklyPlayerRows:
+            cb = cardByWeek.get((r.user_id, r.season, r.week), 0.0)
+            weeklyTotals.append((r.user_id, r.season, r.week, float(r.player_fp or 0) + cb))
+        weeklyTotals.sort(key=lambda t: t[3], reverse=True)
+        weeklyTotals = weeklyTotals[:limit]
+
+        # Season totals: sum across weeks.
+        seasonPlayerRows = session.execute(text("""
+            SELECT fr.user_id AS user_id, fr.season AS season,
+                   SUM(wpf.fantasy_points) AS player_fp
+            FROM fantasy_rosters fr
+            JOIN fantasy_roster_players frp ON frp.roster_id = fr.id
+            JOIN weekly_player_fp wpf ON wpf.player_id = frp.player_id AND wpf.season = fr.season
+            GROUP BY fr.user_id, fr.season
+        """)).fetchall()
+        cardSeasonRows = session.execute(text("""
+            SELECT user_id, season, SUM(bonus_fp) AS bonus_fp
+            FROM weekly_card_bonuses
+            GROUP BY user_id, season
+        """)).fetchall()
+        cardBySeason: Dict[tuple, float] = {
+            (r.user_id, r.season): float(r.bonus_fp or 0) for r in cardSeasonRows
+        }
+        seasonTotals = []
+        for r in seasonPlayerRows:
+            cb = cardBySeason.get((r.user_id, r.season), 0.0)
+            seasonTotals.append((r.user_id, r.season, float(r.player_fp or 0) + cb))
+        seasonTotals.sort(key=lambda t: t[2], reverse=True)
+        seasonTotals = seasonTotals[:limit]
+
+        # Resolve usernames in one batch
+        userIds = {uid for (uid, *_rest) in weeklyTotals} | {uid for (uid, *_rest) in seasonTotals}
+        users = session.query(User).filter(User.id.in_(userIds)).all() if userIds else []
+        nameByUser = {u.id: (u.username or u.email or f"User {u.id}") for u in users}
+
+        return build_success_response({
+            "weeklyFP": [
+                {"userId": uid, "username": nameByUser.get(uid, f"User {uid}"),
+                 "value": round(v, 1), "season": s, "week": w}
+                for uid, s, w, v in weeklyTotals
+            ],
+            "seasonFP": [
+                {"userId": uid, "username": nameByUser.get(uid, f"User {uid}"),
+                 "value": round(v, 1), "season": s}
+                for uid, s, v in seasonTotals
+            ],
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/reigning-champion")
 async def get_reigning_champion(response: Response):
     """Return the previous season's Floosbowl champion (for navbar display)."""
