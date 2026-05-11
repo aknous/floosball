@@ -9201,15 +9201,18 @@ def listAchievements(user: _User = Depends(_getCurrentUser)):
 @app.get("/api/achievements/pending-rewards")
 def listPendingRewards(user: _User = Depends(_getCurrentUser)):
     """List unclaimed pack/powerup rewards the user has earned. Includes canDefer
-    flag for pack rewards when late-season deferral is currently offered."""
+    flag for pack rewards when late-season or offseason deferral is offered."""
     from database.connection import get_session
     from managers import achievementManager
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    isOffseason = (getattr(sm.currentSeason, 'currentWeekText', '') == 'Offseason') if sm and sm.currentSeason else False
     session = get_session()
     try:
-        rewards = achievementManager.getPendingRewards(session, user.id, currentSeason, currentWeek)
+        rewards = achievementManager.getPendingRewards(
+            session, user.id, currentSeason, currentWeek, isOffseason=isOffseason,
+        )
         return build_success_response({"rewards": rewards, "currentWeek": currentWeek, "season": currentSeason})
     finally:
         session.close()
@@ -9227,9 +9230,11 @@ def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     if not currentSeason:
         raise HTTPException(status_code=400, detail="No active season")
-    weeksLeft = max(0, achievementManager.REGULAR_SEASON_WEEKS - currentWeek)
-    if weeksLeft > achievementManager.DEFER_OFFER_WEEKS_REMAINING:
-        raise HTTPException(status_code=400, detail="Deferral only available late in the regular season")
+    isOffseason = (getattr(sm.currentSeason, 'currentWeekText', '') == 'Offseason') if sm and sm.currentSeason else False
+    weeksLeft = max(0, achievementManager.REGULAR_SEASON_WEEKS - currentWeek) if currentWeek else achievementManager.REGULAR_SEASON_WEEKS
+    lateSeason = weeksLeft <= achievementManager.DEFER_OFFER_WEEKS_REMAINING and currentWeek > 0
+    if not (lateSeason or isOffseason):
+        raise HTTPException(status_code=400, detail="Deferral only available late in the regular season or during offseason")
 
     session = get_session()
     try:

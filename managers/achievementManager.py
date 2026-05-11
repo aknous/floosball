@@ -358,7 +358,7 @@ REGULAR_SEASON_WEEKS = 28
 
 
 def getPendingRewards(session: Session, userId: int, currentSeason: int = 0,
-                      currentWeek: int = 0) -> List[Dict[str, Any]]:
+                      currentWeek: int = 0, isOffseason: bool = False) -> List[Dict[str, Any]]:
     """List unclaimed rewards for the user, with canDefer flag for late-season packs."""
     rows = session.query(PendingReward).filter(
         PendingReward.user_id == userId,
@@ -367,13 +367,19 @@ def getPendingRewards(session: Session, userId: int, currentSeason: int = 0,
 
     weeksLeft = max(0, REGULAR_SEASON_WEEKS - currentWeek) if currentWeek else REGULAR_SEASON_WEEKS
     lateSeason = weeksLeft <= DEFER_OFFER_WEEKS_REMAINING and currentWeek > 0
+    # Offseason is treated as deferral-eligible too — currentWeek resets to 0
+    # at offseason start, which would otherwise hide the option during the
+    # exact window when a user is most likely to come back and clean up
+    # unclaimed pack rewards.
+    deferEligible = lateSeason or isOffseason
 
     out = []
     for r in rows:
-        # Defer option only shown for packs, only when late-season, and only if not already deferred
+        # Defer option only shown for packs, only during the eligible window,
+        # and only if not already deferred.
         canDefer = (
             r.kind == "pack"
-            and lateSeason
+            and deferEligible
             and r.defer_until_season is None
             and currentSeason > 0
         )
