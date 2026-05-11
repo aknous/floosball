@@ -375,11 +375,11 @@ def getPendingRewards(session: Session, userId: int, currentSeason: int = 0,
 
     out = []
     for r in rows:
-        # Defer option only shown for packs, only during the eligible window,
-        # and only if not already deferred.
+        # Defer option shown for any unclaimed reward during the eligible
+        # window (late regular season or offseason), as long as it hasn't
+        # already been deferred. Applies to packs and powerups.
         canDefer = (
-            r.kind == "pack"
-            and deferEligible
+            deferEligible
             and r.defer_until_season is None
             and currentSeason > 0
         )

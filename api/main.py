@@ -9220,8 +9220,9 @@ def listPendingRewards(user: _User = Depends(_getCurrentUser)):
 
 @app.post("/api/achievements/reward/{rewardId}/defer")
 def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
-    """Hold a pending pack reward until next season. Only allowed on packs,
-    only once per reward, and only while defer is currently offered (late regular season)."""
+    """Hold an unclaimed reward (pack or powerup) until next season. Allowed
+    once per reward, and only while defer is currently offered (late regular
+    season or offseason)."""
     from database.connection import get_session
     from database.models import PendingReward
     from managers import achievementManager
@@ -9246,8 +9247,6 @@ def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             raise HTTPException(status_code=404, detail="Reward not found")
         if reward.claimed_at is not None:
             raise HTTPException(status_code=400, detail="Reward already claimed")
-        if reward.kind != "pack":
-            raise HTTPException(status_code=400, detail="Only pack rewards can be deferred")
         if reward.defer_until_season is not None:
             raise HTTPException(status_code=400, detail="Reward already deferred")
         reward.defer_until_season = currentSeason + 1
