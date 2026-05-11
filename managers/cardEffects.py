@@ -2544,6 +2544,8 @@ def _computeMedium(primary, ctx, cardPlayerId, eqId):
     correct = int(getattr(ctx, 'userWeeklyPickemCorrect', 0) or 0)
     total = int(getattr(ctx, 'userWeeklyPickemTotal', 0) or 0)
     if total <= 0:
+        if getattr(ctx, 'gamesActive', False):
+            return EffectResult(equation="Waiting for game results")
         return EffectResult(equation="No Prognostications submitted this week")
     accuracy = correct / total
     lowFP = primary.get("lowFP", 4.0)
@@ -2576,6 +2578,8 @@ def _computeParlay(primary, ctx, cardPlayerId, eqId):
     coef = primary.get("coef", 0.10)
     k = primary.get("kPoints", 40)
     if points <= 0:
+        if getattr(ctx, 'gamesActive', False):
+            return EffectResult(multBonus=baseXMult, equation="Waiting for game results")
         return EffectResult(multBonus=baseXMult, equation="No Prognostication points this week")
     mult = baseXMult + coef * math.log(1 + points / k)
     mult = round(mult, 2)
