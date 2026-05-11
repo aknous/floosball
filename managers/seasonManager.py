@@ -550,6 +550,17 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
 
+            # Anomaly system weekly tick: applies attention decay,
+            # accumulates this week's engagement contributions, advances
+            # the state ladder, and recomputes the league-wide aggregate
+            # toward the Thinning threshold. Wrapped defensively so a
+            # failure in this layer never blocks the actual game loop.
+            try:
+                from managers.anomalyManager import weeklyTick as anomalyWeeklyTick
+                anomalyWeeklyTick(self.currentSeason.seasonNumber, nextWeek)
+            except Exception as e:
+                logger.warning(f"Anomaly weekly tick at week {nextWeek} failed: {e}")
+
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
                 self._cachedNextGameStart = weekStartTime
