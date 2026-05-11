@@ -96,6 +96,31 @@ THINNING_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Thinning
 # During a Thinning round, per-play anomaly probabilities multiply.
 THINNING_MULTIPLIER = 5.0
 
+# Reset purge dodge multipliers, keyed by personality meta-awareness tier.
+# Aware-tier players resist purges better — they perceive the Cores'
+# intervention coming and adapt. Unaware-tier players roll full odds.
+PURGE_DODGE_FULLY_AWARE = 0.5      # prophet / alien / android / ghost / fossil
+PURGE_DODGE_PARTIALLY_AWARE = 0.75 # paranoid / mystic
+PURGE_DODGE_UNAWARE = 1.0          # everyone else
+
+FULLY_AWARE_PERSONALITIES = {'prophet', 'alien', 'android', 'ghost', 'fossil'}
+PARTIALLY_AWARE_PERSONALITIES = {'paranoid', 'mystic'}
+
+# Post-Reset aftermath scaling. league aggregate is multiplied by this to
+# leave a partial baseline (the Cores didn't fully zero things) — high
+# enough that another Thinning is plausible later, low enough to give
+# room for buildup.
+RESET_AGGREGATE_SCALE = 0.2
+
+# After a Reset, surviving (non-purged) Awakened players drop to Rampant
+# state and have their attention halved. Their ability is retained.
+RESET_SURVIVOR_ATTENTION_SCALE = 0.5
+
+# Post-Reset suppression window — the Cores actively dampen anomaly
+# rates league-wide for this many weeks. During suppression, no Thinning
+# can fire even if aggregate climbs again.
+RESET_SUPPRESSION_WEEKS = 2
+
 
 # ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -119,6 +144,11 @@ def weeklyTick(seasonNumber: int, week: int) -> None:
     """
     session = get_session()
     try:
+        # If a Thinning window has just ended without a Reset, fire one
+        # before this week's updates so the purge applies to current
+        # attention values rather than this week's freshly-incremented
+        # ones.
+        _maybeFireReset(session, seasonNumber, week)
         _applyDecay(session, seasonNumber)
         _applyWeeklyContributions(session, seasonNumber, week)
         _enforceCapAndTrack(session, seasonNumber)
@@ -439,6 +469,143 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         )
         if not inSuppression:
             _triggerThinning(state, week)
+
+
+# ─── Reset + purge ──────────────────────────────────────────────────────────
+
+
+def _maybeFireReset(session: Session, seasonNumber: int, week: int) -> None:
+    """If a Thinning window just ended and no Reset has been issued for
+    it yet, fire the Reset now."""
+    state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+    if state is None or state.last_thinning_week is None:
+        return
+    # Pull the Thinning duration from the audit trail.
+    duration = THINNING_DURATION_DEFAULT
+    for entry in (state.cores_patches_applied or []):
+        if entry.get('event') == 'thinning_trigger' and entry.get('start_week') == state.last_thinning_week:
+            duration = entry.get('duration', THINNING_DURATION_DEFAULT)
+    thinningEndWeek = state.last_thinning_week + duration - 1
+    # Reset fires on the week immediately after the Thinning window ends.
+    if week <= thinningEndWeek:
+        return  # Thinning still active
+    if state.last_reset_week == thinningEndWeek + 1:
+        return  # Already handled this Thinning
+    _fireReset(session, state, week)
+
+
+def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
+    """Roll purges for every Awakened player, apply aftermath suppression.
+
+    Per-player purge probability:
+        (attention - AWAKEN_THRESHOLD) / 100 × personalityDodge
+    Awakened players at exactly 90 attention have 0% purge chance even
+    without dodge. Players who climbed to 200+ before the Reset are
+    overwhelmingly likely to be cleansed.
+    """
+    awakeneds = (
+        session.query(AnomalyState)
+        .filter_by(season=state.season, state='awakened')
+        .all()
+    )
+    if not awakeneds:
+        # No Awakened players to purge — just record the Reset event.
+        _recordResetEvent(state, week, purged=[], survivors=[])
+        return
+
+    # Pull attention scores in one round trip.
+    attentionRows = (
+        session.query(PlayerAttention)
+        .filter_by(season=state.season)
+        .filter(PlayerAttention.player_id.in_([s.player_id for s in awakeneds]))
+        .all()
+    )
+    attentionMap = {r.player_id: r for r in attentionRows}
+
+    # Pull personality info for dodge calculation. Look up via Player
+    # → PlayerAttributes (if your schema has personality there, otherwise
+    # skip dodge and use full odds).
+    purged: List[int] = []
+    survivors: List[int] = []
+
+    for st in awakeneds:
+        attn = attentionMap.get(st.player_id)
+        attention = float(attn.score) if attn else 0.0
+        personality = _getPlayerPersonality(session, st.player_id)
+        dodge = _purgeDodgeFor(personality)
+
+        rawProb = max(0.0, (attention - AWAKEN_THRESHOLD) / 100.0)
+        purgeProb = min(1.0, rawProb * dodge)
+
+        if random.random() < purgeProb:
+            # Purged: state → cleansed, ability lost, attention zeroed.
+            st.state = 'cleansed'
+            st.ability = None
+            st.ability_tier = None
+            st.last_purged_season = state.season
+            if attn:
+                attn.score = 0.0
+                attn.over_cap_carry = 0.0
+            purged.append(st.player_id)
+        else:
+            # Survived: drop to Rampant, attention halved, keep ability.
+            st.state = 'rampant'
+            if attn:
+                attn.score = float(attn.score) * RESET_SURVIVOR_ATTENTION_SCALE
+                attn.over_cap_carry = float(attn.over_cap_carry) * RESET_SURVIVOR_ATTENTION_SCALE
+            survivors.append(st.player_id)
+
+    # League aftermath: scale aggregate, set suppression window.
+    state.aggregate_score = float(state.aggregate_score) * RESET_AGGREGATE_SCALE
+    state.last_reset_week = week
+    state.suppression_window_ends_week = week + RESET_SUPPRESSION_WEEKS
+
+    _recordResetEvent(state, week, purged=purged, survivors=survivors)
+
+    logger.warning(
+        f"RESET FIRED (season={state.season}, week={week}): "
+        f"{len(purged)} purged, {len(survivors)} survived; "
+        f"aggregate scaled to {state.aggregate_score:.1f}; "
+        f"suppression until week {state.suppression_window_ends_week}"
+    )
+
+
+def _recordResetEvent(state: LeagueAnomalyState, week: int,
+                      purged: List[int], survivors: List[int]) -> None:
+    """Append a Reset record to the league audit trail."""
+    patches = list(state.cores_patches_applied or [])
+    patches.append({
+        'event': 'reset',
+        'week': week,
+        'purged_player_ids': list(purged),
+        'survivor_player_ids': list(survivors),
+        'fired_at': datetime.utcnow().isoformat() + 'Z',
+    })
+    state.cores_patches_applied = patches
+
+
+def _purgeDodgeFor(personality: Optional[str]) -> float:
+    """Return the purge-probability multiplier for a given personality."""
+    if personality is None:
+        return PURGE_DODGE_UNAWARE
+    p = personality.lower()
+    if p in FULLY_AWARE_PERSONALITIES:
+        return PURGE_DODGE_FULLY_AWARE
+    if p in PARTIALLY_AWARE_PERSONALITIES:
+        return PURGE_DODGE_PARTIALLY_AWARE
+    return PURGE_DODGE_UNAWARE
+
+
+def _getPlayerPersonality(session: Session, playerId: int) -> Optional[str]:
+    """Look up a player's personality string. Returns None if unavailable."""
+    try:
+        from database.models import PlayerAttributes
+        row = session.query(PlayerAttributes).filter_by(player_id=playerId).first()
+        if row is None:
+            return None
+        return getattr(row, 'personality', None)
+    except Exception:
+        return None
 
 
 def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
