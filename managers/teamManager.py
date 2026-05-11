@@ -1459,7 +1459,7 @@ class TeamManager:
                 self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
 
-    def generateCoachPool(self, count: int = 5) -> None:
+    def generateCoachPool(self, count: int = 12) -> None:
         """Top up the unassigned coach pool to `count` entries.
 
         Preserves existing pool entries — earlier versions of this method
