@@ -1670,7 +1670,7 @@ async def get_history_standings(season: int, response: Response):
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     from database.connection import get_session
-    from database.models import Game as DBGame, Team as DBTeam
+    from database.models import Game as DBGame, Team as DBTeam, TeamSeasonStats as DBTeamSeasonStats
     session = get_session()
     try:
         games = session.query(DBGame).filter(
@@ -1701,6 +1701,11 @@ async def get_history_standings(season: int, response: Response):
             else:
                 home["ties"] += 1
                 away["ties"] += 1
+        # End-of-season ELO from team_season_stats (keyed by team + season)
+        eloRows = session.query(
+            DBTeamSeasonStats.team_id, DBTeamSeasonStats.elo,
+        ).filter(DBTeamSeasonStats.season == season).all()
+        eloByTeam: Dict[int, Optional[int]] = {r.team_id: r.elo for r in eloRows}
         teams = []
         for tid, rec in records.items():
             team = session.get(DBTeam, tid)
@@ -1719,6 +1724,7 @@ async def get_history_standings(season: int, response: Response):
                 "pointsFor": rec["pointsFor"],
                 "pointsAgainst": rec["pointsAgainst"],
                 "winPct": round(winPct, 3),
+                "elo": eloByTeam.get(tid),
             })
         teams.sort(key=lambda t: (-t["winPct"], -(t["pointsFor"] - t["pointsAgainst"]), -t["pointsFor"]))
         return build_success_response({"season": season, "teams": teams})
