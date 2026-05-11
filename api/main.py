@@ -27,6 +27,11 @@ from api_response_builders import (
 )
 from avatar_generator import getAvatarGenerator
 import floosball_game as FloosGame
+# Auth deps used by handlers defined early in the file (e.g. /api/players
+# with the 'followed' status filter). Later sections re-import these
+# closer to their use; that's fine — module-level imports are idempotent.
+from api.auth import getOptionalUser as _getOptionalUser
+from database.models import User as _User
 
 logger = get_logger("floosball.api")
 
