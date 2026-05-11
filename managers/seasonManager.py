@@ -285,6 +285,19 @@ class SeasonManager:
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
 
+        # Dev-only: spread teams across all 4 funding tiers so single-user
+        # testing produces a realistic tier distribution. Set DEV_SPREAD_TIERS=1
+        # in the environment to enable. Teams are assigned by ID into 4 equal
+        # buckets (deterministic — same team gets same tier every season).
+        self._applyDevTierOverride()
+
+        # Set prior-season expectation pressure baselines (must run after
+        # statArchive is populated by season completion last year — which it
+        # has been by this point — and after funding tier is assigned so
+        # market scaling can read the right value at game time).
+        teamMgr = self.serviceContainer.getService('team_manager')
+        teamMgr.setPressureModifiersForNewSeason(seasonNumber)
+
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
@@ -508,6 +521,18 @@ class SeasonManager:
             # empty week).  For week 1, this was already set above.
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
+
+            # Recompute regular-season pressure blend: prior-season expectations
+            # wane over the first ~14 weeks while inSeasonPressure (set by
+            # standings/elimination logic) takes over. Playoff weeks set
+            # pressureModifier directly elsewhere and are not affected here.
+            try:
+                teamMgr = self.serviceContainer.getService('team_manager')
+                teamMgr.applyRegularSeasonPressureBlend(
+                    nextWeek, season=self.currentSeason.seasonNumber,
+                )
+            except Exception as e:
+                logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
 
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
@@ -1494,6 +1519,70 @@ class SeasonManager:
                     streakCounts = {
                         eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
                     }
+                    # Streak peak-decay state — feeds _computeStreakEffect so a
+                    # cold week after a recent streak pays a decaying tail
+                    # instead of dropping straight to base.
+                    streakPeakOutputs = {
+                        eq.id: float(eq.peak_output) for eq in userEquipped
+                        if getattr(eq, 'peak_output', None) is not None
+                    }
+                    streakWeeksSinceBreak = {
+                        eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0)
+                        for eq in userEquipped
+                    }
+
+                    # Roster-trait card data (for Castaway, Rookie Hype) ──
+                    # Team records: team_id → win pct, used by Castaway to detect
+                    # sub-.500 team players on the roster.
+                    teamRecords = {}
+                    if teamManager:
+                        for team in teamManager.teams:
+                            stats = getattr(team, 'seasonTeamStats', {}) or {}
+                            wp = stats.get('winPerc')
+                            if wp is None:
+                                w = stats.get('wins', 0) or 0
+                                l = stats.get('losses', 0) or 0
+                                wp = w / (w + l) if (w + l) > 0 else 0.5
+                            teamRecords[team.id] = float(wp)
+                    # Rookie flags: playerId → True if rookie. Used by Rookie Hype.
+                    # Matches the "Rookie" service tier (seasonsPlayed 0–1) so
+                    # the card fires for the same players the UI labels as
+                    # rookies, not just the strict first-year subset.
+                    rosterRookieFlags = {}
+                    if self.playerManager:
+                        for pid in rosterPlayerIds:
+                            player = self.playerManager.getPlayerById(pid)
+                            if player:
+                                svc = getattr(player, 'serviceTime', None)
+                                isRookieSvc = bool(svc and getattr(svc, 'name', '') == 'Rookie')
+                                rosterRookieFlags[pid] = bool(
+                                    isRookieSvc
+                                    or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
+                                )
+
+                    # Pick-em stats this user/week — drives Conviction (manual
+                    # submit streak), Augur (accuracy bonus), Tipster (FPx
+                    # scaling with weekly points).
+                    userManualPickSubmittedThisWeek = False
+                    userWeeklyPickemCorrect = 0
+                    userWeeklyPickemTotal = 0
+                    userWeeklyPickemPoints = 0
+                    try:
+                        from database.models import PickEmPick
+                        weekPicks = session.query(PickEmPick).filter_by(
+                            user_id=userId, season=season, week=week,
+                        ).all()
+                        if weekPicks:
+                            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+                            for p in weekPicks:
+                                if p.correct is True:
+                                    userWeeklyPickemCorrect += 1
+                                    userWeeklyPickemTotal += 1
+                                elif p.correct is False:
+                                    userWeeklyPickemTotal += 1
+                                userWeeklyPickemPoints += int(p.points_earned or 0)
+                    except Exception as e:
+                        logger.debug(f"Pick-em ctx hydration skipped for user={userId} wk={week}: {e}")
 
                     # User's favorite team data
                     userRow = session.get(User, userId)
@@ -1632,6 +1721,14 @@ class SeasonManager:
                         rosterTotalTds=rosterTotalTds,
                         rosterPlayerPositions=rosterPlayerPositions,
                         streakCounts=streakCounts,
+                        streakPeakOutputs=streakPeakOutputs,
+                        streakWeeksSinceBreak=streakWeeksSinceBreak,
+                        _teamRecords=teamRecords,
+                        _rosterRookieFlags=rosterRookieFlags,
+                        userManualPickSubmittedThisWeek=userManualPickSubmittedThisWeek,
+                        userWeeklyPickemCorrect=userWeeklyPickemCorrect,
+                        userWeeklyPickemTotal=userWeeklyPickemTotal,
+                        userWeeklyPickemPoints=userWeeklyPickemPoints,
                         userFavoriteTeamId=userFavoriteTeamId,
                         favoriteTeamElo=favoriteTeamElo,
                         leagueAverageElo=leagueAverageElo,
@@ -1800,9 +1897,32 @@ class SeasonManager:
                                 conditionMet = checkStreakCondition(
                                     effectName, calcCtx, eq.user_card.card_template.player_id
                                 )
+                            cfg = STREAK_CONFIGS.get(effectName, {})
+                            isNoReset = cfg.get("noReset", False)
+                            isWeekly = cfg.get("isWeekly", False)
                             if conditionMet:
                                 eq.streak_count = getattr(eq, 'streak_count', 0) + 1
-                            elif not STREAK_CONFIGS.get(effectName, {}).get("noReset", False):
+                                # Snapshot the in-streak output as the new peak
+                                # so a future streak-break can decay from it.
+                                # peak-decay only applies to season streaks
+                                # (skip weekly accumulators and noReset cards).
+                                if not isWeekly and not isNoReset:
+                                    weekOutput = self._extractStreakOutput(result, eq, effectConfig)
+                                    if weekOutput is not None:
+                                        eq.peak_output = weekOutput
+                                    eq.weeks_since_break = 0
+                            elif not isNoReset:
+                                # Streak just broke OR has been broken. Track decay tail.
+                                if not isWeekly:
+                                    if (eq.streak_count or 0) > 0:
+                                        # First cold week: streak just broke. The compute
+                                        # this week already paid the held peak; from next
+                                        # week we begin decaying.
+                                        eq.weeks_since_break = 1
+                                    elif eq.peak_output is not None:
+                                        # Already in decay tail — increment week counter
+                                        # so next compute decays one step further.
+                                        eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
                                 eq.streak_count = 0
                             # If noReset=True and condition not met, streak stays unchanged
 
@@ -1960,10 +2080,13 @@ class SeasonManager:
         """
         # A. Reset team playoff state to prevent stacked modifiers and stale flags
         teamManager = self.serviceContainer.getService('team_manager')
+        from managers.teamManager import logPressureDiag
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else None
         for team in teamManager.teams:
             team.eliminated = False
             team.leagueChampion = False
             team.pressureModifier = 1.0
+            logPressureDiag(team, "playoff_reset", season=seasonNum, week=getattr(self.currentSeason, 'currentWeek', None))
 
         # B. Clear freeAgencyOrder — it gets rebuilt during playoffs
         self.currentSeason.freeAgencyOrder = []
@@ -3132,12 +3255,16 @@ class SeasonManager:
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
                             team.pressureModifier = 1.5
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, "playoff_r1", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
                     else:
                         teamsInRound.extend(playoffTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
                             team.pressureModifier += .2
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
                     list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
@@ -3211,6 +3338,9 @@ class SeasonManager:
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
+                from managers.teamManager import logPressureDiag
+                logPressureDiag(newGame.homeTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
+                logPressureDiag(newGame.awayTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
             # Track playoff round so pick-em can use virtual week numbers (29+)
             self.currentSeason.currentPlayoffRound = currentRound
@@ -4146,6 +4276,10 @@ class SeasonManager:
             from database.connection import get_session
             from database.models import User, UserCurrency
             from api.auth import _provisionStarterPack
+            # Pass currentSeason explicitly — at boot time this runs BEFORE
+            # api.main.floosball_app is wired, so _provisionStarterPack's
+            # fallback lookup of seasonManager wouldn't find anything.
+            currentSeason = self.currentSeason.seasonNumber if self.currentSeason else None
             session = get_session()
             usersWithoutCurrency = (
                 session.query(User)
@@ -4157,7 +4291,7 @@ class SeasonManager:
                 session.close()
                 return
             for user in usersWithoutCurrency:
-                _provisionStarterPack(session, user)
+                _provisionStarterPack(session, user, currentSeason=currentSeason)
             session.commit()
             session.close()
             logger.info(f"Re-provisioned starter packs for {len(usersWithoutCurrency)} existing user(s)")
@@ -5371,7 +5505,7 @@ class SeasonManager:
             }
 
             gm = GmManager(session, lowQuorum=self._isTestMode)
-            directives, positionRankings = gm.resolveSignFaVotes(
+            directives, overallRankings = gm.resolveSignFaVotes(
                 teamManager.teams, season,
                 freeAgentLists, teamOpenPositions
             )
@@ -5382,12 +5516,9 @@ class SeasonManager:
             if directives:
                 logger.info(f"GM FA directives for {len(directives)} team(s)")
 
-            # Build enriched per-team per-position ranking structure so the
-            # UI can show fans' tallied votes for every open position across
-            # the league (not just the user's favorite team). Uses team's
-            # prospects pool in addition to FAs so promoted prospects still
-            # resolve by ID.
-            POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+            # Build enriched per-team flat ranking. Each entry carries its
+            # own position name so the UI can render position chips on a
+            # single ordered list.
             playerLookup = {p.id: p for p in self.playerManager.freeAgents}
             for t in teamManager.teams:
                 for p in getattr(t, 'prospects', []):
@@ -5396,32 +5527,27 @@ class SeasonManager:
                     if p is not None:
                         playerLookup[p.id] = p
             teamLookup = {t.id: t for t in teamManager.teams}
-            enrichedPositionRankings = {}
-            for tId, perPos in positionRankings.items():
+            enrichedFaRankings: Dict[str, list] = {}
+            for tId, playerIds in overallRankings.items():
                 team = teamLookup.get(tId)
                 teamAbbr = getattr(team, 'abbr', None) if team else None
                 if not teamAbbr:
                     continue
-                posEntry = {}
-                for posValue, playerIds in perPos.items():
-                    posName = POS_NAMES.get(posValue, str(posValue))
-                    entries = []
-                    for pid in playerIds:
-                        p = playerLookup.get(pid)
-                        if not p:
-                            continue
-                        entries.append({
-                            "id": p.id,
-                            "name": p.name,
-                            "position": p.position.name,
-                            "rating": round(getattr(p, 'playerRating', 0), 1),
-                            "isProspect": bool(getattr(p, 'is_prospect', False)),
-                        })
-                    if entries:
-                        posEntry[posName] = entries
-                if posEntry:
-                    enrichedPositionRankings[teamAbbr] = posEntry
-            self._offseasonFaVoteResults = enrichedPositionRankings
+                entries = []
+                for pid in playerIds:
+                    p = playerLookup.get(pid)
+                    if not p:
+                        continue
+                    entries.append({
+                        "id": p.id,
+                        "name": p.name,
+                        "position": p.position.name,
+                        "rating": round(getattr(p, 'playerRating', 0), 1),
+                        "isProspect": bool(getattr(p, 'is_prospect', False)),
+                    })
+                if entries:
+                    enrichedFaRankings[teamAbbr] = entries
+            self._offseasonFaVoteResults = enrichedFaRankings
 
             # Broadcast directives to frontend with player details
             if BROADCASTING_AVAILABLE and broadcaster and directives:
@@ -5442,7 +5568,7 @@ class SeasonManager:
                                 })
                     from api.event_models import GmEvent
                     event = GmEvent.faDirectives(enriched)
-                    event['positionRankings'] = enrichedPositionRankings
+                    event['faRankings'] = enrichedFaRankings
                     await broadcaster.broadcast_season_event(event)
                 except Exception as e:
                     logger.warning(f"Could not broadcast FA directives: {e}")
@@ -5582,14 +5708,17 @@ class SeasonManager:
         logger.info(f"Generated {numOfPlayers} new players to replace retirees")
     
     def _getUnusedName(self) -> str:
-        """Get an unused name from the pool"""
+        """Get an unused name from the pool, skipping any already attached to
+        a live player or coach. Goes through playerManager.popUniqueName so
+        polluted entries get dropped instead of producing a duplicate.
+        Falls back to a numeric placeholder if the pool is exhausted.
+        """
         from random import randint
-        
-        if not self.playerManager.unusedNames:
+        name = self.playerManager.popUniqueName()
+        if name is None:
             logger.error("No unused names available!")
             return f"Player {randint(1000, 9999)}"
-        
-        return self.playerManager.unusedNames.pop(randint(0, len(self.playerManager.unusedNames) - 1))
+        return name
     
     async def _updateTeamRatings(self) -> None:
         """Update team ratings and defenses based on current rosters"""
@@ -6212,6 +6341,34 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _extractStreakOutput(self, calcResult, eq, effectConfig):
+        """Pull the in-streak output value of a streak card from a calc result.
+        Returns the FP, FPx, or floobits value depending on the card's rewardType
+        — or None if no matching breakdown was found.
+
+        Used by the peak-decay tracker to snapshot the card's output during an
+        active streak so a future streak break can decay from it.
+        """
+        if calcResult is None or not getattr(calcResult, 'cardBreakdowns', None):
+            return None
+        primary = (effectConfig or {}).get("primary", {})
+        rewardType = primary.get("rewardType", "fp")
+        slot = getattr(eq, 'slot_number', None)
+        if slot is None:
+            return None
+        for b in calcResult.cardBreakdowns:
+            if getattr(b, 'slotNumber', None) != slot:
+                continue
+            if rewardType == "mult":
+                v = float(getattr(b, 'primaryMult', 0) or 0)
+                return v if v > 0 else None
+            if rewardType == "floobits":
+                v = float(getattr(b, 'primaryFloobits', 0) or 0)
+                return v if v > 0 else None
+            v = float(getattr(b, 'primaryFP', 0) or 0)
+            return v if v > 0 else None
+        return None
+
     def _rollCultivationGrowth(self, eq, effectConfig, calcCtx, weekBonus=None):
         """Roll for Cultivation card growth. streak_count tracks growth level."""
         import random as _rand
@@ -6262,9 +6419,11 @@ class SeasonManager:
                 pass
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
-        """Award Floobits to all users based on a percentage of their weekly FP."""
-        import math
-        from constants import WEEKLY_FP_FLOOBIT_RATE, WEEKLY_FP_FLOOBIT_CAP
+        """Award Floobits via the FP→F curve: scale × FP^exponent (Endowment shifts to flatter taper)."""
+        from constants import (
+            WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
+            WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+        )
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
         if not fantasyTracker:
@@ -6290,11 +6449,9 @@ class SeasonManager:
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)
                 from database.repositories.shop_repository import ShopPurchaseRepository
-                from constants import POWERUP_INCOME_BOOST
                 shopRepo = ShopPurchaseRepository(session)
-                boostedCap = POWERUP_INCOME_BOOST.get("boostedCap", 40)
-                # Pre-load Prosperity card ceiling bonuses per user
-                prosperityCaps = {}
+                # Pre-load Prosperity card flat-F bonuses per user
+                prosperityBonuses = {}
                 try:
                     from database.repositories.card_repositories import EquippedCardRepository
                     eqRepo = EquippedCardRepository(session)
@@ -6303,35 +6460,42 @@ class SeasonManager:
                         ec = eq.user_card.card_template.effect_config or {}
                         if ec.get("effectName") == "surplus":
                             ownerId = eq.user_id
-                            bonus = ec.get("primary", {}).get("ceilingBonus", 0)
-                            prosperityCaps[ownerId] = prosperityCaps.get(ownerId, 0) + bonus
+                            bonus = ec.get("primary", {}).get("flatBonus", ec.get("primary", {}).get("ceilingBonus", 0))
+                            prosperityBonuses[ownerId] = prosperityBonuses.get(ownerId, 0) + int(bonus)
                 except Exception as e:
-                    logger.warning(f"Could not load Prosperity caps: {e}")
+                    logger.warning(f"Could not load Prosperity bonuses: {e}")
                 awarded = 0
                 for entry in entries:
                     weekFp = entry.get('weekTotal', 0)
                     if weekFp <= 0:
                         continue
                     userId = entry['userId']
-                    # Check for active income boost powerup
                     activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
-                    cap = boostedCap if activeBoost else WEEKLY_FP_FLOOBIT_CAP
-                    # Apply Prosperity card ceiling bonus
-                    cap += prosperityCaps.get(userId, 0)
-                    raw = weekFp * WEEKLY_FP_FLOOBIT_RATE
-                    reward = min(math.floor(raw), cap)
+                    if activeBoost:
+                        scale, exponent = WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT
+                    else:
+                        scale, exponent = WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
+                    base = round(scale * (weekFp ** exponent))
+                    prosperity = prosperityBonuses.get(userId, 0)
+                    reward = int(base + prosperity)
                     if reward <= 0:
                         continue
+                    descCore = f'Week {week}: {weekFp:.0f} FP → {base}F'
+                    if prosperity:
+                        descCore += f' (+{prosperity} Prosperity)'
+                    if activeBoost:
+                        descCore += ' [Endowment]'
                     currencyRepo.addFunds(
                         userId, reward, 'weekly_fp_bonus',
-                        description=f'Week {week}: {int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP',
+                        description=descCore,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         userId, 'weekly_fp_bonus',
                         f'Week {week} Earnings',
-                        f'+{reward} Floobits ({int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP)',
-                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward},
+                        f'+{reward} Floobits from {weekFp:.0f} FP',
+                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward,
+                              'base': base, 'prosperity': prosperity, 'boosted': bool(activeBoost)},
                     )
                     # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
                     try:
@@ -7401,6 +7565,36 @@ class SeasonManager:
         except ImportError:
             logger.info("First season — all teams default to MID_MARKET funding tier")
 
+    def _applyDevTierOverride(self) -> None:
+        """Dev/testing only: when DEV_SPREAD_TIERS=1 is set, redistribute teams
+        across all four funding tiers (MEGA / LARGE / MID / SMALL) regardless
+        of actual fan contributions. Bypasses the funding-derived tier assignment
+        from `_assignFundingTiers` so single-user test runs produce a realistic
+        4-tier distribution for diagnostic.
+
+        Bucketing is deterministic by team.id — chunks of 8 teams per tier in a
+        32-team league. Same team gets the same tier every season for clean
+        trajectory tracking in logs/pressure_diag.log.
+        """
+        import os
+        if os.environ.get("DEV_SPREAD_TIERS") != "1":
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        sortedTeams = sorted(teamManager.teams, key=lambda t: getattr(t, 'id', 0))
+        n = len(sortedTeams)
+        if n == 0:
+            return
+        chunk = max(1, n // 4)
+        tiers = ["MEGA_MARKET", "LARGE_MARKET", "MID_MARKET", "SMALL_MARKET"]
+        for idx, team in enumerate(sortedTeams):
+            tierIdx = min(idx // chunk, 3)
+            team.fundingTier = tiers[tierIdx]
+            team.fundingTierRank = tierIdx + 1
+        logger.info(
+            "DEV_SPREAD_TIERS active — overrode fundingTier on "
+            f"{n} teams: 4 tiers × {chunk} teams each (deterministic by team.id)"
+        )
+
     def _getPickemWeek(self) -> int:
         """Return the effective week number for pick-em storage.
         Regular season: currentWeek (1-28). Playoffs: 28 + playoffRound (29-32)."""
@@ -7749,10 +7943,14 @@ class SeasonManager:
                     if packTxCount == 0:
                         _am.unlockSecret(session, uid, "monk")
 
-                    # Stalwart — no roster swaps this season
-                    swapCount = session.query(func.count(FantasyRosterSwap.id)).filter(
-                        FantasyRosterSwap.user_id == uid,
-                        FantasyRosterSwap.season == season,
+                    # Stalwart — no roster swaps this season. Swaps are
+                    # keyed to a FantasyRoster (per-season, per-user), not
+                    # directly to the user; join via roster_id.
+                    swapCount = session.query(func.count(FantasyRosterSwap.id)).join(
+                        FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
+                    ).filter(
+                        FantasyRoster.user_id == uid,
+                        FantasyRoster.season == season,
                     ).scalar() or 0
                     if swapCount == 0:
                         _am.unlockSecret(session, uid, "stalwart")

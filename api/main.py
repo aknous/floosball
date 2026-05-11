@@ -27,6 +27,11 @@ from api_response_builders import (
 )
 from avatar_generator import getAvatarGenerator
 import floosball_game as FloosGame
+# Auth deps used by handlers defined early in the file (e.g. /api/players
+# with the 'followed' status filter). Later sections re-import these
+# closer to their use; that's fine — module-level imports are idempotent.
+from api.auth import getOptionalUser as _getOptionalUser
+from database.models import User as _User
 
 logger = get_logger("floosball.api")
 
@@ -130,6 +135,23 @@ async def startup_event():
     # no games are live so it surfaces personality between rounds without
     # competing with live play feed.
     _asyncio.create_task(_offDayFlavorLoop())
+
+    # Sweep stale pending pack reveals — users who paid for a pack but never
+    # confirmed selection (crash / abandoned tab) get auto-resolved with a
+    # random keep-pick so they don't lose the cards they paid for.
+    try:
+        from database.connection import get_session
+        from managers.cardManager import CardManager
+        sweepSession = get_session()
+        try:
+            cm = CardManager(None)
+            resolved = cm.cleanupStalePendingPacks(sweepSession, ageHours=24)
+            if resolved:
+                logger.info(f"Resolved {resolved} stale pending pack opening(s) on startup")
+        finally:
+            sweepSession.close()
+    except Exception as e:
+        logger.warning(f"Stale pending-pack sweep failed on startup: {e}")
 
     # The FloosballApplication will be injected by the main entry point
     # For now, log that we're ready
@@ -800,23 +822,25 @@ async def get_players(
     response: Response,
     position: Optional[str] = None,
     team_id: Optional[int] = None,
-    status: Optional[str] = None  # 'active', 'retired', 'fa', 'hof'
+    status: Optional[str] = None,  # 'active', 'retired', 'fa', 'hof', 'followed'
+    user: Optional[_User] = Depends(_getOptionalUser),
 ):
     """
     Get players with optional filters
-    
+
     Args:
         position: Filter by position (QB, RB, WR, etc.)
         team_id: Filter by team ID
-        status: Filter by status (active, retired, fa, hof)
-    
+        status: Filter by status (active, retired, fa, hof, followed)
+
     Returns:
         List of player objects
     """
-    response.headers["Cache-Control"] = "public, max-age=120"
+    # 'followed' is per-user, so it can't share the public cache.
+    response.headers["Cache-Control"] = "no-store" if status == 'followed' else "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    
+
     try:
         # Determine which player list to use based on status
         if status == 'retired':
@@ -830,6 +854,32 @@ async def get_players(
         elif status == 'prospects':
             players = [p for p in floosball_app.playerManager.activePlayers
                        if getattr(p, 'is_prospect', False)]
+        elif status == 'followed':
+            if user is None:
+                raise HTTPException(status_code=401, detail="Sign in to view followed players")
+            from database.models import FollowedPlayer
+            from database.connection import get_session
+            _session = get_session()
+            try:
+                followedIds = {
+                    r[0] for r in _session.query(FollowedPlayer.player_id)
+                    .filter_by(user_id=user.id).all()
+                }
+            finally:
+                _session.close()
+            # Pull from every pool — followed players can be active, FA, or
+            # retired. Dedupe by id since pools may overlap transiently.
+            pools = (
+                floosball_app.playerManager.activePlayers
+                + floosball_app.playerManager.freeAgents
+                + floosball_app.playerManager.retiredPlayers
+            )
+            seen = set()
+            players = []
+            for p in pools:
+                if p.id in followedIds and p.id not in seen:
+                    seen.add(p.id)
+                    players.append(p)
         else:  # 'active' or None
             players = floosball_app.playerManager.activePlayers
         
@@ -1572,6 +1622,368 @@ async def get_card_effects(response: Response):
     return effects
 
 
+# ─── History (past seasons + record book) ──────────────────────────────────
+
+
+@app.get("/api/history/seasons")
+async def get_history_seasons(response: Response):
+    """List completed past seasons with champion + MVP for the History page."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import (
+        Season as DBSeason, Team as DBTeam, Player as DBPlayer,
+        PlayerSeasonStats as DBPlayerSeasonStats,
+    )
+    session = get_session()
+    try:
+        sm = floosball_app.seasonManager
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        rows = (
+            session.query(DBSeason)
+            .filter(DBSeason.champion_team_id.isnot(None))
+            .filter(DBSeason.season_number < currentSeasonNum)
+            .order_by(DBSeason.season_number.desc())
+            .all()
+        )
+        seasons = []
+        for s in rows:
+            team = session.get(DBTeam, s.champion_team_id) if s.champion_team_id else None
+            mvp = session.get(DBPlayer, s.mvp_player_id) if s.mvp_player_id else None
+            # MVP team for that season — pulled from player_season_stats so it
+            # reflects who they played for at the time, not who they're on now.
+            mvpTeamId: Optional[int] = None
+            mvpTeamAbbr: Optional[str] = None
+            if s.mvp_player_id:
+                pss = session.query(DBPlayerSeasonStats).filter_by(
+                    player_id=s.mvp_player_id, season=s.season_number,
+                ).first()
+                if pss and pss.team_id:
+                    mvpTeamId = pss.team_id
+                    mvpTeam = session.get(DBTeam, pss.team_id)
+                    if mvpTeam:
+                        mvpTeamAbbr = mvpTeam.abbr
+            # Player.position is stored as the FloosPlayer.Position enum value
+            # (1=QB, 2=RB, 3=WR, 4=TE, 5=K). Surface the readable name.
+            _POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+            mvpPositionName = _POS_NAMES.get(getattr(mvp, 'position', None)) if mvp else None
+            seasons.append({
+                "seasonNumber": s.season_number,
+                "championTeamId": s.champion_team_id,
+                "championTeamName": getattr(team, 'name', None),
+                "championTeamAbbr": getattr(team, 'abbr', None),
+                "championTeamColor": getattr(team, 'color', None),
+                "mvpPlayerId": s.mvp_player_id,
+                "mvpPlayerName": getattr(mvp, 'name', None),
+                "mvpPosition": mvpPositionName,
+                "mvpTeamId": mvpTeamId,
+                "mvpTeamAbbr": mvpTeamAbbr,
+            })
+        return build_success_response({"seasons": seasons})
+    finally:
+        session.close()
+
+
+@app.get("/api/history/standings")
+async def get_history_standings(season: int, response: Response):
+    """Final regular-season standings for a past season."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import Game as DBGame, Team as DBTeam, TeamSeasonStats as DBTeamSeasonStats
+    session = get_session()
+    try:
+        games = session.query(DBGame).filter(
+            DBGame.season == season,
+            DBGame.is_playoff == False,
+            DBGame.status == 'final',
+        ).all()
+        # Aggregate per team
+        records: Dict[int, Dict[str, int]] = {}
+        for g in games:
+            for tid in (g.home_team_id, g.away_team_id):
+                records.setdefault(tid, {
+                    "wins": 0, "losses": 0, "ties": 0,
+                    "pointsFor": 0, "pointsAgainst": 0,
+                })
+            home = records[g.home_team_id]
+            away = records[g.away_team_id]
+            home["pointsFor"] += g.home_score
+            home["pointsAgainst"] += g.away_score
+            away["pointsFor"] += g.away_score
+            away["pointsAgainst"] += g.home_score
+            if g.home_score > g.away_score:
+                home["wins"] += 1
+                away["losses"] += 1
+            elif g.away_score > g.home_score:
+                away["wins"] += 1
+                home["losses"] += 1
+            else:
+                home["ties"] += 1
+                away["ties"] += 1
+        # End-of-season ELO from team_season_stats (keyed by team + season)
+        eloRows = session.query(
+            DBTeamSeasonStats.team_id, DBTeamSeasonStats.elo,
+        ).filter(DBTeamSeasonStats.season == season).all()
+        eloByTeam: Dict[int, Optional[int]] = {r.team_id: r.elo for r in eloRows}
+        teams = []
+        for tid, rec in records.items():
+            team = session.get(DBTeam, tid)
+            if not team:
+                continue
+            gp = rec["wins"] + rec["losses"] + rec["ties"]
+            winPct = (rec["wins"] + 0.5 * rec["ties"]) / gp if gp else 0
+            teams.append({
+                "teamId": tid,
+                "teamName": team.name,
+                "teamCity": team.city,
+                "teamAbbr": team.abbr,
+                "teamColor": team.color,
+                "wins": rec["wins"],
+                "losses": rec["losses"],
+                "ties": rec["ties"],
+                "pointsFor": rec["pointsFor"],
+                "pointsAgainst": rec["pointsAgainst"],
+                "winPct": round(winPct, 3),
+                "elo": eloByTeam.get(tid),
+            })
+        teams.sort(key=lambda t: (-t["winPct"], -(t["pointsFor"] - t["pointsAgainst"]), -t["pointsFor"]))
+        return build_success_response({"season": season, "teams": teams})
+    finally:
+        session.close()
+
+
+# Stat category → (label, source field for record book queries)
+_RECORD_STATS = {
+    "passingYards":   {"label": "Passing Yards",   "json_key": "yards",     "json_field": "passing_stats",   "season_col": "passing_yards"},
+    "passingTds":     {"label": "Passing TDs",     "json_key": "tds",       "json_field": "passing_stats",   "season_col": "passing_tds"},
+    "rushingYards":   {"label": "Rushing Yards",   "json_key": "yards",     "json_field": "rushing_stats",   "season_col": "rushing_yards"},
+    "rushingTds":     {"label": "Rushing TDs",     "json_key": "tds",       "json_field": "rushing_stats",   "season_col": "rushing_tds"},
+    "receivingYards": {"label": "Receiving Yards", "json_key": "yards",     "json_field": "receiving_stats", "season_col": "receiving_yards"},
+    "receivingTds":   {"label": "Receiving TDs",   "json_key": "tds",       "json_field": "receiving_stats", "season_col": "receiving_tds"},
+    "receptions":     {"label": "Receptions",      "json_key": "receptions","json_field": "receiving_stats", "season_col": "receptions"},
+    "fgMade":         {"label": "FGs Made",        "json_key": "fgs",       "json_field": "kicking_stats",   "season_col": None},
+    "fantasyPoints":  {"label": "Fantasy Points",  "json_key": None,        "json_field": None,              "season_col": "fantasy_points"},
+}
+
+
+@app.get("/api/history/records")
+async def get_history_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
+    """Top-N record book across single-game / single-season / career timeframes.
+
+    Returns top entries per stat category for each timeframe. Stats with no
+    denormalized season column (e.g. FG made) only return game records.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import (
+        GamePlayerStats as DBGamePlayerStats,
+        PlayerSeasonStats as DBPlayerSeasonStats,
+        Game as DBGame,
+        Player as DBPlayer,
+        Team as DBTeam,
+    )
+    from sqlalchemy import func, desc
+    session = get_session()
+    try:
+        result: Dict[str, Dict[str, list]] = {"game": {}, "season": {}, "career": {}}
+
+        for stat_key, meta in _RECORD_STATS.items():
+            # ── Single-game records ──────────────────────────────────────
+            game_rows = []
+            if stat_key == "fantasyPoints":
+                rows = (
+                    session.query(
+                        DBGamePlayerStats.player_id,
+                        DBGamePlayerStats.team_id,
+                        DBGamePlayerStats.fantasy_points,
+                        DBGame.season, DBGame.week,
+                    )
+                    .join(DBGame, DBGamePlayerStats.game_id == DBGame.id)
+                    .order_by(desc(DBGamePlayerStats.fantasy_points))
+                    .limit(limit).all()
+                )
+                game_rows = [(r.player_id, r.team_id, r.fantasy_points, r.season, r.week) for r in rows]
+            elif meta["json_field"]:
+                field_expr = func.json_extract(getattr(DBGamePlayerStats, meta["json_field"]), f'$.{meta["json_key"]}')
+                rows = (
+                    session.query(
+                        DBGamePlayerStats.player_id,
+                        DBGamePlayerStats.team_id,
+                        field_expr.label("v"),
+                        DBGame.season, DBGame.week,
+                    )
+                    .join(DBGame, DBGamePlayerStats.game_id == DBGame.id)
+                    .filter(field_expr.isnot(None))
+                    .order_by(desc(field_expr))
+                    .limit(limit).all()
+                )
+                game_rows = [(r.player_id, r.team_id, r.v, r.season, r.week) for r in rows if r.v is not None]
+            entries = []
+            for pid, tid, v, season, week in game_rows:
+                p = session.get(DBPlayer, pid)
+                t = session.get(DBTeam, tid) if tid else None
+                entries.append({
+                    "playerId": pid,
+                    "playerName": p.name if p else "Unknown",
+                    "teamAbbr": t.abbr if t else None,
+                    "value": int(v) if v is not None else 0,
+                    "season": season,
+                    "week": week,
+                })
+            result["game"][stat_key] = entries
+
+            # ── Single-season records (only stats with a denormalized col) ──
+            if meta["season_col"]:
+                col = getattr(DBPlayerSeasonStats, meta["season_col"])
+                rows = (
+                    session.query(
+                        DBPlayerSeasonStats.player_id,
+                        DBPlayerSeasonStats.team_id,
+                        col.label("v"),
+                        DBPlayerSeasonStats.season,
+                    )
+                    .order_by(desc(col))
+                    .limit(limit).all()
+                )
+                entries = []
+                for r in rows:
+                    if not r.v:
+                        continue
+                    p = session.get(DBPlayer, r.player_id)
+                    t = session.get(DBTeam, r.team_id) if r.team_id else None
+                    entries.append({
+                        "playerId": r.player_id,
+                        "playerName": p.name if p else "Unknown",
+                        "teamAbbr": t.abbr if t else None,
+                        "value": int(r.v),
+                        "season": r.season,
+                    })
+                result["season"][stat_key] = entries
+
+                # ── Career records ──────────────────────────────────────────
+                rows = (
+                    session.query(
+                        DBPlayerSeasonStats.player_id,
+                        func.sum(col).label("total"),
+                        func.count(DBPlayerSeasonStats.season).label("seasons_count"),
+                    )
+                    .group_by(DBPlayerSeasonStats.player_id)
+                    .order_by(desc("total"))
+                    .limit(limit).all()
+                )
+                entries = []
+                for r in rows:
+                    if not r.total:
+                        continue
+                    p = session.get(DBPlayer, r.player_id)
+                    entries.append({
+                        "playerId": r.player_id,
+                        "playerName": p.name if p else "Unknown",
+                        "value": int(r.total),
+                        "seasons": int(r.seasons_count),
+                    })
+                result["career"][stat_key] = entries
+
+        # Labels for the frontend so it doesn't have to hardcode them
+        labels = {k: v["label"] for k, v in _RECORD_STATS.items()}
+        return build_success_response({"records": result, "labels": labels})
+    finally:
+        session.close()
+
+
+@app.get("/api/history/user-records")
+async def get_history_user_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
+    """Top-N fantasy records across users.
+
+    weeklyFP — best single-week FP total (roster player FP + card bonus)
+    seasonFP — best single-season FP total
+    Both pull from WeeklyPlayerFP (per player per week) joined to a user's
+    locked FantasyRoster, summed with WeeklyCardBonus. Swap nuance is
+    ignored for record-book purposes; the order is dominated by
+    consistent-roster users either way.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from sqlalchemy import text
+    from database.connection import get_session
+    from database.models import User
+    session = get_session()
+    try:
+        # Weekly per-user player FP totals (sum across the user's roster).
+        weeklyPlayerRows = session.execute(text("""
+            SELECT fr.user_id AS user_id, fr.season AS season, wpf.week AS week,
+                   SUM(wpf.fantasy_points) AS player_fp
+            FROM fantasy_rosters fr
+            JOIN fantasy_roster_players frp ON frp.roster_id = fr.id
+            JOIN weekly_player_fp wpf ON wpf.player_id = frp.player_id AND wpf.season = fr.season
+            GROUP BY fr.user_id, fr.season, wpf.week
+        """)).fetchall()
+        # Weekly card bonuses keyed by (user, season, week).
+        cardWeekRows = session.execute(text("""
+            SELECT user_id, season, week, bonus_fp FROM weekly_card_bonuses
+        """)).fetchall()
+        cardByWeek: Dict[tuple, float] = {
+            (r.user_id, r.season, r.week): float(r.bonus_fp or 0) for r in cardWeekRows
+        }
+
+        weeklyTotals = []
+        for r in weeklyPlayerRows:
+            cb = cardByWeek.get((r.user_id, r.season, r.week), 0.0)
+            weeklyTotals.append((r.user_id, r.season, r.week, float(r.player_fp or 0) + cb))
+        weeklyTotals.sort(key=lambda t: t[3], reverse=True)
+        weeklyTotals = weeklyTotals[:limit]
+
+        # Season totals: sum across weeks.
+        seasonPlayerRows = session.execute(text("""
+            SELECT fr.user_id AS user_id, fr.season AS season,
+                   SUM(wpf.fantasy_points) AS player_fp
+            FROM fantasy_rosters fr
+            JOIN fantasy_roster_players frp ON frp.roster_id = fr.id
+            JOIN weekly_player_fp wpf ON wpf.player_id = frp.player_id AND wpf.season = fr.season
+            GROUP BY fr.user_id, fr.season
+        """)).fetchall()
+        cardSeasonRows = session.execute(text("""
+            SELECT user_id, season, SUM(bonus_fp) AS bonus_fp
+            FROM weekly_card_bonuses
+            GROUP BY user_id, season
+        """)).fetchall()
+        cardBySeason: Dict[tuple, float] = {
+            (r.user_id, r.season): float(r.bonus_fp or 0) for r in cardSeasonRows
+        }
+        seasonTotals = []
+        for r in seasonPlayerRows:
+            cb = cardBySeason.get((r.user_id, r.season), 0.0)
+            seasonTotals.append((r.user_id, r.season, float(r.player_fp or 0) + cb))
+        seasonTotals.sort(key=lambda t: t[2], reverse=True)
+        seasonTotals = seasonTotals[:limit]
+
+        # Resolve usernames in one batch
+        userIds = {uid for (uid, *_rest) in weeklyTotals} | {uid for (uid, *_rest) in seasonTotals}
+        users = session.query(User).filter(User.id.in_(userIds)).all() if userIds else []
+        nameByUser = {u.id: (u.username or u.email or f"User {u.id}") for u in users}
+
+        return build_success_response({
+            "weeklyFP": [
+                {"userId": uid, "username": nameByUser.get(uid, f"User {uid}"),
+                 "value": round(v, 1), "season": s, "week": w}
+                for uid, s, w, v in weeklyTotals
+            ],
+            "seasonFP": [
+                {"userId": uid, "username": nameByUser.get(uid, f"User {uid}"),
+                 "value": round(v, 1), "season": s}
+                for uid, s, v in seasonTotals
+            ],
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/reigning-champion")
 async def get_reigning_champion(response: Response):
     """Return the previous season's Floosbowl champion (for navbar display)."""
@@ -1798,8 +2210,13 @@ def _checkAdminAuth(
 
 @app.post("/api/admin/names")
 async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
-    """Add names to the unused player name pool"""
+    """Add names to the unused player name pool.
 
+    Filters out names already in use by an active player or coach (and any
+    duplicates within the submitted batch) so unused_names can't shadow a
+    live entity. Returns the accepted count plus rejected lists so the
+    admin sees what was skipped and why.
+    """
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     names = payload.get("names", [])
@@ -1807,12 +2224,46 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
         raise HTTPException(status_code=400, detail="'names' must be a non-empty list of strings")
     if len(names) > 500:
         raise HTTPException(status_code=400, detail="Too many names; maximum 500 per request")
+
     pm = floosball_app.playerManager
-    pm.unusedNames.extend(names)
-    if getattr(pm, 'name_repo', None):
-        pm.name_repo.add_names_batch(names)
-        pm.db_session.commit()
-    return {"added": len(names), "total": len(pm.unusedNames)}
+
+    # Dedupe the submitted batch first (preserves order)
+    seen: set = set()
+    deduped: list = []
+    duplicatesInBatch: list = []
+    for n in names:
+        if not isinstance(n, str):
+            continue
+        n = n.strip()
+        if not n:
+            continue
+        if n in seen:
+            duplicatesInBatch.append(n)
+            continue
+        seen.add(n)
+        deduped.append(n)
+
+    # Reject anything already attached to a live player or coach.
+    rejectedInUse: list = []
+    accepted: list = []
+    for n in deduped:
+        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(n):
+            rejectedInUse.append(n)
+        else:
+            accepted.append(n)
+
+    if accepted:
+        pm.unusedNames.extend(accepted)
+        if getattr(pm, 'name_repo', None):
+            pm.name_repo.add_names_batch(accepted)
+            pm.db_session.commit()
+
+    return {
+        "added": len(accepted),
+        "total": len(pm.unusedNames),
+        "rejectedInUse": rejectedInUse,
+        "duplicatesInBatch": duplicatesInBatch,
+    }
 
 
 @app.get("/api/app-settings")
@@ -2397,16 +2848,37 @@ def admin_grant_card(payload: Dict[str, Any],
 
     pm = floosball_app.playerManager
 
+    def _isCardEligiblePlayer(p) -> bool:
+        """Same eligibility rules as season-template generation: no prospects,
+        no upcoming rookies, must have a real team. Prevents admin grants
+        from leaving NULL-team_id templates that pollute pack rolls + blend
+        eligibility downstream."""
+        if getattr(p, 'is_prospect', False):
+            return False
+        if getattr(p, 'drafting_team_id', None):
+            return False
+        if getattr(p, 'is_upcoming_rookie', False):
+            return False
+        teamObj = getattr(p, 'team', None)
+        teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
+        return bool(teamId)
+
     if playerId:
         playerObj = pm.getPlayerById(playerId)
         if playerObj is None:
             raise HTTPException(status_code=404, detail=f"Player {playerId} not found")
+        if not _isCardEligiblePlayer(playerObj):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Player {playerObj.name} is a prospect / upcoming rookie / unrostered — cards require a rostered player",
+            )
     else:
         # Pick a random player eligible for this edition's rating threshold
         import random as _rand
         from managers.cardManager import EDITION_THRESHOLDS
         threshold = EDITION_THRESHOLDS.get(edition, 0)
-        eligible = [p for p in pm.activePlayers if round(p.playerRating) >= threshold]
+        eligible = [p for p in pm.activePlayers
+                    if round(p.playerRating) >= threshold and _isCardEligiblePlayer(p)]
         if not eligible:
             raise HTTPException(status_code=400, detail=f"No players eligible for {edition} edition")
         playerObj = _rand.choice(eligible)
@@ -2948,30 +3420,26 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
         else:
             medianBalance = 0
 
-        # Weekly FP cap hit rate
-        from constants import WEEKLY_FP_FLOOBIT_CAP
+        # Weekly FP→F payout summary (curve-based, no cap)
         lastPaidWeek = session.query(func.max(CurrencyTransaction.week)).filter(
             CurrencyTransaction.season == seasonNum,
             CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
         ).scalar()
         if lastPaidWeek:
-            totalFpRecipients = session.query(func.count(CurrencyTransaction.id)).filter(
+            weekPayouts = session.query(CurrencyTransaction.amount).filter(
                 CurrencyTransaction.season == seasonNum,
                 CurrencyTransaction.week == lastPaidWeek,
                 CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
-            ).scalar()
-            capHitters = session.query(func.count(CurrencyTransaction.id)).filter(
-                CurrencyTransaction.season == seasonNum,
-                CurrencyTransaction.week == lastPaidWeek,
-                CurrencyTransaction.transaction_type == 'weekly_fp_bonus',
-                CurrencyTransaction.amount >= WEEKLY_FP_FLOOBIT_CAP,
-            ).scalar()
-            capHitRate = round((capHitters / totalFpRecipients * 100), 1) if totalFpRecipients > 0 else 0
+            ).all()
+            amounts = [int(p[0]) for p in weekPayouts]
+            totalFpRecipients = len(amounts)
+            avgWeeklyPayout = round(sum(amounts) / totalFpRecipients, 1) if totalFpRecipients else 0
+            maxWeeklyPayout = max(amounts) if amounts else 0
             capHitWeek = lastPaidWeek
         else:
-            capHitRate = 0
-            capHitters = 0
             totalFpRecipients = 0
+            avgWeeklyPayout = 0
+            maxWeeklyPayout = 0
             capHitWeek = None
 
         # Richest users (top 5)
@@ -3188,9 +3656,10 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
                 "seasonSpending": int(seasonSpending),
                 "avgBalance": avgBalance,
                 "medianBalance": medianBalance,
-                "capHitRate": capHitRate,
-                "capHitters": capHitters,
-                "capHitWeek": capHitWeek,
+                "avgWeeklyPayout": avgWeeklyPayout,
+                "maxWeeklyPayout": maxWeeklyPayout,
+                "weeklyPayoutRecipients": totalFpRecipients,
+                "lastPayoutWeek": capHitWeek,
                 "richestUsers": richestUsers,
             },
             "cards": {
@@ -4084,11 +4553,13 @@ def get_team_retirement_watch(team_id: int):
 @app.get("/api/users/me")
 def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
     """Get current user profile. Requires Bearer token."""
-    from database.models import UserCurrency
+    from database.models import UserCurrency, FollowedPlayer
     from database.connection import get_session
     session = get_session()
     try:
         currency = session.query(UserCurrency).filter_by(user_id=user.id).first()
+        followedRows = session.query(FollowedPlayer.player_id).filter_by(user_id=user.id).all()
+        followedPlayerIds = [r[0] for r in followedRows]
         return {
             "id": user.id,
             "email": user.email,
@@ -4104,7 +4575,54 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "teamFundingPct": 25 if getattr(user, 'team_funding_pct', 25) is None else user.team_funding_pct,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
             "isAdmin": getattr(user, 'is_admin', False),
+            "followedPlayerIds": followedPlayerIds,
         }
+    finally:
+        session.close()
+
+
+@app.post("/api/players/{player_id}/follow")
+def follow_player(player_id: int, user: _User = Depends(_getCurrentUser)):
+    """Add a player to the user's followed list. Idempotent."""
+    from database.models import FollowedPlayer, Player as DBPlayer
+    from database.connection import get_session
+    session = get_session()
+    try:
+        if not session.query(DBPlayer.id).filter_by(id=player_id).first():
+            raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
+        existing = session.query(FollowedPlayer).filter_by(
+            user_id=user.id, player_id=player_id,
+        ).first()
+        if not existing:
+            session.add(FollowedPlayer(user_id=user.id, player_id=player_id))
+            session.commit()
+        return build_success_response({"playerId": player_id, "following": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"follow_player error: {e}")
+        raise HTTPException(500, "Failed to follow player")
+    finally:
+        session.close()
+
+
+@app.delete("/api/players/{player_id}/follow")
+def unfollow_player(player_id: int, user: _User = Depends(_getCurrentUser)):
+    """Remove a player from the user's followed list. Idempotent."""
+    from database.models import FollowedPlayer
+    from database.connection import get_session
+    session = get_session()
+    try:
+        session.query(FollowedPlayer).filter_by(
+            user_id=user.id, player_id=player_id,
+        ).delete()
+        session.commit()
+        return build_success_response({"playerId": player_id, "following": False})
+    except Exception as e:
+        session.rollback()
+        logger.error(f"unfollow_player error: {e}")
+        raise HTTPException(500, "Failed to unfollow player")
     finally:
         session.close()
 
@@ -5202,6 +5720,57 @@ def get_card_projection(user: _User = Depends(_getCurrentUser),
         session.close()
 
 
+@app.post("/api/cards/template-projection")
+def post_template_projection(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Batch-project unowned CardTemplates against the requesting user's
+    roster + season-to-date stats. Used by the pack reveal-then-select
+    flow and the shop preview to surface expected weekly output before
+    the user commits to a card.
+
+    Request: {"templateIds": [int, int, ...]}
+    Response.data.projections: list of payloads (same shape as
+        computeCandidateProjection) keyed by templateId.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    templateIds = payload.get("templateIds") or []
+    if not isinstance(templateIds, list) or not templateIds:
+        return build_success_response({"projections": []})
+    # Cap the batch to keep the calc bounded
+    templateIds = [int(t) for t in templateIds[:20] if isinstance(t, (int, float))]
+
+    from database.connection import get_session
+    from database.models import CardTemplate
+    from managers.cardProjection import computeTemplateProjection
+
+    sm = floosball_app.seasonManager
+    pm = floosball_app.playerManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    if not season:
+        return build_success_response({"projections": []})
+
+    session = get_session()
+    try:
+        templates = (
+            session.query(CardTemplate)
+            .filter(CardTemplate.id.in_(templateIds))
+            .all()
+        )
+        projections = []
+        for tpl in templates:
+            proj = computeTemplateProjection(
+                tpl, session, user.id, season, week, sm, pm,
+            )
+            if proj is None:
+                continue
+            proj["templateId"] = tpl.id
+            projections.append(proj)
+        return build_success_response({"projections": projections})
+    finally:
+        session.close()
+
+
 @app.get("/api/fantasy/leaderboard")
 def get_fantasy_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
     """Get fantasy leaderboard for a season (defaults to current)."""
@@ -5290,15 +5859,23 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
 
         # ─── Card bonus per week ───────────────────────────────────────
         # storedBonuses[userId][week] = bonus_fp  (from completed weeks)
+        # storedBreakdowns[userId][week] = parsed breakdowns_json list
         storedBonuses = {}
+        storedBreakdowns: Dict[int, Dict[int, list]] = {}
         rosterIds = [info["roster"].id for info in rostersByUser.values()]
         if rosterIds:
             bonusRows = session.query(WeeklyCardBonus).filter(
                 WeeklyCardBonus.roster_id.in_(rosterIds),
                 WeeklyCardBonus.season == seasonNum,
             ).all()
+            import json as _json
             for row in bonusRows:
                 storedBonuses.setdefault(row.user_id, {})[row.week] = row.bonus_fp
+                if row.breakdowns_json:
+                    try:
+                        storedBreakdowns.setdefault(row.user_id, {})[row.week] = _json.loads(row.breakdowns_json)
+                    except (ValueError, TypeError):
+                        pass
 
         # Compute live card bonus for the current week when games are active
         liveCardBonusByUser = {}
@@ -5378,6 +5955,7 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                         "slot": info["playerSlots"].get(playerId, "?"),
                         "playerName": playerObj.name if playerObj else "Unknown",
                         "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
+                        "teamId": getattr(playerObj.team, 'id', None) if playerObj and hasattr(playerObj.team, 'name') else None,
                         "weekPoints": round(fp, 1),
                     })
                 players.sort(key=lambda p: p["weekPoints"], reverse=True)
@@ -5389,6 +5967,7 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                     "weekPoints": round(data["weekPoints"], 1),
                     "cardBonusPoints": round(data.get("cardBonusPoints", 0), 1),
                     "players": players,
+                    "cardBreakdowns": storedBreakdowns.get(userId, {}).get(week, []),
                 })
             entries.sort(key=lambda e: e["weekPoints"], reverse=True)
             for i, entry in enumerate(entries, 1):
@@ -5786,6 +6365,52 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+@app.get("/api/cards/equipped/public/{user_id}")
+def getEquippedCardsPublic(user_id: int, season: int, week: int):
+    """Public read of a user's equipped cards for a given (season, week).
+
+    Used by the fantasy leaderboard expand to show each user's equipped
+    hand alongside their roster. No auth — leaderboards are public.
+    """
+    from database.connection import get_session
+    from database.models import EquippedCard, UserCard, CardTemplate, FantasyRoster
+    from database.repositories.card_repositories import EquippedCardRepository
+    from managers.cardManager import CardManager
+
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+    session = get_session()
+    try:
+        equippedRepo = EquippedCardRepository(session)
+        equipped = equippedRepo.getByUserWeek(user_id, season, week)
+
+        roster = session.query(FantasyRoster).filter_by(user_id=user_id, season=season).first()
+        rosterPlayerIds = set()
+        if roster:
+            for rp in roster.players:
+                rosterPlayerIds.add(rp.player_id)
+
+        result = []
+        for eq in equipped:
+            cardData = cardManager.serializeCard(eq.user_card, season)
+            template = eq.user_card.card_template
+            result.append({
+                "slotNumber": eq.slot_number,
+                "card": cardData,
+                "playerId": template.player_id,
+                "isMatch": template.player_id in rosterPlayerIds,
+                "streakCount": getattr(eq, 'streak_count', 1) or 1,
+                "cardTeamId": template.team_id,
+                "templatePosition": template.position,
+            })
+        return build_success_response({
+            "equippedCards": result,
+            "userId": user_id,
+            "season": season,
+            "week": week,
+        })
+    finally:
+        session.close()
+
 
 class EquipCardSlot(BaseModel):
     slotNumber: int
@@ -6009,84 +6634,154 @@ def _requireShopOpen():
 
 @app.get("/api/packs/types")
 def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
-    """Get available pack types with costs and daily purchase limits."""
-    response.headers["Cache-Control"] = "public, max-age=600"
+    """Get available pack types with costs and daily purchase limits.
+
+    Filtered by the current week's pack rotation: only packs visible in
+    the daily shop are returned (plus the starter pack as a separate
+    `starter` field). Pack revamp design — 'proper' tier deprecated and
+    Exquisite gated to week 2+ for season-progression feel.
+    """
+    # No public cache — response is user-specific (starter claim status +
+    # per-pack daily-limit counters). A shared cache here would mix users.
+    response.headers["Cache-Control"] = "private, no-store"
     from database.connection import get_session
-    from database.models import PackOpening
+    from database.models import PackOpening, PendingPackOpening, User
     from database.repositories.card_repositories import PackTypeRepository
-    from managers.cardManager import DAILY_PACK_LIMITS
+    from managers.cardManager import DAILY_PACK_LIMITS, getActivePackNames, shopDayOfSeason
     from datetime import datetime
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 1
+    shopDay = shopDayOfSeason(currentWeek)
+    activeNames = set(getActivePackNames(shopDay))
 
     session = get_session()
     try:
         packRepo = PackTypeRepository(session)
         packs = packRepo.getAll()
+        rotated = [p for p in packs if p.name in activeNames]
+        starterPack = next((p for p in packs if p.name == 'starter'), None)
 
-        # Count today's purchases per pack type if user is authenticated
+        # Count today's purchases per pack type (committed + pending) if authed
         todayCounts = {}
+        starterClaimed = False
         if user:
             dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            for p in packs:
-                todayCounts[p.id] = session.query(PackOpening).filter(
+            for p in rotated:
+                committed = session.query(PackOpening).filter(
                     PackOpening.user_id == user.id,
                     PackOpening.pack_type_id == p.id,
                     PackOpening.opened_at >= dayStart,
                 ).count()
+                pending = session.query(PendingPackOpening).filter(
+                    PendingPackOpening.user_id == user.id,
+                    PendingPackOpening.pack_type_id == p.id,
+                    PendingPackOpening.opened_at >= dayStart,
+                ).count()
+                todayCounts[p.id] = committed + pending
+            dbUser = session.query(User).filter_by(id=user.id).first()
+            starterClaimed = (dbUser and dbUser.starter_pack_claimed_season == currentSeason)
+
+        def _packDict(p):
+            return {
+                "id": p.id,
+                "name": p.name,
+                "displayName": p.display_name,
+                "cost": p.cost,
+                "cardsPerPack": p.cards_per_pack,
+                "cardsKept": p.cards_kept,
+                "description": p.description,
+                "dailyLimit": DAILY_PACK_LIMITS.get(p.name),
+                "remainingToday": max(0, DAILY_PACK_LIMITS.get(p.name, 99) - todayCounts.get(p.id, 0)) if user else None,
+            }
 
         return build_success_response({
-            "packs": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "displayName": p.display_name,
-                    "cost": p.cost,
-                    "cardsPerPack": p.cards_per_pack,
-                    "guaranteedRarity": p.guaranteed_rarity,
-                    "description": p.description,
-                    "dailyLimit": DAILY_PACK_LIMITS.get(p.name),
-                    "remainingToday": max(0, DAILY_PACK_LIMITS.get(p.name, 99) - todayCounts.get(p.id, 0)) if user else None,
-                }
-                for p in packs
-            ],
+            "packs": [_packDict(p) for p in rotated],
+            "starter": ({
+                **_packDict(starterPack),
+                "claimedThisSeason": starterClaimed,
+            } if starterPack else None),
+            "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
         })
     finally:
         session.close()
 
 
-class OpenPackRequest(BaseModel):
+class RevealPackRequest(BaseModel):
     packTypeId: int
 
 
-@app.post("/api/packs/open")
-def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
-    """Buy and open a card pack."""
+@app.post("/api/packs/reveal")
+def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
+    """Step 1 of the user purchase flow: spend Floobits + reveal cards.
+
+    Cards are NOT yet committed to the user's collection — they're held in
+    a PendingPackOpening row until /api/packs/select confirms which to keep.
+    """
     _requireShopOpen()
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    from managers.cardManager import shopDayOfSeason
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 1
+    shopDay = shopDayOfSeason(currentWeek)
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Pack reveal failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reveal pack")
+    finally:
+        session.close()
+
+
+class SelectPackRequest(BaseModel):
+    pendingId: int
+    keptIndices: List[int]
+
+
+@app.post("/api/packs/select")
+def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
+    """Step 2 of the user purchase flow: commit which revealed cards to keep.
+
+    Discarded cards are dropped (no refund). Daily limit was already debited
+    on /reveal, so this endpoint is the side-effecting one that creates the
+    UserCard rows + records the PackOpening + fires achievement hooks.
+    """
     from database.connection import get_session
     from managers.cardManager import CardManager
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
     session = get_session()
     try:
-        result = cardManager.openPack(session, user.id, req.packTypeId, currentSeason)
-        # Achievement hooks
+        result = cardManager.selectPackKeeps(
+            session, user.id, req.pendingId, req.keptIndices, currentSeason,
+        )
+        # Achievement hooks fire on the kept cards (matches old single-step behavior)
         from managers import achievementManager as _am
         _am.onPackOpened(session, user.id)
         _am.syncCuratorProgress(session, user.id, currentSeason)
-        # Sparkler: if any diamond-edition card dropped
-        if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
+        if any(c.get("edition") == "diamond" for c in (result.get("kept") or [])):
             _am.onDiamondOpened(session, user.id, currentSeason)
-
-        # Secret — Completist (all 4 editions of the same player this season)
+        # Secret: Completist (all 4 editions of the same player this season)
         try:
             from database.models import UserCard as _UC, CardTemplate as _CT
             from sqlalchemy import func
-            # For each player the user owns a card of this season, count distinct editions.
-            # Unlocks when any player has all 4 (base, holographic, prismatic, diamond).
             editionRows = (
                 session.query(_CT.player_id, func.count(func.distinct(_CT.edition)).label("editionCount"))
                 .join(_UC, _UC.card_template_id == _CT.id)
@@ -6107,8 +6802,41 @@ def openPack(req: OpenPackRequest, user: _User = Depends(_getCurrentUser)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         session.rollback()
-        logger.error(f"Pack opening failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to open pack")
+        logger.error(f"Pack selection failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to commit pack selection")
+    finally:
+        session.close()
+
+
+@app.post("/api/packs/starter")
+def claimStarterPack(user: _User = Depends(_getCurrentUser)):
+    """Claim the free once-per-season starter pack (5 base cards, no selection).
+
+    Sets User.starter_pack_claimed_season so the offer disappears until
+    the next season. Achievement hooks still fire.
+    """
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.claimStarterPack(session, user.id, currentSeason)
+        from managers import achievementManager as _am
+        _am.onPackOpened(session, user.id)
+        _am.syncCuratorProgress(session, user.id, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Starter pack claim failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to claim starter pack")
     finally:
         session.close()
 
@@ -6793,20 +7521,25 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
                 "pending": deferred,
             })
 
-        # Income boost (Endowment) — raises weekly FP floobit cap
+        # Income boost (Endowment) — flatter FP→F curve while active
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
             gamesRunning = _areGamesStarted()
             weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
-            from constants import POWERUP_INCOME_BOOST, WEEKLY_FP_FLOOBIT_CAP
+            from constants import (
+                WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
+                WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+            )
             active.append({
                 "slug": "income_boost",
                 "displayName": "Endowment",
                 "expiresAtWeek": activeBoost.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining <= 1,
-                "boostedCap": POWERUP_INCOME_BOOST.get("boostedCap", 65),
-                "standardCap": WEEKLY_FP_FLOOBIT_CAP,
+                "scale": WEEKLY_FP_FLOOBIT_SCALE,
+                "exponent": WEEKLY_FP_FLOOBIT_EXPONENT,
+                "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
+                "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
             })
 
         # Fortune's Favor (Patronage) — boosts chance card trigger rates
@@ -7478,11 +8211,14 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isProspect": True,
                 })
 
-        # Live ballot tally — aggregates fan votes in real time during the
-        # voting window so users can see who's leading before IRV resolution.
-        # Counts each ballot's mention of a candidate as one vote, with a
-        # separate first-choice count for depth.
+        # Live ballot tally — runs the same instant-runoff (IRV) tally the
+        # offseason resolver uses, so the order shown matches the order the
+        # FA draft would actually pull. With one ballot, IRV produces that
+        # ballot's exact ranking. With multiple, it resolves through
+        # elimination rounds — a candidate who's nobody's #1 still climbs
+        # if they're consistently ranked high.
         from database.repositories.gm_repository import GmFaBallotRepository
+        from managers.gmManager import GmManager
         ballotRepo = GmFaBallotRepository(session)
         ballots = ballotRepo.getRankingsForTeam(favTeam.id, seasonNum) if favTeam else []
 
@@ -7510,23 +8246,35 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     if p is not None:
                         playerLookup[p.id] = p
 
-        ballotTally: Dict[str, List[Dict]] = {}
-        for pid, count in mentionCount.items():
+        # Eligible candidates for the IRV: every player at an open position
+        # (open right now OR projected to open). Mirrors the resolver's
+        # eligibility logic so the live tally matches what would resolve.
+        POS_NAME_TO_VAL = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+        openPosVals = {POS_NAME_TO_VAL[s['position']] for s in openSlots
+                       if s.get('position') in POS_NAME_TO_VAL}
+        eligibleCandidates: set = set()
+        for pid, p in playerLookup.items():
+            posVal = getattr(getattr(p, 'position', None), 'value', None)
+            if posVal in openPosVals:
+                eligibleCandidates.add(pid)
+
+        gmTally = GmManager(session)
+        rankedIds = gmTally._tallyFullRankingOverall(ballots, eligibleCandidates)
+
+        ballotTally: List[Dict] = []
+        for pid in rankedIds:
             p = playerLookup.get(pid)
             if not p:
                 continue
-            posName = p.position.name
-            ballotTally.setdefault(posName, []).append({
+            ballotTally.append({
                 "id": p.id,
                 "name": p.name,
-                "position": posName,
+                "position": p.position.name,
                 "rating": round(getattr(p, 'playerRating', 0), 1),
-                "votes": count,
+                "votes": mentionCount.get(pid, 0),
                 "firstChoice": firstChoiceCount.get(pid, 0),
                 "isProspect": bool(getattr(p, 'is_prospect', False)),
             })
-        for posName in ballotTally:
-            ballotTally[posName].sort(key=lambda x: (-x['votes'], -x['firstChoice'], -x['rating']))
 
         return build_success_response({
             "openSlots": openSlots,
@@ -7571,6 +8319,28 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         if not boardActive:
             raise HTTPException(400, f"FA requisitions open in Week {GM_ACTIVE_WEEK}")
 
+        # Sanity-check: every ranked player ID must resolve to a known
+        # candidate (FA, prospect, or rostered player). The frontend modal
+        # already restricts the picker to candidates at open positions, so
+        # this is mainly to keep stale or malformed submissions from
+        # filling the ballot with unresolvable IDs that would silently
+        # drop out at resolution time.
+        pm = floosball_app.playerManager if floosball_app else None
+        teamManager = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        knownIds: set = set()
+        if pm:
+            knownIds.update(p.id for p in pm.freeAgents)
+        if teamManager:
+            for t in teamManager.teams:
+                for p in getattr(t, 'prospects', []):
+                    knownIds.add(p.id)
+                for _slot, p in t.rosterDict.items():
+                    if p is not None:
+                        knownIds.add(p.id)
+        cleanedRankings = [pid for pid in req.rankings if pid in knownIds]
+        if not cleanedRankings:
+            raise HTTPException(400, "No valid candidates in ballot")
+
         ballotRepo = GmFaBallotRepository(session)
         existing = ballotRepo.getUserBallot(user.id, teamId, currentSeason)
 
@@ -7588,13 +8358,13 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
 
         ballot = ballotRepo.submitBallot(
             userId=user.id, teamId=teamId, season=currentSeason,
-            rankings=req.rankings, costPaid=costPaid,
+            rankings=cleanedRankings, costPaid=costPaid,
         )
         session.commit()
 
         return build_success_response({
             "ballotId": ballot.id,
-            "rankings": req.rankings,
+            "rankings": cleanedRankings,
             "costPaid": costPaid,
             "isUpdate": existing is not None,
         })
@@ -8404,9 +9174,26 @@ def get_pickem_leaderboard(season: Optional[int] = None):
             stats = pickemRepo.getUserSeasonStats(entry["userId"], seasonNum)
             entry["clairvoyantWeeks"] = stats["clairvoyantWeeks"]
 
+        # Enrich weekly entries with allAuto flag — True iff every pick this
+        # week was auto-picked. Drives an AUTO badge on the UI so users can
+        # tell who actually showed up to set their picks.
+        weekEntries = _buildEntries(weekRows)
+        if weekEntries:
+            autoRows = session.query(
+                PickEmPick.user_id,
+                func.min(PickEmPick.is_auto).label("min_auto"),
+                func.max(PickEmPick.is_auto).label("max_auto"),
+            ).filter(
+                PickEmPick.season == seasonNum,
+                PickEmPick.week == weeklyWeek,
+            ).group_by(PickEmPick.user_id).all()
+            autoFlagByUser = {r.user_id: bool(r.min_auto) for r in autoRows}
+            for entry in weekEntries:
+                entry["allAuto"] = autoFlagByUser.get(entry["userId"], False)
+
         return build_success_response({
             "season": {"entries": seasonEntries},
-            "week": {"week": weeklyWeek, "entries": _buildEntries(weekRows)},
+            "week": {"week": weeklyWeek, "entries": weekEntries},
         })
     finally:
         session.close()
@@ -8776,15 +9563,18 @@ def listAchievements(user: _User = Depends(_getCurrentUser)):
 @app.get("/api/achievements/pending-rewards")
 def listPendingRewards(user: _User = Depends(_getCurrentUser)):
     """List unclaimed pack/powerup rewards the user has earned. Includes canDefer
-    flag for pack rewards when late-season deferral is currently offered."""
+    flag for pack rewards when late-season or offseason deferral is offered."""
     from database.connection import get_session
     from managers import achievementManager
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    isOffseason = (getattr(sm.currentSeason, 'currentWeekText', '') == 'Offseason') if sm and sm.currentSeason else False
     session = get_session()
     try:
-        rewards = achievementManager.getPendingRewards(session, user.id, currentSeason, currentWeek)
+        rewards = achievementManager.getPendingRewards(
+            session, user.id, currentSeason, currentWeek, isOffseason=isOffseason,
+        )
         return build_success_response({"rewards": rewards, "currentWeek": currentWeek, "season": currentSeason})
     finally:
         session.close()
@@ -8792,8 +9582,9 @@ def listPendingRewards(user: _User = Depends(_getCurrentUser)):
 
 @app.post("/api/achievements/reward/{rewardId}/defer")
 def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
-    """Hold a pending pack reward until next season. Only allowed on packs,
-    only once per reward, and only while defer is currently offered (late regular season)."""
+    """Hold an unclaimed reward (pack or powerup) until next season. Allowed
+    once per reward, and only while defer is currently offered (late regular
+    season or offseason)."""
     from database.connection import get_session
     from database.models import PendingReward
     from managers import achievementManager
@@ -8802,9 +9593,11 @@ def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     if not currentSeason:
         raise HTTPException(status_code=400, detail="No active season")
-    weeksLeft = max(0, achievementManager.REGULAR_SEASON_WEEKS - currentWeek)
-    if weeksLeft > achievementManager.DEFER_OFFER_WEEKS_REMAINING:
-        raise HTTPException(status_code=400, detail="Deferral only available late in the regular season")
+    isOffseason = (getattr(sm.currentSeason, 'currentWeekText', '') == 'Offseason') if sm and sm.currentSeason else False
+    weeksLeft = max(0, achievementManager.REGULAR_SEASON_WEEKS - currentWeek) if currentWeek else achievementManager.REGULAR_SEASON_WEEKS
+    lateSeason = weeksLeft <= achievementManager.DEFER_OFFER_WEEKS_REMAINING and currentWeek > 0
+    if not (lateSeason or isOffseason):
+        raise HTTPException(status_code=400, detail="Deferral only available late in the regular season or during offseason")
 
     session = get_session()
     try:
@@ -8816,8 +9609,6 @@ def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             raise HTTPException(status_code=404, detail="Reward not found")
         if reward.claimed_at is not None:
             raise HTTPException(status_code=400, detail="Reward already claimed")
-        if reward.kind != "pack":
-            raise HTTPException(status_code=400, detail="Only pack rewards can be deferred")
         if reward.defer_until_season is not None:
             raise HTTPException(status_code=400, detail="Reward already deferred")
         reward.defer_until_season = currentSeason + 1
@@ -8877,19 +9668,16 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             if not packType:
                 raise HTTPException(status_code=500, detail=f"Unknown pack type: {reward.slug}")
             cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
-            result = cardManager.openPack(
+            # Achievement-granted packs go through the same reveal+select
+            # flow as purchased packs — the user picks which cards to keep
+            # rather than the system auto-granting everything. Daily limit
+            # and rotation guards are skipped (skipCurrency=True).
+            # Achievement hooks fire on /api/packs/select after the user
+            # confirms their selection, not here.
+            result = cardManager.revealPack(
                 session, user.id, packType.id, currentSeason,
-                skipCurrency=True, source=reward.source,
+                skipCurrency=True,
             )
-            # Mirror the hooks from the normal pack-open endpoint so claimed
-            # pack rewards update achievements the same way. Without these,
-            # Pack Popper / Curator / Sparkler would only progress when the
-            # user spent Floobits, not when they claimed a free pack.
-            from managers import achievementManager as _am
-            _am.onPackOpened(session, user.id)
-            _am.syncCuratorProgress(session, user.id, currentSeason)
-            if any(c.get("edition") == "diamond" for c in (result.get("cards") or [])):
-                _am.onDiamondOpened(session, user.id, currentSeason)
             reward.claimed_at = datetime.utcnow()
             session.commit()
             return build_success_response({"kind": "pack", **result})

@@ -81,6 +81,24 @@ EFFECT_CATEGORY = {
     "closer": "flat_fp", "dark_horse": "multiplier",
     "vagabond": "multiplier", "fat_cat": "flat_fp", "surplus": "floobits",
     "bonsai": "streak",
+    # ── New cards (FP/FPx rebalance, see card_balance_fp_vs_fpx memory) ──
+    # Hand-composition synergy
+    "anthem": "cross",          # threshold based on flat_fp card count in hand
+    "conductor": "cross",       # diamond amplifier, no own output
+    # Roster-trait flat_fp
+    "castaway": "flat_fp",      # roster has player from sub-.500 team
+    "sleeper": "flat_fp",       # chance card, odds scale with low-rated roster players
+    "patient": "flat_fp",       # per-week reward for keeping a low-rated slot
+    "rookie_hype": "flat_fp",   # per rookie on roster
+    "wanderer": "flat_fp",      # per unique team represented across roster
+    # Inverse streak (peak-decay shared with existing streaks)
+    "sandbagger": "streak",     # streak grows when a slot scores ≤5 FP
+    "quiet_storm": "streak",    # streak grows when no roster player ≥15 FP
+    "drought": "streak",        # streak grows when roster total <50 FP
+    # Prognostication-driven
+    "nose_picker": "streak",     # streak grows when user manually submits picks (no auto-pick)
+    "medium": "conditional",     # weekly accuracy bonus (counts auto-picks)
+    "parlay": "multiplier",    # FPx — log-taper on weekly pick-em point total
 }
 
 POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
@@ -147,6 +165,16 @@ EFFECT_EDITION_TIER = {
     "fortitude": "diamond",
     "full_roster": "diamond", "stacked_deck": "diamond",
     "double_down": "diamond",
+
+    # ── New cards (FP/FPx rebalance) ──
+    "patient": "holographic", "rookie_hype": "holographic",
+    "castaway": "holographic", "wanderer": "holographic",
+    "anthem": "prismatic", "sleeper": "prismatic",
+    "sandbagger": "prismatic", "quiet_storm": "prismatic", "drought": "prismatic",
+    "conductor": "diamond",
+
+    # ── Prognostication cards ──
+    "nose_picker": "holographic", "medium": "holographic", "parlay": "holographic",
 }
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -294,6 +322,21 @@ EFFECT_DISPLAY_NAMES = {
     "fat_cat": "Fat Cat",
     "surplus": "Surplus",
     "bonsai": "Bonsai",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "Anthem",
+    "conductor": "Conductor",
+    "castaway": "Castaway",
+    "sleeper": "Sleeper",
+    "patient": "Patient",
+    "rookie_hype": "Rookie Hype",
+    "wanderer": "Wanderer",
+    "sandbagger": "Sandbagger",
+    "quiet_storm": "Quiet Storm",
+    "drought": "Drought",
+    # ── Prognostication cards ──
+    "nose_picker": "Nose Picker",
+    "medium": "Medium",
+    "parlay": "Parlay",
 }
 
 # ─── Three-Tier Description System ───────────────────────────────────────────
@@ -368,7 +411,7 @@ EFFECT_TAGLINES = {
     "dark_horse": "Nobody saw them coming",
     "vagabond": "A restless spirit",
     "fat_cat": "Rolling in it",
-    "surplus": "More where that came from",
+    "surplus": "Steady stipend",
     "bonsai": "Snip snip",
     "pedigree": "Pedigree",
     # Streak (K)
@@ -430,6 +473,21 @@ EFFECT_TAGLINES = {
     # ── Chance Synergy Effects ──
     "advantage": "Double or nothing (minus the nothing)",
     "catalyst": "Points in, luck out",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "All together now",
+    "conductor": "Wave the baton",
+    "castaway": "Diamond in the basement",
+    "sleeper": "Rest easy",
+    "patient": "Time on the wood",
+    "rookie_hype": "Trust the kids",
+    "wanderer": "Spread thin",
+    "sandbagger": "Save it for later",
+    "quiet_storm": "Calm before the chaos",
+    "drought": "When even the rain dries up",
+    # ── Prognostication cards ──
+    "nose_picker": "Pick it yourself",
+    "medium": "Crystal clear",
+    "parlay": "Let it ride",
 }
 
 EFFECT_TOOLTIPS = {
@@ -447,17 +505,17 @@ EFFECT_TOOLTIPS = {
     "snake_eyes": "Bad is good. The lower your lowest-scoring roster player's FP this week, the bigger the FPx on your total.",
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
     "hedge": "Insurance policy. Starts with an FP pool. Roster FP subtracts from it, and whatever remains is your payout.",
-    "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Resets if you make a swap. Stacking streak cards accelerates growth.",
+    "complacency": "Put the phone down. FP that grows each week you don't touch your roster. After a swap the bonus carries over and fades over the next several weeks. Stacking streak cards accelerates growth.",
     "spotlight_moment": "Lights, camera, action. FP whenever your roster's {posLabel} scores a TD. For WR, either counts.",
     "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when your roster's WRs hit a combined stat threshold.",
     # Multiplier (QB)
     "big_deal": "Don't you know who I am? Flat FPx on your total score.",
-    "cornucopia": "Every touchdown compounds. FPx that stacks per roster TD.",
+    "cornucopia": "Every touchdown compounds, but each one matters a little less. FPx that stacks per roster TD with diminishing returns. Big offensive weeks still pay; runaway TD games plateau.",
     "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your roster's {posLabel} earns.",
     "squire": "The crowd goes wild. FP that stacks with each TD your roster's {posLabel} scores.",
     "babysitter": "Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
     "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's season losses.",
-    "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's win streak.",
+    "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's streak, with diminishing returns past long runs. Early streaks reward; perfect seasons plateau.",
     "resplendent": "When they're hot, they're HOT. FP per overperforming roster player.",
     "underdog": "The worse they are, the better the odds. Guaranteed FP floor plus a chance at enhanced FP. Odds increase with each loss on your favorite team's record.",
     "stockpiler": "Patience pays. FPx that grows with each unused roster swap.",
@@ -483,15 +541,15 @@ EFFECT_TOOLTIPS = {
     "reclamation": "Someone has to fix this mess. FP when most of your roster is underperforming.",
     "pedigree": "Prize winner. FP with a bonus when your favorite team's ELO reaches elite status (1600+).",
     # Streak (K) — streak cards boost each other's growth when stacked
-    "on_fire": "Don't let the flame die. FPx that grows each week your roster's K makes a FG. Resets if they don't. Stacking streak cards accelerates growth.",
-    "snowball_fight": "It just keeps getting bigger. FP growing each week your roster scores a TD. Resets if they don't. Stacking streak cards accelerates growth.",
-    "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
-    "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Resets on a loss. Stacking streak cards accelerates growth.",
+    "on_fire": "Don't let the flame die. FPx that grows each week your roster's K makes a FG. After a miss, the bonus fades gradually instead of resetting outright. Stacking streak cards accelerates growth.",
+    "snowball_fight": "It just keeps getting bigger. FP growing each week your roster scores a TD. After a TD-less week the bonus carries over and fades over the next several weeks. Stacking streak cards accelerates growth.",
+    "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. After a loss the bonus carries over and gradually fades. Stacking streak cards accelerates growth.",
+    "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. After a loss the bonus carries over and fades back toward base over time. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
     "odometer": "Hit the milestones. Escalating FP at each yardage gate your roster hits. Resets weekly.",
-    "leg_day": "Never skip it. FP growing each week your roster's K nails a 35+ yard FG. Stacking streak cards accelerates growth.",
-    "automatic": "Perfection pays. FP growing each consecutive week your roster's K goes perfect on FGs. Resets on a miss. Stacking streak cards accelerates growth.",
-    "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 75 FP. Resets if they don't. Stacking streak cards accelerates growth.",
+    "leg_day": "Never skip it. FP growing each week your roster's K nails a 35+ yard FG. After a miss the bonus fades gradually instead of resetting. A no-attempt week keeps the streak alive. Stacking streak cards accelerates growth.",
+    "automatic": "Perfection pays. FP growing each consecutive week your roster's K goes perfect on FGs. After a miss the bonus carries over and fades. A no-attempt week keeps the streak alive. Stacking streak cards accelerates growth.",
+    "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 75 FP. After a quiet week the bonus carries over and fades back toward base over time. Stacking streak cards accelerates growth.",
     # ── New Position-Based Effects ──
     "gunslinger": "Let it fly. FP that scales with how many passing yards your roster's QB racks up.",
     "air_raid": "Death from above. Floobits for each passing TD your roster's QB throws.",
@@ -548,8 +606,23 @@ EFFECT_TOOLTIPS = {
     "dark_horse": "The stars shine brightest from below. FPx that scales inversely with the star rating of your roster's {posLabel}.",
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
-    "surplus": "Raise the ceiling. Increases the maximum Floobits you can earn per week while equipped.",
+    "surplus": "A reliable kickback. Adds a flat Floobits bonus to your weekly earnings while equipped.",
     "bonsai": "Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "Power in numbers. Flat FP that fires when your hand is heavy on flat-FP cards. 3 or more pays a bonus, 4 raises it, 5 maxes it out.",
+    "conductor": "Orchestrates the rest of your hand. Every other flat-FP card you have equipped outputs more. Produces nothing on its own.",
+    "castaway": "Find the gem on a bad team and they pay you. Bonus FP when your roster includes any player whose team is below .500.",
+    "sleeper": "Diamond in the rough territory. Guaranteed FP floor plus a chance at enhanced FP. Odds rise the more low-rated players you keep on your roster.",
+    "patient": "Stick with the bench. Earns FP each week you keep a sub-3-star roster slot intact, with the bonus growing the longer you hold.",
+    "rookie_hype": "Believe in the new class. Bonus FP per rookie on your roster.",
+    "wanderer": "A bit of everywhere. Output scales with how many different teams your roster players come from. Max payout when no two share a team.",
+    "sandbagger": "Hold the line on a weak slot. Streak grows each week one of your roster slots scores 5 FP or less.",
+    "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP.",
+    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total.",
+    # ── Prognostication cards ──
+    "nose_picker": "Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
+    "medium": "Bonus FP when your weekly Prognostication accuracy is high.",
+    "parlay": "FPx that grows with your weekly Prognostication points.",
 }
 
 EFFECT_DETAIL_TEMPLATES = {
@@ -564,21 +637,21 @@ EFFECT_DETAIL_TEMPLATES = {
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
     "rng": "Random +{minFP}–{maxFP} FP each week",
-    "snake_eyes": "FPx based on lowest roster FP: 0 FP=3x · 1-4 FP=2.5x · 5-9 FP=2x · 10-14 FP=1.5x · 15-19 FP=1.2x",
+    "snake_eyes": "FPx based on lowest roster FP: 0 FP=2x · 1-4 FP=1.7x · 5-9 FP=1.5x · 10-14 FP=1.3x · 15-19 FP=1.1x",
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains",
-    "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged. Resets on swap",
+    "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged. After a swap the bonus carries over and decays each week back toward base",
     "spotlight_moment": "+{rewardValue} FP when your roster's {posLabel} scores a TD. WR counts both combined",
     "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if your roster's WRs combine for {threshold}+ {statDisplay}",
     # Multiplier (QB) — FPx
-    "cornucopia": "+{perTdMult} FPx per roster TD",
+    "cornucopia": "FPx that grows on a tapered curve as your roster scores TDs. Plateaus around 1.7x at 10+ TDs",
     "babysitter": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 20% with 1 underperformer (under {fpThreshold} FP), up to 70%",
     "martyr": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 10% at 1 loss, grows with your favorite team's season losses, up to 60%",
     "resplendent": "+{perPlayerFP} FP per overperforming roster player",
     "big_deal": "{xMultValue}x FPx",
     "luminary": "FPx that grows the more FP your roster's {posLabel} earns compared to teammates",
     "squire": "+{perTdFP} FP per TD by your roster's {posLabel}",
-    "juggernaut": "{baseXMult} FPx, grows by {growthPerWin} per your favorite team's win streak",
+    "juggernaut": "{baseXMult}x FPx base, grows on a tapered curve with your favorite team's win streak. Plateaus around 1.7x on long runs",
     "underdog": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Chance grows the worse your favorite team's rating is, up to 75%",
     "stockpiler": "{perSwapXMult} FPx per unused roster swap",
     "providence": "{baseMult}x FPx + boosts all chance card odds by {chanceBonus}",
@@ -604,15 +677,15 @@ EFFECT_DETAIL_TEMPLATES = {
     "pedigree": "+{baseFP} FP base, +{rewardValue} FP when your favorite team's ELO ≥ {eloThreshold}",
     # Streak (K)
     # Synergy: each other streak card in hand adds +1 to effective streak count (+growthPerTick per peer)
-    "on_fire": "{baseReward} FPx, +{growthPerTick} per consecutive FG week. Resets if no FG. Each other streak card adds +1 bonus tick",
-    "snowball_fight": "+{baseReward} FP, +{growthPerTick} per consecutive roster TD week. Resets if no TD. Each other streak card adds +1 bonus tick",
-    "fairweather_fan": "{baseReward} Floobits, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
-    "bandwagon_express": "+{baseReward} FP, +{growthPerTick} per consecutive your favorite team's wins. Resets on loss. Each other streak card adds +1 bonus tick",
+    "on_fire": "{baseReward} FPx, +{growthPerTick} per consecutive FG week. After a miss the bonus carries over and decays each week. Each other streak card adds +1 bonus tick",
+    "snowball_fight": "+{baseReward} FP, +{growthPerTick} per consecutive roster TD week. After a TD-less week the bonus carries over and decays each week. Each other streak card adds +1 bonus tick",
+    "fairweather_fan": "{baseReward} Floobits, +{growthPerTick} per consecutive favorite-team win. After a loss the bonus carries over and decays each week. Each other streak card adds +1 bonus tick",
+    "bandwagon_express": "+{baseReward} FP, +{growthPerTick} per consecutive favorite-team win. After a loss the bonus carries over and decays each week. Each other streak card adds +1 bonus tick",
     "touchdown_jackpot": "{baseReward} Floobits on 1st TD, +{growthPerTick} more per TD after. Resets weekly",
     "odometer": "Escalating FP at 200, 400, 600, and 800+ total roster yards. Resets weekly",
-    "leg_day": "+{baseReward} FP, +{growthPerTick} per consecutive 35+ yd FG week. Each other streak card adds +1 bonus tick",
-    "automatic": "+{baseReward} FP, +{growthPerTick} per consecutive perfect FG week. Resets on a miss. Each other streak card adds +1 bonus tick",
-    "momentum": "{baseReward} FPx, +{growthPerTick} per consecutive week roster scores 75+ FP. Resets if under 75. Each other streak card adds +1 bonus tick",
+    "leg_day": "+{baseReward} FP, +{growthPerTick} per consecutive 35+ yd FG week. After a miss the bonus carries over and decays each week. A no-attempt week keeps the streak alive. Each other streak card adds +1 bonus tick",
+    "automatic": "+{baseReward} FP, +{growthPerTick} per consecutive perfect FG week. After a miss the bonus carries over and decays each week. A no-attempt week keeps the streak alive. Each other streak card adds +1 bonus tick",
+    "momentum": "{baseReward} FPx, +{growthPerTick} per consecutive week roster scores 75+ FP. After a quiet week the bonus carries over and decays each week. Each other streak card adds +1 bonus tick",
     # ── New Position-Based Effects ──
     "gunslinger": "+{perHundredYardsFP} FP per 100 passing yards by your roster's QB",
     "air_raid": "{perTdFloobits} Floobits per passing TD by your roster's QB",
@@ -669,8 +742,23 @@ EFFECT_DETAIL_TEMPLATES = {
     "dark_horse": "+{perStarMult} FPx per star under 5 of your rostered {posLabel}",
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
-    "surplus": "Weekly Floobits cap raised by +{ceilingBonus} while equipped",
+    "surplus": "+{flatBonus}F added to weekly earnings while equipped",
     "bonsai": "+{baseFP} FP base. Each week {triggerLabel} earn a chance to permanently grow by {growthFP} FP. Higher levels need bigger weeks to keep growing.",
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": "+{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5",
+    "conductor": "Boosts each other flat-FP card's output by +{boostPct}%",
+    "castaway": "+{rewardFP} FP when at least one roster player is on a sub-.500 team",
+    "sleeper": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Base 15% chance, +{chancePerLow}% per roster player rated below 3 stars",
+    "patient": "+{baseFP} FP per week a sub-3-star roster slot stays unchanged",
+    "rookie_hype": "+{perRookieFP} FP per rookie on your roster",
+    "wanderer": "+{perTeamFP} FP per unique team represented across your roster",
+    "sandbagger": "+{baseReward} FP, +{growthPerTick} per consecutive week any roster slot scored 5 FP or less. After the streak breaks, the bonus carries over and decays each week",
+    "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. After the streak breaks, the bonus carries over and decays each week",
+    "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. After the streak breaks, the bonus carries over and decays each week",
+    # ── Prognostication cards ──
+    "nose_picker": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds. After the streak breaks, the bonus carries over and decays each week",
+    "medium": "+{lowFP} FP at 50%+ accuracy, +{midFP} FP at 65%+ (typical), +{highFP} FP at 85%+ (chase). Counts auto-picks",
+    "parlay": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -720,6 +808,12 @@ SHARED_EFFECT_POOL = [
     # strategy-warping
     "home_alone", "closer", "dark_horse",
     "vagabond", "fat_cat", "surplus", "bonsai",
+    # New cards (FP/FPx rebalance)
+    "anthem", "conductor",
+    "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
+    "sandbagger", "quiet_storm", "drought",
+    # Prognostication cards
+    "nose_picker", "medium", "parlay",
 ]
 
 POSITION_EXCLUSIVE_POOLS = {
@@ -759,6 +853,15 @@ STREAK_CONFIGS = {
     "leg_day":           {"resetCondition": "kicker_35plus", "isWeekly": False},
     "automatic":         {"resetCondition": "kicker_no_miss", "isWeekly": False},
     "momentum":          {"resetCondition": "roster_75fp", "isWeekly": False},
+    # Inverse streaks — grow when the roster underperforms; break when
+    # production picks up. Get peak-decay carryover the same as forward
+    # streaks so a built-up underperformance bonus doesn't vanish on the
+    # first hot week.
+    "sandbagger":        {"resetCondition": "roster_slot_low_5fp", "isWeekly": False},
+    "quiet_storm":       {"resetCondition": "no_player_15fp", "isWeekly": False},
+    "drought":           {"resetCondition": "roster_under_50fp", "isWeekly": False},
+    # Prognostication
+    "nose_picker":        {"resetCondition": "pickem_manual_submit", "isWeekly": False},
     "house_money":       {"resetCondition": "favorite_team_upset_win", "isWeekly": False, "noReset": True},
     "bonsai":       {"resetCondition": "equipped", "isWeekly": False, "noReset": True},
 }
@@ -857,6 +960,23 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         return {"rewardType": "fp", "baseFP": round(5.0 * editionScale, 1),
                 "enhancedFP": round((20 + rn * 0.4) * editionScale, 1),
                 "isChanceEffect": True}
+    # ── New cards (FP/FPx rebalance) ──
+    if effectName == "anthem":
+        # Threshold-based flat FP. Pops when 3+ flat-FP cards are equipped,
+        # bigger pop at 4, biggest at 5. Numbers tuned so a 3-FP-card hand
+        # gets ~25 FP from Anthem; full-FP hands hit 50.
+        return {"rewardType": "fp",
+                "tier3FP": round((22 + rn * 0.6) * editionScale, 1),
+                "tier4FP": round((32 + rn * 0.8) * editionScale, 1),
+                "tier5FP": round((48 + rn * 1.0) * editionScale, 1)}
+    if effectName == "conductor":
+        # Pure amplifier. Boosts every other flat-FP card in the hand by
+        # +20% (tunable via boostPct). Produces nothing on its own —
+        # marker-style, output applied via _applyConductorBoost in the
+        # calculator's tradeoff phase.
+        return {"rewardType": "mult",
+                "boostPct": int(round(20 + rn * 0.2)),
+                "isAmplifier": True}
     return None
 
 
@@ -924,14 +1044,18 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"perTdFP": round((4 + rn * 0.15) * editionScale, 1)}
     # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
     if effectName == "crescendo":
-        # Position-specific tuning set at compute time; params store rarity-scaled values
-        return {"baseFP": round((1.0 + rn * 0.04) * editionScale, 1),
+        # Position-specific tuning set at compute time; params store rarity-scaled values.
+        # Base lifted to 4 (was 1) so a no-trigger week pays competitively with other
+        # prismatic chance floors (Babysitter / Martyr / Underdog at 5).
+        return {"baseFP": round((4.0 + rn * 0.06) * editionScale, 1),
                 "bonusFP": round((8.0 + rn * 0.3) * editionScale, 1),
                 "baseChance": 15, "chanceStep": 12,  # QB defaults; compute overrides per position
                 "isChanceEffect": True}
     # ── Yardage chance: Traverse (end-of-game roll scaled by yards)
     if effectName == "traverse":
-        return {"baseFP": round((0.5 + rn * 0.03) * editionScale, 1),
+        # Base lifted to 4 (was 0.5) so missed rolls aren't punishing — Traverse's appeal
+        # is its big jackpot, but a 0.5 floor felt like punishment for not hitting.
+        return {"baseFP": round((4.0 + rn * 0.06) * editionScale, 1),
                 "bonusFP": round((15.0 + rn * 0.5) * editionScale, 1),
                 "baseChance": 2, "chancePerStep": 5, "yardStep": 50, "yardType": "passing",
                 "isChanceEffect": True}
@@ -946,12 +1070,39 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"floobitsPerFP": floobitsPerFP, "maxFP": maxFP}
     # ── Strategy-Warping: Alchemy (FG → TD upgrade)
     if effectName == "alchemy":
-        # Bonus FP per FG = TD FP value (6) minus FG FP value (~3) = ~3 base
-        return {"perFgBonusFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+        # Diamond-tier card. Bumped from 3 to 6 base so a 3-FG game pays ~24 FP
+        # rather than ~14, putting Alchemy in line with other diamond outputs
+        # while preserving the FG → TD secondary-effect combo upside.
+        return {"perFgBonusFP": round((6.0 + rn * 0.20) * editionScale, 1)}
     # ── Strategy-Warping: Consolation (base FP + loss bonus)
     # ── Strategy-Warping: Overtime (Q4 FP multiplier)
     if effectName == "closer":
         return {"q4MultFactor": round((1.5 + rn * 0.03) * editionScale, 1)}
+    # ── Roster-trait flat FP cards (FP/FPx rebalance) ──
+    if effectName == "castaway":
+        # Sub-.500 team player check; flat reward when at least one is on roster.
+        return {"rewardFP": round((14.0 + rn * 0.40) * editionScale, 1)}
+    if effectName == "sleeper":
+        # Chance card; enhanced odds scale with how many low-rated (<3★) players
+        # the user keeps on roster. Floor stays competitive with other prismatic
+        # chance cards (Babysitter / Underdog at 5).
+        return {"baseFP": round((5.0 + rn * 0.10) * editionScale, 1),
+                "enhancedFP": round((22.0 + rn * 0.35) * editionScale, 1),
+                "baseChance": 15, "chancePerLow": 12,
+                "isChanceEffect": True}
+    if effectName == "patient":
+        # Per-week reward for keeping a sub-3★ slot intact. Small base FP
+        # multiplied by weeks-held; effectively growing flat FP as long as
+        # the user resists swapping out the underperformer.
+        return {"baseFP": round((1.5 + rn * 0.04) * editionScale, 1)}
+    if effectName == "rookie_hype":
+        # Per-rookie FP. Pays meaningful reward if the user trusts the
+        # rookie draft class instead of grabbing safe vets.
+        return {"perRookieFP": round((4.5 + rn * 0.12) * editionScale, 1)}
+    if effectName == "wanderer":
+        # Per unique team represented. Scales with roster diversity; max
+        # payout when no two roster players share a team.
+        return {"perTeamFP": round((3.0 + rn * 0.08) * editionScale, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(2 * editionScale, 1)}
 
 
@@ -960,7 +1111,10 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
 
     # ── FPx effects (delta-based, wrapped as 1+val in compute) ──
     if effectName == "cornucopia":
-        return {"perTdMult": round((0.05 + rn * 0.003) * editionScale, 2)}
+        # `perTdMult` is now the log-curve coefficient (mult = 1 + perTd*ln(1 + TDs/3))
+        # rather than per-TD delta. Scaled so 5 TDs ≈ 1.39x, plateauing toward
+        # ~1.7x on monster TD weeks. See _computeTriggerHappy.
+        return {"perTdMult": round((0.40 + rn * 0.006) * editionScale, 2)}
     if effectName == "babysitter":
         return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "fpThreshold": 8, "isChanceEffect": True}
@@ -976,14 +1130,20 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         # Tiered FPx: lower lowest-FP player = higher multiplier
         # Tiers read as (maxFP_inclusive, xMult). Applies to the whole
         # weekly FP total, so multipliers are tuned more conservatively
-        # than single-card mults.
-        return {"tiers": [(0, 3.0), (4, 2.5), (9, 2.0), (14, 1.5), (19, 1.2)],
+        # than single-card mults. Top tier capped at 2.0 — match bonus
+        # stacks on top and can push the visible multiplier up to ~3x
+        # on Diamond, so anything higher than 2.0 base crowded out other
+        # cards.
+        return {"tiers": [(0, 2.0), (4, 1.7), (9, 1.5), (14, 1.3), (19, 1.1)],
                 "minMult": 1.0}
     if effectName == "luminary":
         return {"fpShareScale": round((0.25 + rn * 0.012) * editionScale, 2)}
     if effectName == "juggernaut":
+        # `growthPerWin` is now the log-curve coefficient (mult = base + growth*ln(1 + streak/3))
+        # rather than per-win delta. Scaled so a 5-win streak ≈ 1.37x, plateauing
+        # toward ~1.7x on long undefeated runs. See _computeJuggernaut.
         return {"baseXMult": round(1 + (0.05 + rn * 0.002) * editionScale, 2),
-                "growthPerWin": round((0.05 + rn * 0.002) * editionScale, 2)}
+                "growthPerWin": round((0.25 + rn * 0.005) * editionScale, 2)}
     if effectName == "underdog":
         return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
                 "isChanceEffect": True}
@@ -1036,6 +1196,15 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     # ── Strategy-Warping: Vagabond (FPx per swap used, inverse Stockpiler)
     if effectName == "vagabond":
         return {"perSwapXMult": round((0.03 + rn * 0.001) * editionScale, 2)}
+    if effectName == "parlay":
+        # FPx scaling with weekly Prognostication points via log-taper.
+        # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
+        # Counts auto-picks. kPoints=80 tunes the curve to span the
+        # realistic weekly score range (20-120 pts). coef grows with rating.
+        return {"rewardType": "mult",
+                "baseXMult": 1.0,
+                "coef": round((0.30 + rn * 0.012) * editionScale, 3),
+                "kPoints": 80}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.2 * editionScale, 1)}
 
 
@@ -1080,8 +1249,8 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
         return {"perReceptionFloobits": int(round((1.5 + rn * 0.06) * editionScale))}
     # ── Strategy-Warping: Prosperity (Floobits payout ceiling raiser)
     if effectName == "surplus":
-        ceilingBonus = int(round((10 + rn * 0.4) * editionScale))
-        return {"ceilingBonus": ceilingBonus}
+        flatBonus = int(round((6 + rn * 0.18) * editionScale))
+        return {"flatBonus": flatBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
         # Diamond tier — big chance boost + meaningful Floobits output
@@ -1134,6 +1303,14 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "lossFP": round((4 + rn * 0.12) * editionScale, 1),
                 "baseFP": round((6 + rn * 0.20) * editionScale, 1),
                 "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+    if effectName == "medium":
+        # Weekly Prognostication accuracy bonus, three tiers tuned for
+        # ~70% user-average accuracy. 65-84% is the typical-hit zone;
+        # 85%+ is the chase tier (~15% of weeks).
+        return {"rewardType": "fp",
+                "lowFP": round((5.0 + rn * 0.15) * editionScale, 1),
+                "midFP": round((14.0 + rn * 0.30) * editionScale, 1),
+                "highFP": round((26.0 + rn * 0.50) * editionScale, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(3 * editionScale, 1)}
 
 
@@ -1184,6 +1361,36 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
                 "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
+    # ── Inverse streaks (FP/FPx rebalance) — grow when roster underperforms
+    if effectName == "sandbagger":
+        # Roster slot scoring ≤5 FP. Most achievable trigger of the three;
+        # smaller per-tick reward, smaller cap.
+        return {"rewardType": "fp",
+                "baseReward": round((6.0 + rn * 0.15) * editionScale, 1),
+                "growthPerTick": round((4.0 + rn * 0.10) * editionScale, 1)}
+    if effectName == "quiet_storm":
+        # No roster player ≥15 FP. Whole-roster spread-thin; medium reward.
+        return {"rewardType": "fp",
+                "baseReward": round((14.0 + rn * 0.30) * editionScale, 1),
+                "growthPerTick": round((8.0 + rn * 0.20) * editionScale, 1)}
+    if effectName == "drought":
+        # Roster total <50 FP. Nuclear-cold week; biggest reward, rarest trigger.
+        return {"rewardType": "fp",
+                "baseReward": round((20.0 + rn * 0.45) * editionScale, 1),
+                "growthPerTick": round((12.0 + rn * 0.30) * editionScale, 1)}
+    # ── Prognostication cards ─────────────────────────────────────────
+    if effectName == "nose_picker":
+        # Log-tapered streak — pays for showing up to Prognostications
+        # manually each week. The trigger is fully under user control
+        # (no luck/skill), so the curve plateaus rather than scaling
+        # linearly. Same shape as Tipster:
+        #   output = baseReward + coef × ln(1 + streakWeeks / kStreak)
+        return {"rewardType": "fp",
+                "baseReward": round((5.0 + rn * 0.12) * editionScale, 1),
+                "coef": round((9.0 + rn * 0.30) * editionScale, 2),
+                "kStreak": 4,
+                # growthPerTick kept for legacy callers / detail template
+                "growthPerTick": 0}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
@@ -1686,11 +1893,20 @@ def _computeBigDeal(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeTriggerHappy(primary, ctx, cardPlayerId, eqId):
+    """Cornucopia FPx scales with roster TDs using a log taper. Linear
+    growth let strong-offense rosters with 10+ TDs run away (2.0x and up);
+    log curve rewards 3-5 TD weeks similarly to before but plateaus around
+    1.7x on monster TD weeks. `perTdMult` is now the log-curve coefficient.
+    """
+    import math
     perTd = primary.get("perTdMult", 0)
-    tds = ctx.rosterTotalTds
-    bonus = perTd * tds
-    eq = f"1 + ({perTd}/TD × {tds} roster TDs) = {1 + bonus:.2f}x"
-    return EffectResult(multBonus=1 + bonus, equation=eq)
+    tds = ctx.rosterTotalTds or 0
+    if tds <= 0:
+        return EffectResult(multBonus=1.0, equation="No roster TDs this week")
+    bonus = perTd * math.log(1 + tds / 3.0)
+    mult = round(1 + bonus, 3)
+    eq = f"1 + log-taper({tds} roster TDs) = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeMainCharacter(primary, ctx, cardPlayerId, eqId):
@@ -1776,14 +1992,24 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeJuggernaut(primary, ctx, cardPlayerId, eqId):
+    """Juggernaut FPx scales with the favorite team's win streak using a log
+    taper: early wins are very rewarding, gains plateau as the streak grows.
+    Replaces the prior linear baseX + growth × streak which made 10+ win
+    runs explosive (e.g. a 15-win streak produced ~2.3x). New shape peaks
+    around 1.7x on long streaks. Coefficient `growth` now scales the log
+    curve rather than the per-win delta.
+    """
+    import math
     streak = max(0, ctx.favoriteTeamStreak)
-    baseX = primary.get("baseXMult", 1.1)
-    growth = primary.get("growthPerWin", 0.1)
+    baseX = primary.get("baseXMult", 1.08)
+    growth = primary.get("growthPerWin", 0.30)  # repurposed: log-curve scale
     # Only pay out once the team wins this week, extending their streak
     if not ctx.favoriteTeamWonThisWeek or streak <= 0:
         return EffectResult(multBonus=1.0, equation="Waiting for win to extend streak")
-    eq = f"{baseX}x base + ({growth}x × {streak} win streak)"
-    return EffectResult(multBonus=baseX + growth * streak, equation=eq)
+    bonus = growth * math.log(1 + streak / 3.0)
+    mult = round(baseX + bonus, 3)
+    eq = f"{baseX}x base + log-taper({streak} win streak) = {mult}x"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeHotRoster(primary, ctx, cardPlayerId, eqId):
@@ -2161,11 +2387,222 @@ def _conditionalReward(primary) -> EffectResult:
     return EffectResult()
 
 
+# ── New cards (FP/FPx rebalance) ─────────────────────────────────────────────
+
+def _computeAnthem(primary, ctx, cardPlayerId, eqId):
+    """Threshold-based flat FP. Pops when the hand carries 3+ flat-FP cards;
+    larger pop at 4, biggest at 5. Counts only OTHER flat-FP cards in the
+    hand, plus this card itself, against the thresholds.
+    """
+    flatFPCount = sum(
+        1 for outType in (ctx.equippedCardOutputTypes or [])
+        if outType == "fp"
+    )
+    tier3 = primary.get("tier3FP", 25)
+    tier4 = primary.get("tier4FP", 35)
+    tier5 = primary.get("tier5FP", 50)
+    if flatFPCount >= 5:
+        eq = f"+{tier5} FP (5 flat-FP cards equipped)"
+        return EffectResult(fpBonus=tier5, equation=eq)
+    if flatFPCount >= 4:
+        eq = f"+{tier4} FP (4 flat-FP cards equipped)"
+        return EffectResult(fpBonus=tier4, equation=eq)
+    if flatFPCount >= 3:
+        eq = f"+{tier3} FP (3 flat-FP cards equipped)"
+        return EffectResult(fpBonus=tier3, equation=eq)
+    return EffectResult(equation=f"{flatFPCount}/3 flat-FP cards (need 3+)")
+
+
+def _computeConductor(primary, ctx, cardPlayerId, eqId):
+    """Pure amplifier. Produces no own output. The actual boost is applied
+    by the calculator's tradeoff phase (_applyConductorBoost), which
+    multiplies every other flat-FP card's output by (1 + boostPct/100).
+    Returning an empty EffectResult here marks the card as "present"
+    so the amplifier-status pill can read its config.
+    """
+    return EffectResult()
+
+
+def _computeCastaway(primary, ctx, cardPlayerId, eqId):
+    """Flat FP bonus when at least one roster player is on a sub-.500 team.
+    Reads team records via ctx.teamResults if available; falls back to a
+    'no signal' state during projection if records aren't loaded yet.
+    """
+    rewardFP = primary.get("rewardFP", 14)
+    rosterTeamIds = ctx.rosterPlayerTeamIds or {}
+    teamRecords = getattr(ctx, '_teamRecords', None) or {}
+    # ctx may carry team records directly via teamResults (boolean wins
+    # this week) — for season win pct we look at teamRecords mapping.
+    found = False
+    for pid, teamId in rosterTeamIds.items():
+        if pid not in (ctx.rosterPlayerIds or set()):
+            continue
+        rec = teamRecords.get(teamId)
+        if rec is not None and rec < 0.5:
+            found = True
+            break
+    if found:
+        return EffectResult(fpBonus=rewardFP, equation=f"+{rewardFP} FP (sub-.500 player on roster)")
+    return EffectResult(equation="No sub-.500 player on roster")
+
+
+def _computeSleeper(primary, ctx, cardPlayerId, eqId):
+    """Chance card. Enhanced-roll odds scale per <3★ player on roster.
+    Floor pays a guaranteed baseFP; enhanced FP fires more often the more
+    sub-3★ players are committed to the roster.
+    """
+    from managers.cardEffectCalculator import _chanceRoll
+    baseFP = primary.get("baseFP", 5)
+    enhancedFP = primary.get("enhancedFP", 22)
+    baseChance = primary.get("baseChance", 15) / 100.0
+    chancePerLow = primary.get("chancePerLow", 12) / 100.0
+    lowStarCount = sum(
+        1 for pid in (ctx.rosterPlayerIds or set())
+        if (ctx.rosterPlayerRatings or {}).get(pid, 80) < 76
+    )
+    threshold = min(0.85, baseChance + chancePerLow * lowStarCount)
+    threshold = min(0.95, threshold + getattr(ctx, 'chanceBonus', 0.0))
+    rng = _chanceRoll(ctx, eqId)
+    roll = rng.random()
+    triggered = roll <= threshold and not getattr(ctx, 'gamesActive', False)
+    fp = enhancedFP if triggered else baseFP
+    eq = _chanceEq(baseChance + chancePerLow * lowStarCount,
+                   getattr(ctx, 'chanceBonus', 0.0), threshold, triggered,
+                   f"+{enhancedFP} FP", f"{lowStarCount} low-rated players",
+                   ctx=ctx, base=f"+{baseFP} FP")
+    return EffectResult(fpBonus=fp, equation=eq,
+                        chanceRoll=round(roll, 4),
+                        chanceThreshold=round(threshold, 4),
+                        chanceTriggered=triggered)
+
+
+def _computePatient(primary, ctx, cardPlayerId, eqId):
+    """Per-week reward for keeping a sub-3★ roster slot intact. Reads how
+    many weeks the user has gone without swapping out a low-rated slot;
+    pays baseFP * weeks_held until they swap or the player rises to 3★+.
+    Uses ctx.rosterUnchangedWeeks as a proxy when slot-level history isn't
+    available.
+    """
+    baseFP = primary.get("baseFP", 1.5)
+    lowStarCount = sum(
+        1 for pid in (ctx.rosterPlayerIds or set())
+        if (ctx.rosterPlayerRatings or {}).get(pid, 80) < 76
+    )
+    if lowStarCount == 0:
+        return EffectResult(equation="No sub-3★ roster slot to reward")
+    weeksHeld = max(1, getattr(ctx, 'rosterUnchangedWeeks', 1))
+    fp = round(baseFP * weeksHeld, 1)
+    eq = f"+{baseFP}/wk × {weeksHeld} weeks unchanged = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+def _computeRookieHype(primary, ctx, cardPlayerId, eqId):
+    """Per-rookie FP. Uses _isRookie attached on player or rosterPlayerNames
+    plus a fallback to ctx-stored rookie set if available.
+    """
+    perRookieFP = primary.get("perRookieFP", 4.5)
+    rookieFlags = getattr(ctx, '_rosterRookieFlags', None) or {}
+    count = sum(1 for pid in (ctx.rosterPlayerIds or set())
+                if rookieFlags.get(pid))
+    if count == 0:
+        return EffectResult(equation="No rookies on roster")
+    fp = round(perRookieFP * count, 1)
+    eq = f"+{perRookieFP}/rookie × {count} = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+def _computeWanderer(primary, ctx, cardPlayerId, eqId):
+    """Per unique team represented across the roster. Counts distinct
+    team_ids from rosterPlayerTeamIds; max payout when no two roster
+    players share a team.
+    """
+    perTeamFP = primary.get("perTeamFP", 3)
+    teamIds = set(
+        teamId for pid, teamId in (ctx.rosterPlayerTeamIds or {}).items()
+        if pid in (ctx.rosterPlayerIds or set()) and teamId is not None
+    )
+    if not teamIds:
+        return EffectResult(equation="No team affiliation data on roster")
+    fp = round(perTeamFP * len(teamIds), 1)
+    eq = f"+{perTeamFP}/team × {len(teamIds)} unique teams = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+# ── Prognostication cards ──────────────────────────────────────────────────
+
+def _computeMedium(primary, ctx, cardPlayerId, eqId):
+    """Weekly Prognostication accuracy bonus.
+
+    Thresholds tuned for a 70% season-long user accuracy average — the
+    65-84% band catches the typical "good week," ~55% of weeks land there.
+      - 50% to 64%: lowFP (below-average week)
+      - 65% to 84%: midFP (typical hit zone)
+      - 85%+: highFP (chase tier, ~15% of weeks)
+    Counts auto-picks. Returns no output if the user submitted nothing.
+    """
+    correct = int(getattr(ctx, 'userWeeklyPickemCorrect', 0) or 0)
+    total = int(getattr(ctx, 'userWeeklyPickemTotal', 0) or 0)
+    if total <= 0:
+        if getattr(ctx, 'gamesActive', False):
+            return EffectResult(equation="Waiting for game results")
+        return EffectResult(equation="No Prognostications submitted this week")
+    accuracy = correct / total
+    lowFP = primary.get("lowFP", 4.0)
+    midFP = primary.get("midFP", 10.0)
+    highFP = primary.get("highFP", 20.0)
+    if accuracy >= 0.85:
+        fp = highFP
+        tier = "85%+"
+    elif accuracy >= 0.65:
+        fp = midFP
+        tier = "65%+"
+    elif accuracy >= 0.50:
+        fp = lowFP
+        tier = "50%+"
+    else:
+        return EffectResult(equation=f"{correct}/{total} picks ({accuracy:.0%}) — below 50% threshold")
+    eq = f"{correct}/{total} picks ({accuracy:.0%}) — {tier} = +{fp} FP"
+    return EffectResult(fpBonus=fp, equation=eq)
+
+
+def _computeParlay(primary, ctx, cardPlayerId, eqId):
+    """FPx scaling with weekly Prognostication points via log-taper.
+
+    Same shape as Cornucopia: mult = baseXMult + coef × ln(1 + pts/kPoints).
+    Counts auto-picks. Returns 1.0x when the user submitted no picks.
+    """
+    import math
+    points = int(getattr(ctx, 'userWeeklyPickemPoints', 0) or 0)
+    baseXMult = primary.get("baseXMult", 1.0)
+    coef = primary.get("coef", 0.10)
+    k = primary.get("kPoints", 40)
+    if points <= 0:
+        if getattr(ctx, 'gamesActive', False):
+            return EffectResult(multBonus=baseXMult, equation="Waiting for game results")
+        return EffectResult(multBonus=baseXMult, equation="No Prognostication points this week")
+    mult = baseXMult + coef * math.log(1 + points / k)
+    mult = round(mult, 2)
+    eq = f"1.0 + {coef:.2f} × ln(1 + {points}/{k}) = {mult:.2f}x"
+    return EffectResult(multBonus=mult, equation=eq)
+
+
 # ── Streak (K) ───────────────────────────────────────────────────────────────
 
 def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
-    """Generic streak computation. Uses streak_count from ctx for season streaks,
-    or computes within-week accumulation for weekly streaks."""
+    """Generic streak computation with peak-decay carryover.
+
+    Active streak (condition met): output = base + perWeek * (streak - 1),
+    plus the existing peer synergy bonus per other streak card.
+
+    Streak broken (condition not met) but card has a recorded peak from a
+    prior streak: output = max(base, peak * decay**weeksSinceBreak). FPx
+    cards use a slower decay (0.85) since their output range is narrow;
+    flat-FP and floobits cards use 0.7. Long streaks therefore pay a
+    multi-week tail instead of dropping straight to base on the first
+    cold week.
+
+    No peak recorded (never had a streak): output = base, current behavior.
+    """
     streakConfig = STREAK_CONFIGS.get(ctx._currentEffectName, {})
     isWeekly = streakConfig.get("isWeekly", False)
 
@@ -2177,27 +2614,61 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         ticks = _countWeeklyTicks(ctx._currentEffectName, primary, ctx)
         totalReward = sum(baseReward + growthPerTick * i for i in range(ticks))
         eq = f"{baseReward} base + ({growthPerTick}/TD × {ticks} TDs)"
-    else:
-        # Season streaks: live-aware computation
-        # streakCounts already includes +1 increment if condition was met live
-        streakCount = ctx.streakCounts.get(eqId, 1)
-        conditionMet = ctx.liveStreakConditionsMet.get(eqId, True)
+        result = _streakReward(primary, totalReward)
+        result.equation = eq
+        return result
 
-        if not conditionMet:
-            # Condition not yet met → show base only (no growth)
+    # Season streaks: live-aware computation
+    streakCount = ctx.streakCounts.get(eqId, 1)
+    conditionMet = ctx.liveStreakConditionsMet.get(eqId, True)
+    rewardType = primary.get("rewardType", "fp")
+
+    if not conditionMet:
+        # Streak isn't active this week. Apply peak-decay if a peak is recorded.
+        peak = ctx.streakPeakOutputs.get(eqId)
+        if peak is None or peak <= baseReward:
+            # No prior peak above base — pay base as usual.
             result = _streakReward(primary, baseReward)
             result.equation = f"{baseReward} base"
             return result
-
-        peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
-        effectiveCount = streakCount + peerBonus
-        growthTicks = max(0, effectiveCount - 1)
-        totalReward = baseReward + growthPerTick * growthTicks
-        if peerBonus > 0:
-            eq = f"{baseReward} base + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+        weeksSince = ctx.streakWeeksSinceBreak.get(eqId, 0)
+        decay = 0.85 if rewardType == "mult" else 0.7
+        decayed = peak * (decay ** weeksSince)
+        output = max(baseReward, decayed)
+        result = _streakReward(primary, output)
+        if weeksSince == 0:
+            result.equation = f"{round(peak, 2)} (streak broke, holding peak)"
         else:
-            eq = f"{baseReward} base + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
+            result.equation = (
+                f"{round(output, 2)} (peak {round(peak, 2)} × decay^{weeksSince})"
+            )
+        return result
 
+    peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
+    effectiveCount = streakCount + peerBonus
+
+    # Log-tapered streaks (Conviction): set when `coef` is in primary.
+    # output = baseReward + coef × ln(1 + effectiveCount / kStreak)
+    # Naturally plateaus on long streaks rather than scaling linearly.
+    if "coef" in primary:
+        import math
+        coef = primary.get("coef", 0.0)
+        kStreak = primary.get("kStreak", 4)
+        totalReward = baseReward + coef * math.log(1 + effectiveCount / kStreak)
+        if peerBonus > 0:
+            eq = f"{baseReward} + {coef} × ln(1 + {effectiveCount}/{kStreak}) [{streakCount} wk + {peerBonus} synergy]"
+        else:
+            eq = f"{baseReward} + {coef} × ln(1 + {streakCount}/{kStreak})"
+        result = _streakReward(primary, totalReward)
+        result.equation = eq
+        return result
+
+    growthTicks = max(0, effectiveCount - 1)
+    totalReward = baseReward + growthPerTick * growthTicks
+    if peerBonus > 0:
+        eq = f"{baseReward} base + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+    else:
+        eq = f"{baseReward} base + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
     result = _streakReward(primary, totalReward)
     result.equation = eq
     return result
@@ -2963,7 +3434,12 @@ def _computeStackedDeck(primary, ctx, cardPlayerId, eqId):
 
 def _computeCopycat(primary, ctx, cardPlayerId, eqId):
     """+FP equal to the highest flat FP bonus among other cards."""
-    breakdowns = ctx._firstPassBreakdowns or []
+    breakdowns = list(ctx._firstPassBreakdowns or [])
+    spBreakdowns = getattr(ctx, '_secondPassBreakdowns', None) or []
+    spEqIds = getattr(ctx, '_secondPassEqIds', None) or []
+    for spIdx, spEqId in enumerate(spEqIds):
+        if spEqId != eqId and spIdx < len(spBreakdowns):
+            breakdowns.append(spBreakdowns[spIdx])
     bestFP = 0
     for b in breakdowns:
         if b.totalFP > bestFP:
@@ -2981,6 +3457,8 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
                          if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
+    triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     if triggeredCount > 0:
         bonus = round(1 + perCard * triggeredCount, 2)
         eq = f"1 + ({perCard} × {triggeredCount} triggered cards) = {bonus}"
@@ -2995,6 +3473,8 @@ def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
                          if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
+    triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     if triggeredCount >= 4:
         eq = f"+{rewardValue} FP ({triggeredCount}/4+ cards triggered)"
         return EffectResult(fpBonus=rewardValue, equation=eq)
@@ -3007,7 +3487,12 @@ def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
 def _computeHighRoller(primary, ctx, cardPlayerId, eqId):
     """FPx scaling with how many chance cards triggered their enhanced payout."""
     perCardMult = primary.get("perCardMult", 0.10)
-    breakdowns = ctx._firstPassBreakdowns or []
+    breakdowns = list(ctx._firstPassBreakdowns or [])
+    spBreakdowns = getattr(ctx, '_secondPassBreakdowns', None) or []
+    spEqIds = getattr(ctx, '_secondPassEqIds', None) or []
+    for spIdx, spEqId in enumerate(spEqIds):
+        if spEqId != eqId and spIdx < len(spBreakdowns):
+            breakdowns.append(spBreakdowns[spIdx])
     chanceTriggered = sum(1 for b in breakdowns if b.chanceTriggered)
     if chanceTriggered > 0:
         bonus = round(1 + perCardMult * chanceTriggered, 2)
@@ -3069,6 +3554,8 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=baseMult, equation=f"{baseMult}x FPx (legacy)")
     breakdowns = ctx._firstPassBreakdowns or []
     failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0 and b.primaryMult <= 0)
+    preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
+    failedCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and not t)
     if failedCount <= 0:
         eq = f"+{baseFP} FP. All cards triggered"
         return EffectResult(fpBonus=baseFP, equation=eq)
@@ -3240,12 +3727,10 @@ def _computeOpulence(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeProsperity(primary, ctx, cardPlayerId, eqId):
-    """Raises the weekly Floobits payout cap. Output is informational only —
-    the actual cap raise is applied in seasonManager._awardWeeklyFpFloobits()."""
-    ceilingBonus = primary.get("ceilingBonus", 10)
-    from constants import WEEKLY_FP_FLOOBIT_CAP
-    newCap = WEEKLY_FP_FLOOBIT_CAP + ceilingBonus
-    return EffectResult(floobits=0, equation=f"+{ceilingBonus} cap raise (effective cap: {newCap}F)")
+    """Adds a flat F bonus to weekly earnings. Output is informational only —
+    the actual bonus is applied in seasonManager._awardWeeklyFpFloobits()."""
+    flatBonus = primary.get("flatBonus", primary.get("ceilingBonus", 6))
+    return EffectResult(floobits=0, equation=f"+{flatBonus}F flat weekly bonus")
 
 
 def _getCultivationStepSize(triggerEvent):
@@ -3427,6 +3912,21 @@ EFFECT_REGISTRY = {
     "fat_cat": _computeOpulence,
     "surplus": _computeProsperity,
     "bonsai": _computeCultivation,
+    # ── New cards (FP/FPx rebalance) ──
+    "anthem": _computeAnthem,
+    "conductor": _computeConductor,
+    "castaway": _computeCastaway,
+    "sleeper": _computeSleeper,
+    "patient": _computePatient,
+    "rookie_hype": _computeRookieHype,
+    "wanderer": _computeWanderer,
+    "sandbagger": _computeStreakEffect,
+    "quiet_storm": _computeStreakEffect,
+    "drought": _computeStreakEffect,
+    # ── Prognostication cards ──
+    "nose_picker": _computeStreakEffect,
+    "medium": _computeMedium,
+    "parlay": _computeParlay,
 }
 
 
@@ -3484,13 +3984,16 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
     if condition == "equipped":
         return True  # Always met as long as card is equipped
 
+    # Kicker conditions all share a "no attempt = streak holds" rule:
+    # if the offense never reached FG range, the kicker had no chance to
+    # fail, so the streak shouldn't reset through no fault of their own.
     if condition == "kicker_fg":
-        fgMade, _, _, _ = _getKickerFgStats(ctx)
-        return fgMade > 0
+        fgMade, fgAtt, _, _ = _getKickerFgStats(ctx)
+        return fgAtt == 0 or fgMade > 0
 
     if condition == "kicker_2fg":
-        fgMade, _, _, _ = _getKickerFgStats(ctx)
-        return fgMade >= 2
+        fgMade, fgAtt, _, _ = _getKickerFgStats(ctx)
+        return fgAtt == 0 or fgMade >= 2
 
     if condition == "roster_td":
         return ctx.rosterTotalTds > 0
@@ -3499,8 +4002,8 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return ctx.favoriteTeamWonThisWeek
 
     if condition == "kicker_45plus":
-        _, _, longest, _ = _getKickerFgStats(ctx)
-        return longest >= 45
+        _, fgAtt, longest, _ = _getKickerFgStats(ctx)
+        return fgAtt == 0 or longest >= 45
 
     if condition == "kicker_35plus":
         fgMade, fgAtt, longest, _ = _getKickerFgStats(ctx)
@@ -3522,5 +4025,33 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
 
     if condition == "favorite_team_upset_win":
         return ctx.favoriteTeamWonThisWeek and ctx.favoriteTeamOpponentElo > ctx.favoriteTeamElo
+
+    # ── Inverse-streak triggers (FP/FPx rebalance) ──
+    # All three return True when the roster is UNDERPERFORMING; the streak
+    # grows on bad weeks, breaks on good ones (peak-decay handles the tail).
+    if condition == "roster_slot_low_5fp":
+        # Streak grows if any roster slot scored ≤5 FP this week.
+        for pid in (ctx.rosterPlayerIds or set()):
+            stats = (ctx.weekPlayerStats or {}).get(pid, {}) or {}
+            if float(stats.get("fantasyPoints", 0) or 0) <= 5:
+                return True
+        return False
+
+    if condition == "no_player_15fp":
+        # Streak grows if NO roster player scored 15+ FP this week.
+        for pid in (ctx.rosterPlayerIds or set()):
+            stats = (ctx.weekPlayerStats or {}).get(pid, {}) or {}
+            if float(stats.get("fantasyPoints", 0) or 0) >= 15:
+                return False
+        return True
+
+    if condition == "roster_under_50fp":
+        # Streak grows if total roster FP this week was under 50.
+        return (ctx.weekRawFP or 0) < 50
+
+    if condition == "pickem_manual_submit":
+        # Streak grows when the user submitted Prognostications manually
+        # this week (any auto-pick fill-in breaks the streak).
+        return bool(getattr(ctx, 'userManualPickSubmittedThisWeek', False))
 
     return True

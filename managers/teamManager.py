@@ -49,7 +49,28 @@ class TeamManager:
         else:
             self.logger.info("TeamManager using JSON file storage")
 
+        # Fallback name pool, used only when playerManager.unusedNames isn't
+        # available. The primary path now looks up the live unusedNames each
+        # call (via _liveCoachPool) so that mutations always land on the
+        # actual list, not a stale reference left over from before
+        # playerManager re-assigned its unusedNames.
         self._coachNamePool: List[str] = []
+
+    def _liveCoachPool(self) -> Optional[List[str]]:
+        """Return the live unusedNames list from playerManager, or fall
+        back to the local seed pool. Crucially, this re-resolves the
+        list on every call — playerManager.loadNameLists reassigns
+        self.unusedNames to a new list (DB / JSON paths both do this),
+        so caching the reference once at generateTeams time made coach
+        name removals land on a dead list and the same name showed up
+        on a player generated later in the session.
+        """
+        playerMgr = getattr(self.serviceContainer, 'playerManager', None)
+        if playerMgr is not None:
+            live = getattr(playerMgr, 'unusedNames', None)
+            if isinstance(live, list):
+                return live
+        return self._coachNamePool if self._coachNamePool else None
 
     def generateTeams(self, config: Dict[str, Any]) -> None:
         """
@@ -57,14 +78,10 @@ class TeamManager:
         Replaces getTeams() function from floosball.py
         """
         self.teams.clear()
-        # Use names not yet assigned to players (playerManager depletes unusedNames first).
-        # Shared reference so removals here also remove from playerManager.unusedNames,
-        # preventing future players from getting a coach's name.
-        playerMgr = getattr(self.serviceContainer, 'playerManager', None)
-        if playerMgr and getattr(playerMgr, 'unusedNames', None):
-            self._coachNamePool = playerMgr.unusedNames
-        else:
-            self._coachNamePool = list(config.get('players', []))
+        # Seed the fallback pool from config — only consumed when playerManager
+        # isn't available. Live coach naming reads playerManager.unusedNames
+        # via _liveCoachPool so removals stay in sync.
+        self._coachNamePool = list(config.get('players', []))
 
         # Try database first if enabled
         if DATABASE_AVAILABLE and USE_DATABASE and self.team_repo:
@@ -1000,117 +1017,121 @@ class TeamManager:
         return self.leagues
     
     def setPressureModifiersForNewSeason(self, currentSeason: int) -> None:
+        """Set the prior-season expectation baseline for every team. Called at
+        season start. Sets `team.priorSeasonPressure` based on last season's
+        playoff finish or win percentage; resets `inSeasonPressure` to 1.0.
+        The live `pressureModifier` is initialized to the prior baseline and
+        then wanes across the regular season as in-season forces take over
+        (see applyRegularSeasonPressureBlend).
         """
-        Set pressure modifiers for teams based on previous season performance.
-        Called at the start of each new season.
-        """
-        self.logger.info(f"Setting pressure modifiers for season {currentSeason}")
-        
+        self.logger.info(f"Setting prior-season pressure baselines for season {currentSeason}")
+
         for team in self.teams:
-            # Initialize pressure modifier to default
-            team.pressureModifier = 1.0
-            
+            prior = 1.0  # Default: no prior expectations
+
             # Only apply historical pressure if this is not the first season
             if currentSeason > 1 and hasattr(team, 'statArchive') and len(team.statArchive) > 0:
-                previousSeason = team.statArchive[0]  # Most recent season is at index 0
-                
-                # Teams that made playoffs get pressure based on how far they went
+                previousSeason = team.statArchive[0]
+
                 if previousSeason.get('madePlayoffs', False):
                     if not previousSeason.get('floosbowlChamp', False):
-                        # Made playoffs but didn't win championship - pressure increases
-                        leagueChamp = previousSeason.get('leageChamp', False)  # Note: typo in original key
+                        leagueChamp = previousSeason.get('leageChamp', False)  # legacy typo in stored key
                         topSeed = previousSeason.get('topSeed', False)
-                        
                         if leagueChamp and topSeed:
-                            team.pressureModifier = 1.5  # High expectations
-                            self.logger.debug(f"{team.name}: Pressure 1.5 (League champ + top seed)")
+                            prior = 1.5
                         elif leagueChamp or topSeed:
-                            team.pressureModifier = 1.4  # Medium-high expectations
-                            self.logger.debug(f"{team.name}: Pressure 1.4 (League champ OR top seed)")
+                            prior = 1.4
                         else:
-                            team.pressureModifier = 1.2  # Made playoffs, some pressure
-                            self.logger.debug(f"{team.name}: Pressure 1.2 (Made playoffs)")
-                    # Note: Floos Bowl champions get default 1.0 (no extra pressure)
+                            prior = 1.2
+                    # Floos Bowl champs ride at 1.0 — they already won it all,
+                    # nothing to prove. (Could flip to a "defend the throne"
+                    # bump later if it feels right.)
                 else:
-                    # Teams that missed playoffs get reduced pressure based on how bad they were
                     winPerc = previousSeason.get('winPerc', 0)
-                    
                     if winPerc < 0.25:
-                        team.pressureModifier = 0.7  # Very bad season, low pressure
-                        self.logger.debug(f"{team.name}: Pressure 0.7 (Win% < 25%)")
+                        prior = 0.7
                     elif winPerc < 0.4:
-                        team.pressureModifier = 0.8  # Bad season, reduced pressure
-                        self.logger.debug(f"{team.name}: Pressure 0.8 (Win% < 40%)")
+                        prior = 0.8
                     elif winPerc < 0.5:
-                        team.pressureModifier = 0.9  # Below average, slight reduction
-                        self.logger.debug(f"{team.name}: Pressure 0.9 (Win% < 50%)")
+                        prior = 0.9
                     else:
-                        team.pressureModifier = 1.0  # Decent season, normal pressure
-                        self.logger.debug(f"{team.name}: Pressure 1.0 (Win% >= 50%)")
-            else:
-                # New teams or first season get default pressure
-                self.logger.debug(f"{team.name}: Pressure 1.0 (New team/First season)")
-        
-        self.logger.info("Pressure modifiers set for all teams based on previous season")
+                        prior = 1.0
+
+            team.priorSeasonPressure = prior
+            team.inSeasonPressure = 1.0
+            team.pressureModifier = prior  # Game-time value starts at full prior expectation
+            team.currentWinStreak = 0
+            team.streakPressure = 0.0
+            self.logger.debug(f"{team.name}: priorSeasonPressure={prior}")
+
+        self.logger.info("Prior-season pressure baselines set")
+        self.logPressureSnapshot("season_start", season=currentSeason, week=0)
     
     def updateInSeasonPressureModifiers(self, currentWeek: int, nonPlayoffTeamsList: List, lastTeamIn) -> List[Dict[str, str]]:
-        """
-        Update pressure modifiers during the season based on playoff implications.
-        
-        Args:
-            currentWeek: Current week number
-            nonPlayoffTeamsList: List of teams not currently in playoffs
-            lastTeamIn: Team object representing the last team to make playoffs
-            
-        Returns:
-            List of highlight events generated from pressure changes
+        """Update each team's `inSeasonPressure` (NOT pressureModifier directly)
+        based on current standings and elimination math. The blended live
+        pressureModifier gets recomputed in applyRegularSeasonPressureBlend.
         """
         leagueHighlights = []
-        
-        self.logger.info(f"Updating in-season pressure modifiers for week {currentWeek}")
-        
+
+        self.logger.info(f"Updating in-season pressure for week {currentWeek}")
+
         for standing in nonPlayoffTeamsList:
             team = standing['team'] if isinstance(standing, dict) else standing
-            
-            # Set pressure modifiers for poor performing teams late in season
+
+            # Poor performers late in season: in-season pressure dips
             if team.seasonTeamStats.get('winPerc', 0) < 0.45 and currentWeek >= 14:
-                team.pressureModifier = 0.9
-                self.logger.debug(f"{team.name}: Reduced pressure (0.9) for poor performance late in season")
-            
-            # Check elimination status and set pressure accordingly
+                team.inSeasonPressure = 0.9
+
             if not getattr(team, 'clinchedPlayoffs', False) and not getattr(team, 'eliminated', False):
                 import floosball_methods as FloosMethods
-                
-                # Check if team is mathematically eliminated
+
                 team.eliminated = FloosMethods.checkIfEliminated(
                     team.seasonTeamStats.get('wins', 0),
                     lastTeamIn.seasonTeamStats.get('wins', 0),
                     28 - currentWeek
                 )
-                
+
                 if team.eliminated:
                     leagueHighlights.insert(0, {
                         'event': {'text': f'{team.city} {team.name} have faded from playoff contention'}
                     })
-                    team.pressureModifier = 0.7  # Eliminated teams have very low pressure
-                    self.logger.debug(f"{team.name}: Eliminated - pressure set to 0.7")
+                    team.inSeasonPressure = 0.7
                 else:
-                    # Check if team is on brink of elimination (must win out to match last team in)
                     teamMaxWins = team.seasonTeamStats.get('wins', 0) + (28 - currentWeek)
                     lastTeamWins = lastTeamIn.seasonTeamStats.get('wins', 0)
-                    
+
                     if teamMaxWins == lastTeamWins:
                         leagueHighlights.insert(0, {
                             'event': {'text': f'{team.city} {team.name} are on the brink of elimination!'}
                         })
-                        
-                        # High pressure if close to elimination late in season
                         if (28 - currentWeek) <= 5:
-                            team.pressureModifier = 2.0  # Maximum pressure for must-win situations
-                            self.logger.debug(f"{team.name}: Brink of elimination - pressure set to 2.0")
-        
+                            team.inSeasonPressure = 2.0  # Must-win
+
         self.logger.info(f"In-season pressure update complete for week {currentWeek}")
         return leagueHighlights
+
+    def applyRegularSeasonPressureBlend(self, currentWeek: int, season: int = None) -> None:
+        """Blend prior-season expectation into in-season pressure based on
+        how far we are into the regular season. Call this at week start during
+        the regular season — the live `pressureModifier` becomes the blended
+        value used by the game pressure calculation. Playoff and Floos Bowl
+        code continues to set pressureModifier directly and overrides the
+        blend.
+
+        progress: 0 at week 1, 1 at week 15+. Linear ramp.
+            week 1  → 100% prior, 0% in-season
+            week 8  → ~50/50
+            week 15 → 0% prior, 100% in-season
+        """
+        progress = max(0.0, min(1.0, (currentWeek - 1) / 14.0))
+        for team in self.teams:
+            prior = getattr(team, 'priorSeasonPressure', 1.0)
+            inseason = getattr(team, 'inSeasonPressure', 1.0)
+            blended = prior * (1.0 - progress) + inseason * progress
+            team.pressureModifier = round(blended, 3)
+        self.logPressureSnapshot(f"week_blend(progress={progress:.2f})",
+                                 season=season, week=currentWeek)
     
     def setPlayoffPressureModifiers(self, playoffTeams: Dict[str, List], currentRound: int) -> None:
         """
@@ -1139,6 +1160,7 @@ class TeamManager:
                     self.logger.debug(f"{team.name}: Round {currentRound} pressure increased to {team.pressureModifier}")
         
         self.logger.info(f"Playoff pressure modifiers set for round {currentRound}")
+        self.logPressureSnapshot(f"playoff_round_{currentRound}")
     
     def setFloosBowlPressure(self, homeTeam, awayTeam) -> None:
         """
@@ -1157,16 +1179,28 @@ class TeamManager:
         self.logger.debug(f"{awayTeam.name}: Floos Bowl pressure set to 2.5")
         
         self.logger.info("Floos Bowl pressure modifiers set")
+        self.logPressureSnapshot("floos_bowl")
     
     def resetPressureModifiers(self) -> None:
         """Reset all team pressure modifiers to default (1.0)"""
         self.logger.info("Resetting all pressure modifiers to default")
-        
+
         for team in self.teams:
             team.pressureModifier = 1.0
-        
+
         self.logger.info("All pressure modifiers reset to 1.0")
-    
+
+    def logPressureSnapshot(self, context: str, season: int = None, week: int = None) -> None:
+        """Diagnostic dump of every team's pressure modifier — both the raw
+        baseline value and the market-tier scaled effective value used at game
+        time. Writes to logs/pressure_diag.log via the dedicated pressure_diag
+        logger (separate from the main app log). Tagged with context/season/
+        week so you can grep across the file to track fluctuations.
+        """
+        diagLogger = _getPressureDiagLogger()
+        for team in self.teams:
+            diagLogger.info(formatPressureDiagLine(team, context, season=season, week=week))
+
     def getPressureStatistics(self) -> Dict[str, Any]:
         """Get pressure modifier statistics for all teams"""
         import statistics
@@ -1193,31 +1227,62 @@ class TeamManager:
     # -------------------------------------------------------------------------
 
     def generateCoach(self, seed: int = None) -> FloosCoach.Coach:
-        """Create a new Coach with generated attributes and a unique name from the pool."""
+        """Create a new Coach with generated attributes and a unique name from the pool.
+
+        Prefers playerManager.popUniqueName when available so any name
+        already attached to a live player or coach is dropped from the
+        pool rather than handed to the new coach. Defensive against the
+        kind of pollution that produced coach/player and player/player
+        collisions in past seasons.
+        """
         coach = FloosCoach.Coach()
         coach.generateAttributes(seed=seed)
-        if self._coachNamePool:
-            name = _random.choice(self._coachNamePool)
-            self._coachNamePool.remove(name)
-            coach.name = name
-            # Persist removal so restarts don't reassign this name to a player
-            playerMgr = getattr(self.serviceContainer, 'playerManager', None)
-            if playerMgr:
+        playerMgr = None
+        try:
+            playerMgr = self.serviceContainer.getService('player_manager')
+        except Exception:
+            pass
+
+        name = None
+        if playerMgr and hasattr(playerMgr, 'popUniqueName'):
+            name = playerMgr.popUniqueName()
+            if name is not None:
                 playerMgr.saveUnusedNames()
+        else:
+            # Fallback: legacy path against the local pool. Still mutates
+            # the live unusedNames via _liveCoachPool when present.
+            pool = self._liveCoachPool()
+            if pool:
+                name = _random.choice(pool)
+                pool.remove(name)
+                if playerMgr and hasattr(playerMgr, 'saveUnusedNames'):
+                    playerMgr.saveUnusedNames()
+
+        if name is not None:
+            coach.name = name
         else:
             coach.generateName()
         return coach
 
-    def _saveCoachToDatabase(self, team: FloosTeam.Team) -> None:
-        """Persist team.coach to the coaches table and update team.coach_id FK."""
-        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session and team.coach):
+    def _saveCoachToDatabase(self, team: FloosTeam.Team, session=None) -> None:
+        """Persist team.coach to the coaches table and update team.coach_id FK.
+
+        Optional `session` lets callers (e.g. the GM hire-coach resolution
+        flow) write through their own session so this save shares one
+        connection with the surrounding resolution. Without that, two
+        connections fight for SQLite's write lock and the auto-pick
+        fallback path hits "database is locked" while gmManager still
+        holds its session.
+        """
+        targetSession = session if session is not None else self.db_session
+        if not (DATABASE_AVAILABLE and USE_DATABASE and targetSession and team.coach):
             return
         try:
             from database.models import Coach as DBCoach
-            dbCoach = self.db_session.get(DBCoach, team.coach.id) if team.coach.id else None
+            dbCoach = targetSession.get(DBCoach, team.coach.id) if team.coach.id else None
             if dbCoach is None:
                 dbCoach = DBCoach(team_id=team.id)
-                self.db_session.add(dbCoach)
+                targetSession.add(dbCoach)
             dbCoach.name = team.coach.name
             dbCoach.team_id = team.id
             dbCoach.seasons_coached = team.coach.seasonsCoached
@@ -1230,16 +1295,26 @@ class TeamManager:
             dbCoach.scouting = getattr(team.coach, 'scouting', 80)
             dbCoach.attitude = getattr(team.coach, 'attitude', 80)
             dbCoach.overall_rating = team.coach.overallRating
-            self.db_session.flush()
+            targetSession.flush()
             team.coach.id = dbCoach.id
-            # Link team → coach via coach_id FK
-            dbTeam = self.team_repo.get_by_id(team.id)
+            # Link team → coach via coach_id FK. Re-resolve via the same
+            # session as the rest of this write so the FK update lands on
+            # the same transaction.
+            from database.models import Team as DBTeam
+            dbTeam = targetSession.get(DBTeam, team.id)
             if dbTeam:
                 dbTeam.coach_id = dbCoach.id
-            self.db_session.commit()
+            # Only commit when we own the session. When a caller passes in
+            # their own session they're responsible for the commit/rollback
+            # lifecycle so we don't trip nested-transaction errors.
+            if session is None:
+                targetSession.commit()
         except Exception as e:
             self.logger.error(f"Failed to save coach for {team.name}: {e}")
-            self.db_session.rollback()
+            if session is None:
+                targetSession.rollback()
+            else:
+                raise
 
     def _loadCoachFromDatabase(self, team: FloosTeam.Team) -> bool:
         """Try to load a coach from DB for this team. Returns True if found and loaded."""
@@ -1272,9 +1347,17 @@ class TeamManager:
             coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
             coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
             team.coach = coach
-            # Remove coach name from unused pool so no future player gets it
-            if coach.name in self._coachNamePool:
-                self._coachNamePool.remove(coach.name)
+            # Remove coach name from the LIVE unused-names pool so no future
+            # player gets it. Goes through _liveCoachPool to read whatever
+            # list playerManager currently considers authoritative — caching
+            # the reference at generateTeams time was unsafe because
+            # loadNameLists reassigns it.
+            pool = self._liveCoachPool()
+            if pool and coach.name in pool:
+                pool.remove(coach.name)
+                playerMgr = getattr(self.serviceContainer, 'playerManager', None)
+                if playerMgr:
+                    playerMgr.saveUnusedNames()
             self.logger.debug(f"Loaded coach {coach.name} from DB for {team.name}")
             return True
         except Exception as e:
@@ -1290,16 +1373,20 @@ class TeamManager:
                     self._saveCoachToDatabase(team)
                     self.logger.debug(f"Generated and saved coach {team.coach.name} for {team.name}")
 
-    def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach) -> None:
+    def hireCoach(self, team: FloosTeam.Team, coach: FloosCoach.Coach, session=None) -> None:
         """Assign a specific coach to a team and persist the assignment.
 
         Without _saveCoachToDatabase, the new coach exists only in memory —
         the GM hire-coach fallback path (no vote met threshold → auto-generate
         a coach) leaves the team coachless on the next restart, since
         _loadCoachFromDatabase finds no Coach row tied to team_id.
+
+        Optional `session` is forwarded to _saveCoachToDatabase so callers
+        like the GM resolution flow can keep all writes on one connection
+        and avoid SQLite write-lock contention.
         """
         team.coach = coach
-        self._saveCoachToDatabase(team)
+        self._saveCoachToDatabase(team, session=session)
 
     def fireCoach(self, team: FloosTeam.Team, session=None) -> None:
         """Remove a team's coach (leaves them coachless until next hire).
@@ -1372,7 +1459,7 @@ class TeamManager:
                 self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
 
-    def generateCoachPool(self, count: int = 5) -> None:
+    def generateCoachPool(self, count: int = 12) -> None:
         """Top up the unassigned coach pool to `count` entries.
 
         Preserves existing pool entries — earlier versions of this method
@@ -1453,3 +1540,71 @@ class TeamManager:
         targetSession.flush()
         self.logger.info(f"{team.name} hired coach {coach.name} from pool")
         return True
+
+
+# ── Pressure diagnostic logging (module-level helpers) ──────────────────────
+
+_pressureDiagLogger = None
+
+
+def _getPressureDiagLogger():
+    """Lazy-init a dedicated logger that writes only to logs/pressure_diag.log.
+    Keeps PRESSURE_DIAG lines out of the main app log so testing this feature
+    doesn't drown out other diagnostic output.
+    """
+    global _pressureDiagLogger
+    if _pressureDiagLogger is not None:
+        return _pressureDiagLogger
+    import logging
+    import os
+    diagLogger = logging.getLogger("floosball.pressure_diag")
+    diagLogger.setLevel(logging.INFO)
+    diagLogger.propagate = False
+    if not diagLogger.handlers:
+        os.makedirs("logs", exist_ok=True)
+        handler = logging.FileHandler("logs/pressure_diag.log")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        diagLogger.addHandler(handler)
+    _pressureDiagLogger = diagLogger
+    return diagLogger
+
+
+def formatPressureDiagLine(team, context: str, season: int = None, week: int = None) -> str:
+    """Build a single PRESSURE_DIAG log line for one team. Mirrors the
+    game-time scaling in floosball_game.calculateGamePressure exactly so
+    the log values match what the simulation actually applies.
+    """
+    from constants import (
+        EXPECTATION_SCALE_BY_TIER,
+        EXPECTATION_RELIEF_BY_TIER,
+        EXPECTATION_DELTA_CAP,
+        CHAMPIONSHIP_OVERFLOW_FACTOR,
+    )
+    base = getattr(team, 'pressureModifier', 1.0)
+    streakAdd = getattr(team, 'streakPressure', 0.0)
+    streak = getattr(team, 'currentWinStreak', 0)
+    effective = base + streakAdd
+    tier = getattr(team, 'fundingTier', 'UNKNOWN')
+    delta = effective - 1.0
+    if delta > 0:
+        tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+        cap = min(delta, EXPECTATION_DELTA_CAP)
+        overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+        scaledDelta = cap * tierScale + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
+    else:
+        reliefScale = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+        scaledDelta = delta * reliefScale
+    scaled = 1.0 + scaledDelta
+    return (
+        f"PRESSURE_DIAG s={season if season is not None else '-'} "
+        f"w={week if week is not None else '-'} ctx={context} "
+        f"team={team.name} tier={tier} base={base:.2f} streak={streak} "
+        f"streakP={streakAdd:.2f} scaled={scaled:.2f}"
+    )
+
+
+def logPressureDiag(team, context: str, season: int = None, week: int = None) -> None:
+    """Log one team's pressure state at a mutation site. Used by
+    seasonManager / leagueManager at the inline pressureModifier assignments.
+    """
+    _getPressureDiagLogger().info(formatPressureDiagLine(team, context, season=season, week=week))

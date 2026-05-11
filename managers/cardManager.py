@@ -47,13 +47,43 @@ BLENDER_THRESHOLDS = [
     (0, 'base'),            # 0-49 → base
 ]
 
-# Daily pack purchase limits (resets on calendar day, same as featured shop refresh)
+# Daily pack purchase limits (resets on calendar day, same as featured shop refresh).
+# Pack revamp (feature/pack-revamp): every rotated pack now caps at 1/day; the
+# 2-packs-per-day intent is enforced by which packs the rotation surfaces in
+# the shop on a given day. 'proper' is deprecated and not in the rotation.
 DAILY_PACK_LIMITS = {
-    'humble': 3,
-    'proper': 2,
+    'humble': 1,
     'grand': 1,
     'exquisite': 1,
 }
+
+# Shop rotation: 4 "shop days" map to 7-week segments of the season,
+# matching the existing featured-shop SWAP_CYCLE_WEEKS cycle.
+#   Shop day 1 → weeks 1-7
+#   Shop day 2 → weeks 8-14
+#   Shop day 3 → weeks 15-21
+#   Shop day 4 → weeks 22-28
+def shopDayOfSeason(currentWeek: int) -> int:
+    """Return the 1-indexed shop day (1-4) for the given season week.
+    Clamps to [1, 4] for the regular-season range; postseason weeks fall
+    in shop day 4 since that's the final cycle.
+    """
+    from constants import SWAP_CYCLE_WEEKS
+    week = max(1, currentWeek or 1)
+    return min(4, (week - 1) // SWAP_CYCLE_WEEKS + 1)
+
+
+def getActivePackNames(shopDay: int) -> list:
+    """Pack tiers visible in the shop on the given shop day.
+
+    Shop day 1 (weeks 1-7):    humble + grand           — two-pack starter
+    Shop day 2 (weeks 8-14):   humble + grand           — same lineup
+    Shop day 3 (weeks 15-21):  humble + grand + exquisite — top tier unlocks
+    Shop day 4 (weeks 22-28):  humble + grand + exquisite — full lineup
+    """
+    if shopDay <= 2:
+        return ['humble', 'grand']
+    return ['humble', 'grand', 'exquisite']
 
 # Classification value multipliers (stacking for compound classifications)
 CLASSIFICATION_VALUE_MULTIPLIERS = {
@@ -172,17 +202,20 @@ class CardManager:
             # Cards are for rostered players only — exclude every off-roster
             # population:
             # - Free agents (player.team is None or a 'Free Agent' string)
-            # - Prospects (is_prospect=True; player.team is the 'Prospect' string
-            #   once routing runs, but flag-checking is more reliable than
-            #   string comparison)
+            # - Prospects (is_prospect=True OR drafting_team_id set; the flag
+            #   is the canonical marker but drafting_team_id catches
+            #   half-promoted state where one of the two got cleared)
             # - Upcoming rookies (is_upcoming_rookie=True)
             # - Retired players (player.team == 'Retired' string)
             if getattr(player, 'is_prospect', False):
                 continue
+            if getattr(player, 'drafting_team_id', None):
+                continue
             if getattr(player, 'is_upcoming_rookie', False):
                 continue
             teamObj = getattr(player, 'team', None)
-            if teamObj is None or not hasattr(teamObj, 'id'):
+            teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
+            if not teamId:  # None or 0 — both invalid; rules out string-team values too
                 continue
 
             rating = getattr(player, 'playerRating', None)
@@ -191,8 +224,6 @@ class CardManager:
 
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
             isRookie = getattr(player, 'seasonsPlayed', 1) == 0
-
-            teamId = teamObj.id
 
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
@@ -264,13 +295,18 @@ class CardManager:
                 continue
 
             # Skip prospects, upcoming rookies, free agents — only rostered
-            # players get card templates.
+            # players get card templates. Belt-and-suspenders on the prospect
+            # check via drafting_team_id since the flag has gotten out of
+            # sync before.
             if getattr(player, 'is_prospect', False):
+                continue
+            if getattr(player, 'drafting_team_id', None):
                 continue
             if getattr(player, 'is_upcoming_rookie', False):
                 continue
             teamObj = getattr(player, 'team', None)
-            if teamObj is None or not hasattr(teamObj, 'id'):
+            teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
+            if not teamId:
                 continue
 
             # Only create rookie templates for actual rookies (just generated this offseason)
@@ -282,7 +318,6 @@ class CardManager:
                 continue
 
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
-            teamId = teamObj.id
 
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
@@ -563,9 +598,13 @@ class CardManager:
         allTemplates = templateRepo.getBySeason(currentSeason)
         minRating = EDITION_THRESHOLDS.get(resultEdition, 0)
 
-        # Get unique eligible players
+        # Get unique eligible players. Skip templates with NULL team_id —
+        # those are leftovers from past prospect/rookie pollution, and
+        # picking one as a blend source would propagate the bad state.
         eligiblePlayers = {}
         for t in allTemplates:
+            if t.team_id is None:
+                continue
             if t.player_rating >= minRating and t.player_id not in eligiblePlayers:
                 eligiblePlayers[t.player_id] = t
 
@@ -650,11 +689,13 @@ class CardManager:
 
     def openPack(self, session, userId: int, packTypeId: int, currentSeason: int,
                  skipCurrency: bool = False, source: str = "purchase") -> dict:
-        """Buy and open a card pack. Returns the list of new cards.
+        """Buy and open a card pack — IMMEDIATE-grant flow (no selection).
+
+        Used for achievement rewards / starter grants / any path where the
+        user doesn't pick which cards to keep. Purchase flow with selection
+        goes through revealPack + selectPackKeeps instead.
 
         Raises ValueError if insufficient Floobits or invalid pack type.
-        When skipCurrency=True the pack is free (used for achievement rewards,
-        starter grants, etc.). The PackOpening is still recorded for history.
         """
         from database.models import CardTemplate, UserCard, PackOpening
         from database.repositories.card_repositories import (
@@ -676,7 +717,7 @@ class CardManager:
         if not skipCurrency:
             dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
             if dailyLimit is not None:
-                from datetime import datetime, timedelta
+                from datetime import datetime
                 from database.models import PackOpening
                 now = datetime.utcnow()
                 dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -698,51 +739,7 @@ class CardManager:
             if result is None:
                 raise ValueError("Insufficient Floobits")
 
-        # Get current-season templates for drawing
-        allTemplates = templateRepo.getBySeason(currentSeason)
-        if not allTemplates:
-            raise ValueError("No card templates available for the current season")
-
-        # Build weighted pool by edition using pack's rarity_weights
-        packWeights = packType.rarity_weights or EDITION_BASE_WEIGHTS
-
-        drawnTemplates: List[CardTemplate] = []
-        cardsNeeded = packType.cards_per_pack
-
-        # Handle guaranteed rarity first
-        if packType.guaranteed_rarity:
-            guaranteedEditions = self._editionsAtOrAbove(packType.guaranteed_rarity)
-            guaranteedPool = [t for t in allTemplates if t.edition in guaranteedEditions]
-            if guaranteedPool:
-                picked = self._weightedDraw(guaranteedPool, packWeights, count=1)
-                drawnTemplates.extend(picked)
-                cardsNeeded -= len(picked)
-
-            # Grand packs guarantee a second holographic or better
-            if packType.name == 'grand':
-                holoPlus = self._editionsAtOrAbove('holographic')
-                holoPool = [t for t in allTemplates if t.edition in holoPlus and t not in drawnTemplates]
-                if holoPool:
-                    picked = self._weightedDraw(holoPool, packWeights, count=1)
-                    drawnTemplates.extend(picked)
-                    cardsNeeded -= len(picked)
-
-            # Exquisite packs guarantee a prismatic+ alongside the diamond
-            if packType.name == 'exquisite':
-                prismaticPlus = self._editionsAtOrAbove('prismatic')
-                prismaticPool = [t for t in allTemplates if t.edition in prismaticPlus and t not in drawnTemplates]
-                if prismaticPool:
-                    picked = self._weightedDraw(prismaticPool, packWeights, count=1)
-                    drawnTemplates.extend(picked)
-                    cardsNeeded -= len(picked)
-
-        # Fill remaining slots with weighted random
-        if cardsNeeded > 0:
-            remainingPool = [t for t in allTemplates if t not in drawnTemplates]
-            if not remainingPool:
-                remainingPool = allTemplates
-            filled = self._weightedDraw(remainingPool, packWeights, count=cardsNeeded)
-            drawnTemplates.extend(filled)
+        drawnTemplates = self._drawPackCards(session, packType, currentSeason)
 
         # Create UserCard instances
         newCards: List[UserCard] = []
@@ -757,7 +754,6 @@ class CardManager:
 
         cardRepo.saveBatch(newCards)
 
-        # Record the opening (cost=0 for free grants)
         openingRecord = PackOpening(
             user_id=userId,
             pack_type_id=packType.id,
@@ -766,10 +762,8 @@ class CardManager:
         )
         openingRepo.save(openingRecord)
 
-        # Serialize the new cards for response
         serialized = []
         for card in newCards:
-            # Eagerly load template relationship
             session.refresh(card)
             serialized.append(self.serializeCard(card, currentSeason))
 
@@ -778,6 +772,274 @@ class CardManager:
             "cost": packType.cost,
             "cards": serialized,
         }
+
+    def _drawPackCards(self, session, packType, currentSeason: int) -> list:
+        """Shared draw routine: returns N templates per packType.cards_per_pack.
+
+        guaranteed_rarity branch was removed in the pack revamp — rate weights
+        on each pack carry the rarity guarantees probabilistically instead.
+        """
+        from database.repositories.card_repositories import CardTemplateRepository
+        templateRepo = CardTemplateRepository(session)
+        allTemplates = templateRepo.getBySeason(currentSeason)
+        # Skip any templates with NULL team_id — defensive guard against legacy
+        # prospect/rookie templates polluting fresh pack rolls.
+        allTemplates = [t for t in allTemplates if t.team_id is not None]
+        if not allTemplates:
+            raise ValueError("No card templates available for the current season")
+
+        packWeights = packType.rarity_weights or EDITION_BASE_WEIGHTS
+        return self._weightedDraw(allTemplates, packWeights, count=packType.cards_per_pack)
+
+    # ─── Reveal / Select flow (purchases) ─────────────────────────────────────
+
+    def revealPack(self, session, userId: int, packTypeId: int, currentSeason: int,
+                   shopDay: Optional[int] = None,
+                   skipCurrency: bool = False) -> dict:
+        """Reveal flow: draw cards into a PendingPackOpening without yet
+        committing them. Returns a pendingId the user submits to
+        selectPackKeeps once they've chosen which to keep.
+
+        skipCurrency=False (default): user-purchase path. Spends Floobits,
+            checks daily limit + rotation gate.
+        skipCurrency=True: free-grant path (achievement rewards, etc.).
+            Skips spend, daily limit, and rotation check — but the same
+            reveal+select UX still applies so users always pick which
+            cards to keep.
+        """
+        from database.models import PendingPackOpening, PackOpening
+        from database.repositories.card_repositories import (
+            PackTypeRepository, CurrencyRepository,
+        )
+        from datetime import datetime
+
+        packRepo = PackTypeRepository(session)
+        currencyRepo = CurrencyRepository(session)
+
+        packType = packRepo.getById(packTypeId)
+        if not packType:
+            raise ValueError("Invalid pack type")
+        if packType.name == 'starter':
+            raise ValueError("Starter pack uses claimStarterPack, not revealPack")
+
+        if not skipCurrency:
+            # Block out-of-rotation packs (deprecated tiers like 'proper' or
+            # tiered packs not yet unlocked today). Can't trust the frontend
+            # to filter — a crafted call would otherwise let a user buy any
+            # pack at any time.
+            if shopDay is not None:
+                activeNames = set(getActivePackNames(shopDay))
+                if packType.name not in activeNames:
+                    raise ValueError(f"{packType.display_name} is not available in the shop right now")
+
+            # Daily limit — counts both committed openings AND pending reveals
+            # so a user can't open + abandon + open again for the same pack today.
+            dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
+            if dailyLimit is not None:
+                now = datetime.utcnow()
+                dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                committedCount = session.query(PackOpening).filter(
+                    PackOpening.user_id == userId,
+                    PackOpening.pack_type_id == packType.id,
+                    PackOpening.opened_at >= dayStart,
+                ).count()
+                pendingCount = session.query(PendingPackOpening).filter(
+                    PendingPackOpening.user_id == userId,
+                    PendingPackOpening.pack_type_id == packType.id,
+                    PendingPackOpening.opened_at >= dayStart,
+                ).count()
+                if committedCount + pendingCount >= dailyLimit:
+                    raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
+
+            # Spend Floobits up-front. Selection step doesn't refund.
+            result = currencyRepo.spendFunds(
+                userId, packType.cost,
+                transactionType='pack_purchase',
+                description=f"Opened {packType.display_name}",
+                season=currentSeason,
+            )
+            if result is None:
+                raise ValueError("Insufficient Floobits")
+
+        drawnTemplates = self._drawPackCards(session, packType, currentSeason)
+
+        pending = PendingPackOpening(
+            user_id=userId,
+            pack_type_id=packType.id,
+            revealed_template_ids=[t.id for t in drawnTemplates],
+            cost_paid=0 if skipCurrency else packType.cost,
+            season=currentSeason,
+        )
+        session.add(pending)
+        session.flush()
+
+        revealed = [self._serializeTemplate(t, currentSeason) for t in drawnTemplates]
+        return {
+            "pendingId": pending.id,
+            "packName": packType.display_name,
+            "cost": 0 if skipCurrency else packType.cost,
+            "cardsPerPack": packType.cards_per_pack,
+            "cardsKept": packType.cards_kept,
+            "revealed": revealed,
+        }
+
+    def selectPackKeeps(self, session, userId: int, pendingId: int,
+                        keptIndices: list, currentSeason: int) -> dict:
+        """Commit the user's selection from a pending pack reveal.
+
+        keptIndices: list of integer indices into the pendingPack.revealed_template_ids
+        list. Length must match the pack's cards_kept value (or all of them
+        for packs with no selection). Discarded cards are dropped — no refund
+        for now.
+        """
+        from database.models import PendingPackOpening, UserCard, PackOpening, CardTemplate
+        from database.repositories.card_repositories import (
+            UserCardRepository, PackOpeningRepository,
+        )
+
+        pending = session.query(PendingPackOpening).filter_by(
+            id=pendingId, user_id=userId,
+        ).first()
+        if not pending:
+            raise ValueError("No pending pack with that id for this user")
+
+        packType = pending.pack_type
+        revealedIds = list(pending.revealed_template_ids or [])
+        if not revealedIds:
+            raise ValueError("Pending pack has no revealed cards")
+
+        keepCount = packType.cards_kept or packType.cards_per_pack
+
+        # Sanitize indices: dedupe, range-check, count-check
+        indices = sorted({int(i) for i in keptIndices if 0 <= int(i) < len(revealedIds)})
+        if len(indices) != keepCount:
+            raise ValueError(f"Must select exactly {keepCount} of {len(revealedIds)} revealed cards")
+
+        keptTemplateIds = [revealedIds[i] for i in indices]
+
+        # Materialize UserCard rows for kept selections
+        cardRepo = UserCardRepository(session)
+        openingRepo = PackOpeningRepository(session)
+
+        newCards: List[UserCard] = []
+        acquiredVia = f"pack_{packType.name}"
+        for tid in keptTemplateIds:
+            newCards.append(UserCard(
+                user_id=userId,
+                card_template_id=tid,
+                acquired_via=acquiredVia,
+            ))
+        cardRepo.saveBatch(newCards)
+
+        # Record the opening with the KEPT cards (not the revealed pool) for
+        # historical accuracy of "what the user actually got".
+        opening = PackOpening(
+            user_id=userId,
+            pack_type_id=packType.id,
+            cards_received=keptTemplateIds,
+            cost=pending.cost_paid,
+        )
+        openingRepo.save(opening)
+
+        session.delete(pending)
+        session.flush()
+
+        serialized = []
+        for card in newCards:
+            session.refresh(card)
+            serialized.append(self.serializeCard(card, currentSeason))
+
+        return {
+            "packName": packType.display_name,
+            "kept": serialized,
+            "discardedCount": len(revealedIds) - len(keptTemplateIds),
+        }
+
+    def claimStarterPack(self, session, userId: int, currentSeason: int) -> dict:
+        """Free starter pack: 5 base cards, once per season per user.
+
+        No selection — user keeps everything. Sets User.starter_pack_claimed_season
+        so the offer disappears until the next season.
+        """
+        from database.models import User
+        from database.repositories.card_repositories import PackTypeRepository
+
+        user = session.query(User).filter_by(id=userId).first()
+        if not user:
+            raise ValueError("User not found")
+        if user.starter_pack_claimed_season == currentSeason:
+            raise ValueError("Starter pack already claimed this season")
+
+        packRepo = PackTypeRepository(session)
+        packType = packRepo.getByName('starter')
+        if not packType:
+            raise ValueError("Starter pack type not seeded — run migrations")
+
+        # Use the immediate-grant flow with skipCurrency=True (no daily limit, no spend).
+        result = self.openPack(session, userId, packType.id, currentSeason, skipCurrency=True)
+        user.starter_pack_claimed_season = currentSeason
+        session.flush()
+        return result
+
+    def cleanupStalePendingPacks(self, session, ageHours: int = 24) -> int:
+        """Auto-resolve pending pack reveals older than ageHours by random
+        keep-selection. Run on app startup so users never lose paid packs to
+        crashes / abandoned sessions.
+
+        Returns the number of pending packs resolved.
+        """
+        from database.models import PendingPackOpening
+        from datetime import datetime, timedelta
+        import random as _random
+
+        cutoff = datetime.utcnow() - timedelta(hours=ageHours)
+        stale = session.query(PendingPackOpening).filter(
+            PendingPackOpening.opened_at < cutoff,
+        ).all()
+
+        for pending in stale:
+            try:
+                packType = pending.pack_type
+                revealedIds = list(pending.revealed_template_ids or [])
+                if not revealedIds:
+                    session.delete(pending)
+                    continue
+                keepCount = packType.cards_kept or packType.cards_per_pack
+                keepCount = min(keepCount, len(revealedIds))
+                indices = _random.sample(range(len(revealedIds)), keepCount)
+                self.selectPackKeeps(
+                    session, pending.user_id, pending.id, indices, pending.season,
+                )
+            except Exception:
+                # Don't let one bad row block the sweep; just orphan it.
+                session.rollback()
+                continue
+
+        session.commit()
+        return len(stale)
+
+    def _serializeTemplate(self, template, currentSeason: int) -> dict:
+        """Template-only serialization for reveal payloads. Mirrors the
+        rich shape of serializeCard so the reveal UI can render cards
+        identically to a UserCard view, but without an `id` (no UserCard
+        exists yet — those are written on selection).
+        """
+        # Build a transient stub UserCard so we can reuse serializeCard's
+        # effect-rebuilding / sellValue / combineValue logic intact.
+        from database.models import UserCard
+        from datetime import datetime
+        stub = UserCard(
+            user_id=0,
+            card_template_id=template.id,
+            acquired_via='pack_reveal',
+            acquired_at=datetime.utcnow(),
+        )
+        # Wire the relationship in-memory so serializeCard can read template
+        stub.card_template = template
+        result = self.serializeCard(stub, currentSeason)
+        # Strip the fake id — the card doesn't exist yet
+        result.pop('id', None)
+        return result
 
     def _editionsAtOrAbove(self, minEdition: str) -> set:
         """Return set of editions at or above the given rarity tier."""
@@ -789,19 +1051,43 @@ class CardManager:
         return set(order[idx:])
 
     def _weightedDraw(self, pool: list, packWeights: dict, count: int) -> list:
-        """Draw `count` templates from pool using weighted random selection."""
+        """Draw `count` templates from pool using weighted random selection.
+
+        Two-stage selection so the stated edition rates actually hold:
+          1. Roll the edition using packWeights (the per-pack rarity weights).
+          2. Pick a template within that edition, weighted by player rating
+             (higher-rated players are rarer within each edition).
+
+        A naive single-stage weight (editionWeight × ratingPenalty per template)
+        is wrong because there are far more base templates than diamond ones,
+        so the summed base weight always dominates regardless of the stated
+        per-edition weight. Splitting the roll fixes that.
+        """
         if not pool:
             return []
 
-        weights = []
+        # Group templates by edition; skip editions absent from the pool.
+        byEdition: Dict[str, list] = {}
         for t in pool:
-            editionWeight = packWeights.get(t.edition, EDITION_BASE_WEIGHTS.get(t.edition, 1))
-            # Higher-rated players are rarer within each edition
-            ratingPenalty = max(1, 120 - t.player_rating)
-            weights.append(editionWeight * ratingPenalty)
+            byEdition.setdefault(t.edition, []).append(t)
 
-        # random.choices allows duplicates — that's fine for packs
-        drawn = random.choices(pool, weights=weights, k=count)
+        editions = list(byEdition.keys())
+        editionWeights = [
+            packWeights.get(e, EDITION_BASE_WEIGHTS.get(e, 1))
+            for e in editions
+        ]
+
+        # Defensive: if all weights are zero (misconfigured pack), fall back
+        # to uniform-random across the pool so we never return empty.
+        if sum(editionWeights) <= 0:
+            return random.choices(pool, k=count)
+
+        drawn: list = []
+        for _ in range(count):
+            edition = random.choices(editions, weights=editionWeights, k=1)[0]
+            candidates = byEdition[edition]
+            ratingWeights = [max(1, 120 - t.player_rating) for t in candidates]
+            drawn.extend(random.choices(candidates, weights=ratingWeights, k=1))
         return drawn
 
     # ─── Featured Shop Cards ──────────────────────────────────────────────────
@@ -879,6 +1165,9 @@ class CardManager:
             # Generate fresh selection for this user
             templateRepo = CardTemplateRepository(session)
             allTemplates = templateRepo.getBySeason(currentSeason)
+            # Skip NULL-team templates so legacy prospect/rookie pollution
+            # doesn't bleed into the shop's featured rotation.
+            allTemplates = [t for t in allTemplates if t.team_id is not None]
 
             if not allTemplates:
                 return []

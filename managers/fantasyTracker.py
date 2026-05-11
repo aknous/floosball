@@ -520,6 +520,11 @@ class FantasyTracker:
                             if pObj and hasattr(pObj, 'team') and pObj.team
                             else ""
                         ),
+                        "teamId": (
+                            getattr(pObj.team, 'id', None)
+                            if pObj and hasattr(pObj, 'team') and pObj.team
+                            else None
+                        ),
                         "earnedPoints": round(playerEarnedFP, 1),
                         "weekFP": round(adjustedWeekFP, 1),
                     })
@@ -537,6 +542,7 @@ class FantasyTracker:
                         "playerName": "Previous Players",
                         "position": "",
                         "teamAbbr": "",
+                        "teamId": None,
                         "earnedPoints": round(previousPlayersFP, 1),
                         "weekFP": 0,
                     })
@@ -1212,6 +1218,28 @@ class FantasyTracker:
                 effectName = ec.get("effectName", "")
                 if effectName in STREAK_CONFIGS and not STREAK_CONFIGS[effectName].get("isWeekly", False):
                     liveStreakConditionsMet[eq.id] = False
+
+        # Pickem-driven streaks (Nose Picker) can be confirmed any time the
+        # user has manually submitted picks for the current week — independent
+        # of game state. Override the default here so the card lights up as
+        # soon as picks land in pick_em_picks.
+        try:
+            from database.models import PickEmPick
+            pickemUserPicks = None
+            for eq in userEquipped:
+                ec = eq.user_card.card_template.effect_config or {}
+                if ec.get("effectName") != "nose_picker":
+                    continue
+                if pickemUserPicks is None:
+                    pickemUserPicks = session.query(PickEmPick).filter_by(
+                        user_id=userId, season=season, week=currentWeek,
+                    ).all()
+                hasManualSubmit = any(not p.is_auto for p in pickemUserPicks)
+                liveStreakConditionsMet[eq.id] = hasManualSubmit
+                if hasManualSubmit:
+                    streakCounts[eq.id] = getattr(eq, 'streak_count', 0) + 1
+        except Exception:
+            pass
 
         # Inject Q4 fantasy points into weekPlayerStats for Closer card effect.
         # During live games _weekQ4FP is populated in memory; between weeks or

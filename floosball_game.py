@@ -1257,40 +1257,121 @@ class Game:
         except Exception:
             return False
 
-    def _logLateGameDecision(self, decision: str, **context) -> None:
-        """Append a structured entry for late-game FG/clock decisions to
-        logs/late_game_decisions.jsonl. Used for offline analysis of how
-        the decision logic plays out across many seasons. Never raises —
-        diagnostics must not break the game."""
+    def _logPressureCorrelation(self) -> None:
+        """Append one JSONL entry per team to logs/pressure_correlation.jsonl
+        capturing pressure level, game outcome, ELO delta, form state, and
+        roster resolve average. Used to look for correlation between market
+        expectation pressure and on-field outcomes. Never raises — diagnostic
+        must not break the game loop.
+        """
         try:
             import json as _json
             import os
             from datetime import datetime
-            entry = {
-                'ts': datetime.utcnow().isoformat() + 'Z',
-                'decision': decision,
-                'season': getattr(self, 'seasonNumber', None),
-                'week': getattr(self, 'week', None),
-                'gameId': getattr(self, 'id', None),
-                'gameType': getattr(self, 'gameType', None),
-                'quarter': self.currentQuarter,
-                'secondsRemaining': self.gameClockSeconds,
-                'down': self.down,
-                'yardsToFirstDown': self.yardsToFirstDown,
-                'yardsToEndzone': self.yardsToEndzone,
-                'offenseAbbr': getattr(self.offensiveTeam, 'abbr', None),
-                'defenseAbbr': getattr(self.defensiveTeam, 'abbr', None),
-                'homeScore': self.homeScore,
-                'awayScore': self.awayScore,
-                'offTimeoutsRemaining': (
-                    self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
-                    else self.awayTimeoutsRemaining
-                ),
-                **context,
-            }
-            os.makedirs('logs', exist_ok=True)
-            with open('logs/late_game_decisions.jsonl', 'a') as f:
-                f.write(_json.dumps(entry) + '\n')
+            from constants import (
+                EXPECTATION_SCALE_BY_TIER,
+                EXPECTATION_RELIEF_BY_TIER,
+                EXPECTATION_DELTA_CAP,
+                CHAMPIONSHIP_OVERFLOW_FACTOR,
+            )
+            try:
+                from api_response_builders import TeamResponseBuilder as _Trb
+            except Exception:
+                _Trb = None
+
+            def _scaledPressure(base, tier, streakAdd=0.0):
+                effective = base + streakAdd
+                delta = effective - 1.0
+                if delta > 0:
+                    ts = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+                    cap = min(delta, EXPECTATION_DELTA_CAP)
+                    overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+                    return 1.0 + cap * ts + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
+                rs = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+                return 1.0 + delta * rs
+
+            def _rosterAttrAvg(team, attrName):
+                """Generic roster average for a player.attributes value or method.
+                Returns None if no roster players carry the attr.
+                """
+                roster = getattr(team, 'rosterDict', None) or {}
+                vals = []
+                for p in roster.values():
+                    if p is None:
+                        continue
+                    attrs = getattr(p, 'attributes', None)
+                    if attrs is None:
+                        continue
+                    val = getattr(attrs, attrName, None)
+                    if val is None:
+                        continue
+                    try:
+                        v = val() if callable(val) else val
+                        vals.append(float(v))
+                    except Exception:
+                        continue
+                return round(sum(vals) / len(vals), 3) if vals else None
+
+            def _rosterResolveAvg(team):
+                return _rosterAttrAvg(team, 'adversityResolve')
+
+            def _rosterPressureHandlingAvg(team):
+                return _rosterAttrAvg(team, 'pressureHandling')
+
+            for team, opp, score, oppScore, preElo, prePressure, preTier, preStreak, preStreakP in (
+                (self.homeTeam, self.awayTeam, self.homeScore, self.awayScore,
+                 getattr(self, '_preGameHomeElo', 1500),
+                 getattr(self, '_preGameHomePressureMod', 1.0),
+                 getattr(self, '_preGameHomeTier', 'UNKNOWN'),
+                 getattr(self, '_preGameHomeStreak', 0),
+                 getattr(self, '_preGameHomeStreakP', 0.0)),
+                (self.awayTeam, self.homeTeam, self.awayScore, self.homeScore,
+                 getattr(self, '_preGameAwayElo', 1500),
+                 getattr(self, '_preGameAwayPressureMod', 1.0),
+                 getattr(self, '_preGameAwayTier', 'UNKNOWN'),
+                 getattr(self, '_preGameAwayStreak', 0),
+                 getattr(self, '_preGameAwayStreakP', 0.0)),
+            ):
+                preEloOpp = (getattr(self, '_preGameAwayElo', 1500)
+                             if team is self.homeTeam
+                             else getattr(self, '_preGameHomeElo', 1500))
+                won = score > oppScore
+                tied = score == oppScore
+                formState = None
+                try:
+                    if _Trb is not None:
+                        formState = _Trb.computeFormState(team)
+                except Exception:
+                    formState = None
+                entry = {
+                    'ts': datetime.utcnow().isoformat() + 'Z',
+                    'season': getattr(self, 'seasonNumber', None),
+                    'week': getattr(self, 'week', None),
+                    'gameId': getattr(self, 'id', None),
+                    'gameType': getattr(self, 'gameType', None),
+                    'playoffRound': getattr(self, 'playoffRound', None),
+                    'team': team.name,
+                    'opponent': opp.name,
+                    'tier': preTier,
+                    'pressureBase': round(prePressure, 3),
+                    'pressureScaled': round(_scaledPressure(prePressure, preTier, preStreakP), 3),
+                    'priorSeasonPressure': round(getattr(team, 'priorSeasonPressure', 1.0), 3),
+                    'inSeasonPressure': round(getattr(team, 'inSeasonPressure', 1.0), 3),
+                    'preGameWinStreak': preStreak,
+                    'streakPressure': round(preStreakP, 3),
+                    'won': won,
+                    'tied': tied,
+                    'score': score,
+                    'opponentScore': oppScore,
+                    'preEloDiff': round(preElo - preEloOpp, 1),
+                    'preElo': round(preElo, 1),
+                    'formState': formState,
+                    'rosterResolveAvg': _rosterResolveAvg(team),
+                    'rosterPressureHandlingAvg': _rosterPressureHandlingAvg(team),
+                }
+                os.makedirs('logs', exist_ok=True)
+                with open('logs/pressure_correlation.jsonl', 'a') as f:
+                    f.write(_json.dumps(entry) + '\n')
         except Exception:
             pass
 
@@ -3083,34 +3164,6 @@ class Game:
                 if not play.clutchPlayerName:
                     play.clutchPlayerName = topFaller[0]
 
-        # Diagnostic: log clutch/choke tagging so defensive (and offensive)
-        # plays can be reviewed offline. Only fires when something actually
-        # got tagged.
-        if clutchPerformers or chokePerformers:
-            offNames = {n for n, _ in offInvolved}
-            defNames = {n for n, _ in defInvolved}
-            self._logLateGameDecision(
-                'clutchChokeTag',
-                branch='outcome',
-                playType=play.playType.name if play.playType else None,
-                isClutchOutcome=bool(isClutchOutcome),
-                isChokeOutcome=bool(isChokeOutcome),
-                clutchPerformers=clutchPerformers,
-                chokePerformers=chokePerformers,
-                clutchOffense=[n for n in clutchPerformers if n in offNames],
-                clutchDefense=[n for n in clutchPerformers if n in defNames],
-                chokeOffense=[n for n in chokePerformers if n in offNames],
-                chokeDefense=[n for n in chokePerformers if n in defNames],
-                gamePressure=round(play.gamePressure, 1),
-                yardage=play.yardage,
-                isTd=bool(getattr(play, 'isTd', False)),
-                isInterception=bool(getattr(play, 'isInterception', False)),
-                isSack=bool(getattr(play, 'isSack', False)),
-                isFumbleLost=bool(getattr(play, 'isFumbleLost', False)),
-                isFgGood=bool(getattr(play, 'isFgGood', False)),
-                scoreDiff=scoreDiff,
-            )
-
     def _accumulateOffenseStats(self, team, score):
         """Accumulate a team's offensive stats into season totals after a game."""
         roster = team.rosterDict
@@ -3410,6 +3463,39 @@ class Game:
         # Apply funding morale modifiers (small pregame confidence/determination nudge)
         self._applyFundingMorale(self.homeTeam)
         self._applyFundingMorale(self.awayTeam)
+
+        # Diagnostic snapshot at game start — captures the effective scaled
+        # pressure modifier each team carries into this game. Regular-season
+        # base sits at 1.0 across the board, so this confirms whether market-
+        # tier scaling fires for non-playoff games (it shouldn't when delta=0).
+        try:
+            from managers.teamManager import logPressureDiag
+            seasonNum = getattr(self, 'seasonNumber', None)
+            weekNum = getattr(self, 'gameWeek', None) or getattr(self, 'weekNumber', None)
+            ctx = "game_start"
+            if not getattr(self, 'isRegularSeasonGame', True):
+                ctx = f"playoff_game_r{getattr(self, 'playoffRound', '?')}"
+            logPressureDiag(self.homeTeam, ctx, season=seasonNum, week=weekNum)
+            logPressureDiag(self.awayTeam, ctx, season=seasonNum, week=weekNum)
+        except Exception:
+            pass  # Diagnostic logging must never break the game loop
+
+        # Snapshot pre-game ELO + pressure modifier for the correlation log
+        # written at game end. Stored on the game instance so we can compute
+        # ELO delta and have a record of conditions entering the game.
+        try:
+            self._preGameHomeElo = getattr(self.homeTeam, 'elo', 1500)
+            self._preGameAwayElo = getattr(self.awayTeam, 'elo', 1500)
+            self._preGameHomePressureMod = getattr(self.homeTeam, 'pressureModifier', 1.0)
+            self._preGameAwayPressureMod = getattr(self.awayTeam, 'pressureModifier', 1.0)
+            self._preGameHomeTier = getattr(self.homeTeam, 'fundingTier', 'UNKNOWN')
+            self._preGameAwayTier = getattr(self.awayTeam, 'fundingTier', 'UNKNOWN')
+            self._preGameHomeStreak = getattr(self.homeTeam, 'currentWinStreak', 0)
+            self._preGameAwayStreak = getattr(self.awayTeam, 'currentWinStreak', 0)
+            self._preGameHomeStreakP = getattr(self.homeTeam, 'streakPressure', 0.0)
+            self._preGameAwayStreakP = getattr(self.awayTeam, 'streakPressure', 0.0)
+        except Exception:
+            pass
 
         # Apply fatigue penalties (accumulated over the season)
         self._applyFatigue(self.homeTeam)
@@ -4338,6 +4424,11 @@ class Game:
         # Player postgame processing: sync stats, update confidence/determination, compute derived stats
         self._processPlayerPostgame()
 
+        # Per-team correlation log: pressure level, outcome, ELO delta,
+        # form state, roster resolve average. Written to logs/pressure_correlation.jsonl
+        # for offline analysis of how pressure relates to outcomes/metrics.
+        self._logPressureCorrelation()
+
         # Postgame personality reactions — winners go positive, losers go negative.
         # Inserted into gameFeed as cutaway-style entries so they render alongside
         # plays in the modal feed and survive page reloads via /api/games/{id}.
@@ -4467,8 +4558,36 @@ class Game:
         earlyGameScale = {1: 0.3, 2: 0.5, 3: 0.7, 4: 1.0, 5: 1.0}
         pressure *= earlyGameScale.get(self.currentQuarter, 1.0)
 
-        # Apply the team pressure modifier (playoff importance, Floosbowl, etc.)
-        pressure = pressure * self.offensiveTeam.pressureModifier
+        # Apply the team pressure modifier (playoff importance, Floosbowl,
+        # prior-season expectations, in-season elimination state, etc.) with
+        # market-tier expectation scaling layered on top: big markets amplify
+        # high-expectation deltas, small markets amplify the relief side.
+        # Streak pressure (built from consecutive wins) is added to the base
+        # modifier before scaling so it gets the same market amplification.
+        from constants import (
+            EXPECTATION_SCALE_BY_TIER,
+            EXPECTATION_RELIEF_BY_TIER,
+            EXPECTATION_DELTA_CAP,
+            CHAMPIONSHIP_OVERFLOW_FACTOR,
+        )
+        pressureMod = self.offensiveTeam.pressureModifier
+        streakAdd = getattr(self.offensiveTeam, 'streakPressure', 0.0)
+        effective = pressureMod + streakAdd
+        delta = effective - 1.0
+        tier = getattr(self.offensiveTeam, 'fundingTier', None)
+        if delta > 0:
+            tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+            # Soften scaling above the championship band so MEGA Floos Bowl
+            # doesn't auto-cap pressure at 100 on every play. Cap portion
+            # gets full market amplification; overflow gets a weaker factor
+            # (default 1.0 — overflow added unscaled).
+            cap = min(delta, EXPECTATION_DELTA_CAP)
+            overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+            scaledDelta = cap * tierScale + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
+        else:
+            reliefScale = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+            scaledDelta = delta * reliefScale
+        pressure = pressure * (1.0 + scaledDelta)
 
         return min(100, pressure)  # Cap at 100
 
@@ -7933,30 +8052,3 @@ class Play():
         # success rates over many seasons. Use the play-level flag (not
         # self.passType) so sacks — which short-circuit before passType is set
         # — are still counted.
-        if getattr(self, '_isHailMaryPlay', False):
-            if self.isSack:
-                outcome = 'sack'
-            elif self.isInterception:
-                outcome = 'interception'
-            elif self.isPassCompletion:
-                if self.yardage >= self.yardsToEndzone:
-                    outcome = 'touchdown'
-                else:
-                    outcome = 'completionShort'
-            elif getattr(self, 'passIsDropped', False):
-                outcome = 'dropped'
-            else:
-                outcome = 'incomplete'
-            try:
-                self.game._logLateGameDecision(
-                    'hailMaryAttempt',
-                    branch='hailMaryOutcome',
-                    outcome=outcome,
-                    yardsGained=self.yardage,
-                    yardsToEndzone=self.yardsToEndzone,
-                    qbAccuracy=getattr(self.passer.gameAttributes, 'accuracy', None) if self.passer else None,
-                    qbName=self.passer.name if self.passer else None,
-                )
-            except Exception:
-                pass
-

@@ -671,11 +671,14 @@ class LeagueManager:
                                 _emit(f'{team.city} {team.name} have clinched a playoff berth', 'clinch_playoff', team.id)
 
                     # --- Eliminations ---
+                    # Update inSeasonPressure (NOT pressureModifier directly).
+                    # The blended live value is recomputed at week start via
+                    # teamManager.applyRegularSeasonPressureBlend.
                     for standing in nonPlayoffTeamsList:
                         team = standing['team']
 
                         if team.seasonTeamStats.get('winPerc', 0) < 0.45 and currentWeek >= 14:
-                            team.pressureModifier = 0.9
+                            team.inSeasonPressure = 0.9
 
                         if not team.clinchedPlayoffs and not team.eliminated:
                             if FloosMethods.checkIfEliminated(
@@ -685,7 +688,7 @@ class LeagueManager:
                             ) or currentWeek == 28:
                                 team.eliminated = True
                                 _emit(f'{team.city} {team.name} have faded from playoff contention', 'eliminated', team.id)
-                                team.pressureModifier = 0.7
+                                team.inSeasonPressure = 0.7
                             else:
                                 # On the brink of elimination
                                 if (team.seasonTeamStats.get('wins', 0) + remaining ==
@@ -694,7 +697,7 @@ class LeagueManager:
                                         'event': {'text': f'{team.city} {team.name} are on the brink of elimination!'}
                                     })
                                     if remaining <= 5:
-                                        team.pressureModifier = 2.0
+                                        team.inSeasonPressure = 2.0
 
         return newEvents
     

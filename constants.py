@@ -110,9 +110,23 @@ SEASON_LEADERBOARD_TOP_PCT = 0.25
 ROSTER_SWAP_COST = 15          # Base cost per swap (escalates per slot)
 ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same slot
 
-# Weekly FP → Floobits conversion (participation reward)
-WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
-WEEKLY_FP_FLOOBIT_CAP = 40      # Max Floobits earned from FP conversion per week
+# Weekly FP → Floobits conversion (participation reward).
+# Tapering power curve: F = round(SCALE * FP^EXPONENT), no hard cap. Big
+# weeks always pay more than small weeks, but with diminishing returns so
+# the system can't run away. Tunable knobs:
+#   SCALE     — overall payout scale (raises floor + ceiling together)
+#   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
+# Sample profile (default):
+#   100 FP → 17 F        (vs. old linear 15 F, capped at 40)
+#   500 FP → 67 F        (old: capped at 40)
+#  1000 FP → 121 F       (old: capped at 40)
+WEEKLY_FP_FLOOBIT_SCALE = 0.34
+WEEKLY_FP_FLOOBIT_EXPONENT = 0.85
+# Endowment (income_boost powerup) replaces the curve with a flatter one.
+# Less taper = monster weeks pay more; low weeks pay slightly less than
+# the default curve. Same cost (100 F).
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.20
+WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.95
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -136,6 +150,68 @@ FUNDING_TIER_THRESHOLDS = {
 FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
 FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
 FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
+
+# ---- Market Expectation Scaling ----
+# Bigger markets carry heavier "expectations to win" pressure on top of
+# whatever the team's prior performance has earned. Smaller markets are more
+# forgiving when the team underperforms (less media spotlight, less fan
+# rage). Applied at game time as an asymmetric scalar on the delta of
+# team.pressureModifier from baseline (1.0):
+#   - positive delta (high expectations from prior playoff success, etc.)
+#     is scaled up for big markets — MEGA's win-it-all expectations weigh
+#     more than a SMALL team's same on-paper expectation.
+#   - negative delta (low expectations from a bad prior season) is scaled
+#     up for SMALL markets — small markets disengage and stop watching, big
+#     markets keep the spotlight on even during a rebuild.
+# Effect at game time:
+#   delta = team.pressureModifier - 1.0
+#   if delta > 0:  scaled = delta * EXPECTATION_SCALE[tier]
+#   else:          scaled = delta * (2.0 - EXPECTATION_SCALE[tier])
+#   effectivePressureMod = 1.0 + scaled
+EXPECTATION_SCALE_BY_TIER = {
+    'MEGA_MARKET':  1.5,
+    'LARGE_MARKET': 1.2,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 0.7,
+}
+
+# Relief side: when the team's prior baseline is below 1.0 (bad season last
+# year, eliminated mid-season, etc.), how much that relief gets amplified by
+# market tier. Big markets keep the spotlight on even during a rebuild
+# (less relief); small markets disengage entirely (much more relief).
+# Replaces the prior `(2 - tierScale)` inverse, which gave too narrow a
+# spread (LARGE 0.8, SMALL 1.3) — diagnostic showed LARGE/SMALL barely
+# differed from MID in the relief direction.
+EXPECTATION_RELIEF_BY_TIER = {
+    'MEGA_MARKET':  0.4,
+    'LARGE_MARKET': 0.65,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 1.6,
+}
+
+# Championship-band softening: delta above this threshold (i.e. baselines
+# above 2.0 — Floos Bowl 2.5, brink-of-elimination 2.0, deep playoff round
+# 1.9+) gets a much weaker market scale. Without softening, MEGA Floos Bowl
+# hits 3.25 which caps in-game pressure at 100 on every play. Overflow
+# portion of the delta uses CHAMPIONSHIP_OVERFLOW_FACTOR instead of the
+# full tier scale.
+EXPECTATION_DELTA_CAP = 1.0
+CHAMPIONSHIP_OVERFLOW_FACTOR = 1.0  # overflow unscaled — preserves nominal
+                                     # baseline so MEGA/MID/SMALL keep the
+                                     # right ordering at the top end.
+
+# ---- Streak Pressure ----
+# Pressure that builds as a team's consecutive-win streak grows. Active in
+# both regular season and playoffs — an undefeated team chasing a perfect
+# season feels the spotlight, and that spotlight follows them through the
+# postseason. Resets to 0 on any loss.
+#   streakPressure = min(CAP, max(0, streak - FLOOR) * PER_WIN)
+# Added to team.pressureModifier at game-time scaling, so market-tier
+# amplification applies (MEGA on a 10-win streak gets a heavier scaled
+# bump than SMALL on the same streak).
+STREAK_PRESSURE_FLOOR   = 3      # streaks 1-3 add nothing (normal hot start)
+STREAK_PRESSURE_PER_WIN = 0.10   # each win past the floor adds +0.10
+STREAK_PRESSURE_CAP     = 0.80   # caps at streak 11+ to avoid runaway
 
 # ---- Form-state Per-game Rating Multiplier ----
 # Applied to in-game player attributes at kickoff based on the team's current
@@ -246,11 +322,16 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Raises your weekly FP earnings cap to 65 Floobits for 4 weeks.",
+    "description": "Bumps your weekly FP-to-Floobits curve to a flatter taper for 4 weeks. Big weeks pay more; routine weeks roughly the same.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    "boostedCap": 65,
+    # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
+    # small dip on low-FP weeks for a meaningful bump on monster weeks
+    # (e.g. 500 FP: 67 F normal → 73 F endowment; 1000 FP: 121 → 142;
+    # 5000 FP: 474 → 653).
+    "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
+    "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
 }
 
 POWERUP_CATALOG = {

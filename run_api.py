@@ -165,6 +165,13 @@ def parse_args():
             args['card_reset_current_season'] = True
         elif arg.startswith('--schedule-gap='):
             args['schedule_gap'] = int(arg.split('=')[1])
+        elif arg == '--spread-tiers':
+            # Dev-only: spread teams across all 4 funding tiers each season
+            # so single-user testing produces a realistic tier distribution
+            # for pressure diagnostic. Sets the env var that
+            # seasonManager._applyDevTierOverride reads.
+            os.environ['DEV_SPREAD_TIERS'] = '1'
+            logger.info("--spread-tiers active: teams will be assigned to all 4 tiers each season")
 
     return args
 
