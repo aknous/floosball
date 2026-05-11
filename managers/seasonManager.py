@@ -7943,10 +7943,14 @@ class SeasonManager:
                     if packTxCount == 0:
                         _am.unlockSecret(session, uid, "monk")
 
-                    # Stalwart — no roster swaps this season
-                    swapCount = session.query(func.count(FantasyRosterSwap.id)).filter(
-                        FantasyRosterSwap.user_id == uid,
-                        FantasyRosterSwap.season == season,
+                    # Stalwart — no roster swaps this season. Swaps are
+                    # keyed to a FantasyRoster (per-season, per-user), not
+                    # directly to the user; join via roster_id.
+                    swapCount = session.query(func.count(FantasyRosterSwap.id)).join(
+                        FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
+                    ).filter(
+                        FantasyRoster.user_id == uid,
+                        FantasyRoster.season == season,
                     ).scalar() or 0
                     if swapCount == 0:
                         _am.unlockSecret(session, uid, "stalwart")
