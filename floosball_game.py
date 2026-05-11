@@ -29,10 +29,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from constants import (
     GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
-    RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER, FIELD_LENGTH,
+    RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
-    QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
-    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_MIN_ATTEMPT_PROB, YARDS_TO_FIRST_DOWN,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     RECEIVER_MATCHUP_SCALE,
@@ -609,7 +607,7 @@ def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
 class Game:
-    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None):
+    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None, gameRules=None):
         self.id = None  # Integer ID assigned by SeasonManager
         self.seasonNumber = None  # Which season this game belongs to
         self.week = None  # Week number for regular season
@@ -622,7 +620,19 @@ class Game:
         self.awayTeam : FloosTeam.Team = awayTeam
         self.awayScore = 0
         self.homeScore = 0
-        
+
+        # Rule book. Every football-rule decision the sim makes reads
+        # from this object (field length, downs per series, score
+        # values, FG mechanics, clock, etc.). Defaults to the standard
+        # ruleset; the Season passes its own instance in so all games
+        # share a consistent set, and so future Cores' rule patches can
+        # propagate to subsequent games.
+        if gameRules is not None:
+            self.gameRules = gameRules
+        else:
+            from game_rules import GameRules
+            self.gameRules = GameRules()
+
         # Set up timing manager for game-level delays
         if timingManager is not None:
             self.timingManager = timingManager
@@ -644,7 +654,7 @@ class Game:
         self.currentQuarter = 0
         
         # Game clock system
-        self.gameClockSeconds = 900  # 15 minutes per quarter
+        self.gameClockSeconds = self.gameRules.quarterLengthSeconds  # 15 minutes per quarter
         self.clockRunning = False
         self.homeTimeoutsRemaining = 3
         self.awayTimeoutsRemaining = 3
@@ -1249,7 +1259,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         if kicker is None:
             return False
-        kickerMax = kicker.maxFgDistance - FG_SNAP_DISTANCE
+        kickerMax = kicker.maxFgDistance - self.gameRules.fgSnapDistance
         if self.yardsToEndzone > kickerMax:
             return False
         try:
@@ -1534,7 +1544,7 @@ class Game:
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
         # Urgency-based timeout probability
-        if isEndGame and secs <= TIMEOUT_CLOCK_THRESHOLD:
+        if isEndGame and secs <= self.gameRules.timeoutClockThreshold:
             # Under 2 min: high urgency (original behavior)
             toChance = 0.5 + 0.5 * defGameIQ
         elif isEndGame:
@@ -1573,7 +1583,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         if not kicker:
             return 0.0
-        fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
+        fgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
         baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
         normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
         fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
@@ -1589,7 +1599,7 @@ class Game:
         The kicker's in-game performance also shifts the threshold — recent misses
         make coaches more cautious, while a perfect day builds trust.
         """
-        baseThreshold = FG_MIN_ATTEMPT_PROB  # 0.20
+        baseThreshold = self.gameRules.fgMinAttemptProb  # 0.20
 
         # ── Coach aggressiveness ──
         # aggrNorm: -1 (conservative) to +1 (aggressive)
@@ -1623,7 +1633,7 @@ class Game:
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
         coach = getattr(self.offensiveTeam, 'coach', None)
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -1769,7 +1779,7 @@ class Game:
                     return
 
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxDistance = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
         inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold
@@ -1847,7 +1857,7 @@ class Game:
         elif scoreDiff < 0 and inFieldGoalRange:
             deficit = abs(scoreDiff)
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
-            if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD:
+            if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold:
                 gameIQ = self._coachClockIQ(coach)
                 if deficit <= 3:
                     # FG ties or wins — chip shots are automatic, longer FGs nearly so
@@ -1870,7 +1880,7 @@ class Game:
                     # As time dwindles, FG becomes pointless — below 45 sec, no one kicks
                     secs = self.gameClockSeconds
                     if secs >= 45:
-                        timeFactor = (secs - 45) / (TIMEOUT_CLOCK_THRESHOLD - 45)
+                        timeFactor = (secs - 45) / (self.gameRules.timeoutClockThreshold - 45)
                         # Bad coaches (low IQ) more likely to settle; good coaches go for TD
                         fgChance = timeFactor * max(0.0, 0.35 - 0.3 * gameIQ)
                         if _random.random() < fgChance:
@@ -2363,7 +2373,7 @@ class Game:
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
-                drainableSeconds = toadKneels * 4 + freeKneels * KNEEL_DRAIN_SECONDS
+                drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
                 if drainableSeconds >= self.gameClockSeconds:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'kneel',
@@ -2383,7 +2393,7 @@ class Game:
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 30):
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
                 if self.yardsToEndzone <= kickerMax:
                     despThreshold = self._coachFgThreshold(coach)
@@ -2440,7 +2450,7 @@ class Game:
                     and self.gameClockSeconds <= 30
                     and not self._isGarbageTime(scoreDiff)):
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 if self.yardsToEndzone <= kickerMax:
                     winFgProb = self._estimateFgProbability()
                     if winFgProb >= 0.75:
@@ -2482,7 +2492,7 @@ class Game:
             secs = self.gameClockSeconds
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
-                    and secs <= SPIKE_CLOCK_THRESHOLD
+                    and secs <= self.gameRules.spikeClockThreshold
                     and timeoutsLeft == 0 and scoreDiff <= 0
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
@@ -2505,9 +2515,9 @@ class Game:
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
             if (isLateGame and scoreDiff <= 0 and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
-                toWindow = 300 if self.currentQuarter >= 4 else TIMEOUT_CLOCK_THRESHOLD
+                toWindow = 300 if self.currentQuarter >= 4 else self.gameRules.timeoutClockThreshold
                 if secs <= toWindow:
-                    if secs <= TIMEOUT_CLOCK_THRESHOLD:
+                    if secs <= self.gameRules.timeoutClockThreshold:
                         # Under 2 min: high urgency (original behavior)
                         toChance = 0.5 + 0.5 * gameIQ
                     else:
@@ -2569,12 +2579,12 @@ class Game:
 
         # End-of-half / end-of-game FG attempts — compute kicker range once
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
 
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if self.currentQuarter == 2 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
+        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
             if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -2584,7 +2594,7 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
+        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
             if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 canAdvance = self.gameClockSeconds >= 30
                 if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -2698,9 +2708,9 @@ class Game:
         self.offensiveTeam = defense
         self.defensiveTeam = offense
         self.yardsToEndzone = yards
-        self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+        self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
-        self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+        self.yardsToFirstDown = self.gameRules.firstDownDistance
 
 
     def formatPlayText(self):
@@ -3420,7 +3430,7 @@ class Game:
 
         # Initialize clock for Q1
         self.currentQuarter = 1
-        self.gameClockSeconds = 900
+        self.gameClockSeconds = self.gameRules.quarterLengthSeconds
         self.clockRunning = False
         
         # Store ELO ratings for use in win probability calculations
@@ -3593,7 +3603,7 @@ class Game:
                 
                 # Defensive check: If still in OT and clock is still 0 after advanceQuarter, force reset
                 if self.currentQuarter >= 5 and self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
-                    self.gameClockSeconds = 600  # Force clock reset to prevent infinite loop
+                    self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Force clock reset to prevent infinite loop
                 
                 if oldQuarter == 2:
                     # Halftime
@@ -3803,7 +3813,7 @@ class Game:
             # Start new possession if needed
             if self.down == 0 or self.down > 4:
                 self.down = 1
-                self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+                self.yardsToFirstDown = self.gameRules.firstDownDistance
                 self.yardsToEndzone = 80
                 self.yardsToSafety = 20
 
@@ -3881,7 +3891,7 @@ class Game:
                             else:
                                 # Receiving team keeps ball — move to their 40 instead of their 20
                                 self.yardsToEndzone = 60
-                                self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+                                self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
                                 onsideFailEvent = {
                                     'text': f'{receivingTeam.abbr} recovers at their own 40!',
                                     'quarter': self.currentQuarter,
@@ -4202,7 +4212,7 @@ class Game:
                         if self.yardsToEndzone < 10:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
-                            self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+                            self.yardsToFirstDown = self.gameRules.firstDownDistance
                         self.yardsToSafety += self.play.yardage
                         self.yardsToEndzone -= self.play.yardage
                         self.play.playResult = PlayResult.FirstDown
@@ -5636,9 +5646,9 @@ class Game:
             target = 7
             return ('setupFG', max(8, secs - target))
 
-        if (q >= 4) and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0 and not garbageTime:
+        if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
-        if q == 2 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0:
+        if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:
             return ('hurryUp', 15)  # End-of-half trailing or tied
         if q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
             return ('hurryUp', 15 if scoreDiff <= -8 else 25)  # Mid-late deficit
@@ -5649,7 +5659,7 @@ class Game:
             return ('burnClock', 40)  # Late Q3 with two-score lead
         if q >= 4 and scoreDiff > 8:
             return ('burnClock', 40)  # Q4/OT comfortable lead
-        if q >= 4 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:
+        if q >= 4 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff > 0:
             return ('burnClock', 38)  # Q4/OT any lead under 2:00
         return ('neutral', DEFAULT_BASE)
 
@@ -5825,7 +5835,7 @@ class Game:
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
         self.yardsToEndzone = 2
-        self.yardsToSafety = FIELD_LENGTH - 2
+        self.yardsToSafety = self.gameRules.fieldLength - 2
         self.down = 1
         self.yardsToFirstDown = 2
 
@@ -5902,7 +5912,7 @@ class Game:
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
         self.yardsToEndzone = 15
-        self.yardsToSafety = FIELD_LENGTH - 15
+        self.yardsToSafety = self.gameRules.fieldLength - 15
         self.down = 1
         self.yardsToFirstDown = 15
 
@@ -5998,7 +6008,7 @@ class Game:
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
-        if not self.twoMinuteWarningShown and self.gameClockSeconds <= TIMEOUT_CLOCK_THRESHOLD:
+        if not self.twoMinuteWarningShown and self.gameClockSeconds <= self.gameRules.timeoutClockThreshold:
             if self.currentQuarter == 2 or self.currentQuarter == 4:
                 self.twoMinuteWarningShown = True
                 self.clockRunning = False
@@ -6018,12 +6028,12 @@ class Game:
         """Transition to next quarter"""
         if self.currentQuarter == 1:
             self.currentQuarter = 2
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.isHalftime = False
             # Reset timeouts for second half
             self.homeTimeoutsRemaining = 3
@@ -6031,13 +6041,13 @@ class Game:
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 3:
             self.currentQuarter = 4
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:
                 self.currentQuarter = 5
-                self.gameClockSeconds = 600  # 10 minute OT
+                self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # 10 minute OT
                 self.isOvertime = True
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
@@ -6048,7 +6058,7 @@ class Game:
             # Additional OT periods - reset clock if game is still tied
             if self.homeScore == self.awayScore:
                 self.otPeriod += 1
-                self.gameClockSeconds = 600  # Another 10 minute OT period
+                self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Another 10 minute OT period
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
                 self.awayTimeoutsRemaining = 2

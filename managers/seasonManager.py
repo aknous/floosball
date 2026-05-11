@@ -76,13 +76,19 @@ def _isEdt(d):
 
 class Season:
     """Represents a single season"""
-    
+
     def __init__(self, seasonNumber: int):
         self.seasonNumber = seasonNumber
         self.currentSeason = seasonNumber  # Backward compatibility
         self.currentWeek = 0
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
+        # Rule book for this season. Defaults to the standard ruleset.
+        # Future Cores' rule patches mutate this object via
+        # ``gameRules.applyPatch(...)`` and the patch propagates to
+        # every game scheduled in this season from that point forward.
+        from game_rules import GameRules
+        self.gameRules = GameRules()
         self.activeGames = None
         self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []
@@ -2576,7 +2582,7 @@ class SeasonManager:
                     game = weekGames[x]
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
-                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'))
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'), gameRules=self.currentSeason.gameRules)
                     
                     # Assign unique integer ID and metadata
                     self._gameIdCounter += 1
@@ -2652,7 +2658,8 @@ class SeasonManager:
             self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
                                      timingManager=self.timingManager,
-                                     personalityManager=self.serviceContainer.getService('personality_manager'))
+                                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                                     gameRules=self.currentSeason.gameRules)
             newGame.id = self._gameIdCounter
             newGame.dbId = row.id
             newGame.seasonNumber = seasonNumber
@@ -3286,6 +3293,7 @@ class SeasonManager:
                             teamsInRound[hiSeed], teamsInRound[lowSeed],
                             timingManager=self.timingManager,
                             personalityManager=self.serviceContainer.getService('personality_manager'),
+                            gameRules=self.currentSeason.gameRules,
                         )
 
                         # Assign unique integer ID and metadata
@@ -3327,6 +3335,7 @@ class SeasonManager:
                     floosbowlTeams[0], floosbowlTeams[1],
                     timingManager=self.timingManager,
                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                    gameRules=self.currentSeason.gameRules,
                 )
 
                 # Assign unique integer ID and metadata
