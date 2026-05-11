@@ -1519,12 +1519,19 @@ def _seedBetaAllowlist():
 def _seedUnusedNames():
     """Merge player/coach names from config.json into the unused_names table.
 
-    Idempotent — only inserts names that aren't already in the table. Runs on
-    every startup so new names added to config.json get picked up without
-    wiping admin-curated additions. The unused_names table is preserved
-    across fresh starts (see clear_db()), so admin-added names survive.
+    Idempotent — only inserts names that aren't already in the table AND
+    aren't currently held by an active coach or player. Without the active-
+    entity filter, names that were promoted from the pool into a coach or
+    player slot get silently re-seeded on every boot, leaving the pool
+    polluted with names the runtime defensive filter then has to scrub at
+    every draw.
+
+    Runs on every startup so new names added to config.json get picked up
+    without wiping admin-curated additions. The unused_names table is
+    preserved across fresh starts (see clear_db()), so admin additions
+    survive.
     """
-    from database.models import UnusedName
+    from database.models import UnusedName, Coach, Player
     try:
         from config_manager import get_config
         names = get_config().get("players", [])
@@ -1535,15 +1542,26 @@ def _seedUnusedNames():
     session = SessionLocal()
     try:
         existing = {row.name for row in session.query(UnusedName.name).all()}
+        activeCoachNames = {c.name for c in session.query(Coach.name).all() if c.name}
+        activePlayerNames = {p.name for p in session.query(Player.name).all() if p.name}
+        inUse = activeCoachNames | activePlayerNames
         added = 0
+        skipped = 0
         for name in names:
-            if name not in existing:
-                session.add(UnusedName(name=name))
-                existing.add(name)
-                added += 1
-        if added:
+            if name in existing:
+                continue
+            if name in inUse:
+                skipped += 1
+                continue
+            session.add(UnusedName(name=name))
+            existing.add(name)
+            added += 1
+        if added or skipped:
             session.commit()
-            logger.info(f"Seeded {added} new names from config into unused_names pool")
+            logger.info(
+                f"Seeded {added} new names from config into unused_names pool"
+                + (f" (skipped {skipped} already in use by coaches/players)" if skipped else "")
+            )
     except Exception as exc:
         session.rollback()
         logger.warning(f"Failed to seed unused_names: {exc}")
