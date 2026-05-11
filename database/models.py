@@ -1422,6 +1422,29 @@ class PickEmPick(Base):
         return f"<PickEmPick(user={self.user_id}, S{self.season}W{self.week}, game={self.game_index}, picked={self.picked_team_id})>"
 
 
+class FollowedPlayer(Base):
+    """Per-user watchlist — players the user has chosen to follow.
+
+    Drives the Players page 'Followed' filter and surfaces those players'
+    personality/off-day lines in the highlight feed alongside the user's
+    favorite team and fantasy roster.
+    """
+    __tablename__ = "followed_players"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "player_id", name="uq_followed_player_user"),
+        Index("idx_followed_players_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<FollowedPlayer(user={self.user_id}, player={self.player_id})>"
+
+
 class Achievement(Base):
     """Achievement template — static definition of an unlockable goal."""
     __tablename__ = "achievements"

@@ -817,23 +817,25 @@ async def get_players(
     response: Response,
     position: Optional[str] = None,
     team_id: Optional[int] = None,
-    status: Optional[str] = None  # 'active', 'retired', 'fa', 'hof'
+    status: Optional[str] = None,  # 'active', 'retired', 'fa', 'hof', 'followed'
+    user: Optional[_User] = Depends(_getOptionalUser),
 ):
     """
     Get players with optional filters
-    
+
     Args:
         position: Filter by position (QB, RB, WR, etc.)
         team_id: Filter by team ID
-        status: Filter by status (active, retired, fa, hof)
-    
+        status: Filter by status (active, retired, fa, hof, followed)
+
     Returns:
         List of player objects
     """
-    response.headers["Cache-Control"] = "public, max-age=120"
+    # 'followed' is per-user, so it can't share the public cache.
+    response.headers["Cache-Control"] = "no-store" if status == 'followed' else "public, max-age=120"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
-    
+
     try:
         # Determine which player list to use based on status
         if status == 'retired':
@@ -847,6 +849,32 @@ async def get_players(
         elif status == 'prospects':
             players = [p for p in floosball_app.playerManager.activePlayers
                        if getattr(p, 'is_prospect', False)]
+        elif status == 'followed':
+            if user is None:
+                raise HTTPException(status_code=401, detail="Sign in to view followed players")
+            from database.models import FollowedPlayer
+            from database.connection import get_session
+            _session = get_session()
+            try:
+                followedIds = {
+                    r[0] for r in _session.query(FollowedPlayer.player_id)
+                    .filter_by(user_id=user.id).all()
+                }
+            finally:
+                _session.close()
+            # Pull from every pool — followed players can be active, FA, or
+            # retired. Dedupe by id since pools may overlap transiently.
+            pools = (
+                floosball_app.playerManager.activePlayers
+                + floosball_app.playerManager.freeAgents
+                + floosball_app.playerManager.retiredPlayers
+            )
+            seen = set()
+            players = []
+            for p in pools:
+                if p.id in followedIds and p.id not in seen:
+                    seen.add(p.id)
+                    players.append(p)
         else:  # 'active' or None
             players = floosball_app.playerManager.activePlayers
         
@@ -4158,11 +4186,13 @@ def get_team_retirement_watch(team_id: int):
 @app.get("/api/users/me")
 def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
     """Get current user profile. Requires Bearer token."""
-    from database.models import UserCurrency
+    from database.models import UserCurrency, FollowedPlayer
     from database.connection import get_session
     session = get_session()
     try:
         currency = session.query(UserCurrency).filter_by(user_id=user.id).first()
+        followedRows = session.query(FollowedPlayer.player_id).filter_by(user_id=user.id).all()
+        followedPlayerIds = [r[0] for r in followedRows]
         return {
             "id": user.id,
             "email": user.email,
@@ -4178,7 +4208,54 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "teamFundingPct": 25 if getattr(user, 'team_funding_pct', 25) is None else user.team_funding_pct,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
             "isAdmin": getattr(user, 'is_admin', False),
+            "followedPlayerIds": followedPlayerIds,
         }
+    finally:
+        session.close()
+
+
+@app.post("/api/players/{player_id}/follow")
+def follow_player(player_id: int, user: _User = Depends(_getCurrentUser)):
+    """Add a player to the user's followed list. Idempotent."""
+    from database.models import FollowedPlayer, Player as DBPlayer
+    from database.connection import get_session
+    session = get_session()
+    try:
+        if not session.query(DBPlayer.id).filter_by(id=player_id).first():
+            raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
+        existing = session.query(FollowedPlayer).filter_by(
+            user_id=user.id, player_id=player_id,
+        ).first()
+        if not existing:
+            session.add(FollowedPlayer(user_id=user.id, player_id=player_id))
+            session.commit()
+        return build_success_response({"playerId": player_id, "following": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"follow_player error: {e}")
+        raise HTTPException(500, "Failed to follow player")
+    finally:
+        session.close()
+
+
+@app.delete("/api/players/{player_id}/follow")
+def unfollow_player(player_id: int, user: _User = Depends(_getCurrentUser)):
+    """Remove a player from the user's followed list. Idempotent."""
+    from database.models import FollowedPlayer
+    from database.connection import get_session
+    session = get_session()
+    try:
+        session.query(FollowedPlayer).filter_by(
+            user_id=user.id, player_id=player_id,
+        ).delete()
+        session.commit()
+        return build_success_response({"playerId": player_id, "following": False})
+    except Exception as e:
+        session.rollback()
+        logger.error(f"unfollow_player error: {e}")
+        raise HTTPException(500, "Failed to unfollow player")
     finally:
         session.close()
 
