@@ -660,6 +660,10 @@ class Game:
         # start of each game so mid-game DB churn isn't required.
         self._anomalyAttention: Dict[int, float] = {}
         self._anomalyAttentionLoaded: bool = False
+        # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
+        # if this game is happening inside an active Thinning window.
+        # Set when attention is loaded.
+        self._thinningMultiplier: float = 1.0
 
         # Set up timing manager for game-level delays
         if timingManager is not None:
@@ -6464,7 +6468,8 @@ class Game:
     # signature abilities land in follow-up commits.
 
     def _loadAnomalyAttention(self) -> None:
-        """Snapshot every active player's attention score for this season.
+        """Snapshot every active player's attention score for this season,
+        plus this game's Thinning multiplier.
 
         Called lazily on the first play of the game. The snapshot is
         held in memory for the rest of the game — DB churn would be
@@ -6473,6 +6478,7 @@ class Game:
         try:
             from database.connection import get_session
             from database.models import PlayerAttention
+            from managers.anomalyManager import getThinningMultiplier
             session = get_session()
             try:
                 rows = session.query(PlayerAttention).filter_by(
@@ -6483,10 +6489,14 @@ class Game:
                 }
             finally:
                 session.close()
+            self._thinningMultiplier = getThinningMultiplier(
+                self.seasonNumber or 0, self.week or 0,
+            )
         except Exception as e:
             # Anomaly system is purely additive — if anything fails,
             # play out the game as if no one had any attention.
             self._anomalyAttention = {}
+            self._thinningMultiplier = 1.0
             try:
                 logging.getLogger("floosball.anomaly").debug(
                     f"Anomaly attention load failed: {e}"
@@ -6515,7 +6525,7 @@ class Game:
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
                 continue
-            prob = min(0.5, attention / 1000.0)
+            prob = min(0.9, (attention / 1000.0) * self._thinningMultiplier)
             if _random.random() < prob:
                 self._injectAnomalyLine(player)
                 # One anomaly per play is plenty for v1 — break before
@@ -6550,7 +6560,7 @@ class Game:
                     layer='micro',
                     ability=None,
                     play_text=line,
-                    during_thinning=False,
+                    during_thinning=(self._thinningMultiplier > 1.0),
                 )
                 session.add(evt)
                 session.commit()

@@ -86,6 +86,16 @@ SUPPRESSION_WINDOW_WEEKS = 2
 # threshold so engaged leagues get multiple events.
 THRESHOLD_DECAY_AFTER_THINNING = 0.75
 
+# Thinning duration — number of rounds (weeks) the Thinning is active.
+# 1 round for first Thinning, 2 rounds if the aggregate was 50%+ over
+# the threshold when it fired (runaway league signal).
+THINNING_DURATION_DEFAULT = 1
+THINNING_DURATION_RUNAWAY = 2
+THINNING_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Thinning
+
+# During a Thinning round, per-play anomaly probabilities multiply.
+THINNING_MULTIPLIER = 5.0
+
 
 # ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -145,6 +155,36 @@ def getAnomalyState(playerId: int, seasonNumber: int) -> Optional[AnomalyState]:
         ).first()
     finally:
         session.close()
+
+
+def isThinningWeek(seasonNumber: int, week: int) -> bool:
+    """Return True if the given week is currently inside a Thinning window.
+
+    A Thinning lasts 1 or 2 consecutive rounds starting at
+    ``last_thinning_week``. Outside the window, returns False.
+    """
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        if state is None or state.last_thinning_week is None:
+            return False
+        start = state.last_thinning_week
+        # Inspect the patch trail to figure out duration. The Thinning
+        # trigger records its planned duration in the cores_patches_applied
+        # list (see _triggerThinning); 1 by default.
+        duration = THINNING_DURATION_DEFAULT
+        for entry in (state.cores_patches_applied or []):
+            if entry.get('event') == 'thinning_trigger' and entry.get('start_week') == start:
+                duration = entry.get('duration', THINNING_DURATION_DEFAULT)
+                break
+        return start <= week < start + duration
+    finally:
+        session.close()
+
+
+def getThinningMultiplier(seasonNumber: int, week: int) -> float:
+    """Per-play anomaly probability multiplier. 1.0 normally, 5.0 during Thinning."""
+    return THINNING_MULTIPLIER if isThinningWeek(seasonNumber, week) else 1.0
 
 
 # ─── Decay ──────────────────────────────────────────────────────────────────
@@ -389,6 +429,51 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         f"(over-cap sum={overCapSum:.1f}, pressure={backgroundPressure:.1f})"
     )
 
-    # Thinning trigger detection happens here in a future commit (v1
-    # commit on the Thinning trigger). The trigger flips a flag on
-    # the league state row + tags games in the next round.
+    # Thinning trigger detection — if aggregate has crossed the hidden
+    # threshold AND we're not currently in a suppression window from a
+    # recent Reset, fire the Thinning for the next round.
+    if state.aggregate_score >= state.threshold:
+        inSuppression = (
+            state.suppression_window_ends_week is not None
+            and week < state.suppression_window_ends_week
+        )
+        if not inSuppression:
+            _triggerThinning(state, week)
+
+
+def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
+    """Fire a Thinning event for the upcoming round(s).
+
+    Records the trigger event in cores_patches_applied (which doubles as
+    the league's audit trail). Bumps the threshold for next time so a
+    second Thinning in the same season requires fresh attention buildup.
+    """
+    overRatio = state.aggregate_score / max(1, state.threshold)
+    duration = (
+        THINNING_DURATION_RUNAWAY
+        if overRatio >= (1.0 + THINNING_RUNAWAY_OVER_THRESHOLD)
+        else THINNING_DURATION_DEFAULT
+    )
+    startWeek = currentWeek  # Thinning applies to the current/just-started round
+    state.thinnings_this_season = (state.thinnings_this_season or 0) + 1
+    state.last_thinning_week = startWeek
+    # Reduce threshold for any subsequent Thinning in this season.
+    state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_THINNING))
+
+    patches = list(state.cores_patches_applied or [])
+    patches.append({
+        'event': 'thinning_trigger',
+        'start_week': startWeek,
+        'duration': duration,
+        'aggregate_at_trigger': float(state.aggregate_score),
+        'over_ratio': float(overRatio),
+        'thinning_number': state.thinnings_this_season,
+        'fired_at': datetime.utcnow().isoformat() + 'Z',
+    })
+    state.cores_patches_applied = patches
+
+    logger.warning(
+        f"THINNING TRIGGERED (#{state.thinnings_this_season}, season="
+        f"{state.season}): start_week={startWeek}, duration={duration} round(s), "
+        f"aggregate={state.aggregate_score:.1f} (×{overRatio:.2f} threshold)"
+    )
