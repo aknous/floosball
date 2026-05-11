@@ -1716,6 +1716,7 @@ async def get_history_standings(season: int, response: Response):
             teams.append({
                 "teamId": tid,
                 "teamName": team.name,
+                "teamCity": team.city,
                 "teamAbbr": team.abbr,
                 "teamColor": team.color,
                 "wins": rec["wins"],
