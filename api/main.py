@@ -1738,7 +1738,7 @@ _RECORD_STATS = {
     "passingYards":   {"label": "Passing Yards",   "json_key": "yards",     "json_field": "passing_stats",   "season_col": "passing_yards"},
     "passingTds":     {"label": "Passing TDs",     "json_key": "tds",       "json_field": "passing_stats",   "season_col": "passing_tds"},
     "rushingYards":   {"label": "Rushing Yards",   "json_key": "yards",     "json_field": "rushing_stats",   "season_col": "rushing_yards"},
-    "rushingTds":     {"label": "Rushing TDs",     "json_key": "runTds",    "json_field": "rushing_stats",   "season_col": "rushing_tds"},
+    "rushingTds":     {"label": "Rushing TDs",     "json_key": "tds",       "json_field": "rushing_stats",   "season_col": "rushing_tds"},
     "receivingYards": {"label": "Receiving Yards", "json_key": "yards",     "json_field": "receiving_stats", "season_col": "receiving_yards"},
     "receivingTds":   {"label": "Receiving TDs",   "json_key": "tds",       "json_field": "receiving_stats", "season_col": "receiving_tds"},
     "receptions":     {"label": "Receptions",      "json_key": "receptions","json_field": "receiving_stats", "season_col": "receptions"},
