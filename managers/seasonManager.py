@@ -6131,7 +6131,7 @@ class SeasonManager:
         "payday": "Floobits earned are tripled",
         "grounded": "All FPx effects disabled",
         "wildcard": "All cards treated as matched",
-        "longshot": "Conditional thresholds halved",
+        "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
         "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
