@@ -118,6 +118,29 @@ class CardCalcContext:
     streakCardCount: int = 0  # Number of streak cards in hand (for synergy effects)
     activeStreakCount: int = 0  # Number of season streak cards whose condition is met this week
     liveStreakConditionsMet: Dict[int, bool] = field(default_factory=dict)  # eqId → conditionMet this game
+    # Peak-decay state for streak cards. peakOutput is the in-streak output of
+    # the card the last week the streak was active; weeksSinceBreak counts cold
+    # weeks since then. Together they let _computeStreakEffect compute a decay
+    # tail when the streak isn't met this week, instead of dropping straight
+    # to base. Loaded from EquippedCard.peak_output / weeks_since_break;
+    # persistence updates both after each week's calc.
+    streakPeakOutputs: Dict[int, float] = field(default_factory=dict)  # eqId → peakOutput
+    streakWeeksSinceBreak: Dict[int, int] = field(default_factory=dict)  # eqId → cold weeks since break
+
+    # Roster-trait card lookups (FP/FPx rebalance)
+    # _teamRecords: teamId → win pct (0.0-1.0). Used by Castaway to detect
+    # sub-.500 team players on the roster.
+    _teamRecords: Dict[int, float] = field(default_factory=dict)
+    # _rosterRookieFlags: playerId → True if rookie. Used by Rookie Hype.
+    _rosterRookieFlags: Dict[int, bool] = field(default_factory=dict)
+
+    # Pick-em stats for the displayed week. Used by Conviction (streak on
+    # manual submit), Augur (accuracy bonus), Tipster (FPx scaling with
+    # weekly points).
+    userManualPickSubmittedThisWeek: bool = False
+    userWeeklyPickemCorrect: int = 0
+    userWeeklyPickemTotal: int = 0
+    userWeeklyPickemPoints: int = 0
 
     # Eminence: per-position league avg FP/game and per-player season FP/game
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
@@ -140,6 +163,17 @@ class CardCalcContext:
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
     _firstPassBreakdowns: Optional[List] = None  # Set for second-pass effects
+    # Map of eq.id → bool: would this second-pass card produce non-zero output
+    # given only first-pass results? Used by trigger-chain effects (Chain
+    # Reaction, Bonus Round, Last Resort) to count other second-pass cards
+    # without circularity — the boolean is determined from first-pass data so
+    # CR-A counting CR-B (and vice-versa) resolves cleanly.
+    _secondPassPreTriggers: Dict[int, bool] = field(default_factory=dict)
+    # Set during the convergence pass so effects (Copycat, High Roller) can
+    # scan other second-pass cards' actual breakdowns. Index-aligned with
+    # _secondPassEqIds.
+    _secondPassBreakdowns: Optional[List] = None
+    _secondPassEqIds: Optional[List[int]] = None
 
 
 @dataclass
@@ -329,6 +363,43 @@ _SECOND_PASS_EFFECTS = frozenset({
 _TRADEOFF_EFFECTS = frozenset({
     "double_down", "last_resort",
 })
+
+
+def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
+    """Heuristic: would this second-pass card produce non-zero output given
+    only first-pass results? Used to let trigger-chain effects count each
+    other without circularity. The actual-trigger correction happens later
+    in the convergence pass.
+    """
+    template = eq.user_card.card_template
+    ec = template.effect_config or {}
+    effectName = ec.get("effectName", "")
+    primary = ec.get("primary", {}) or {}
+    fpTriggered = sum(1 for b in firstPassBreakdowns
+                      if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+    if effectName == "chain_reaction":
+        return fpTriggered > 0
+    if effectName == "bonus_round":
+        return fpTriggered >= 4
+    if effectName == "last_resort":
+        # Modern config (baseFP) always pays out → triggered.
+        # Legacy config (rewardValue only) fires only when nothing else
+        # triggered → inverse condition.
+        if "baseFP" in primary:
+            return True
+        if "rewardValue" in primary and "baseFP" not in primary:
+            return fpTriggered == 0
+        return True
+    if effectName == "copycat":
+        return any(b.totalFP > 0 for b in firstPassBreakdowns)
+    if effectName == "double_down":
+        return any(b.totalFP > 0 and b.effectName != "double_down" for b in firstPassBreakdowns)
+    if effectName == "high_roller":
+        return any(b.chanceTriggered for b in firstPassBreakdowns)
+    if effectName == "fortitude":
+        # Heat Check fires whenever there's at least one active streak card.
+        return getattr(ctx, 'activeStreakCount', 0) > 0
+    return False
 
 
 def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
@@ -716,16 +787,58 @@ def calculateWeekCardBonuses(
         breakdown = _computeCardPass(eq, ctx)
         firstPassBreakdowns.append(breakdown)
 
+    # Pre-trigger pass: for each second-pass card, determine whether it would
+    # produce non-zero output given only first-pass results. Stash on ctx so
+    # trigger-chain effects (Chain Reaction, Bonus Round, Last Resort) can
+    # count other second-pass cards in their tallies.
+    ctx._secondPassPreTriggers = {
+        eq.id: _wouldSecondPassTrigger(eq, firstPassBreakdowns, ctx)
+        for eq in secondPassCards
+    }
+
     # Second pass: compute second-pass cards with first-pass results
     secondPassBreakdowns = []
     for eq in secondPassCards:
         breakdown = _computeCardPass(eq, ctx, firstPassBreakdowns=firstPassBreakdowns)
         secondPassBreakdowns.append(breakdown)
 
+    # Convergence: re-run effects that depend on other second-pass cards using
+    # *actual* second-pass results instead of pre-trigger heuristics. Closes
+    # asymmetries — e.g. CR pushing BR over its threshold without getting
+    # credit, or Copycat missing a higher FP value coming from Bonus Round.
+    # Last Resort is excluded (its chance roll would destabilize on re-run);
+    # Lemons / fortitude don't depend on cross-second-pass info.
+    if secondPassCards:
+        actualTriggers = {
+            eq.id: (b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
+            for eq, b in zip(secondPassCards, secondPassBreakdowns)
+        }
+        savedPreTriggers = ctx._secondPassPreTriggers
+        ctx._secondPassPreTriggers = actualTriggers
+        ctx._secondPassBreakdowns = secondPassBreakdowns
+        ctx._secondPassEqIds = [eq.id for eq in secondPassCards]
+        try:
+            for idx, eq in enumerate(secondPassCards):
+                effectName = (eq.user_card.card_template.effect_config or {}).get("effectName", "")
+                if effectName in {"chain_reaction", "bonus_round", "copycat", "high_roller"}:
+                    secondPassBreakdowns[idx] = _computeCardPass(
+                        eq, ctx, firstPassBreakdowns=firstPassBreakdowns,
+                    )
+        finally:
+            ctx._secondPassPreTriggers = savedPreTriggers
+            ctx._secondPassBreakdowns = None
+            ctx._secondPassEqIds = None
+
     allBreakdowns = firstPassBreakdowns + secondPassBreakdowns
 
     # Apply tradeoff effects that modify other cards' bonuses
     _applyTradeoffEffects(allBreakdowns)
+
+    # Conductor amplifier — if a Conductor card is in the hand, every other
+    # flat-FP card gets a percentage boost on its primary FP output. Mirrors
+    # the Lemons/double_down marker pattern: Conductor's own breakdown carries
+    # no FP, but its presence amplifies neighbors.
+    _applyConductorBoost(allBreakdowns, equippedCards)
 
     # Aggregate totals from all breakdowns
     for breakdown in allBreakdowns:
@@ -772,5 +885,42 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
         # Clear the marker mult so it doesn't stack on the global FPx aggregation
         if ddBreakdown:
             ddBreakdown.primaryMult = 0
+
+
+def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None:
+    """Conductor diamond amplifier: when present in the hand, every other
+    flat-FP card's primary output is multiplied by (1 + boostPct/100).
+    Conductor's own breakdown produces no output. Reads boostPct from
+    Conductor's effectConfig.primary so seeded variance is honored.
+    """
+    conductorBreakdown = next(
+        (b for b in breakdowns if b.effectName == "conductor"), None,
+    )
+    if conductorBreakdown is None:
+        return
+    boostPct = 20
+    for eq in (equippedCards or []):
+        ec = (eq.user_card.card_template.effect_config or {})
+        if ec.get("effectName") == "conductor":
+            boostPct = (ec.get("primary", {}) or {}).get("boostPct", 20)
+            break
+    factor = 1.0 + (boostPct / 100.0)
+    boosted = 0
+    for b in breakdowns:
+        if b.effectName == "conductor":
+            continue
+        if b.outputType != "fp":
+            continue
+        if b.totalFP <= 0:
+            continue
+        bonus = round(b.totalFP * (factor - 1.0), 1)
+        b.primaryFP = round(b.primaryFP + bonus, 1)
+        b.totalFP = round(b.totalFP + bonus, 1)
+        b.equation = f"{b.equation} +{boostPct}% (Conductor)"
+        boosted += 1
+    if boosted > 0:
+        conductorBreakdown.equation = f"+{boostPct}% on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
+    else:
+        conductorBreakdown.equation = "No flat-FP cards to amplify"
 
 

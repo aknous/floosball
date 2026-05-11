@@ -216,6 +216,8 @@ def _runPendingMigrations():
         # Rename achievement keys that collided with existing card effect names:
         #   windfall_* → racket_*
         #   crescendo  → zenith
+        # Plus: single-tier tycoon → tycoon_i so existing user progress
+        # carries forward into the new four-tier ladder.
         try:
             renameMap = {
                 "windfall_i": "racket_i",
@@ -223,8 +225,10 @@ def _runPendingMigrations():
                 "windfall_iii": "racket_iii",
                 "windfall_iv": "racket_iv",
                 "crescendo": "zenith",
+                "tycoon": "tycoon_i",
             }
             totalRenamed = 0
+            sourcesRenamed = 0
             for oldKey, newKey in renameMap.items():
                 # If the new key already exists (e.g. from a prior partial migration or fresh seed),
                 # delete the stale row instead of renaming on top of it.
@@ -241,9 +245,21 @@ def _runPendingMigrations():
                     ), {"new": newKey, "old": oldKey})
                     if result.rowcount:
                         totalRenamed += result.rowcount
-            if totalRenamed:
+                # Update any PendingReward.source that still points at the old
+                # key — keeps the achievements page from rendering the raw
+                # 'tycoon' / 'crescendo' fragments instead of a proper name.
+                srcResult = conn.execute(text(
+                    "UPDATE pending_rewards SET source = :new "
+                    "WHERE source = :old"
+                ), {"new": f"achievement:{newKey}", "old": f"achievement:{oldKey}"})
+                if srcResult.rowcount:
+                    sourcesRenamed += srcResult.rowcount
+            if totalRenamed or sourcesRenamed:
                 conn.commit()
-                logger.info(f"  Migration: renamed {totalRenamed} collided achievement keys")
+                if totalRenamed:
+                    logger.info(f"  Migration: renamed {totalRenamed} collided achievement keys")
+                if sourcesRenamed:
+                    logger.info(f"  Migration: rewrote {sourcesRenamed} pending_rewards.source values")
             else:
                 conn.rollback()
         except Exception as e:
@@ -437,6 +453,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Starter pack + selection mechanic (feature/pack-revamp)
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN starter_pack_claimed_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added users.starter_pack_claimed_season")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE pack_types ADD COLUMN cards_kept INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added pack_types.cards_kept")
+        except Exception:
+            conn.rollback()
+
         # app_settings table — admin-editable runtime config (feedback URL,
         # survey URL, button visibility, etc). Created via SQLAlchemy below;
         # this seed step inserts default rows when missing.
@@ -548,6 +578,24 @@ def _runPendingMigrations():
             conn.execute(text("ALTER TABLE team_season_stats ADD COLUMN big_plays INTEGER DEFAULT 0"))
             conn.commit()
             logger.info("  Migration: added team_season_stats.big_plays")
+        except Exception:
+            conn.rollback()
+
+        # Streak peak-decay state on equipped_cards. peak_output snapshots the
+        # in-streak output the last week the streak was active; weeks_since_break
+        # counts cold weeks since then. Together they let a broken streak
+        # decay from peak rather than dropping straight to base on the first
+        # cold week. NULL peak = no prior streak to decay from.
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN peak_output REAL"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.peak_output")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN weeks_since_break INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.weeks_since_break")
         except Exception:
             conn.rollback()
     finally:
@@ -1069,6 +1117,22 @@ def clear_db():
 
     # Recreate all tables (create_all is safe — skips existing preserved tables)
     Base.metadata.create_all(bind=engine)
+
+    # Clear per-season user flags — these are scoped to season number, and
+    # fresh start resets the counter to 1.  Without this reset, prior-run
+    # stamps (e.g. starter_pack_claimed_season=1) carry over and incorrectly
+    # match the new season-1, hiding once-per-season offers.
+    try:
+        with engine.connect() as conn:
+            for col in ('starter_pack_claimed_season', 'favorite_team_locked_season'):
+                try:
+                    conn.execute(text(f"UPDATE users SET {col} = NULL"))
+                except Exception:
+                    pass
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to reset per-season user flags on fresh start: {e}")
+
     logger.info(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
     # Run migrations for preserved tables (e.g. new columns on users)
@@ -1158,51 +1222,68 @@ def _seedAchievements():
             {"key": "curator", "name": "Curator", "category": "guidance", "scope": "per_season", "sort_order": 130, "target": 15,
              "description": "Collect 15 unique cards this season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "tycoon", "name": "Tycoon", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 1000,
-             "description": "Earn 1,000 floobits in a single season.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": ["income_boost"], "deferred": False}},
+            # Tycoon tiers — floobits earned in a single season. Mirrors
+            # Magnate (spent side). Targets reflect post-curve income
+            # economy where a typical user earns 2-4k/season.
+            {"key": "tycoon_i", "name": "Tycoon I", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 750,
+             "description": "Earn 750 floobits in a single season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_ii", "name": "Tycoon II", "category": "guidance", "scope": "per_season", "sort_order": 141, "target": 2500,
+             "description": "Earn 2,500 floobits in a single season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_iii", "name": "Tycoon III", "category": "guidance", "scope": "per_season", "sort_order": 142, "target": 5500,
+             "description": "Earn 5,500 floobits in a single season.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_iv", "name": "Tycoon IV", "category": "guidance", "scope": "per_season", "sort_order": 143, "target": 10000,
+             "description": "Earn 10,000 floobits in a single season.",
+             "reward_config": {"floobits": 150, "packs": [], "powerups": ["income_boost"], "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
-            # Banner Week tiers — FP earned in a single week
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 150,
-             "description": "Earn 150+ fantasy points in a single week.",
+            # Banner Week tiers — FP earned in a single week.
+            # Targets widened (next-season): rebalanced cards push elite weeks
+            # well above the old 300 cap; tier IV becomes a real flex goal.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 175,
+             "description": "Earn 175+ fantasy points in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 200,
-             "description": "Earn 200+ fantasy points in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 250,
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 250,
              "description": "Earn 250+ fantasy points in a single week.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 400,
+             "description": "Earn 400+ fantasy points in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 300,
-             "description": "Earn 300+ fantasy points in a single week.",
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 600,
+             "description": "Earn 600+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
-            # (renamed from Windfall to avoid clashing with the card effect of the same name)
-            {"key": "racket_i", "name": "Racket I", "category": "guidance", "scope": "per_season", "sort_order": 190, "target": 50,
-             "description": "Earn 50+ floobits from card effects in a single week.",
+            # (renamed from Windfall to avoid clashing with the card effect of
+            # the same name). Targets widened (next-season).
+            {"key": "racket_i", "name": "Racket I", "category": "guidance", "scope": "per_season", "sort_order": 190, "target": 60,
+             "description": "Earn 60+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "racket_ii", "name": "Racket II", "category": "guidance", "scope": "per_season", "sort_order": 191, "target": 100,
-             "description": "Earn 100+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "racket_iii", "name": "Racket III", "category": "guidance", "scope": "per_season", "sort_order": 192, "target": 150,
+            {"key": "racket_ii", "name": "Racket II", "category": "guidance", "scope": "per_season", "sort_order": 191, "target": 150,
              "description": "Earn 150+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 200,
-             "description": "Earn 200+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Dynamo tiers — cumulative season fantasy points
-            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 1000,
-             "description": "Earn 1,000 total fantasy points this season.",
-             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 2000,
-             "description": "Earn 2,000 total fantasy points this season.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 3500,
-             "description": "Earn 3,500 total fantasy points this season.",
+            {"key": "racket_iii", "name": "Racket III", "category": "guidance", "scope": "per_season", "sort_order": 192, "target": 250,
+             "description": "Earn 250+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 5000,
-             "description": "Earn 5,000 total fantasy points this season.",
+            {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 400,
+             "description": "Earn 400+ floobits from card effects in a single week.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Dynamo tiers — cumulative season fantasy points. Targets
+            # widened (next-season): rebalanced FP cards push elite season
+            # totals well above 5,000.
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 1500,
+             "description": "Earn 1,500 total fantasy points this season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 3500,
+             "description": "Earn 3,500 total fantasy points this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 6000,
+             "description": "Earn 6,000 total fantasy points this season.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 9000,
+             "description": "Earn 9,000 total fantasy points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
@@ -1217,18 +1298,20 @@ def _seedAchievements():
             {"key": "oracle_iv", "name": "Oracle IV", "category": "guidance", "scope": "per_season", "sort_order": 213, "target": 1800,
              "description": "Earn 1,800 total prognostication points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Magnate tiers — cumulative season floobits spent
-            {"key": "magnate_i", "name": "Magnate I", "category": "guidance", "scope": "per_season", "sort_order": 220, "target": 500,
-             "description": "Spend 500 floobits this season.",
+            # Magnate tiers — cumulative season floobits spent. Targets
+            # widened (next-season) so tier IV is a real spender milestone
+            # given the floobit-curve income changes.
+            {"key": "magnate_i", "name": "Magnate I", "category": "guidance", "scope": "per_season", "sort_order": 220, "target": 750,
+             "description": "Spend 750 floobits this season.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "magnate_ii", "name": "Magnate II", "category": "guidance", "scope": "per_season", "sort_order": 221, "target": 1500,
-             "description": "Spend 1,500 floobits this season.",
+            {"key": "magnate_ii", "name": "Magnate II", "category": "guidance", "scope": "per_season", "sort_order": 221, "target": 2500,
+             "description": "Spend 2,500 floobits this season.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "magnate_iii", "name": "Magnate III", "category": "guidance", "scope": "per_season", "sort_order": 222, "target": 3000,
-             "description": "Spend 3,000 floobits this season.",
+            {"key": "magnate_iii", "name": "Magnate III", "category": "guidance", "scope": "per_season", "sort_order": 222, "target": 5500,
+             "description": "Spend 5,500 floobits this season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "magnate_iv", "name": "Magnate IV", "category": "guidance", "scope": "per_season", "sort_order": 223, "target": 5000,
-             "description": "Spend 5,000 floobits this season.",
+            {"key": "magnate_iv", "name": "Magnate IV", "category": "guidance", "scope": "per_season", "sort_order": 223, "target": 10000,
+             "description": "Spend 10,000 floobits this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Podium tiers — weekly fantasy leaderboard top-3 finishes this season
             {"key": "podium_i", "name": "Podium I", "category": "guidance", "scope": "per_season", "sort_order": 230, "target": 5,
@@ -1269,18 +1352,20 @@ def _seedAchievements():
             {"key": "benefactor_iv", "name": "Benefactor IV", "category": "guidance", "scope": "per_season", "sort_order": 253, "target": 5000,
              "description": "Contribute 5,000 floobits to your team this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Compound tiers — single-week total FP multiplier (stored as multiplier × 100)
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 120,
-             "description": "Reach a 1.2x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 150,
+            # Compound tiers — single-week total FP multiplier (stored as
+            # multiplier × 100). Targets widened (next-season): the FPx tapers
+            # make 2.0× routine, 3.5× requires real composition skill.
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 150,
              "description": "Reach a 1.5x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 170,
-             "description": "Reach a 1.7x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 200,
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 200,
              "description": "Reach a 2.0x total FP multiplier in a single week.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 250,
+             "description": "Reach a 2.5x total FP multiplier in a single week.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 350,
+             "description": "Reach a 3.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard

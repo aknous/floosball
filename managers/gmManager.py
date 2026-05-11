@@ -171,7 +171,13 @@ class GmManager:
         stability. Only when zero hire votes were cast does the resolver
         fall back to an auto-pick (random generated coach).
 
-        For each team in firedTeamIds:
+        Resolution order (when multiple teams target the same coach):
+            1. Market tier — MEGA > LARGE > MID > SMALL
+            2. Fan count desc as tiebreaker within tier
+        Higher-priority team gets first dibs; lower-priority teams fall
+        through to their next-ranked candidate.
+
+        For each team in priority order:
         - Tally hire_coach votes by candidate
         - Pick the leader; if leader is no longer in the pool (e.g. another
           team's resolution claimed them this offseason), try the next
@@ -182,9 +188,21 @@ class GmManager:
         coachNames = {c.id: c.name for c in availableCoaches}
         availableIds = {c.id for c in availableCoaches}
 
-        for team in teams:
-            if team.id not in firedTeamIds:
-                continue
+        # Resolution priority: market tier asc (MEGA first), then fan count desc.
+        _TIER_RANK = {
+            'MEGA_MARKET': 0,
+            'LARGE_MARKET': 1,
+            'MID_MARKET': 2,
+            'SMALL_MARKET': 3,
+        }
+        firedTeams = [t for t in teams if t.id in firedTeamIds]
+        firedTeams.sort(key=lambda t: (
+            _TIER_RANK.get(getattr(t, 'fundingTier', None), 99),
+            -self.voteRepo.getTeamFanCount(t.id, season),
+            t.id,  # final stable tiebreaker
+        ))
+
+        for team in firedTeams:
 
             votes = self.voteRepo.getVotesForTeam(team.id, season, "hire_coach")
             votesByTarget: Dict[int, int] = {}
@@ -243,9 +261,14 @@ class GmManager:
                 })
 
             if not hired:
-                # No votes at all OR every vote target was unavailable — auto-pick
+                # No votes at all OR every vote target was unavailable — auto-pick.
+                # Pass session=self.session so the new-coach insert + team
+                # coach_id FK update share this resolution's connection. Without
+                # it, _saveCoachToDatabase opens a second connection and
+                # deadlocks with our session, sitting ~30s on the SQLite write
+                # lock before failing "database is locked".
                 newCoach = teamManager.generateCoach()
-                teamManager.hireCoach(team, newCoach)
+                teamManager.hireCoach(team, newCoach, session=self.session)
                 reason = "no hire_coach votes" if not votesByTarget else "all candidates unavailable"
                 logger.info(
                     f"GM: {team.name} auto-hired {newCoach.name} ({reason})"
@@ -376,19 +399,26 @@ class GmManager:
 
     def resolveSignFaVotes(self, teams, season: int,
                            freeAgentLists: Dict,
-                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, Dict[int, List[int]]]]:
-        """Resolve sign_fa ballots via ranked choice voting.
+                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, List[int]]]:
+        """Resolve sign_fa ballots via overall ranked-choice voting.
+
+        Single-list IRV across all candidates whose position is currently
+        open for the team — the order encodes both who and which position
+        the team should pursue first. The directive walks the resolved
+        ranking and assigns each player to the first remaining open slot
+        at their position; players whose positions are already filled get
+        skipped.
 
         Returns:
-          - directives: {teamId: [playerId, ...]} flat priority list used by
-            the FA draft. Interleaves positions round-robin.
-          - positionRankings: {teamId: {positionValue: [playerId, ...]}} raw
-            per-position IRV rankings. Lets the UI show "for QB fans ranked:
-            X, Y, Z" without the interleave collapsing the structure.
+          - directives: {teamId: [playerId, ...]} the slot-walk-trimmed
+            sign list used by the FA draft.
+          - overallRankings: {teamId: [playerId, ...]} the full IRV
+            ranking before slot-walking, for tally display.
         """
         directives: Dict[int, List[int]] = {}
-        positionRankingsByTeam: Dict[int, Dict[int, List[int]]] = {}
+        overallRankingsByTeam: Dict[int, List[int]] = {}
 
+        # Position-value → name lookup for slot-fill bookkeeping.
         for team in teams:
             ballots = self.ballotRepo.getRankingsForTeam(team.id, season)
             totalBallots = len(ballots)
@@ -399,26 +429,27 @@ class GmManager:
             threshold = self.calculateBallotThreshold(engagedFans)
             probability = self.calculateProbability(totalBallots, threshold)
 
-            # Tally per-position rankings for EVERY team with ballots, even
-            # below quorum — fans still want to see how votes shook out. The
-            # threshold/roll only gate whether the directives actually drive
-            # the FA draft.
-            teamProspectsByPos: Dict[int, set] = {}
-            for prospect in getattr(team, 'prospects', []):
-                if hasattr(prospect, 'position') and hasattr(prospect.position, 'value'):
-                    teamProspectsByPos.setdefault(prospect.position.value, set()).add(prospect.id)
-
             openPositions = teamOpenPositions.get(team.id, [])
-            positionRankings = {}
-            for pos in openPositions:
-                ranked = self._tallyFullRanking(
-                    ballots, pos, freeAgentLists,
-                    prospectIds=teamProspectsByPos.get(pos, set()),
-                )
-                if ranked:
-                    positionRankings.setdefault(pos, []).extend(ranked)
-            if positionRankings:
-                positionRankingsByTeam[team.id] = dict(positionRankings)
+            if not openPositions:
+                continue
+
+            # Eligible candidates: all FAs at any open position, plus team's
+            # own prospects at any open position. Prospects share ID space.
+            openPosSet = set(openPositions)
+            eligibleCandidates: set = set()
+            for posKey, players in freeAgentLists.items():
+                for p in players:
+                    posVal = getattr(getattr(p, 'position', None), 'value', None)
+                    if posVal in openPosSet:
+                        eligibleCandidates.add(p.id)
+            for prospect in getattr(team, 'prospects', []):
+                posVal = getattr(getattr(prospect, 'position', None), 'value', None)
+                if posVal in openPosSet:
+                    eligibleCandidates.add(prospect.id)
+
+            overallRanking = self._tallyFullRankingOverall(ballots, eligibleCandidates)
+            if overallRanking:
+                overallRankingsByTeam[team.id] = list(overallRanking)
 
             if probability == 0.0:
                 self.voteRepo.recordResult(
@@ -436,15 +467,31 @@ class GmManager:
                 )
                 continue
 
-            # Interleave: first picks from all positions, then second picks, etc.
+            # Slot-walk: each player in the ranking consumes one open slot
+            # at their position. Once a position runs out of slots, further
+            # candidates at that position are skipped (the team has filled
+            # its need there).
+            remainingSlots: Dict[int, int] = {}
+            for pos in openPositions:
+                remainingSlots[pos] = remainingSlots.get(pos, 0) + 1
+
+            playerLookup = {}
+            for posKey, players in freeAgentLists.items():
+                for p in players:
+                    playerLookup[p.id] = p
+            for prospect in getattr(team, 'prospects', []):
+                playerLookup[prospect.id] = prospect
+
             teamDirectives = []
-            uniquePositions = list(dict.fromkeys(openPositions))
-            maxDepth = max((len(positionRankings.get(p, [])) for p in uniquePositions), default=0)
-            for depth in range(maxDepth):
-                for pos in uniquePositions:
-                    ranked = positionRankings.get(pos, [])
-                    if depth < len(ranked) and ranked[depth] not in teamDirectives:
-                        teamDirectives.append(ranked[depth])
+            for pid in overallRanking:
+                p = playerLookup.get(pid)
+                if not p:
+                    continue
+                posVal = getattr(getattr(p, 'position', None), 'value', None)
+                if posVal is None or remainingSlots.get(posVal, 0) <= 0:
+                    continue
+                teamDirectives.append(pid)
+                remainingSlots[posVal] -= 1
 
             if teamDirectives:
                 directives[team.id] = teamDirectives
@@ -460,76 +507,67 @@ class GmManager:
                 f"({totalBallots} ballots, p={probability:.0%})"
             )
 
-        return directives, positionRankingsByTeam
+        return directives, overallRankingsByTeam
 
-    def _tallyFullRanking(self, ballots: List[List[int]], position: int,
-                          freeAgentLists: Dict, prospectIds: set = None) -> List[int]:
-        """Run repeated IRV for a position to produce a full ranking of candidates.
-        prospectIds are team-specific prospect IDs eligible for this position, which
-        share the ballot pool with FAs.
+    def _tallyFullRankingOverall(self, ballots: List[List[int]],
+                                 eligibleCandidates: set) -> List[int]:
+        """Run repeated IRV across the full eligible candidate pool to produce
+        a single overall ranking. Order encodes both who and which position
+        a team should pursue — fans whose top picks cluster on one position
+        implicitly vote for that position as the priority.
         """
         ranking = []
-        excluded = []
+        excluded: List[int] = []
         while True:
-            winner = self._tallyRankedChoice(ballots, position, freeAgentLists,
-                                              alreadyPicked=excluded,
-                                              prospectIds=prospectIds or set())
+            winner = self._tallyRankedChoiceOverall(
+                ballots, eligibleCandidates, alreadyPicked=excluded,
+            )
             if winner is None:
                 break
             ranking.append(winner)
             excluded.append(winner)
         return ranking
 
-    def _tallyRankedChoice(self, ballots: List[List[int]], position: int,
-                            freeAgentLists: Dict,
-                            alreadyPicked: List[int],
-                            prospectIds: set = None) -> Optional[int]:
-        """Run instant-runoff for a single position. Returns winner player ID or None.
-        prospectIds are team-specific prospects eligible for this position, treated
-        as first-class ballot candidates alongside FAs.
-        """
-        # Eligible candidates: FAs at this position + team's prospects at this position
-        faAtPosition = set()
-        for posKey, players in freeAgentLists.items():
-            for p in players:
-                if getattr(p, 'position', None) is not None and p.position.value == position and p.id not in alreadyPicked:
-                    faAtPosition.add(p.id)
-        if prospectIds:
-            faAtPosition |= {pid for pid in prospectIds if pid not in alreadyPicked}
+    def _tallyRankedChoiceOverall(self, ballots: List[List[int]],
+                                   eligibleCandidates: set,
+                                   alreadyPicked: List[int]) -> Optional[int]:
+        """Single-pass IRV across the full eligible candidate pool.
 
-        if not faAtPosition:
+        Same rules as `_tallyRankedChoice` (majority winner, eliminate
+        lowest, ties eliminate together) but candidate eligibility is
+        determined by membership in `eligibleCandidates` rather than by
+        position. Filters ballots to only the still-active candidates.
+        """
+        active = {pid for pid in eligibleCandidates if pid not in alreadyPicked}
+        if not active:
             return None
 
-        # Filter out players that don't appear on enough ballots
         totalBallots = len(ballots)
         if totalBallots > 0:
             appearanceCounts: Dict[int, int] = {}
             for ranking in ballots:
                 seen = set()
                 for pid in ranking:
-                    if pid in faAtPosition and pid not in seen:
+                    if pid in active and pid not in seen:
                         appearanceCounts[pid] = appearanceCounts.get(pid, 0) + 1
                         seen.add(pid)
             minAppearances = max(1, math.ceil(totalBallots * GM_FA_MIN_APPEARANCE_PCT))
-            faAtPosition = {pid for pid in faAtPosition
-                           if appearanceCounts.get(pid, 0) >= minAppearances}
-            if not faAtPosition:
+            active = {pid for pid in active
+                      if appearanceCounts.get(pid, 0) >= minAppearances}
+            if not active:
                 return None
 
-        # Filter ballots to only include eligible candidates at this position
         activeBallots = []
         for ranking in ballots:
-            filtered = [pid for pid in ranking if pid in faAtPosition]
+            filtered = [pid for pid in ranking if pid in active]
             if filtered:
                 activeBallots.append(filtered)
 
         if not activeBallots:
             return None
 
-        eliminated = set()
-
+        eliminated: set = set()
         while True:
-            # Count first-choice votes
             firstChoiceCounts: Dict[int, int] = {}
             for ballot in activeBallots:
                 for pid in ballot:
@@ -542,19 +580,14 @@ class GmManager:
 
             totalActive = sum(firstChoiceCounts.values())
             majority = totalActive / 2.0
-
-            # Check for majority winner
             for pid, count in firstChoiceCounts.items():
                 if count > majority:
                     return pid
 
-            # If only one candidate left, they win
             if len(firstChoiceCounts) == 1:
                 return next(iter(firstChoiceCounts))
 
-            # Eliminate candidate with fewest first-choice votes
             minVotes = min(firstChoiceCounts.values())
-            # Break ties by eliminating all tied-lowest candidates
             toEliminate = [pid for pid, c in firstChoiceCounts.items() if c == minVotes]
             eliminated.update(toEliminate)
 

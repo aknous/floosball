@@ -951,7 +951,26 @@ class RecordManager:
                         })
             else:
                 losingTeam.seasonTeamStats['streak'] -= 1
-                
+
+            # Streak pressure: independent of seasonTeamStats['streak']
+            # (which is regular-season-only). currentWinStreak counts every
+            # consecutive win across regular season + playoffs. Resets on
+            # any loss. Drives team.streakPressure for the spotlight bump.
+            try:
+                from constants import (
+                    STREAK_PRESSURE_FLOOR,
+                    STREAK_PRESSURE_PER_WIN,
+                    STREAK_PRESSURE_CAP,
+                )
+                winningTeam.currentWinStreak = getattr(winningTeam, 'currentWinStreak', 0) + 1
+                losingTeam.currentWinStreak = 0
+                for team in (winningTeam, losingTeam):
+                    streak = getattr(team, 'currentWinStreak', 0)
+                    over = max(0, streak - STREAK_PRESSURE_FLOOR)
+                    team.streakPressure = round(min(STREAK_PRESSURE_CAP, over * STREAK_PRESSURE_PER_WIN), 3)
+            except Exception:
+                pass
+
         except Exception as e:
             self.logger.error(f"Error updating win streaks: {e}")
     

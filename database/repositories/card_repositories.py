@@ -15,6 +15,20 @@ from database.models import (
 )
 
 
+# Transaction types that fire a per-user `floobits_received` toast event.
+# Add types here when introducing a new passive earning source.
+_PASSIVE_GRANT_TYPES = frozenset({
+    'weekly_fp_bonus',
+    'leaderboard_season',
+    'leaderboard_weekly',
+    'pickem_correct',
+    'pickem_leaderboard_season',
+    'pickem_leaderboard_weekly',
+    'card_effect',
+    'admin_grant',
+})
+
+
 class CardTemplateRepository:
     """Repository for card template operations."""
 
@@ -303,6 +317,25 @@ class CurrencyRepository:
             except Exception:
                 pass  # never break a grant over an achievement hook
 
+        # Toast hook — fire a per-user `floobits_received` WS event for passive
+        # grants. Achievements have their own toast; user-initiated grants
+        # (refunds, etc.) carry no surprise so they're skipped.
+        if amount > 0 and transactionType in _PASSIVE_GRANT_TYPES:
+            try:
+                from api.event_models import CurrencyEvent
+                from api.game_broadcaster import broadcaster
+                event = CurrencyEvent.received(
+                    amount=amount,
+                    transactionType=transactionType,
+                    description=description,
+                    balanceAfter=int(currency.balance),
+                    season=season,
+                    week=week,
+                )
+                broadcaster.broadcast_to_user_sync(userId, event)
+            except Exception:
+                pass  # never break a grant over a toast broadcast
+
         return currency
 
     def spendFunds(self, userId: int, amount: int, transactionType: str,
@@ -368,43 +401,55 @@ class PackTypeRepository:
         return packType
 
     def seedDefaults(self):
-        """Seed default pack types if they don't exist."""
+        """Seed default pack types if they don't exist.
+
+        Pack revamp (feature/pack-revamp):
+          - Starter: free, once per season, 5 base cards (no selection).
+          - Daily packs: reveal/keep mechanic. Humble/Grand/Exquisite stay;
+            Proper deprecated (left in DB to preserve PackOpening history).
+          - guaranteed_rarity dropped — rates are bumped on higher tiers
+            so Exquisite still feels Exquisite without a hard guarantee.
+        """
         defaults = [
+            PackType(
+                name='starter',
+                display_name='Starter Pack',
+                cost=0,
+                cards_per_pack=5,
+                cards_kept=5,
+                guaranteed_rarity=None,
+                rarity_weights={'base': 100, 'holographic': 0, 'prismatic': 0, 'diamond': 0},
+                description='Free starter. 5 base cards to fill your hand. Once per season.',
+            ),
             PackType(
                 name='humble',
                 display_name='Humble Pack',
                 cost=50,
                 cards_per_pack=3,
+                cards_kept=2,
                 guaranteed_rarity=None,
-                rarity_weights={'base': 100, 'holographic': 20, 'prismatic': 10, 'diamond': 1},
-                description='3 random cards. Anything is possible!',
-            ),
-            PackType(
-                name='proper',
-                display_name='Proper Pack',
-                cost=150,
-                cards_per_pack=5,
-                guaranteed_rarity='holographic',
-                rarity_weights={'base': 80, 'holographic': 35, 'prismatic': 20, 'diamond': 3},
-                description='5 cards with at least one Holographic or better.',
+                rarity_weights={'base': 100, 'holographic': 20, 'prismatic': 8, 'diamond': 1},
+                description='Reveal 3 cards, keep 2. Anything is possible.',
             ),
             PackType(
                 name='grand',
                 display_name='Grand Pack',
                 cost=350,
                 cards_per_pack=5,
-                guaranteed_rarity='prismatic',
-                rarity_weights={'base': 50, 'holographic': 30, 'prismatic': 25, 'diamond': 3},
-                description='5 cards with a guaranteed Prismatic and Holographic or better.',
+                cards_kept=3,
+                guaranteed_rarity=None,
+                rarity_weights={'base': 30, 'holographic': 50, 'prismatic': 35, 'diamond': 5},
+                description='Reveal 5 cards, keep 3. Modestly increased drop rates.',
             ),
             PackType(
                 name='exquisite',
                 display_name='Exquisite Pack',
                 cost=750,
                 cards_per_pack=5,
-                guaranteed_rarity='diamond',
-                rarity_weights={'base': 40, 'holographic': 30, 'prismatic': 20, 'diamond': 2},
-                description='5 cards with a guaranteed Diamond and Prismatic or better.',
+                cards_kept=3,
+                guaranteed_rarity=None,
+                rarity_weights={'base': 15, 'holographic': 35, 'prismatic': 45, 'diamond': 12},
+                description='Reveal 5 cards, keep 3. Greatly increased drop rates.',
             ),
         ]
         for pt in defaults:
@@ -413,10 +458,12 @@ class PackTypeRepository:
                 self.session.add(pt)
             else:
                 existing.cost = pt.cost
+                existing.display_name = pt.display_name
                 existing.description = pt.description
                 existing.rarity_weights = pt.rarity_weights
                 existing.guaranteed_rarity = pt.guaranteed_rarity
                 existing.cards_per_pack = pt.cards_per_pack
+                existing.cards_kept = pt.cards_kept
         self.session.flush()
 
 

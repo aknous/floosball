@@ -93,6 +93,7 @@ _AMPLIFIER_DEPENDS = {
     "catalyst":      lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "advantage":     lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "cascade":       lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "mult"),
+    "conductor":     lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "fp"),
 }
 
 
@@ -149,6 +150,9 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         return "Chance rolls twice" if active else "Needs chance card"
     if effectName == "cascade":
         return "Stacks with FPx cards" if active else "Needs FPx card"
+    if effectName == "conductor":
+        boost = primary.get("boostPct", 20)
+        return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"
     return ""
 
 
@@ -340,6 +344,108 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                         EquippedCard.week == week)
                 .all())
     streakCounts = {eq.id: getattr(eq, 'streak_count', 1) for eq in equipped}
+    # Peak-decay state — projection mirrors the live computation so the
+    # pill shows the decaying tail when a streak's broken, not just base.
+    streakPeakOutputs = {
+        eq.id: float(eq.peak_output) for eq in equipped
+        if getattr(eq, 'peak_output', None) is not None
+    }
+    streakWeeksSinceBreak = {
+        eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0) for eq in equipped
+    }
+    # Roster-trait card data (Castaway, Rookie Hype) — projection uses the
+    # same lookups as live calc so the pill reflects what they'll pay.
+    teamRecords = {}
+    if teamManager:
+        for team in teamManager.teams:
+            stats = getattr(team, 'seasonTeamStats', {}) or {}
+            wp = stats.get('winPerc')
+            if wp is None:
+                w = stats.get('wins', 0) or 0
+                l = stats.get('losses', 0) or 0
+                wp = w / (w + l) if (w + l) > 0 else 0.5
+            teamRecords[team.id] = float(wp)
+    rosterRookieFlags = {}
+    if playerManager:
+        for pid in rosterPlayerIds:
+            player = playerManager.getPlayerById(pid)
+            if player:
+                # Rookie = canonical "Rookie" service tier, which the game
+                # applies for the first 2 seasons of play (seasonsPlayed
+                # 0 or 1). Matches what shows on the player card and what
+                # users see as "Rookie".
+                svc = getattr(player, 'serviceTime', None)
+                isRookieSvc = bool(svc and getattr(svc, 'name', '') == 'Rookie')
+                rosterRookieFlags[pid] = bool(
+                    isRookieSvc
+                    or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
+                )
+
+    # Pick-em stats — drives Nose Picker (Conviction), Medium (Augur),
+    # Parlay (Tipster). Projection mode estimates forward:
+    #   - Current week (live or already resolved): use those rows directly.
+    #   - Otherwise: average the user's historical resolved weeks this
+    #     season. New users with no history fall back to plausible
+    #     defaults (70% accuracy, ~60 weekly pts, manual submission).
+    userManualPickSubmittedThisWeek = True
+    userWeeklyPickemCorrect = 0
+    userWeeklyPickemTotal = 0
+    userWeeklyPickemPoints = 0
+    try:
+        from database.models import PickEmPick
+        weekPicks = session.query(PickEmPick).filter_by(
+            user_id=userId, season=season, week=week,
+        ).all()
+        hasLiveData = bool(weekPicks) and any(p.correct is not None for p in weekPicks)
+        if hasLiveData:
+            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+            for p in weekPicks:
+                if p.correct is True:
+                    userWeeklyPickemCorrect += 1
+                    userWeeklyPickemTotal += 1
+                elif p.correct is False:
+                    userWeeklyPickemTotal += 1
+                userWeeklyPickemPoints += int(p.points_earned or 0)
+        else:
+            # Use historical averages from prior weeks this season
+            priorPicks = session.query(PickEmPick).filter(
+                PickEmPick.user_id == userId,
+                PickEmPick.season == season,
+                PickEmPick.week < week,
+                PickEmPick.correct.isnot(None),
+            ).all()
+            if priorPicks:
+                # Manual-submit projection: extend prior behavior unless
+                # the user has switched to auto-pick lately
+                weeksByNum: Dict[int, list] = {}
+                for p in priorPicks:
+                    weeksByNum.setdefault(p.week, []).append(p)
+                manualWeeks = sum(
+                    1 for wk_picks in weeksByNum.values()
+                    if any(not p.is_auto for p in wk_picks)
+                )
+                userManualPickSubmittedThisWeek = manualWeeks >= max(1, len(weeksByNum) // 2)
+
+                correct = sum(1 for p in priorPicks if p.correct is True)
+                total = len(priorPicks)
+                # Project current-week values by scaling accuracy to the
+                # number of games this week (assume same picks-per-week
+                # the user has been getting on average).
+                avgPicksPerWeek = total / max(1, len(weeksByNum))
+                projectedTotal = round(avgPicksPerWeek)
+                projectedAccuracy = correct / total if total else 0.7
+                userWeeklyPickemCorrect = round(projectedAccuracy * projectedTotal)
+                userWeeklyPickemTotal = projectedTotal
+                avgPoints = sum(int(p.points_earned or 0) for p in priorPicks) / max(1, len(weeksByNum))
+                userWeeklyPickemPoints = round(avgPoints)
+            else:
+                # No history: fall back to league-typical estimates so the
+                # projection isn't pinned to 0.
+                userWeeklyPickemCorrect = 8
+                userWeeklyPickemTotal = 12
+                userWeeklyPickemPoints = 60
+    except Exception:
+        pass
 
     lastSwap = (session.query(FantasyRosterSwap.swap_week)
                 .filter_by(roster_id=roster.id)
@@ -401,6 +507,14 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         rosterTotalTds=int(round(rosterTotalTds)),
         rosterPlayerPositions=rosterPlayerPositions,
         streakCounts=streakCounts,
+        streakPeakOutputs=streakPeakOutputs,
+        streakWeeksSinceBreak=streakWeeksSinceBreak,
+        _teamRecords=teamRecords,
+        _rosterRookieFlags=rosterRookieFlags,
+        userManualPickSubmittedThisWeek=userManualPickSubmittedThisWeek,
+        userWeeklyPickemCorrect=userWeeklyPickemCorrect,
+        userWeeklyPickemTotal=userWeeklyPickemTotal,
+        userWeeklyPickemPoints=userWeeklyPickemPoints,
         userFavoriteTeamId=favTeamId,
         favoriteTeamElo=favElo,
         leagueAverageElo=leagueAverageElo,
@@ -567,7 +681,7 @@ def _shapeCardPayload(breakdown, amplifier: Optional[Dict[str, Any]], effectConf
             if float(breakdown.preMatchMult) > 1.0:
                 projectedMult = round(float(breakdown.preMatchMult), 2)
             else:
-                projectedMult = 2.0
+                projectedMult = 1.5  # typical mid-tier (5-9 FP lowest)
         except Exception:
             pass
 
@@ -812,3 +926,31 @@ def _wrapUserCardAsEquipped(userCard):
             self.streak_count = 1
             self.user_card = uc
     return _FauxEquipped(userCard)
+
+
+def _wrapTemplateAsUserCard(template, fauxId: int = -1):
+    """Wrap a CardTemplate in a UserCard-shaped object so projection logic
+    that expects userCard.card_template / userCard.id can run against
+    not-yet-owned templates (pack reveal, shop preview)."""
+    class _FauxUserCard:
+        __slots__ = ('id', 'card_template')
+        def __init__(self, tpl):
+            self.id = fauxId
+            self.card_template = tpl
+    return _FauxUserCard(template)
+
+
+def computeTemplateProjection(template, session, userId, season, week,
+                              seasonManager, playerManager) -> Optional[Dict[str, Any]]:
+    """Project what a CardTemplate would output if equipped, using the
+    user's current roster + recent stats. Used for not-yet-owned cards
+    (pack reveal-then-select flow, shop preview). Solo projection — the
+    template gets evaluated against the user's existing equipped hand
+    plus the candidate, but only the candidate's own breakdown is
+    returned for the UI pill.
+    """
+    fauxUserCard = _wrapTemplateAsUserCard(template, fauxId=-(template.id or 1))
+    return computeCandidateProjection(
+        fauxUserCard, session, userId, season, week,
+        seasonManager, playerManager, replaceSlot=None,
+    )

@@ -81,6 +81,9 @@ class EventType(Enum):
     # Achievements
     ACHIEVEMENT_UNLOCKED = "achievement_unlocked"
 
+    # Currency — passive grants (excludes user-initiated spends/refunds)
+    FLOOBITS_RECEIVED = "floobits_received"
+
     # System events
     ERROR = "error"
     INFO = "info"
@@ -406,6 +409,28 @@ class AchievementEvent:
             'description': description,
             'rewardConfig': rewardConfig or {},
             'season': season,
+        }
+
+
+class CurrencyEvent:
+    """Factory for per-user currency events"""
+
+    @staticmethod
+    def received(amount: int, transactionType: str, description: Optional[str],
+                 balanceAfter: int, season: Optional[int], week: Optional[int]) -> Dict[str, Any]:
+        """Sent to a specific user when they receive a passive Floobits grant.
+
+        Excludes user-initiated grants (no surprise factor) and achievement
+        grants (which already trigger their own toast)."""
+        return {
+            'event': EventType.FLOOBITS_RECEIVED.value,
+            'timestamp': datetime.now().isoformat(),
+            'amount': amount,
+            'transactionType': transactionType,
+            'description': description or '',
+            'balanceAfter': balanceAfter,
+            'season': season,
+            'week': week,
         }
 
 
