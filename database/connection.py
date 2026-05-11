@@ -228,6 +228,7 @@ def _runPendingMigrations():
                 "tycoon": "tycoon_i",
             }
             totalRenamed = 0
+            sourcesRenamed = 0
             for oldKey, newKey in renameMap.items():
                 # If the new key already exists (e.g. from a prior partial migration or fresh seed),
                 # delete the stale row instead of renaming on top of it.
@@ -244,9 +245,21 @@ def _runPendingMigrations():
                     ), {"new": newKey, "old": oldKey})
                     if result.rowcount:
                         totalRenamed += result.rowcount
-            if totalRenamed:
+                # Update any PendingReward.source that still points at the old
+                # key — keeps the achievements page from rendering the raw
+                # 'tycoon' / 'crescendo' fragments instead of a proper name.
+                srcResult = conn.execute(text(
+                    "UPDATE pending_rewards SET source = :new "
+                    "WHERE source = :old"
+                ), {"new": f"achievement:{newKey}", "old": f"achievement:{oldKey}"})
+                if srcResult.rowcount:
+                    sourcesRenamed += srcResult.rowcount
+            if totalRenamed or sourcesRenamed:
                 conn.commit()
-                logger.info(f"  Migration: renamed {totalRenamed} collided achievement keys")
+                if totalRenamed:
+                    logger.info(f"  Migration: renamed {totalRenamed} collided achievement keys")
+                if sourcesRenamed:
+                    logger.info(f"  Migration: rewrote {sourcesRenamed} pending_rewards.source values")
             else:
                 conn.rollback()
         except Exception as e:
