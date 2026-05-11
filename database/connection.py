@@ -216,6 +216,8 @@ def _runPendingMigrations():
         # Rename achievement keys that collided with existing card effect names:
         #   windfall_* → racket_*
         #   crescendo  → zenith
+        # Plus: single-tier tycoon → tycoon_i so existing user progress
+        # carries forward into the new four-tier ladder.
         try:
             renameMap = {
                 "windfall_i": "racket_i",
@@ -223,6 +225,7 @@ def _runPendingMigrations():
                 "windfall_iii": "racket_iii",
                 "windfall_iv": "racket_iv",
                 "crescendo": "zenith",
+                "tycoon": "tycoon_i",
             }
             totalRenamed = 0
             for oldKey, newKey in renameMap.items():
@@ -1206,9 +1209,21 @@ def _seedAchievements():
             {"key": "curator", "name": "Curator", "category": "guidance", "scope": "per_season", "sort_order": 130, "target": 15,
              "description": "Collect 15 unique cards this season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "tycoon", "name": "Tycoon", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 1000,
-             "description": "Earn 1,000 floobits in a single season.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": ["income_boost"], "deferred": False}},
+            # Tycoon tiers — floobits earned in a single season. Mirrors
+            # Magnate (spent side). Targets reflect post-curve income
+            # economy where a typical user earns 2-4k/season.
+            {"key": "tycoon_i", "name": "Tycoon I", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 750,
+             "description": "Earn 750 floobits in a single season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_ii", "name": "Tycoon II", "category": "guidance", "scope": "per_season", "sort_order": 141, "target": 2500,
+             "description": "Earn 2,500 floobits in a single season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_iii", "name": "Tycoon III", "category": "guidance", "scope": "per_season", "sort_order": 142, "target": 5500,
+             "description": "Earn 5,500 floobits in a single season.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_iv", "name": "Tycoon IV", "category": "guidance", "scope": "per_season", "sort_order": 143, "target": 10000,
+             "description": "Earn 10,000 floobits in a single season.",
+             "reward_config": {"floobits": 150, "packs": [], "powerups": ["income_boost"], "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},

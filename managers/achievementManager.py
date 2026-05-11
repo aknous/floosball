@@ -425,11 +425,12 @@ def onClairvoyant(session: Session, userId: int, currentSeason: int) -> Optional
     return recordProgress(session, userId, "sharp", currentSeason=currentSeason)
 
 
-def onFloobitsEarned(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
-    """Tycoon — track floobits earned this season. Queries CurrencyTransaction
-    for the season sum. Skips if season is 0 (e.g. admin grants outside a season)."""
+def onFloobitsEarned(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
+    """Tycoon tiers (I-IV) — track floobits earned this season. Queries
+    CurrencyTransaction for the season sum. Skips if season is 0
+    (e.g. admin grants outside a season)."""
     if not currentSeason:
-        return None
+        return []
     from database.models import CurrencyTransaction
     from sqlalchemy import func
     seasonEarned = session.query(func.coalesce(func.sum(CurrencyTransaction.amount), 0)).filter(
@@ -437,7 +438,11 @@ def onFloobitsEarned(session: Session, userId: int, currentSeason: int) -> Optio
         CurrencyTransaction.season == currentSeason,
         CurrencyTransaction.amount > 0,
     ).scalar() or 0
-    return recordProgress(session, userId, "tycoon", absolute=int(seasonEarned), currentSeason=currentSeason)
+    unlocked = []
+    for key in ("tycoon_i", "tycoon_ii", "tycoon_iii", "tycoon_iv"):
+        u = recordProgress(session, userId, key, absolute=int(seasonEarned), currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
 
 
 def syncCuratorProgress(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
