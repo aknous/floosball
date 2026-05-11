@@ -1196,6 +1196,15 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     # ── Strategy-Warping: Vagabond (FPx per swap used, inverse Stockpiler)
     if effectName == "vagabond":
         return {"perSwapXMult": round((0.03 + rn * 0.001) * editionScale, 2)}
+    if effectName == "parlay":
+        # FPx scaling with weekly Prognostication points via log-taper.
+        # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
+        # Counts auto-picks. kPoints=80 tunes the curve to span the
+        # realistic weekly score range (20-120 pts). coef grows with rating.
+        return {"rewardType": "mult",
+                "baseXMult": 1.0,
+                "coef": round((0.30 + rn * 0.012) * editionScale, 3),
+                "kPoints": 80}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.2 * editionScale, 1)}
 
 
@@ -1294,6 +1303,14 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "lossFP": round((4 + rn * 0.12) * editionScale, 1),
                 "baseFP": round((6 + rn * 0.20) * editionScale, 1),
                 "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+    if effectName == "medium":
+        # Weekly Prognostication accuracy bonus, three tiers tuned for
+        # ~70% user-average accuracy. 65-84% is the typical-hit zone;
+        # 85%+ is the chase tier (~15% of weeks).
+        return {"rewardType": "fp",
+                "lowFP": round((5.0 + rn * 0.15) * editionScale, 1),
+                "midFP": round((14.0 + rn * 0.30) * editionScale, 1),
+                "highFP": round((26.0 + rn * 0.50) * editionScale, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(3 * editionScale, 1)}
 
 
@@ -1374,24 +1391,6 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "kStreak": 4,
                 # growthPerTick kept for legacy callers / detail template
                 "growthPerTick": 0}
-    if effectName == "medium":
-        # Weekly accuracy bonus, three tiers tuned for ~70% user average.
-        # 65-84% is the "typical good week" payout — mid pushed higher so
-        # the bread-and-butter week pays HOLO-strong, not HOLO-floor.
-        # 85%+ is the chase tier (~15% of weeks).
-        return {"rewardType": "fp",
-                "lowFP": round((5.0 + rn * 0.15) * editionScale, 1),
-                "midFP": round((14.0 + rn * 0.30) * editionScale, 1),
-                "highFP": round((26.0 + rn * 0.50) * editionScale, 1)}
-    if effectName == "parlay":
-        # FPx multiplier scaling with weekly pickem points via log-taper.
-        # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
-        # Counts auto-picks. kPoints=80 tunes the curve to span the realistic
-        # weekly score range (20–120 pts). coef grows with player rating.
-        return {"rewardType": "mult",
-                "baseXMult": 1.0,
-                "coef": round((0.30 + rn * 0.012) * editionScale, 3),
-                "kPoints": 80}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
