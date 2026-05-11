@@ -1622,6 +1622,251 @@ async def get_card_effects(response: Response):
     return effects
 
 
+# ─── History (past seasons + record book) ──────────────────────────────────
+
+
+@app.get("/api/history/seasons")
+async def get_history_seasons(response: Response):
+    """List completed past seasons with champion + MVP for the History page."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import Season as DBSeason, Team as DBTeam, Player as DBPlayer
+    session = get_session()
+    try:
+        sm = floosball_app.seasonManager
+        currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        rows = (
+            session.query(DBSeason)
+            .filter(DBSeason.champion_team_id.isnot(None))
+            .filter(DBSeason.season_number < currentSeasonNum)
+            .order_by(DBSeason.season_number.desc())
+            .all()
+        )
+        seasons = []
+        for s in rows:
+            team = session.get(DBTeam, s.champion_team_id) if s.champion_team_id else None
+            mvp = session.get(DBPlayer, s.mvp_player_id) if s.mvp_player_id else None
+            seasons.append({
+                "seasonNumber": s.season_number,
+                "championTeamId": s.champion_team_id,
+                "championTeamName": getattr(team, 'name', None),
+                "championTeamAbbr": getattr(team, 'abbr', None),
+                "championTeamColor": getattr(team, 'color_primary', None),
+                "mvpPlayerId": s.mvp_player_id,
+                "mvpPlayerName": getattr(mvp, 'name', None),
+                "mvpPosition": getattr(mvp, 'position', None),
+            })
+        return build_success_response({"seasons": seasons})
+    finally:
+        session.close()
+
+
+@app.get("/api/history/standings")
+async def get_history_standings(season: int, response: Response):
+    """Final regular-season standings for a past season."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import Game as DBGame, Team as DBTeam
+    session = get_session()
+    try:
+        games = session.query(DBGame).filter(
+            DBGame.season == season,
+            DBGame.is_playoff == False,
+            DBGame.status == 'final',
+        ).all()
+        # Aggregate per team
+        records: Dict[int, Dict[str, int]] = {}
+        for g in games:
+            for tid in (g.home_team_id, g.away_team_id):
+                records.setdefault(tid, {
+                    "wins": 0, "losses": 0, "ties": 0,
+                    "pointsFor": 0, "pointsAgainst": 0,
+                })
+            home = records[g.home_team_id]
+            away = records[g.away_team_id]
+            home["pointsFor"] += g.home_score
+            home["pointsAgainst"] += g.away_score
+            away["pointsFor"] += g.away_score
+            away["pointsAgainst"] += g.home_score
+            if g.home_score > g.away_score:
+                home["wins"] += 1
+                away["losses"] += 1
+            elif g.away_score > g.home_score:
+                away["wins"] += 1
+                home["losses"] += 1
+            else:
+                home["ties"] += 1
+                away["ties"] += 1
+        teams = []
+        for tid, rec in records.items():
+            team = session.get(DBTeam, tid)
+            if not team:
+                continue
+            gp = rec["wins"] + rec["losses"] + rec["ties"]
+            winPct = (rec["wins"] + 0.5 * rec["ties"]) / gp if gp else 0
+            teams.append({
+                "teamId": tid,
+                "teamName": team.name,
+                "teamAbbr": team.abbr,
+                "teamColor": team.color_primary,
+                "wins": rec["wins"],
+                "losses": rec["losses"],
+                "ties": rec["ties"],
+                "pointsFor": rec["pointsFor"],
+                "pointsAgainst": rec["pointsAgainst"],
+                "winPct": round(winPct, 3),
+            })
+        teams.sort(key=lambda t: (-t["winPct"], -(t["pointsFor"] - t["pointsAgainst"]), -t["pointsFor"]))
+        return build_success_response({"season": season, "teams": teams})
+    finally:
+        session.close()
+
+
+# Stat category → (label, source field for record book queries)
+_RECORD_STATS = {
+    "passingYards":   {"label": "Passing Yards",   "json_key": "yards",     "json_field": "passing_stats",   "season_col": "passing_yards"},
+    "passingTds":     {"label": "Passing TDs",     "json_key": "tds",       "json_field": "passing_stats",   "season_col": "passing_tds"},
+    "rushingYards":   {"label": "Rushing Yards",   "json_key": "yards",     "json_field": "rushing_stats",   "season_col": "rushing_yards"},
+    "rushingTds":     {"label": "Rushing TDs",     "json_key": "runTds",    "json_field": "rushing_stats",   "season_col": "rushing_tds"},
+    "receivingYards": {"label": "Receiving Yards", "json_key": "yards",     "json_field": "receiving_stats", "season_col": "receiving_yards"},
+    "receivingTds":   {"label": "Receiving TDs",   "json_key": "tds",       "json_field": "receiving_stats", "season_col": "receiving_tds"},
+    "receptions":     {"label": "Receptions",      "json_key": "receptions","json_field": "receiving_stats", "season_col": "receptions"},
+    "fgMade":         {"label": "FGs Made",        "json_key": "fgs",       "json_field": "kicking_stats",   "season_col": None},
+    "fantasyPoints":  {"label": "Fantasy Points",  "json_key": None,        "json_field": None,              "season_col": "fantasy_points"},
+}
+
+
+@app.get("/api/history/records")
+async def get_history_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
+    """Top-N record book across single-game / single-season / career timeframes.
+
+    Returns top entries per stat category for each timeframe. Stats with no
+    denormalized season column (e.g. FG made) only return game records.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import (
+        GamePlayerStats as DBGamePlayerStats,
+        PlayerSeasonStats as DBPlayerSeasonStats,
+        Game as DBGame,
+        Player as DBPlayer,
+        Team as DBTeam,
+    )
+    from sqlalchemy import func, desc
+    session = get_session()
+    try:
+        result: Dict[str, Dict[str, list]] = {"game": {}, "season": {}, "career": {}}
+
+        for stat_key, meta in _RECORD_STATS.items():
+            # ── Single-game records ──────────────────────────────────────
+            game_rows = []
+            if stat_key == "fantasyPoints":
+                rows = (
+                    session.query(
+                        DBGamePlayerStats.player_id,
+                        DBGamePlayerStats.team_id,
+                        DBGamePlayerStats.fantasy_points,
+                        DBGame.season, DBGame.week,
+                    )
+                    .join(DBGame, DBGamePlayerStats.game_id == DBGame.id)
+                    .order_by(desc(DBGamePlayerStats.fantasy_points))
+                    .limit(limit).all()
+                )
+                game_rows = [(r.player_id, r.team_id, r.fantasy_points, r.season, r.week) for r in rows]
+            elif meta["json_field"]:
+                field_expr = func.json_extract(getattr(DBGamePlayerStats, meta["json_field"]), f'$.{meta["json_key"]}')
+                rows = (
+                    session.query(
+                        DBGamePlayerStats.player_id,
+                        DBGamePlayerStats.team_id,
+                        field_expr.label("v"),
+                        DBGame.season, DBGame.week,
+                    )
+                    .join(DBGame, DBGamePlayerStats.game_id == DBGame.id)
+                    .filter(field_expr.isnot(None))
+                    .order_by(desc(field_expr))
+                    .limit(limit).all()
+                )
+                game_rows = [(r.player_id, r.team_id, r.v, r.season, r.week) for r in rows if r.v is not None]
+            entries = []
+            for pid, tid, v, season, week in game_rows:
+                p = session.get(DBPlayer, pid)
+                t = session.get(DBTeam, tid) if tid else None
+                entries.append({
+                    "playerId": pid,
+                    "playerName": p.name if p else "Unknown",
+                    "teamAbbr": t.abbr if t else None,
+                    "value": int(v) if v is not None else 0,
+                    "season": season,
+                    "week": week,
+                })
+            result["game"][stat_key] = entries
+
+            # ── Single-season records (only stats with a denormalized col) ──
+            if meta["season_col"]:
+                col = getattr(DBPlayerSeasonStats, meta["season_col"])
+                rows = (
+                    session.query(
+                        DBPlayerSeasonStats.player_id,
+                        DBPlayerSeasonStats.team_id,
+                        col.label("v"),
+                        DBPlayerSeasonStats.season,
+                    )
+                    .order_by(desc(col))
+                    .limit(limit).all()
+                )
+                entries = []
+                for r in rows:
+                    if not r.v:
+                        continue
+                    p = session.get(DBPlayer, r.player_id)
+                    t = session.get(DBTeam, r.team_id) if r.team_id else None
+                    entries.append({
+                        "playerId": r.player_id,
+                        "playerName": p.name if p else "Unknown",
+                        "teamAbbr": t.abbr if t else None,
+                        "value": int(r.v),
+                        "season": r.season,
+                    })
+                result["season"][stat_key] = entries
+
+                # ── Career records ──────────────────────────────────────────
+                rows = (
+                    session.query(
+                        DBPlayerSeasonStats.player_id,
+                        func.sum(col).label("total"),
+                        func.count(DBPlayerSeasonStats.season).label("seasons_count"),
+                    )
+                    .group_by(DBPlayerSeasonStats.player_id)
+                    .order_by(desc("total"))
+                    .limit(limit).all()
+                )
+                entries = []
+                for r in rows:
+                    if not r.total:
+                        continue
+                    p = session.get(DBPlayer, r.player_id)
+                    entries.append({
+                        "playerId": r.player_id,
+                        "playerName": p.name if p else "Unknown",
+                        "value": int(r.total),
+                        "seasons": int(r.seasons_count),
+                    })
+                result["career"][stat_key] = entries
+
+        # Labels for the frontend so it doesn't have to hardcode them
+        labels = {k: v["label"] for k, v in _RECORD_STATS.items()}
+        return build_success_response({"records": result, "labels": labels})
+    finally:
+        session.close()
+
+
 @app.get("/api/reigning-champion")
 async def get_reigning_champion(response: Response):
     """Return the previous season's Floosbowl champion (for navbar display)."""
