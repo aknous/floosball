@@ -1896,6 +1896,167 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
         session.close()
 
 
+@app.get("/api/history/team-trends")
+async def get_history_team_trends(response: Response):
+    """Per-team per-season ELO + win%, for trend charts on the analytics tab.
+
+    Returns a season-indexed array. Each season element carries a list of
+    team entries with their final ELO and win percentage for that season.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamSeasonStats as DBTeamSeasonStats, Team as DBTeam
+    session = get_session()
+    try:
+        rows = (
+            session.query(
+                DBTeamSeasonStats.season,
+                DBTeamSeasonStats.team_id,
+                DBTeamSeasonStats.elo,
+                DBTeamSeasonStats.win_percentage,
+                DBTeamSeasonStats.wins,
+                DBTeamSeasonStats.losses,
+            )
+            .order_by(DBTeamSeasonStats.season.asc())
+            .all()
+        )
+        teamMeta = {t.id: t for t in session.query(DBTeam).all()}
+        seasonMap: Dict[int, List[Dict[str, Any]]] = {}
+        for r in rows:
+            team = teamMeta.get(r.team_id)
+            if not team:
+                continue
+            seasonMap.setdefault(r.season, []).append({
+                "teamId": r.team_id,
+                "name": team.name,
+                "abbr": team.abbr,
+                "color": team.color,
+                "elo": r.elo,
+                "winPct": round(r.win_percentage, 3) if r.win_percentage is not None else None,
+                "wins": r.wins,
+                "losses": r.losses,
+            })
+        seasons = sorted(seasonMap.keys())
+        return build_success_response({
+            "seasons": [{"season": s, "teams": seasonMap[s]} for s in seasons],
+            "teams": [
+                {"teamId": t.id, "name": t.name, "abbr": t.abbr, "color": t.color}
+                for t in sorted(teamMeta.values(), key=lambda t: t.abbr or t.name)
+            ],
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/history/league-scoring")
+async def get_history_league_scoring(response: Response):
+    """League-wide scoring trend per season: avg pts/game, totals."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import Game as DBGame
+    from sqlalchemy import func
+    session = get_session()
+    try:
+        # Per-season: number of regular-season finals, total combined points,
+        # avg per game (each game contributes home_score + away_score).
+        rows = session.query(
+            DBGame.season,
+            func.count(DBGame.id).label("games"),
+            func.sum(DBGame.home_score + DBGame.away_score).label("total_pts"),
+        ).filter(
+            DBGame.is_playoff == False,
+            DBGame.status == 'final',
+        ).group_by(DBGame.season).order_by(DBGame.season.asc()).all()
+        out = []
+        for r in rows:
+            games = int(r.games or 0)
+            total = int(r.total_pts or 0)
+            avg = round(total / games, 1) if games else 0.0
+            # Per-team avg = total / (games * 2) since each game has 2 teams
+            perTeam = round(total / (games * 2), 1) if games else 0.0
+            out.append({
+                "season": r.season,
+                "games": games,
+                "totalPoints": total,
+                "avgCombined": avg,
+                "avgPerTeam": perTeam,
+            })
+        return build_success_response({"seasons": out})
+    finally:
+        session.close()
+
+
+@app.get("/api/history/season-leaders")
+async def get_history_season_leaders(
+    response: Response,
+    season: Optional[int] = None,
+    limit: int = Query(default=10, ge=1, le=50),
+):
+    """Top-N players in the given season for each stat category.
+
+    Defaults to the current season when no `season` query param is given —
+    drives the in-season analytics view. Same stat list as the all-time
+    record book.
+    """
+    response.headers["Cache-Control"] = "public, max-age=120"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    targetSeason = season if season is not None else (
+        sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+    )
+    from database.connection import get_session
+    from database.models import (
+        PlayerSeasonStats as DBPlayerSeasonStats,
+        Player as DBPlayer, Team as DBTeam,
+    )
+    from sqlalchemy import desc
+    session = get_session()
+    try:
+        result: Dict[str, list] = {}
+        labels: Dict[str, str] = {}
+        for stat_key, meta in _RECORD_STATS.items():
+            if not meta["season_col"]:
+                continue
+            col = getattr(DBPlayerSeasonStats, meta["season_col"])
+            rows = (
+                session.query(
+                    DBPlayerSeasonStats.player_id,
+                    DBPlayerSeasonStats.team_id,
+                    col.label("v"),
+                )
+                .filter(DBPlayerSeasonStats.season == targetSeason)
+                .filter(col > 0)
+                .order_by(desc(col))
+                .limit(limit)
+                .all()
+            )
+            entries = []
+            for r in rows:
+                p = session.get(DBPlayer, r.player_id)
+                t = session.get(DBTeam, r.team_id) if r.team_id else None
+                entries.append({
+                    "playerId": r.player_id,
+                    "playerName": p.name if p else "Unknown",
+                    "teamAbbr": t.abbr if t else None,
+                    "teamColor": t.color if t else None,
+                    "value": int(r.v),
+                })
+            result[stat_key] = entries
+            labels[stat_key] = meta["label"]
+        return build_success_response({
+            "season": targetSeason,
+            "leaders": result,
+            "labels": labels,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/history/user-records")
 async def get_history_user_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
     """Top-N fantasy records across users.
