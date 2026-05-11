@@ -8730,9 +8730,26 @@ def get_pickem_leaderboard(season: Optional[int] = None):
             stats = pickemRepo.getUserSeasonStats(entry["userId"], seasonNum)
             entry["clairvoyantWeeks"] = stats["clairvoyantWeeks"]
 
+        # Enrich weekly entries with allAuto flag — True iff every pick this
+        # week was auto-picked. Drives an AUTO badge on the UI so users can
+        # tell who actually showed up to set their picks.
+        weekEntries = _buildEntries(weekRows)
+        if weekEntries:
+            autoRows = session.query(
+                PickEmPick.user_id,
+                func.min(PickEmPick.is_auto).label("min_auto"),
+                func.max(PickEmPick.is_auto).label("max_auto"),
+            ).filter(
+                PickEmPick.season == seasonNum,
+                PickEmPick.week == weeklyWeek,
+            ).group_by(PickEmPick.user_id).all()
+            autoFlagByUser = {r.user_id: bool(r.min_auto) for r in autoRows}
+            for entry in weekEntries:
+                entry["allAuto"] = autoFlagByUser.get(entry["userId"], False)
+
         return build_success_response({
             "season": {"entries": seasonEntries},
-            "week": {"week": weeklyWeek, "entries": _buildEntries(weekRows)},
+            "week": {"week": weeklyWeek, "entries": weekEntries},
         })
     finally:
         session.close()
