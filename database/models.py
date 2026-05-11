@@ -1,7 +1,7 @@
 """SQLAlchemy models for Floosball database."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from sqlalchemy import (
     Boolean,
@@ -1534,3 +1534,148 @@ class AppSetting(Base):
 
     def __repr__(self):
         return f"<AppSetting({self.key}={self.value!r})>"
+
+
+# ─── Anomaly system ─────────────────────────────────────────────────────────
+# User-attention-driven simulation-cracking layer. Players accumulate
+# "attention" from being equipped on cards, rostered in fantasy, followed,
+# etc. Past a threshold they enter a state ladder (stirring → erratic →
+# rampant → awakened). At awakened, they roll a signature ability that
+# fires in games. League-wide attention drives the Thinning event — one or
+# two rounds where anomalies spike league-wide. After a Thinning the Cores
+# fire a Reset which may purge awakened players permanently.
+
+
+class PlayerAttention(Base):
+    """Per-player per-season rolling attention score.
+
+    Mutated by the weekly aggregation tick. Decays 10%/week absent input.
+    Excess past the soft cap (100) accumulates into ``over_cap_carry``
+    which flows into the league aggregate toward the Thinning threshold.
+    """
+    __tablename__ = "player_attention"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    over_cap_carry: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    peak_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        UniqueConstraint('player_id', 'season', name='_player_attention_season_uc'),
+        Index('idx_attention_season_score', 'season', 'score'),
+    )
+
+    def __repr__(self):
+        return f"<PlayerAttention(player={self.player_id}, season={self.season}, score={self.score:.1f})>"
+
+
+class AnomalyState(Base):
+    """Per-player per-season state on the anomaly ladder.
+
+    Created when a player first crosses to stirring. State transitions
+    happen during the weekly tick. ``awakened`` is sticky — once reached,
+    the player stays awakened until purged in a Reset, even if their
+    attention later decays below the threshold.
+    """
+    __tablename__ = "anomaly_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'stable' | 'stirring' | 'erratic' | 'rampant' | 'awakened' | 'cleansed'
+    state: Mapped[str] = mapped_column(String(16), default='stable', nullable=False)
+    # Ability slug — only populated once the player has awakened.
+    ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # 'tremor' | 'disturbance' | 'breach' | 'singularity'
+    ability_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    awakened_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # How many seasons this player has carried an ability forward.
+    # Drives end-of-season tier decay.
+    seasons_carried: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_purged_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        UniqueConstraint('player_id', 'season', name='_anomaly_state_season_uc'),
+        Index('idx_anomaly_state_season_state', 'season', 'state'),
+    )
+
+    def __repr__(self):
+        return f"<AnomalyState(player={self.player_id}, s={self.season}, state={self.state}, ability={self.ability})>"
+
+
+class LeagueAnomalyState(Base):
+    """Singleton-per-season row tracking league-wide anomaly aggregate.
+
+    Aggregate is computed each weekly tick as sum of over-cap attention
+    across all players plus recent anomaly activity plus baseline pressure.
+    When it crosses ``threshold`` (randomized per season, hidden from users)
+    the Thinning fires.
+    """
+    __tablename__ = "league_anomaly_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    aggregate_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Hidden threshold for this season. Randomized in 600-1200 range.
+    threshold: Mapped[int] = mapped_column(Integer, default=900, nullable=False)
+    # How many Thinnings have fired this season.
+    thinnings_this_season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_thinning_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_reset_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Week through which the post-Reset suppression dampener is in effect.
+    suppression_window_ends_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Audit trail of every Core-issued rule patch this season (mirrors
+    # GameRules.patchHistory but persisted). Each entry includes the Core
+    # responsible, the news-text payload, the field touched, and old/new.
+    cores_patches_applied: Mapped[List[Dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<LeagueAnomalyState(season={self.season}, agg={self.aggregate_score:.1f}/{self.threshold})>"
+
+
+class AnomalyEvent(Base):
+    """Every fired anomaly — universal micro-glitch, personality-keyed, or
+    signature ability — logged for analytics, replay, and audit.
+
+    Powers the highlights feed's glitch markers and feeds the player-profile
+    'Recent Anomalies' surface. In-memory ring buffer for hot reads, DB row
+    for persistence.
+    """
+    __tablename__ = "anomaly_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    game_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    play_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 'micro' | 'personality' | 'signature'
+    layer: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Ability slug — only set when layer='signature'.
+    ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # The glitch-flavored line that surfaced in the play feed.
+    play_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Whether this fired during a Thinning round (boosted intensity).
+    during_thinning: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        Index('idx_anomaly_event_season_week', 'season', 'week'),
+        Index('idx_anomaly_event_player', 'player_id'),
+    )
+
+    def __repr__(self):
+        return f"<AnomalyEvent(player={self.player_id}, layer={self.layer}, ability={self.ability})>"
