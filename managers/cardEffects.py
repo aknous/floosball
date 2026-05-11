@@ -1376,12 +1376,13 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "growthPerTick": 0}
     if effectName == "medium":
         # Weekly accuracy bonus, three tiers tuned for ~70% user average.
-        # 65-84% is the "typical good week" payout — mid lands HOLO-band.
+        # 65-84% is the "typical good week" payout — mid pushed higher so
+        # the bread-and-butter week pays HOLO-strong, not HOLO-floor.
         # 85%+ is the chase tier (~15% of weeks).
         return {"rewardType": "fp",
-                "lowFP": round((4.0 + rn * 0.15) * editionScale, 1),
-                "midFP": round((10.0 + rn * 0.22) * editionScale, 1),
-                "highFP": round((20.0 + rn * 0.40) * editionScale, 1)}
+                "lowFP": round((5.0 + rn * 0.15) * editionScale, 1),
+                "midFP": round((14.0 + rn * 0.30) * editionScale, 1),
+                "highFP": round((26.0 + rn * 0.50) * editionScale, 1)}
     if effectName == "parlay":
         # FPx multiplier scaling with weekly pickem points via log-taper.
         # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
