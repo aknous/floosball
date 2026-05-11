@@ -974,114 +974,122 @@ def _backfillPlayerCareerStatsFromGames():
         fixed = 0
 
         for playerId in playerIds:
-            # Aggregate ALL game stats across ALL seasons
-            gameRows = conn.execute(text(
-                "SELECT gps.passing_stats, gps.rushing_stats, gps.receiving_stats, "
-                "       gps.kicking_stats, gps.defense_stats, gps.fantasy_points "
-                "FROM game_player_stats gps "
-                "JOIN games g ON gps.game_id = g.id "
-                "WHERE gps.player_id = :pid AND g.is_playoff = 0"
-            ), {"pid": playerId}).fetchall()
+            try:
+                # Aggregate ALL game stats across ALL seasons
+                gameRows = conn.execute(text(
+                    "SELECT gps.passing_stats, gps.rushing_stats, gps.receiving_stats, "
+                    "       gps.kicking_stats, gps.defense_stats, gps.fantasy_points "
+                    "FROM game_player_stats gps "
+                    "JOIN games g ON gps.game_id = g.id "
+                    "WHERE gps.player_id = :pid AND g.is_playoff = 0"
+                ), {"pid": playerId}).fetchall()
 
-            if not gameRows:
-                continue
+                if not gameRows:
+                    continue
 
-            passing = {}
-            rushing = {}
-            receiving = {}
-            kicking = {}
-            defense = {}
-            totalFp = 0
-            gamesPlayed = len(gameRows)
+                passing = {}
+                rushing = {}
+                receiving = {}
+                kicking = {}
+                defense = {}
+                totalFp = 0
+                gamesPlayed = len(gameRows)
 
-            for gPassing, gRushing, gReceiving, gKicking, gDefense, gFp in gameRows:
-                totalFp += gFp or 0
-                for src, dest in [
-                    (gPassing, passing), (gRushing, rushing),
-                    (gReceiving, receiving), (gKicking, kicking), (gDefense, defense)
-                ]:
-                    if src:
+                for gPassing, gRushing, gReceiving, gKicking, gDefense, gFp in gameRows:
+                    totalFp += gFp or 0
+                    for src, dest in [
+                        (gPassing, passing), (gRushing, rushing),
+                        (gReceiving, receiving), (gKicking, kicking), (gDefense, defense)
+                    ]:
+                        if not src:
+                            continue
                         d = _json.loads(src) if isinstance(src, str) else src
+                        # _json.loads('null') -> None; some legacy rows store 'null' here
+                        if not d:
+                            continue
                         for k, v in d.items():
                             if isinstance(v, (int, float)):
                                 dest[k] = dest.get(k, 0) + v
 
-            # Recompute derived stats
-            if passing.get('att', 0) > 0:
-                passing['compPerc'] = round(passing.get('comp', 0) / passing['att'] * 100, 1)
-                passing['ypc'] = round(passing.get('yards', 0) / passing['att'], 1)
-            if rushing.get('carries', 0) > 0:
-                rushing['ypc'] = round(rushing.get('yards', 0) / rushing['carries'], 1)
-            if receiving.get('receptions', 0) > 0:
-                receiving['ypr'] = round(receiving.get('yards', 0) / receiving['receptions'], 1)
-            if receiving.get('targets', 0) > 0:
-                receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
-            if kicking.get('fgAtt', 0) > 0:
-                kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
-            # Per-range FG percentages (under 20 / 20-40 / 40-50 / 50+).
-            # Each pair tracks attempts (xxxAtt) and makes (xxx).
-            for mkKey, attKey, percKey in (
-                ('fgUnder20', 'fgUnder20att', 'fgUnder20perc'),
-                ('fg20to40', 'fg20to40att', 'fg20to40perc'),
-                ('fg40to50', 'fg40to50att', 'fg40to50perc'),
-                ('fgOver50', 'fgOver50att', 'fgOver50perc'),
-            ):
-                att = kicking.get(attKey, 0) or 0
-                if att > 0:
-                    kicking[percKey] = round((kicking.get(mkKey, 0) or 0) / att * 100, 1)
+                # Recompute derived stats
+                if passing.get('att', 0) > 0:
+                    passing['compPerc'] = round(passing.get('comp', 0) / passing['att'] * 100, 1)
+                    passing['ypc'] = round(passing.get('yards', 0) / passing['att'], 1)
+                if rushing.get('carries', 0) > 0:
+                    rushing['ypc'] = round(rushing.get('yards', 0) / rushing['carries'], 1)
+                if receiving.get('receptions', 0) > 0:
+                    receiving['ypr'] = round(receiving.get('yards', 0) / receiving['receptions'], 1)
+                if receiving.get('targets', 0) > 0:
+                    receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
+                if kicking.get('fgAtt', 0) > 0:
+                    kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
+                # Per-range FG percentages (under 20 / 20-40 / 40-50 / 50+).
+                # Each pair tracks attempts (xxxAtt) and makes (xxx).
+                for mkKey, attKey, percKey in (
+                    ('fgUnder20', 'fgUnder20att', 'fgUnder20perc'),
+                    ('fg20to40', 'fg20to40att', 'fg20to40perc'),
+                    ('fg40to50', 'fg40to50att', 'fg40to50perc'),
+                    ('fgOver50', 'fgOver50att', 'fgOver50perc'),
+                ):
+                    att = kicking.get(attKey, 0) or 0
+                    if att > 0:
+                        kicking[percKey] = round((kicking.get(mkKey, 0) or 0) / att * 100, 1)
+                    else:
+                        kicking[percKey] = 0
+
+                # Check if career row exists
+                existing = conn.execute(text(
+                    "SELECT id FROM player_career_stats WHERE player_id = :pid AND season = 0"
+                ), {"pid": playerId}).fetchone()
+
+                if existing:
+                    conn.execute(text(
+                        "UPDATE player_career_stats SET "
+                        "  passing_stats = :passing, rushing_stats = :rushing, "
+                        "  receiving_stats = :receiving, kicking_stats = :kicking, "
+                        "  defense_stats = :defense, fantasy_points = :fp, "
+                        "  games_played = :gp, "
+                        "  passing_yards = :pyards, passing_tds = :ptds, passing_ints = :pints, "
+                        "  rushing_yards = :ryards, rushing_tds = :rtds, "
+                        "  receiving_yards = :recyards, receiving_tds = :rectds "
+                        "WHERE id = :id"
+                    ), {
+                        "passing": _json.dumps(passing) if passing else None,
+                        "rushing": _json.dumps(rushing) if rushing else None,
+                        "receiving": _json.dumps(receiving) if receiving else None,
+                        "kicking": _json.dumps(kicking) if kicking else None,
+                        "defense": _json.dumps(defense) if defense else None,
+                        "fp": totalFp, "gp": gamesPlayed, "id": existing[0],
+                        "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
+                        "pints": passing.get('ints', 0),
+                        "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
+                        "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
+                    })
                 else:
-                    kicking[percKey] = 0
-
-            # Check if career row exists
-            existing = conn.execute(text(
-                "SELECT id FROM player_career_stats WHERE player_id = :pid AND season = 0"
-            ), {"pid": playerId}).fetchone()
-
-            if existing:
-                conn.execute(text(
-                    "UPDATE player_career_stats SET "
-                    "  passing_stats = :passing, rushing_stats = :rushing, "
-                    "  receiving_stats = :receiving, kicking_stats = :kicking, "
-                    "  defense_stats = :defense, fantasy_points = :fp, "
-                    "  games_played = :gp, "
-                    "  passing_yards = :pyards, passing_tds = :ptds, passing_ints = :pints, "
-                    "  rushing_yards = :ryards, rushing_tds = :rtds, "
-                    "  receiving_yards = :recyards, receiving_tds = :rectds "
-                    "WHERE id = :id"
-                ), {
-                    "passing": _json.dumps(passing) if passing else None,
-                    "rushing": _json.dumps(rushing) if rushing else None,
-                    "receiving": _json.dumps(receiving) if receiving else None,
-                    "kicking": _json.dumps(kicking) if kicking else None,
-                    "defense": _json.dumps(defense) if defense else None,
-                    "fp": totalFp, "gp": gamesPlayed, "id": existing[0],
-                    "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
-                    "pints": passing.get('ints', 0),
-                    "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
-                    "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
-                })
-            else:
-                conn.execute(text(
-                    "INSERT INTO player_career_stats "
-                    "(player_id, season, games_played, fantasy_points, "
-                    " passing_yards, passing_tds, passing_ints, rushing_yards, rushing_tds, "
-                    " receiving_yards, receiving_tds, "
-                    " passing_stats, rushing_stats, receiving_stats, kicking_stats, defense_stats) "
-                    "VALUES (:pid, 0, :gp, :fp, :pyards, :ptds, :pints, :ryards, :rtds, "
-                    "        :recyards, :rectds, :passing, :rushing, :receiving, :kicking, :defense)"
-                ), {
-                    "pid": playerId, "gp": gamesPlayed, "fp": totalFp,
-                    "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
-                    "pints": passing.get('ints', 0),
-                    "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
-                    "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
-                    "passing": _json.dumps(passing) if passing else None,
-                    "rushing": _json.dumps(rushing) if rushing else None,
-                    "receiving": _json.dumps(receiving) if receiving else None,
-                    "kicking": _json.dumps(kicking) if kicking else None,
-                    "defense": _json.dumps(defense) if defense else None,
-                })
-            fixed += 1
+                    conn.execute(text(
+                        "INSERT INTO player_career_stats "
+                        "(player_id, season, games_played, fantasy_points, "
+                        " passing_yards, passing_tds, passing_ints, rushing_yards, rushing_tds, "
+                        " receiving_yards, receiving_tds, "
+                        " passing_stats, rushing_stats, receiving_stats, kicking_stats, defense_stats) "
+                        "VALUES (:pid, 0, :gp, :fp, :pyards, :ptds, :pints, :ryards, :rtds, "
+                        "        :recyards, :rectds, :passing, :rushing, :receiving, :kicking, :defense)"
+                    ), {
+                        "pid": playerId, "gp": gamesPlayed, "fp": totalFp,
+                        "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
+                        "pints": passing.get('ints', 0),
+                        "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
+                        "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
+                        "passing": _json.dumps(passing) if passing else None,
+                        "rushing": _json.dumps(rushing) if rushing else None,
+                        "receiving": _json.dumps(receiving) if receiving else None,
+                        "kicking": _json.dumps(kicking) if kicking else None,
+                        "defense": _json.dumps(defense) if defense else None,
+                    })
+                fixed += 1
+            except Exception as perPlayerErr:
+                logger.info(f"  Backfill: skipped player {playerId} ({perPlayerErr})")
+                continue
 
         conn.commit()
         logger.info(f"  Backfill: reconstructed career stats for {fixed} players from game data")
