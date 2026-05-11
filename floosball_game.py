@@ -10,6 +10,7 @@ import math
 import statistics
 from random import choice
 from time import sleep
+from typing import Dict
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
@@ -74,6 +75,26 @@ class PlayType(enum.Enum):
     ExtraPoint = 'Extra Point'
     Spike = 'Spike'
     Kneel = 'Kneel'
+
+
+# Layer 1 universal micro-glitch pool. Drawn at random when an anomaly
+# fires on a player. Pure flavor — does NOT alter stat outputs. The
+# user perceives an uncanny moment without explanation. Personality-
+# keyed and signature flavor pools land in follow-up commits.
+_LAYER_1_MICRO_GLITCHES = [
+    "The ball was already there when {player} turned around.",
+    "{player} caught it before the broadcast caught up.",
+    "Replay shows nothing unusual. The play feels off anyway.",
+    "{player} takes a half-step backward and the defender phases past.",
+    "The camera cut and {player} was past the line.",
+    "{player} blinks and the route is already finished.",
+    "Something flickered. {player} doesn't comment.",
+    "The down marker hadn't moved yet when {player} did.",
+    "{player} looks at the spot where the ball used to be.",
+    "The coverage dissolves around {player} for no observable reason.",
+    "{player} arrives at the catch point a beat before they should.",
+    "A glitch in the broadcast feed shows {player} in two positions.",
+]
     
 class PassType(enum.Enum):
     short = 1
@@ -632,6 +653,13 @@ class Game:
         else:
             from game_rules import GameRules
             self.gameRules = GameRules()
+
+        # Anomaly system — per-player attention snapshot loaded lazily on
+        # first play. Empty dict means "not loaded yet"; an entry of 0
+        # means "loaded, this player has no attention." Refreshed at the
+        # start of each game so mid-game DB churn isn't required.
+        self._anomalyAttention: Dict[int, float] = {}
+        self._anomalyAttentionLoaded: bool = False
 
         # Set up timing manager for game-level delays
         if timingManager is not None:
@@ -3836,6 +3864,11 @@ class Game:
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
 
+                    # Anomaly roll — fires Layer 1 micro-glitches for
+                    # players who've accumulated enough attention. Pure
+                    # flavor for v1; stat outputs unchanged.
+                    self._maybeFireAnomalies()
+
                     # Broadcast comprehensive game state (replaces playComplete, scoreUpdate, gameStateUpdate)
                     self.broadcastGameState(includeLastPlay=True)
 
@@ -6423,6 +6456,108 @@ class Game:
                 scoringPlay={'team': team.abbr, 'points': points, 'quarter': self.currentQuarter}
             )
             broadcaster.broadcast_sync(self.id, event)
+
+    # ── Anomaly system hooks ───────────────────────────────────────────
+    # Per-play roll for the user-attention-driven simulation-cracking
+    # layer. v1 only fires Layer 1 universal micro-glitches (pure play-
+    # text injection, no stat-output changes). Personality-keyed and
+    # signature abilities land in follow-up commits.
+
+    def _loadAnomalyAttention(self) -> None:
+        """Snapshot every active player's attention score for this season.
+
+        Called lazily on the first play of the game. The snapshot is
+        held in memory for the rest of the game — DB churn would be
+        prohibitive at per-play frequency.
+        """
+        try:
+            from database.connection import get_session
+            from database.models import PlayerAttention
+            session = get_session()
+            try:
+                rows = session.query(PlayerAttention).filter_by(
+                    season=self.seasonNumber or 0,
+                ).all()
+                self._anomalyAttention = {
+                    r.player_id: float(r.score) for r in rows
+                }
+            finally:
+                session.close()
+        except Exception as e:
+            # Anomaly system is purely additive — if anything fails,
+            # play out the game as if no one had any attention.
+            self._anomalyAttention = {}
+            try:
+                logging.getLogger("floosball.anomaly").debug(
+                    f"Anomaly attention load failed: {e}"
+                )
+            except Exception:
+                pass
+        self._anomalyAttentionLoaded = True
+
+    def _maybeFireAnomalies(self) -> None:
+        """Roll for Layer 1 micro-glitches on this play's participants.
+
+        Probability per player = attention / 1000. Awakened-threshold
+        attention (~100) gives ~10% per-play chance.
+        """
+        if not self._anomalyAttentionLoaded:
+            self._loadAnomalyAttention()
+        if not self._anomalyAttention:
+            return
+        # Gather candidates — the offense's primary actors on this play.
+        candidates = []
+        for attr in ('passer', 'receiver', 'runner', 'kicker'):
+            p = getattr(self.play, attr, None) if self.play is not None else None
+            if p is not None and getattr(p, 'id', None) is not None:
+                candidates.append(p)
+        for player in candidates:
+            attention = self._anomalyAttention.get(player.id, 0.0)
+            if attention <= 0:
+                continue
+            prob = min(0.5, attention / 1000.0)
+            if _random.random() < prob:
+                self._injectAnomalyLine(player)
+                # One anomaly per play is plenty for v1 — break before
+                # we surface two glitches on the same play.
+                break
+
+    def _injectAnomalyLine(self, player) -> None:
+        """Add a glitch line to the game feed + log the AnomalyEvent."""
+        line = _random.choice(_LAYER_1_MICRO_GLITCHES).format(player=player.name)
+        self.gameFeed.insert(0, {
+            'event': {
+                'text': line,
+                'isAnomaly': True,
+                'anomalyLayer': 'micro',
+                'playerId': player.id,
+                'playerName': player.name,
+                'quarter': self.currentQuarter,
+            }
+        })
+        # Best-effort persistence — failure here doesn't affect the game.
+        try:
+            from database.connection import get_session
+            from database.models import AnomalyEvent
+            session = get_session()
+            try:
+                evt = AnomalyEvent(
+                    player_id=player.id,
+                    season=self.seasonNumber or 0,
+                    week=self.week or 0,
+                    game_id=self.id,
+                    play_number=getattr(self.play, 'playNumber', None),
+                    layer='micro',
+                    ability=None,
+                    play_text=line,
+                    during_thinning=False,
+                )
+                session.add(evt)
+                session.commit()
+            finally:
+                session.close()
+        except Exception:
+            pass
 
 
 class Play():
