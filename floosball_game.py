@@ -77,18 +77,9 @@ class PlayType(enum.Enum):
     Kneel = 'Kneel'
 
 
-# Layer 1 universal micro-glitch pool. Drawn at random when an anomaly
-# fires on a player. **PURE FLAVOR** — does NOT alter stat outputs or
-# game state. The user sees a line in the feed implying the simulation
-# glitched to produce the result, but mechanically nothing changes.
-# (Mechanical impact lives in Layer 3 signature abilities — a player
-# has to awaken to actually break the game.)
-#
-# Lines work for both offensive AND defensive actors. Whoever made the
-# play happen — the receiver who caught it, the runner who broke it,
-# the tackler who stopped it, the defender who picked it off — gets
-# their name slotted in. The flavor explains "the player glitched,
-# that's how the play happened."
+# Layer 1 universal micro-glitch pool. **PURE FLAVOR** — no mechanical
+# impact. Fires for any anomalous player from Stirring up. The user
+# reads these and thinks "huh, that's curious." Subtle. Generic.
 _LAYER_1_MICRO_GLITCHES = [
     "{player}'s body did not occupy that space until the play resolved around them.",
     "{player} arrived through a gap that should not have existed.",
@@ -105,6 +96,32 @@ _LAYER_1_MICRO_GLITCHES = [
     "{player}'s movement skipped a frame the rest of the play did not.",
     "The simulation did not have {player} in this position. The simulation conceded.",
     "{player} resolved the play through a path that did not exist a moment earlier.",
+]
+
+# Layer 2 personality-flavored glitch pool. **STILL PURE FLAVOR** — no
+# mechanical impact. Fires for players at Erratic state and above. The
+# user reads these and thinks "okay, something weird is happening here."
+# More pronounced than Layer 1: the simulation is visibly failing
+# around the player, not just nudging.
+_LAYER_2_GLITCHES = [
+    "{player} passed through the play. The defenders did not register {player} until after.",
+    "{player}'s outline doubles for a moment. The defenders fail to converge on either.",
+    "Something resists {player} and gives way at the same instant.",
+    "{player} occupies three positions. Two of them should not be possible.",
+    "The defenders forget where {player} is for the duration of the play.",
+    "{player} moves and the field corrects itself behind them.",
+    "{player}'s body arrives before {player}'s decision did.",
+    "{player} bends the play around themselves. No one objects.",
+    "{player} is wrong in a way the simulation has not seen before.",
+    "Time will not behave near {player} anymore.",
+    "{player} steps somewhere that did not exist a half-second prior.",
+    "The space around {player} stops resolving. The play continues regardless.",
+    "{player} performs the play with no path that leads to it.",
+    "{player} did not move. The result moved to {player}.",
+    "Something failed to lock down around {player}. The lock did not return.",
+    "{player} crosses the field in a way the simulation has stopped checking.",
+    "{player} is no longer following the field's geometry.",
+    "{player}'s motion stops resembling motion. The play credits {player} anyway.",
 ]
     
 class PassType(enum.Enum):
@@ -665,11 +682,13 @@ class Game:
             from game_rules import GameRules
             self.gameRules = GameRules()
 
-        # Anomaly system — per-player attention snapshot loaded lazily on
-        # first play. Empty dict means "not loaded yet"; an entry of 0
-        # means "loaded, this player has no attention." Refreshed at the
-        # start of each game so mid-game DB churn isn't required.
+        # Anomaly system — per-player attention + state snapshot loaded
+        # lazily on first play. Empty dicts means "not loaded yet"; an
+        # entry of 0 / 'stable' means "loaded, this player has nothing
+        # going on." Refreshed at the start of each game so mid-game DB
+        # churn isn't required.
         self._anomalyAttention: Dict[int, float] = {}
+        self._anomalyState: Dict[int, str] = {}
         self._anomalyAttentionLoaded: bool = False
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
         # if this game is happening inside an active Cracking window.
@@ -6486,8 +6505,8 @@ class Game:
     # signature abilities land in follow-up commits.
 
     def _loadAnomalyAttention(self) -> None:
-        """Snapshot every active player's attention score for this season,
-        plus this game's Cracking multiplier.
+        """Snapshot every active player's attention score + state for
+        this season, plus this game's Cracking multiplier.
 
         Called lazily on the first play of the game. The snapshot is
         held in memory for the rest of the game — DB churn would be
@@ -6495,15 +6514,21 @@ class Game:
         """
         try:
             from database.connection import get_session
-            from database.models import PlayerAttention
+            from database.models import PlayerAttention, AnomalyState
             from managers.anomalyManager import getCrackingMultiplier
             session = get_session()
             try:
-                rows = session.query(PlayerAttention).filter_by(
+                attnRows = session.query(PlayerAttention).filter_by(
                     season=self.seasonNumber or 0,
                 ).all()
                 self._anomalyAttention = {
-                    r.player_id: float(r.score) for r in rows
+                    r.player_id: float(r.score) for r in attnRows
+                }
+                stateRows = session.query(AnomalyState).filter_by(
+                    season=self.seasonNumber or 0,
+                ).all()
+                self._anomalyState = {
+                    r.player_id: r.state for r in stateRows
                 }
             finally:
                 session.close()
@@ -6514,6 +6539,7 @@ class Game:
             # Anomaly system is purely additive — if anything fails,
             # play out the game as if no one had any attention.
             self._anomalyAttention = {}
+            self._anomalyState = {}
             self._crackingMultiplier = 1.0
             try:
                 from logger_config import get_logger
@@ -6579,35 +6605,55 @@ class Game:
                 continue
             prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
             if _random.random() < prob:
-                self._injectAnomalyLine(player)
+                # Pick the layer based on the player's state:
+                #   stable / stirring  -> Layer 1 (subtle, "huh")
+                #   erratic / rampant  -> 60% Layer 2, 40% Layer 1
+                #   awakened           -> 80% Layer 2, 20% Layer 1
+                #                         (Layer 3 ability fires separately,
+                #                         once per game, not per play)
+                #   cleansed           -> Layer 1 only (drained of weight)
+                state = self._anomalyState.get(player.id, 'stable')
+                if state in ('erratic', 'rampant'):
+                    layer = 'personality' if _random.random() < 0.6 else 'micro'
+                elif state == 'awakened':
+                    layer = 'personality' if _random.random() < 0.8 else 'micro'
+                else:
+                    layer = 'micro'
+                self._injectAnomalyLine(player, layer=layer)
                 # One anomaly per play. Multiple Awakened players on
                 # the field don't stack glitch lines.
                 return
 
-    def _injectAnomalyLine(self, player) -> None:
+    def _injectAnomalyLine(self, player, layer: str = 'micro') -> None:
         """Append a glitch line to the play's text + log the AnomalyEvent.
 
-        The play has already been formatted and inserted into the game
-        feed. Rather than create a separate event row, we attach the
-        glitch line as an extra field on the play (and append it to
-        playText) so it renders as part of the same play card.
+        layer:
+          - 'micro'       — Layer 1 generic pool, subtle, "huh that's curious"
+          - 'personality' — Layer 2 pool, more pronounced, "something is wrong"
 
-        - `play.glitchText` — the new field, holds the glitch line so
-          frontend renderers can style it distinctly from the main
-          play text (italic, dim, etc.).
-        - `play.glitchPlayerId` / `play.glitchPlayerName` — attribution
-          for hover or click-through.
-        - `play.playText` — also gets the line appended with a newline,
-          so feeds that read playText alone still surface the glitch.
+        Mechanics:
+          - `play.glitchText` — the new field, holds the glitch line so
+            frontend renderers can style it distinctly from the main
+            play text (italic, dim, etc.).
+          - `play.glitchPlayerId` / `play.glitchPlayerName` — attribution
+            for hover or click-through.
+          - `play.glitchLayer` — 'micro' or 'personality' so the frontend
+            can style L2 louder than L1.
+          - `play.playText` — also gets the line appended with a newline,
+            so feeds that read playText alone still surface the glitch.
         """
         if self.play is None:
             return
-        line = _random.choice(_LAYER_1_MICRO_GLITCHES).format(player=player.name)
+        if layer == 'personality':
+            pool = _LAYER_2_GLITCHES
+        else:
+            pool = _LAYER_1_MICRO_GLITCHES
+        line = _random.choice(pool).format(player=player.name)
         try:
             self.play.glitchText = line
             self.play.glitchPlayerId = player.id
             self.play.glitchPlayerName = player.name
-            self.play.glitchLayer = 'micro'
+            self.play.glitchLayer = layer
             existing = getattr(self.play, 'playText', '') or ''
             if existing:
                 self.play.playText = f"{existing}\n{line}"
@@ -6627,7 +6673,7 @@ class Game:
                     week=self.week or 0,
                     game_id=self.id,
                     play_number=getattr(self.play, 'playNumber', None),
-                    layer='micro',
+                    layer=layer,
                     ability=None,
                     play_text=line,
                     during_thinning=(self._crackingMultiplier > 1.0),
