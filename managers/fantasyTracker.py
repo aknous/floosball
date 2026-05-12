@@ -316,9 +316,25 @@ class FantasyTracker:
                 season=seasonNum, is_locked=True
             ).all()
             if not rosters:
+                # No rosters yet (pre-week-1 / between seasons) — return the
+                # shell with the active modifier attached so the fantasy page's
+                # weekly modifier badge still renders before lock-in.
+                preLockModifier = None
+                if isCurrentSeason and currentWeek >= 1:
+                    modRow = session.query(WeeklyModifier).filter_by(
+                        season=seasonNum, week=currentWeek
+                    ).first()
+                    if modRow:
+                        modName = modRow.modifier
+                        preLockModifier = {
+                            "name": modName,
+                            "displayName": sm.MODIFIER_DISPLAY.get(modName, modName.title()),
+                            "description": sm.MODIFIER_DESCRIPTIONS.get(modName, ""),
+                        }
                 return {
                     "season": seasonNum, "week": currentWeek,
                     "gamesActive": gamesActive or gamesCompleted, "entries": [],
+                    "modifier": preLockModifier,
                 }
 
             # ── 2. Collect all roster player IDs ──
@@ -925,6 +941,17 @@ class FantasyTracker:
         streakCounts = {
             eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
         }
+        # Peak-decay state — same hydration as seasonManager's week-end
+        # path. Without these, the live snapshot can't pay a decayed
+        # tail on a cold-week streak; the card just drops to base.
+        streakPeakOutputs = {
+            eq.id: float(eq.peak_output) for eq in userEquipped
+            if getattr(eq, 'peak_output', None) is not None
+        }
+        streakWeeksSinceBreak = {
+            eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0)
+            for eq in userEquipped
+        }
 
         rosterPlayerPositions = {
             pid: playerPositionMap.get(pid, 0) for pid in rosterPlayerIds
@@ -1277,6 +1304,8 @@ class FantasyTracker:
             rosterTotalTds=rosterTotalTds,
             rosterPlayerPositions=rosterPlayerPositions,
             streakCounts=streakCounts,
+            streakPeakOutputs=streakPeakOutputs,
+            streakWeeksSinceBreak=streakWeeksSinceBreak,
             userFavoriteTeamId=userFavoriteTeamId,
             favoriteTeamElo=favoriteTeamElo,
             leagueAverageElo=leagueAverageElo,

@@ -6364,6 +6364,12 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 # this week, and unequipping it skips the refund — letting users
                 # accumulate swaps by equip/unequip cycles.
                 prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
+                # Carry forward streak peak-decay state. Without this, the
+                # new week's EquippedCard row has peak_output=NULL, and a
+                # cold-week compute falls back to base instead of holding
+                # the prior peak / decaying from it.
+                prevPeakOutput = getattr(prev, 'peak_output', None)
+                prevWeeksSinceBreak = getattr(prev, 'weeks_since_break', 0) or 0
                 equippedRepo.save(EquippedCard(
                     user_id=user.id,
                     season=currentSeason,
@@ -6373,6 +6379,8 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     locked=gamesActive,
                     streak_count=prevStreak,
                     swap_bonus_active=prevSwapBonus,
+                    peak_output=prevPeakOutput,
+                    weeks_since_break=prevWeeksSinceBreak,
                 ))
             session.commit()
             equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
@@ -6590,9 +6598,19 @@ def setEquippedCards(
         # Track previously equipped cards before clearing
         previousEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
-        # Build streak count lookup so re-equipped cards keep their streak
+        # Build streak count lookup so re-equipped cards keep their streak,
+        # plus peak-decay state so the cold-week decay tail survives an
+        # equip change.
         prevStreakByCardId = {
             prev.user_card_id: getattr(prev, 'streak_count', 1) or 1
+            for prev in previousEquipped
+        }
+        prevPeakByCardId = {
+            prev.user_card_id: getattr(prev, 'peak_output', None)
+            for prev in previousEquipped
+        }
+        prevWeeksSinceByCardId = {
+            prev.user_card_id: getattr(prev, 'weeks_since_break', 0) or 0
             for prev in previousEquipped
         }
 
@@ -6610,6 +6628,8 @@ def setEquippedCards(
                 user_card_id=c.userCardId,
                 locked=False,
                 streak_count=prevStreakByCardId.get(c.userCardId, 1),
+                peak_output=prevPeakByCardId.get(c.userCardId),
+                weeks_since_break=prevWeeksSinceByCardId.get(c.userCardId, 0),
             ))
 
         # All-Pro swap bonuses — only apply when roster is locked

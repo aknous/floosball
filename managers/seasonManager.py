@@ -1215,6 +1215,11 @@ class SeasonManager:
                         # week boundary silently flips active grants to
                         # "used" — matching one of the swap-accounting bugs.
                         prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
+                        # Carry forward peak-decay state so a cold-week
+                        # streak compute on this new row can hold the
+                        # peak and decay from it.
+                        prevPeakOutput = getattr(prev, 'peak_output', None)
+                        prevWeeksSinceBreak = getattr(prev, 'weeks_since_break', 0) or 0
                         equippedRepo.save(EquippedCard(
                             user_id=userId,
                             season=season,
@@ -1224,6 +1229,8 @@ class SeasonManager:
                             locked=False,
                             streak_count=prevStreak,
                             swap_bonus_active=prevSwapBonus,
+                            peak_output=prevPeakOutput,
+                            weeks_since_break=prevWeeksSinceBreak,
                         ))
                     carried += 1
                     break
@@ -1764,16 +1771,39 @@ class SeasonManager:
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
                     )
 
-                    # Populate streak conditions for breakdown display
+                    # Populate streak conditions for breakdown display AND
+                    # pre-bump streakCounts to the PROJECTED value when the
+                    # condition is met. Without the bump, the persisted
+                    # breakdown for week N pays at the count from end-of-
+                    # week-N-1 (always one tick behind) — meaning the very
+                    # first week the streak triggers pays base only, which
+                    # contradicts the per-week growth users expect.
+                    # The actual eq.streak_count DB bump still happens
+                    # post-calc at line ~1914; this just keeps the calc-time
+                    # view in sync with the live snapshot path.
                     from managers.cardEffects import STREAK_CONFIGS as _streakConfigs
                     streakConditions = {}
                     for eq in userEquipped:
                         ec = eq.user_card.card_template.effect_config or {}
                         eName = ec.get("effectName", "")
-                        if eName in _streakConfigs:
-                            streakConditions[eq.id] = checkStreakCondition(
-                                eName, calcCtx, eq.user_card.card_template.player_id
-                            )
+                        if eName not in _streakConfigs:
+                            continue
+                        cfg = _streakConfigs[eName]
+                        # Weekly accumulators (touchdown_jackpot) compute
+                        # their own ticks from this week's data; don't bump.
+                        if cfg.get("isWeekly"):
+                            streakConditions[eq.id] = True
+                            continue
+                        condMet = checkStreakCondition(
+                            eName, calcCtx, eq.user_card.card_template.player_id
+                        )
+                        streakConditions[eq.id] = condMet
+                        # Apply ironclad modifier — if active, treat as met
+                        # for the bump too (matches the eq.streak_count
+                        # bump path below at the streak-management block).
+                        effectiveMet = condMet or (userModifier == "ironclad")
+                        if effectiveMet:
+                            calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
                     calcCtx.liveStreakConditionsMet = streakConditions
 
                     # Calculate card bonuses
@@ -1912,26 +1942,43 @@ class SeasonManager:
                             isWeekly = cfg.get("isWeekly", False)
                             if conditionMet:
                                 eq.streak_count = getattr(eq, 'streak_count', 0) + 1
-                                # Snapshot the in-streak output as the new peak
-                                # so a future streak-break can decay from it.
-                                # peak-decay only applies to season streaks
-                                # (skip weekly accumulators and noReset cards).
+                                # peak_output stays LOCKED during an active
+                                # streak — it represents the carried base
+                                # the streak began at. Only break weeks and
+                                # cold continuing weeks mutate it.
                                 if not isWeekly and not isNoReset:
-                                    weekOutput = self._extractStreakOutput(result, eq, effectConfig)
-                                    if weekOutput is not None:
-                                        eq.peak_output = weekOutput
                                     eq.weeks_since_break = 0
                             elif not isNoReset:
-                                # Streak just broke OR has been broken. Track decay tail.
                                 if not isWeekly:
-                                    if (eq.streak_count or 0) > 0:
-                                        # First cold week: streak just broke. The compute
-                                        # this week already paid the held peak; from next
-                                        # week we begin decaying.
-                                        eq.weeks_since_break = 1
+                                    primary = effectConfig.get("primary", {})
+                                    baseReward = primary.get("baseReward", 0)
+                                    growthPerTick = primary.get("growthPerTick", 0)
+                                    rewardType = primary.get("rewardType", "fp")
+                                    decay = 0.85 if rewardType == "mult" else 0.7
+                                    priorCount = eq.streak_count or 0
+                                    currentPeak = eq.peak_output
+                                    if currentPeak is not None and currentPeak > baseReward:
+                                        carriedBase = currentPeak
+                                    else:
+                                        carriedBase = baseReward
+                                    if priorCount > 0:
+                                        # Streak just broke. New peak = the peak the
+                                        # streak achieved. Compute this week already
+                                        # paid this value; store it so subsequent
+                                        # cold weeks decay from here.
+                                        newPeak = carriedBase + growthPerTick * (priorCount - 1)
+                                        if newPeak > baseReward:
+                                            eq.peak_output = newPeak
+                                        else:
+                                            eq.peak_output = None
+                                        eq.weeks_since_break = 0
                                     elif eq.peak_output is not None:
-                                        # Already in decay tail — increment week counter
-                                        # so next compute decays one step further.
+                                        # Continuing cold week — decay one step.
+                                        decayed = eq.peak_output * decay
+                                        if decayed <= baseReward:
+                                            eq.peak_output = None
+                                        else:
+                                            eq.peak_output = decayed
                                         eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
                                 eq.streak_count = 0
                             # If noReset=True and condition not met, streak stays unchanged
@@ -6131,7 +6178,7 @@ class SeasonManager:
         "payday": "Floobits earned are tripled",
         "grounded": "All FPx effects disabled",
         "wildcard": "All cards treated as matched",
-        "longshot": "Conditional thresholds halved",
+        "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
         "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
@@ -6350,34 +6397,6 @@ class SeasonManager:
                 session.close()
         except ImportError:
             pass
-
-    def _extractStreakOutput(self, calcResult, eq, effectConfig):
-        """Pull the in-streak output value of a streak card from a calc result.
-        Returns the FP, FPx, or floobits value depending on the card's rewardType
-        — or None if no matching breakdown was found.
-
-        Used by the peak-decay tracker to snapshot the card's output during an
-        active streak so a future streak break can decay from it.
-        """
-        if calcResult is None or not getattr(calcResult, 'cardBreakdowns', None):
-            return None
-        primary = (effectConfig or {}).get("primary", {})
-        rewardType = primary.get("rewardType", "fp")
-        slot = getattr(eq, 'slot_number', None)
-        if slot is None:
-            return None
-        for b in calcResult.cardBreakdowns:
-            if getattr(b, 'slotNumber', None) != slot:
-                continue
-            if rewardType == "mult":
-                v = float(getattr(b, 'primaryMult', 0) or 0)
-                return v if v > 0 else None
-            if rewardType == "floobits":
-                v = float(getattr(b, 'primaryFloobits', 0) or 0)
-                return v if v > 0 else None
-            v = float(getattr(b, 'primaryFP', 0) or 0)
-            return v if v > 0 else None
-        return None
 
     def _rollCultivationGrowth(self, eq, effectConfig, calcCtx, weekBonus=None):
         """Roll for Cultivation card growth. streak_count tracks growth level."""
