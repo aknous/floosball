@@ -2589,19 +2589,22 @@ def _computeParlay(primary, ctx, cardPlayerId, eqId):
 # ── Streak (K) ───────────────────────────────────────────────────────────────
 
 def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
-    """Generic streak computation with peak-decay carryover.
+    """Generic streak computation with locked-base carryover.
 
-    Active streak (condition met): output = base + perWeek * (streak - 1),
-    plus the existing peer synergy bonus per other streak card.
+    Carried base (peak_output) semantics:
+    - First-ever streak: peak_output is None → carriedBase = baseReward.
+    - During an active streak: peak_output is LOCKED at the value held
+      when the streak began. It does not change while the streak runs.
+    - When a streak breaks: the post-calc step writes peak_output =
+      carriedBase + growth × (priorCount - 1), the peak the streak
+      actually achieved. The break-week output also pays that peak.
+    - During continuing cold weeks: peak_output decays one step per
+      week (post-calc, multiplicative). Compute pays current peak_output.
+    - When a new streak begins: peak_output stays locked at its current
+      (decayed) value for the duration of the new streak.
 
-    Streak broken (condition not met) but card has a recorded peak from a
-    prior streak: output = max(base, peak * decay**weeksSinceBreak). FPx
-    cards use a slower decay (0.85) since their output range is narrow;
-    flat-FP and floobits cards use 0.7. Long streaks therefore pay a
-    multi-week tail instead of dropping straight to base on the first
-    cold week.
-
-    No peak recorded (never had a streak): output = base, current behavior.
+    Decay: 0.85 for FPx cards (narrow range), 0.7 for flat-FP/floobits.
+    Floor: peak_output is cleared to None when it falls to ≤ baseReward.
     """
     streakConfig = STREAK_CONFIGS.get(ctx._currentEffectName, {})
     isWeekly = streakConfig.get("isWeekly", False)
@@ -2621,72 +2624,57 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
     # Season streaks: live-aware computation
     streakCount = ctx.streakCounts.get(eqId, 1)
     conditionMet = ctx.liveStreakConditionsMet.get(eqId, True)
-    rewardType = primary.get("rewardType", "fp")
+
+    storedBase = ctx.streakPeakOutputs.get(eqId)
+    if storedBase is not None and storedBase > baseReward:
+        carriedBase = storedBase
+    else:
+        carriedBase = baseReward
 
     if not conditionMet:
-        # Streak isn't active this week. Apply peak-decay if a peak is recorded.
-        peak = ctx.streakPeakOutputs.get(eqId)
-        if peak is None or peak <= baseReward:
-            # No prior peak above base — pay base as usual.
-            result = _streakReward(primary, baseReward)
-            result.equation = f"{baseReward} base"
+        if streakCount > 0:
+            # Streak just broke this week. Pay the peak the streak achieved:
+            # carriedBase (the locked base) + growth × (priorCount - 1).
+            peakOutput = carriedBase + growthPerTick * (streakCount - 1)
+            result = _streakReward(primary, peakOutput)
+            result.equation = f"{round(peakOutput, 2)} (streak broke, paying peak)"
             return result
-        weeksSince = ctx.streakWeeksSinceBreak.get(eqId, 0)
-        decay = 0.85 if rewardType == "mult" else 0.7
-        decayed = peak * (decay ** weeksSince)
-        output = max(baseReward, decayed)
-        result = _streakReward(primary, output)
-        if weeksSince == 0:
-            result.equation = f"{round(peak, 2)} (streak broke, holding peak)"
+        # Continuing cold week — pay current carried base (already decayed
+        # one step per prior cold week via post-calc).
+        result = _streakReward(primary, carriedBase)
+        if carriedBase > baseReward:
+            result.equation = f"{round(carriedBase, 2)} (carried base, decaying)"
         else:
-            result.equation = (
-                f"{round(output, 2)} (peak {round(peak, 2)} × decay^{weeksSince})"
-            )
+            result.equation = f"{baseReward} base"
         return result
 
+    # Active streak — carriedBase is locked.
     peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
     effectiveCount = streakCount + peerBonus
 
-    # Ratcheting base — when a streak resumes after a break, the new
-    # base = the decayed peak at this moment (capped to ≥ original
-    # base). This way successful streaks leave a higher floor for
-    # subsequent streaks: a card whose previous run peaked at 1.32
-    # picks up around 1.20 if one cold week passed before the
-    # restart, growing from there rather than from 1.07 again. If
-    # the decay has already floored back to base, this resolves to
-    # the original base and behaves as a fresh streak.
-    peak = ctx.streakPeakOutputs.get(eqId)
-    weeksSince = ctx.streakWeeksSinceBreak.get(eqId, 0)
-    if peak is not None and peak > baseReward:
-        decay = 0.85 if rewardType == "mult" else 0.7
-        decayedPeak = peak * (decay ** weeksSince)
-        effectiveBase = max(baseReward, decayedPeak)
-    else:
-        effectiveBase = baseReward
-
     # Log-tapered streaks (Conviction): set when `coef` is in primary.
-    # output = effectiveBase + coef × ln(1 + effectiveCount / kStreak)
+    # output = carriedBase + coef × ln(1 + effectiveCount / kStreak)
     # Naturally plateaus on long streaks rather than scaling linearly.
     if "coef" in primary:
         import math
         coef = primary.get("coef", 0.0)
         kStreak = primary.get("kStreak", 4)
-        totalReward = effectiveBase + coef * math.log(1 + effectiveCount / kStreak)
+        totalReward = carriedBase + coef * math.log(1 + effectiveCount / kStreak)
         if peerBonus > 0:
-            eq = f"{round(effectiveBase, 2)} + {coef} × ln(1 + {effectiveCount}/{kStreak}) [{streakCount} wk + {peerBonus} synergy]"
+            eq = f"{round(carriedBase, 2)} + {coef} × ln(1 + {effectiveCount}/{kStreak}) [{streakCount} wk + {peerBonus} synergy]"
         else:
-            eq = f"{round(effectiveBase, 2)} + {coef} × ln(1 + {streakCount}/{kStreak})"
+            eq = f"{round(carriedBase, 2)} + {coef} × ln(1 + {streakCount}/{kStreak})"
         result = _streakReward(primary, totalReward)
         result.equation = eq
         return result
 
     growthTicks = max(0, effectiveCount - 1)
-    totalReward = effectiveBase + growthPerTick * growthTicks
-    baseLabel = "base" if effectiveBase == baseReward else "carried base"
+    totalReward = carriedBase + growthPerTick * growthTicks
+    baseLabel = "base" if carriedBase == baseReward else "carried base"
     if peerBonus > 0:
-        eq = f"{round(effectiveBase, 2)} {baseLabel} + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+        eq = f"{round(carriedBase, 2)} {baseLabel} + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
     else:
-        eq = f"{round(effectiveBase, 2)} {baseLabel} + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
+        eq = f"{round(carriedBase, 2)} {baseLabel} + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
     result = _streakReward(primary, totalReward)
     result.equation = eq
     return result
