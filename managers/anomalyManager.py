@@ -394,6 +394,20 @@ def _scoreToState(score: float) -> str:
     return bestState
 
 
+# Numeric rank for forward-only state progression. State in the DB is
+# the season high-water mark; per-play anomaly probability still tracks
+# raw attention via the score field, so glitches naturally taper when
+# attention decays. But the BADGE / TRANSITION LINE only ever advances.
+_STATE_RANK = {
+    'stable':    0,
+    'stirring':  1,
+    'erratic':   2,
+    'rampant':   3,
+    'awakened':  4,
+    'cleansed': -1,  # post-purge sentinel; treated as terminal-down
+}
+
+
 def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
     """Advance/regress every player's anomaly state based on current score.
 
@@ -442,7 +456,16 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
         if float(attn.score) >= AWAKEN_THRESHOLD:
             targetState = 'awakened'
 
-        if targetState == currentState:
+        # Forward-only progression. State stored in the DB is the
+        # season high-water mark; per-play anomaly probability still
+        # tracks raw attention via the score field, so glitches taper
+        # naturally when attention decays. But the badge / transition
+        # line only ever advances — prevents oscillation re-firing
+        # ("X is rampant" should fire once per season per player,
+        # not every time score crosses 60 from below).
+        currentRank = _STATE_RANK.get(currentState, 0)
+        targetRank = _STATE_RANK.get(targetState, 0)
+        if targetRank <= currentRank:
             continue
 
         if state is None:
@@ -465,8 +488,7 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             state.ability = 'placeholder'
 
         transitions += 1
-        # Only narrate forward transitions to non-stable states. Stale
-        # drops to 'stable' (rare without a Reset) are silent.
+        # Only narrate transitions to non-stable states.
         if targetState in STATE_TRANSITION_LINES:
             transitionEvents.append((attn.player_id, targetState))
 
