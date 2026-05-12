@@ -941,6 +941,17 @@ class FantasyTracker:
         streakCounts = {
             eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
         }
+        # Peak-decay state — same hydration as seasonManager's week-end
+        # path. Without these, the live snapshot can't pay a decayed
+        # tail on a cold-week streak; the card just drops to base.
+        streakPeakOutputs = {
+            eq.id: float(eq.peak_output) for eq in userEquipped
+            if getattr(eq, 'peak_output', None) is not None
+        }
+        streakWeeksSinceBreak = {
+            eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0)
+            for eq in userEquipped
+        }
 
         rosterPlayerPositions = {
             pid: playerPositionMap.get(pid, 0) for pid in rosterPlayerIds
@@ -1293,6 +1304,8 @@ class FantasyTracker:
             rosterTotalTds=rosterTotalTds,
             rosterPlayerPositions=rosterPlayerPositions,
             streakCounts=streakCounts,
+            streakPeakOutputs=streakPeakOutputs,
+            streakWeeksSinceBreak=streakWeeksSinceBreak,
             userFavoriteTeamId=userFavoriteTeamId,
             favoriteTeamElo=favoriteTeamElo,
             leagueAverageElo=leagueAverageElo,
