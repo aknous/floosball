@@ -78,29 +78,33 @@ class PlayType(enum.Enum):
 
 
 # Layer 1 universal micro-glitch pool. Drawn at random when an anomaly
-# fires on a player. Pure flavor — does NOT alter stat outputs. The
-# user perceives an uncanny moment without explanation. Personality-
-# keyed and signature flavor pools land in follow-up commits.
+# fires on a player. **PURE FLAVOR** — does NOT alter stat outputs or
+# game state. The user sees a line in the feed implying the simulation
+# glitched to produce the result, but mechanically nothing changes.
+# (Mechanical impact lives in Layer 3 signature abilities — a player
+# has to awaken to actually break the game.)
 #
-# Lines lean toward "the simulation itself can't quite account for what
-# just happened" — the result is recorded, the field is wrong, the
-# space around the player did something the rest of the field didn't.
+# Lines work for both offensive AND defensive actors. Whoever made the
+# play happen — the receiver who caught it, the runner who broke it,
+# the tackler who stopped it, the defender who picked it off — gets
+# their name slotted in. The flavor explains "the player glitched,
+# that's how the play happened."
 _LAYER_1_MICRO_GLITCHES = [
-    "The down advances. {player} was not at the marker a moment ago.",
-    "{player} is credited with the play. The path between them and the result is missing.",
-    "The defender was in position. {player} reached the marker regardless.",
-    "The yards do not add up. {player} has them anyway.",
-    "{player}'s position skips. The result holds.",
-    "The space between {player} and the defender did not behave.",
-    "Something fails to resolve around {player}. The play is logged.",
-    "{player} arrives where {player} shouldn't have been able to arrive.",
-    "The field rearranges quietly around {player}. The down moves.",
-    "The route ends in a place no one was watching. The yards count.",
-    "Time skips a half-beat for {player} alone.",
-    "{player} is closer to the marker than physics permits. The result holds.",
-    "The play resolves before anyone moves. {player} is credited.",
-    "The line of scrimmage shifts under {player}. No one calls it.",
-    "Something failed to update around {player}. The play stood.",
+    "{player}'s body did not occupy that space until the play resolved around them.",
+    "{player} arrived through a gap that should not have existed.",
+    "{player} acted on information the play hadn't produced yet.",
+    "{player}'s position skipped to the result.",
+    "{player} was somewhere else a half-second ago. The play does not reflect this.",
+    "{player} was in two positions at once. Only one of them mattered.",
+    "{player} reached the moment before the moment reached {player}.",
+    "Time did not behave around {player}.",
+    "{player} stepped through a gap in the geometry.",
+    "{player}'s shadow lags. The result does not.",
+    "{player} was already in position. {player} should not have been.",
+    "{player} occupied a space the rest of the field did not acknowledge.",
+    "{player}'s movement skipped a frame the rest of the play did not.",
+    "The simulation did not have {player} in this position. The simulation conceded.",
+    "{player} resolved the play through a path that did not exist a moment earlier.",
 ]
     
 class PassType(enum.Enum):
@@ -5537,6 +5541,13 @@ class Game:
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
                 'scoreChange': getattr(self.play, 'scoreChange', False),
+                # Anomaly attachments — null when no glitch fired on
+                # this play. When present, the frontend should render
+                # glitchText distinctly (italic, dim) below playText.
+                'glitchText': getattr(self.play, 'glitchText', None),
+                'glitchPlayerId': getattr(self.play, 'glitchPlayerId', None),
+                'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
+                'glitchLayer': getattr(self.play, 'glitchLayer', None),
                 'homeTeamScore': getattr(self.play, 'homeTeamScore', None),
                 'awayTeamScore': getattr(self.play, 'awayTeamScore', None),
                 'offensiveTeam': self.play.offense.abbr if hasattr(self.play, 'offense') else self.offensiveTeam.abbr,
@@ -6514,19 +6525,18 @@ class Game:
         self._anomalyAttentionLoaded = True
 
     def _maybeFireAnomalies(self) -> None:
-        """Roll for Layer 1 micro-glitches and apply impact.
+        """Roll for Layer 1 micro-glitches — flavor only.
 
-        Layer 1 is the noise floor — it fires on the play's ball-carrier
-        (the runner or receiver on a positive-yardage play) and ADDS
-        bonus yards that the simulation can't quite account for. The
-        bonus updates the player's stats and the play's displayed
-        yardage, but doesn't move the field — so the box score and the
-        field state stop matching, which is the "simulation is wrong"
-        signal.
+        Layer 1 is the noise floor. Pure cosmetic — the line appends to
+        the play's text as a separate sentence, but the simulation's
+        stats and field state are NOT modified. Mechanical impact lives
+        in Layer 3 (signature abilities at Awakened state).
 
-        Probability per ball-carrier = attention / 1000, scaled by the
-        active Cracking multiplier. Bonus is clamped to avoid retroactive
-        first-down crossings or red-zone overflow.
+        Candidates are the play's primary actors on either side of the
+        ball — the offensive player who advanced, and the defender who
+        stopped them or made the disruption. Each candidate with
+        attention rolls independently; the first hit fires the line and
+        we move on.
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
@@ -6535,85 +6545,76 @@ class Game:
         p = self.play
         if p is None:
             return
-        # Only fire on positive-yardage offensive plays — runs and
-        # completions. Sacks, turnovers, FGs, kicks, incompletions all
-        # skip Layer 1 (their flavor lives in Layer 2 / personality-
-        # keyed pools, which haven't shipped yet).
-        yardage = getattr(p, 'yardage', 0) or 0
-        if yardage <= 0:
-            return
-        if getattr(p, 'isSack', False) or getattr(p, 'isTurnover', False):
-            return
-
-        # Pick the ball-carrier — the player who actually moved with
-        # the ball. Receiver for pass plays, runner for run plays.
-        ballCarrier = getattr(p, 'receiver', None) or getattr(p, 'runner', None)
-        if ballCarrier is None or getattr(ballCarrier, 'id', None) is None:
-            return
-
-        attention = self._anomalyAttention.get(ballCarrier.id, 0.0)
-        if attention <= 0:
-            return
-        prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
-        if _random.random() >= prob:
+        # Skip plays with no meaningful result — incompletions,
+        # throwaways, spikes, kneels. The glitch is about the player's
+        # role in the play; no role means nothing to glitch.
+        hadResult = (
+            getattr(p, 'yardage', 0) != 0
+            or getattr(p, 'isTouchdown', False)
+            or getattr(p, 'isTurnover', False)
+            or getattr(p, 'isInterception', False)
+            or getattr(p, 'isFumbleLost', False)
+            or getattr(p, 'isSack', False)
+            or getattr(p, 'scoreChange', False)
+        )
+        if not hadResult:
             return
 
-        # Compute bonus yardage. Clamp so the glitched yardage stays
-        # short of the first-down marker AND short of the end zone —
-        # we don't want retroactive scoring or chain-moving since the
-        # game state has already advanced past this play.
-        bonus = _random.randint(3, 10)
-        maxBonus = max(0, getattr(self, 'yardsToFirstDown', 99) - 1)
-        maxBonus = min(maxBonus, max(0, getattr(self, 'yardsToEndzone', 99) - 1))
-        bonus = min(bonus, maxBonus)
-        if bonus < 1:
-            # No safe bonus to apply (near first down or goal). Skip
-            # rather than fire a glitch line with no mechanical kick.
+        # Gather every primary actor — offensive ball-mover plus the
+        # defenders who altered the play. Order doesn't matter; we
+        # shuffle so neither side has a structural firing advantage.
+        candidates = []
+        for attr in ('receiver', 'runner', 'passer',
+                     'tackledBy', 'sackedBy', 'interceptedBy', 'forcedFumbleBy'):
+            actor = getattr(p, attr, None)
+            if actor is not None and getattr(actor, 'id', None) is not None:
+                candidates.append(actor)
+        if not candidates:
             return
+        _random.shuffle(candidates)
 
-        # Apply to ball-carrier + passer (if pass play).
-        isRegular = bool(self.isRegularSeasonGame)
-        passer = getattr(p, 'passer', None)
+        for player in candidates:
+            attention = self._anomalyAttention.get(player.id, 0.0)
+            if attention <= 0:
+                continue
+            prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
+            if _random.random() < prob:
+                self._injectAnomalyLine(player)
+                # One anomaly per play. Multiple Awakened players on
+                # the field don't stack glitch lines.
+                return
+
+    def _injectAnomalyLine(self, player) -> None:
+        """Append a glitch line to the play's text + log the AnomalyEvent.
+
+        The play has already been formatted and inserted into the game
+        feed. Rather than create a separate event row, we attach the
+        glitch line as an extra field on the play (and append it to
+        playText) so it renders as part of the same play card.
+
+        - `play.glitchText` — the new field, holds the glitch line so
+          frontend renderers can style it distinctly from the main
+          play text (italic, dim, etc.).
+        - `play.glitchPlayerId` / `play.glitchPlayerName` — attribution
+          for hover or click-through.
+        - `play.playText` — also gets the line appended with a newline,
+          so feeds that read playText alone still surface the glitch.
+        """
+        if self.play is None:
+            return
+        line = _random.choice(_LAYER_1_MICRO_GLITCHES).format(player=player.name)
         try:
-            if ballCarrier is getattr(p, 'receiver', None):
-                ballCarrier.addReceiveYards(bonus, isRegular)
-                if passer is not None:
-                    passer.addPassYards(bonus, isRegular)
-            elif ballCarrier is getattr(p, 'runner', None):
-                ballCarrier.addRushYards(bonus, isRegular)
-        except Exception:
-            # Stat update failed — abort the glitch entirely so the
-            # line doesn't fire without backing impact.
-            return
-
-        # Update play's reported yardage so the feed shows the inflated
-        # number rather than the original.
-        try:
-            p.yardage = yardage + bonus
+            self.play.glitchText = line
+            self.play.glitchPlayerId = player.id
+            self.play.glitchPlayerName = player.name
+            self.play.glitchLayer = 'micro'
+            existing = getattr(self.play, 'playText', '') or ''
+            if existing:
+                self.play.playText = f"{existing}\n{line}"
+            else:
+                self.play.playText = line
         except Exception:
             pass
-
-        self._injectAnomalyLine(ballCarrier, bonusYards=bonus)
-
-    def _injectAnomalyLine(self, player, bonusYards: int = 0) -> None:
-        """Add a glitch line to the game feed + log the AnomalyEvent.
-
-        bonusYards: yardage the glitch retroactively added to the play.
-        Surfaces in the feed metadata so the frontend can render
-        "+N glitch yards" alongside the line.
-        """
-        line = _random.choice(_LAYER_1_MICRO_GLITCHES).format(player=player.name)
-        self.gameFeed.insert(0, {
-            'event': {
-                'text': line,
-                'isAnomaly': True,
-                'anomalyLayer': 'micro',
-                'playerId': player.id,
-                'playerName': player.name,
-                'bonusYards': bonusYards,
-                'quarter': self.currentQuarter,
-            }
-        })
         # Best-effort persistence — failure here doesn't affect the game.
         try:
             from database.connection import get_session
@@ -6715,6 +6716,12 @@ class Play():
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
+        # Anomaly system attachments — populated when a Layer 1 glitch
+        # fires on this play. None / empty when no anomaly happened.
+        self.glitchText = None          # The glitch flavor line
+        self.glitchPlayerId = None      # Player whose anomaly triggered
+        self.glitchPlayerName = None
+        self.glitchLayer = None         # 'micro' for Layer 1 (Layers 2-3 land later)
         self.insights = {}              # Play insights dict — populated during execution
 
     def _captureBlitzer(self, scheme, defGameplanObj):
