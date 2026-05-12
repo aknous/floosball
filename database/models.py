@@ -459,6 +459,12 @@ class TeamSeasonStats(Base):
     # games this team participated in. Drives the Highlight Reel card
     # projection (pays per favorite-team big play).
     big_plays: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Longest win-or-loss streak (abs value) this season. Persisted so
+    # the Gone Streaking card retains its season-long high after backend
+    # restarts — without this, peakStreak lives only on the in-memory
+    # Team object and resets to 0 every boot.
+    peak_streak: Mapped[int] = mapped_column(Integer, default=0)
     
     # Stats stored as JSON (detailed breakdown)
     offense_stats: Mapped[Optional[dict]] = mapped_column(JSON)

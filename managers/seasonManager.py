@@ -8611,6 +8611,11 @@ class SeasonManager:
                 # average survives backend restarts.
                 db_stats.big_plays = stats.get('bigPlays', 0)
 
+                # Peak streak — persisted so Gone Streaking survives
+                # restarts. peakStreak is the longest win-or-loss run
+                # (abs value) seen this season.
+                db_stats.peak_streak = stats.get('peakStreak', 0)
+
                 # JSON for detailed breakdown
                 db_stats.offense_stats = stats.get('Offense', {})
                 db_stats.defense_stats = stats.get('Defense', {})
