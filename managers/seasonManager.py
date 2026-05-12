@@ -553,7 +553,7 @@ class SeasonManager:
             # Anomaly system weekly tick: applies attention decay,
             # accumulates this week's engagement contributions, advances
             # the state ladder, and recomputes the league-wide aggregate
-            # toward the Thinning threshold. Wrapped defensively so a
+            # toward the Cracking threshold. Wrapped defensively so a
             # failure in this layer never blocks the actual game loop.
             try:
                 from managers.anomalyManager import weeklyTick as anomalyWeeklyTick

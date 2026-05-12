@@ -5,12 +5,12 @@ Responsibilities:
     sources (equipped cards, fantasy rosters, follows, favorite-team
     fan presence). Decay 10%/week absent fresh input.
   * Soft-cap individual attention at 100; excess flows into a per-
-    season league aggregate that drives the Thinning trigger.
+    season league aggregate that drives the Cracking trigger.
   * Manage state-ladder transitions (stable → stirring → erratic →
     rampant → awakened). Awakened is sticky until a Reset purge.
-  * Detect the Thinning when aggregate crosses the season's hidden
+  * Detect the Cracking when aggregate crosses the season's hidden
     threshold; tag the next 1–2 rounds for amplified anomaly rolls.
-  * Fire the Reset post-Thinning: roll purge per awakened player,
+  * Fire the Reset post-Cracking: roll purge per awakened player,
     cleanse losers, scale survivors back, open suppression window.
 
 The manager is called once per week from the season loop's
@@ -50,7 +50,7 @@ logger = get_logger("floosball.anomaly")
 # ─── Tuning constants ───────────────────────────────────────────────────────
 
 # Env-override for testing: set FLOOSBALL_ANOMALY_FAST=1 to compress
-# every threshold so a fresh sim run can produce Awakenings + Thinnings
+# every threshold so a fresh sim run can produce Awakenings + Crackings
 # within a single fast-mode season. Boosts contributions, slashes
 # thresholds, and raises per-play roll caps.
 _ANOMALY_FAST = os.environ.get('FLOOSBALL_ANOMALY_FAST', '').lower() in ('1', 'true', 'yes')
@@ -91,7 +91,7 @@ else:
     ]
     AWAKEN_THRESHOLD = 90.0
 
-# League aggregate threshold for Thinning trigger.
+# League aggregate threshold for Cracking trigger.
 # Randomized per season in this range; the chosen value is hidden.
 # Fast mode pulls it way down so any decently-engaged season triggers.
 THRESHOLD_MIN = 80 if _ANOMALY_FAST else 600
@@ -101,19 +101,19 @@ THRESHOLD_MAX = 200 if _ANOMALY_FAST else 1200
 # is floored league-wide.
 SUPPRESSION_WINDOW_WEEKS = 2
 
-# Each subsequent Thinning in the same season triggers at a reduced
+# Each subsequent Cracking in the same season triggers at a reduced
 # threshold so engaged leagues get multiple events.
-THRESHOLD_DECAY_AFTER_THINNING = 0.75
+THRESHOLD_DECAY_AFTER_CRACKING = 0.75
 
-# Thinning duration — number of rounds (weeks) the Thinning is active.
-# 1 round for first Thinning, 2 rounds if the aggregate was 50%+ over
+# Cracking duration — number of rounds (weeks) the Cracking is active.
+# 1 round for first Cracking, 2 rounds if the aggregate was 50%+ over
 # the threshold when it fired (runaway league signal).
-THINNING_DURATION_DEFAULT = 1
-THINNING_DURATION_RUNAWAY = 2
-THINNING_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Thinning
+CRACKING_DURATION_DEFAULT = 1
+CRACKING_DURATION_RUNAWAY = 2
+CRACKING_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Cracking
 
-# During a Thinning round, per-play anomaly probabilities multiply.
-THINNING_MULTIPLIER = 8.0 if _ANOMALY_FAST else 5.0
+# During a Cracking round, per-play anomaly probabilities multiply.
+CRACKING_MULTIPLIER = 8.0 if _ANOMALY_FAST else 5.0
 
 # Reset purge dodge multipliers, keyed by personality meta-awareness tier.
 # Aware-tier players resist purges better — they perceive the Cores'
@@ -127,7 +127,7 @@ PARTIALLY_AWARE_PERSONALITIES = {'paranoid', 'mystic'}
 
 # Post-Reset aftermath scaling. league aggregate is multiplied by this to
 # leave a partial baseline (the Cores didn't fully zero things) — high
-# enough that another Thinning is plausible later, low enough to give
+# enough that another Cracking is plausible later, low enough to give
 # room for buildup.
 RESET_AGGREGATE_SCALE = 0.2
 
@@ -136,7 +136,7 @@ RESET_AGGREGATE_SCALE = 0.2
 RESET_SURVIVOR_ATTENTION_SCALE = 0.5
 
 # Post-Reset suppression window — the Cores actively dampen anomaly
-# rates league-wide for this many weeks. During suppression, no Thinning
+# rates league-wide for this many weeks. During suppression, no Cracking
 # can fire even if aggregate climbs again.
 RESET_SUPPRESSION_WEEKS = 2
 
@@ -156,14 +156,14 @@ def weeklyTick(seasonNumber: int, week: int) -> None:
       2. Compute this week's attention contributions from each
          engagement source and add them in.
       3. Enforce soft cap; excess flows into over_cap_carry (per
-         player, accumulates over the season toward the Thinning).
+         player, accumulates over the season toward the Cracking).
       4. Update state ladder (stable → ... → awakened).
-      5. Recompute league aggregate; (Thinning trigger detection
+      5. Recompute league aggregate; (Cracking trigger detection
          lands in a follow-up commit).
     """
     session = get_session()
     try:
-        # If a Thinning window has just ended without a Reset, fire one
+        # If a Cracking window has just ended without a Reset, fire one
         # before this week's updates so the purge applies to current
         # attention values rather than this week's freshly-incremented
         # ones.
@@ -206,10 +206,10 @@ def getAnomalyState(playerId: int, seasonNumber: int) -> Optional[AnomalyState]:
         session.close()
 
 
-def isThinningWeek(seasonNumber: int, week: int) -> bool:
-    """Return True if the given week is currently inside a Thinning window.
+def isCrackingWeek(seasonNumber: int, week: int) -> bool:
+    """Return True if the given week is currently inside a Cracking window.
 
-    A Thinning lasts 1 or 2 consecutive rounds starting at
+    A Cracking lasts 1 or 2 consecutive rounds starting at
     ``last_thinning_week``. Outside the window, returns False.
     """
     session = get_session()
@@ -218,22 +218,22 @@ def isThinningWeek(seasonNumber: int, week: int) -> bool:
         if state is None or state.last_thinning_week is None:
             return False
         start = state.last_thinning_week
-        # Inspect the patch trail to figure out duration. The Thinning
+        # Inspect the patch trail to figure out duration. The Cracking
         # trigger records its planned duration in the cores_patches_applied
-        # list (see _triggerThinning); 1 by default.
-        duration = THINNING_DURATION_DEFAULT
+        # list (see _triggerCracking); 1 by default.
+        duration = CRACKING_DURATION_DEFAULT
         for entry in (state.cores_patches_applied or []):
             if entry.get('event') == 'thinning_trigger' and entry.get('start_week') == start:
-                duration = entry.get('duration', THINNING_DURATION_DEFAULT)
+                duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
                 break
         return start <= week < start + duration
     finally:
         session.close()
 
 
-def getThinningMultiplier(seasonNumber: int, week: int) -> float:
-    """Per-play anomaly probability multiplier. 1.0 normally, 5.0 during Thinning."""
-    return THINNING_MULTIPLIER if isThinningWeek(seasonNumber, week) else 1.0
+def getCrackingMultiplier(seasonNumber: int, week: int) -> float:
+    """Per-play anomaly probability multiplier. 1.0 normally, 5.0 during Cracking."""
+    return CRACKING_MULTIPLIER if isCrackingWeek(seasonNumber, week) else 1.0
 
 
 # ─── Decay ──────────────────────────────────────────────────────────────────
@@ -436,11 +436,11 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
         )
 
 
-# ─── League aggregate + Thinning trigger ────────────────────────────────────
+# ─── League aggregate + Cracking trigger ────────────────────────────────────
 
 
 def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> None:
-    """Recompute the league-wide aggregate and check Thinning threshold.
+    """Recompute the league-wide aggregate and check Cracking threshold.
 
     Aggregate inputs (v1):
       * Sum of over_cap_carry across all PlayerAttention rows.
@@ -478,58 +478,58 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         f"(over-cap sum={overCapSum:.1f}, pressure={backgroundPressure:.1f})"
     )
 
-    # Thinning trigger detection — if aggregate has crossed the hidden
-    # threshold AND we're not already inside an active Thinning window
+    # Cracking trigger detection — if aggregate has crossed the hidden
+    # threshold AND we're not already inside an active Cracking window
     # AND we're not in a post-Reset suppression window, fire the
-    # Thinning for the next round.
+    # Cracking for the next round.
     if state.aggregate_score >= state.threshold:
         inSuppression = (
             state.suppression_window_ends_week is not None
             and week < state.suppression_window_ends_week
         )
-        # Block re-triggering inside an active Thinning window. The
+        # Block re-triggering inside an active Cracking window. The
         # Reset that follows clears last_thinning_week's "active" status
         # by setting last_reset_week, so subsequent crossings only fire
-        # once the previous Thinning has been resolved.
-        inActiveThinning = False
+        # once the previous Cracking has been resolved.
+        inActiveCracking = False
         if state.last_thinning_week is not None:
             # Pull duration from the audit trail.
-            duration = THINNING_DURATION_DEFAULT
+            duration = CRACKING_DURATION_DEFAULT
             for entry in (state.cores_patches_applied or []):
                 if (entry.get('event') == 'thinning_trigger'
                         and entry.get('start_week') == state.last_thinning_week):
-                    duration = entry.get('duration', THINNING_DURATION_DEFAULT)
-            thinningEndWeek = state.last_thinning_week + duration - 1
+                    duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
+            crackingEndWeek = state.last_thinning_week + duration - 1
             # Active window: between trigger and next-week Reset.
-            if week <= thinningEndWeek:
-                inActiveThinning = True
-            elif state.last_reset_week is None or state.last_reset_week < thinningEndWeek + 1:
-                # Thinning window has ended but Reset hasn't yet fired.
-                inActiveThinning = True
-        if not inSuppression and not inActiveThinning:
-            _triggerThinning(state, week)
+            if week <= crackingEndWeek:
+                inActiveCracking = True
+            elif state.last_reset_week is None or state.last_reset_week < crackingEndWeek + 1:
+                # Cracking window has ended but Reset hasn't yet fired.
+                inActiveCracking = True
+        if not inSuppression and not inActiveCracking:
+            _triggerCracking(state, week)
 
 
 # ─── Reset + purge ──────────────────────────────────────────────────────────
 
 
 def _maybeFireReset(session: Session, seasonNumber: int, week: int) -> None:
-    """If a Thinning window just ended and no Reset has been issued for
+    """If a Cracking window just ended and no Reset has been issued for
     it yet, fire the Reset now."""
     state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
     if state is None or state.last_thinning_week is None:
         return
-    # Pull the Thinning duration from the audit trail.
-    duration = THINNING_DURATION_DEFAULT
+    # Pull the Cracking duration from the audit trail.
+    duration = CRACKING_DURATION_DEFAULT
     for entry in (state.cores_patches_applied or []):
         if entry.get('event') == 'thinning_trigger' and entry.get('start_week') == state.last_thinning_week:
-            duration = entry.get('duration', THINNING_DURATION_DEFAULT)
-    thinningEndWeek = state.last_thinning_week + duration - 1
-    # Reset fires on the week immediately after the Thinning window ends.
-    if week <= thinningEndWeek:
-        return  # Thinning still active
-    if state.last_reset_week == thinningEndWeek + 1:
-        return  # Already handled this Thinning
+            duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
+    crackingEndWeek = state.last_thinning_week + duration - 1
+    # Reset fires on the week immediately after the Cracking window ends.
+    if week <= crackingEndWeek:
+        return  # Cracking still active
+    if state.last_reset_week == crackingEndWeek + 1:
+        return  # Already handled this Cracking
     _fireReset(session, state, week)
 
 
@@ -657,25 +657,25 @@ def _getPlayerPersonality(session: Session, playerId: int) -> Optional[str]:
         return None
 
 
-def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
-    """Fire a Thinning event for the upcoming round(s).
+def _triggerCracking(state: LeagueAnomalyState, currentWeek: int) -> None:
+    """Fire a Cracking event for the upcoming round(s).
 
     Records the trigger event in cores_patches_applied (which doubles as
     the league's audit trail). Bumps the threshold for next time so a
-    second Thinning in the same season requires fresh attention buildup.
+    second Cracking in the same season requires fresh attention buildup.
     Broadcasts a Cores-attributed news entry to the league feed.
     """
     overRatio = state.aggregate_score / max(1, state.threshold)
     duration = (
-        THINNING_DURATION_RUNAWAY
-        if overRatio >= (1.0 + THINNING_RUNAWAY_OVER_THRESHOLD)
-        else THINNING_DURATION_DEFAULT
+        CRACKING_DURATION_RUNAWAY
+        if overRatio >= (1.0 + CRACKING_RUNAWAY_OVER_THRESHOLD)
+        else CRACKING_DURATION_DEFAULT
     )
-    startWeek = currentWeek  # Thinning applies to the current/just-started round
+    startWeek = currentWeek  # Cracking applies to the current/just-started round
     state.thinnings_this_season = (state.thinnings_this_season or 0) + 1
     state.last_thinning_week = startWeek
-    # Reduce threshold for any subsequent Thinning in this season.
-    state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_THINNING))
+    # Reduce threshold for any subsequent Cracking in this season.
+    state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_CRACKING))
 
     # Compose the Cores' news entry and record it on the audit trail.
     news = None
@@ -699,7 +699,7 @@ def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
     state.cores_patches_applied = patches
 
     logger.warning(
-        f"THINNING TRIGGERED (#{state.thinnings_this_season}, season="
+        f"THE CRACKING FIRED (#{state.thinnings_this_season}, season="
         f"{state.season}): start_week={startWeek}, duration={duration} round(s), "
         f"aggregate={state.aggregate_score:.1f} (×{overRatio:.2f} threshold)"
     )

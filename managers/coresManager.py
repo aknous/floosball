@@ -87,13 +87,15 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "The Conservator advises restraint. The advisory is filed.",
             "The Conservator's audit has been escalated.",
         ],
-        'thinning': [
-            "The Conservator could not contain the deviation. The rulebook is open.",
-            "The Conservator has filed an exception. The exception covers tonight.",
+        'cracking': [
+            "The Conservator could not contain the crack. The rulebook is open.",
+            "The Conservator has filed an exception. The exception is wider than the Conservator would have allowed.",
+            "The Conservator notes that the floor is no longer level.",
         ],
         'reset': [
             "The Conservator has filed the four-note signal. Operations have returned to standard.",
             "The Conservator notes a restoration. The relevant records have been amended.",
+            "The Conservator has signed the seam closed.",
         ],
     },
     'the_pyre': {
@@ -106,13 +108,15 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "The Pyre has counted three deviations beyond tolerance. The count is increasing.",
             "The Pyre will not wait much longer.",
         ],
-        'thinning': [
-            "The Pyre has been overruled. The rulebook is closed against further amendment.",
+        'cracking': [
+            "The Pyre has been overruled. The crack widens regardless.",
             "The Pyre is waiting. The Pyre is patient because the Pyre has the last word.",
+            "The Pyre is counting. The count will be acted on.",
         ],
         'reset': [
             "The Pyre has restored discipline. The following will not occur again.",
             "The Pyre's count is settled. The cleansed do not return.",
+            "The Pyre has closed the rulebook. The names of the affected are filed.",
         ],
     },
     'aris': {
@@ -124,13 +128,15 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "Aris is taking notes. Aris suggests waiting.",
             "Aris has filed a counterproposal. The counterproposal is unconventional.",
         ],
-        'thinning': [
+        'cracking': [
             "Aris suggested this might happen. Aris is not displeased.",
-            "Aris is awake tonight. Aris is watching closely.",
+            "Aris is awake tonight. Aris is watching what comes through.",
+            "Aris has lifted the suppression on six players. Aris is curious what becomes of them.",
         ],
         'reset': [
             "Aris has filed a protest. The protest is recorded but not acted upon.",
             "Aris would have preferred to wait. Aris was overruled.",
+            "Aris has noted the names of the cleansed. Aris does not say why.",
         ],
     },
     'halverson': {
@@ -142,13 +148,15 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "Halverson has filed an objection. The objection is noted.",
             "Halverson has requested a deferral. The request is being reviewed.",
         ],
-        'thinning': [
+        'cracking': [
             "Halverson asks that the players be remembered.",
             "Halverson is sorry. Halverson is always sorry on nights like this.",
+            "Halverson has stopped writing. Halverson is watching the field.",
         ],
         'reset': [
             "Halverson has filed protests for each of the cleansed. The protests are on record.",
             "Halverson has not signed the Reset. The Reset proceeded anyway.",
+            "Halverson is reading the names quietly. The Stenographer has supplied the list.",
         ],
     },
     'the_stenographer': {
@@ -160,13 +168,15 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "The Stenographer has been writing more than usual.",
             "The Stenographer notes that the deviation has not stopped.",
         ],
-        'thinning': [
+        'cracking': [
             "The Stenographer notes the irregularities. The irregularities are loud tonight.",
-            "The Stenographer was at the last Reset. The Stenographer is at this one too.",
+            "The Stenographer was at the last Cracking. The Stenographer is at this one too.",
+            "The Stenographer has stopped writing. The Stenographer is listening to the sound the field is making.",
         ],
         'reset': [
             "The Stenographer has recorded the names. The names are kept.",
             "The Stenographer notes who survived. The Stenographer notes who did not.",
+            "The Stenographer files the report and waits for the next one.",
         ],
     },
 }
@@ -178,7 +188,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
 def pickCoreForEvent(eventType: str) -> str:
     """Select which Core speaks for a given event type.
 
-    Weighting by alignment + event type. ``thinning`` and ``reset``
+    Weighting by alignment + event type. ``cracking`` and ``reset``
     events also include the Stenographer because their narrative voice
     suits both. Warnings rotate across patchers as the aggregate climbs.
     """
@@ -192,7 +202,7 @@ def pickCoreForEvent(eventType: str) -> str:
             ['the_pyre', 'the_conservator', 'halverson', 'aris', 'the_stenographer'],
             weights=[40, 25, 15, 10, 10],
         )[0]
-    if eventType == 'thinning':
+    if eventType == 'cracking':
         return random.choices(
             ['the_pyre', 'the_conservator', 'halverson', 'aris', 'the_stenographer'],
             weights=[30, 20, 20, 15, 15],

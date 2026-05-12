@@ -1088,7 +1088,7 @@ async def get_player_quotes(player_id: int, limit: int = 10):
 async def debug_anomaly_state():
     """Testing aid — dump current league anomaly state + top-attention
     players. NOT for production users; intentionally not gated on admin
-    so local sims can poke at it freely. Includes the hidden Thinning
+    so local sims can poke at it freely. Includes the hidden Cracking
     threshold — use only for testing."""
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
@@ -1097,7 +1097,7 @@ async def debug_anomaly_state():
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     from database.connection import get_session
     from database.models import LeagueAnomalyState, PlayerAttention, AnomalyState, Player
-    from managers.anomalyManager import isThinningWeek, getThinningMultiplier
+    from managers.anomalyManager import isCrackingWeek, getCrackingMultiplier
     session = get_session()
     try:
         state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
@@ -1119,14 +1119,14 @@ async def debug_anomaly_state():
         return build_success_response({
             'season': seasonNumber,
             'currentWeek': currentWeek,
-            'isThinningWeek': isThinningWeek(seasonNumber, currentWeek),
-            'thinningMultiplier': getThinningMultiplier(seasonNumber, currentWeek),
+            'isCrackingWeek': isCrackingWeek(seasonNumber, currentWeek),
+            'crackingMultiplier': getCrackingMultiplier(seasonNumber, currentWeek),
             'league': ({
                 'aggregateScore': float(state.aggregate_score),
                 'threshold': state.threshold,
                 'progressPct': round(float(state.aggregate_score) / max(1, state.threshold) * 100, 1),
-                'thinningsThisSeason': state.thinnings_this_season,
-                'lastThinningWeek': state.last_thinning_week,
+                'crackingsThisSeason': state.thinnings_this_season,
+                'lastCrackingWeek': state.last_thinning_week,
                 'lastResetWeek': state.last_reset_week,
                 'suppressionWindowEndsWeek': state.suppression_window_ends_week,
                 'recentPatches': (state.cores_patches_applied or [])[-5:],
