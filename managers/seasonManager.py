@@ -1215,6 +1215,11 @@ class SeasonManager:
                         # week boundary silently flips active grants to
                         # "used" — matching one of the swap-accounting bugs.
                         prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
+                        # Carry forward peak-decay state so a cold-week
+                        # streak compute on this new row can hold the
+                        # peak and decay from it.
+                        prevPeakOutput = getattr(prev, 'peak_output', None)
+                        prevWeeksSinceBreak = getattr(prev, 'weeks_since_break', 0) or 0
                         equippedRepo.save(EquippedCard(
                             user_id=userId,
                             season=season,
@@ -1224,6 +1229,8 @@ class SeasonManager:
                             locked=False,
                             streak_count=prevStreak,
                             swap_bonus_active=prevSwapBonus,
+                            peak_output=prevPeakOutput,
+                            weeks_since_break=prevWeeksSinceBreak,
                         ))
                     carried += 1
                     break
