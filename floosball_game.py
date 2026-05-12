@@ -81,19 +81,26 @@ class PlayType(enum.Enum):
 # fires on a player. Pure flavor — does NOT alter stat outputs. The
 # user perceives an uncanny moment without explanation. Personality-
 # keyed and signature flavor pools land in follow-up commits.
+#
+# Lines tilt ominous + broadcast-era: the play happened, the
+# stat-counter advanced, but the *footage* disagrees with the result.
+# That's the tell — telemetry says one thing, the cameras say another.
 _LAYER_1_MICRO_GLITCHES = [
-    "The ball was already there when {player} turned around.",
-    "{player} caught it before the broadcast caught up.",
-    "Replay shows nothing unusual. The play feels off anyway.",
-    "{player} takes a half-step backward and the defender phases past.",
-    "The camera cut and {player} was past the line.",
-    "{player} blinks and the route is already finished.",
-    "Something flickered. {player} doesn't comment.",
-    "The down marker hadn't moved yet when {player} did.",
-    "{player} looks at the spot where the ball used to be.",
-    "The coverage dissolves around {player} for no observable reason.",
-    "{player} arrives at the catch point a beat before they should.",
-    "A glitch in the broadcast feed shows {player} in two positions.",
+    "The booth pauses. {player} is credited with the play regardless.",
+    "The replay shows {player} in two positions. The officials confer and let the result stand.",
+    "{player}'s telemetry skips a frame. The yardage marker advances anyway.",
+    "Two cameras catch {player} from incompatible angles. The down advances.",
+    "The broadcast feed cuts to static for half a second. When it returns, the play is already over.",
+    "The down marker turns before {player} reaches it. The refs do not object.",
+    "{player} is not in the frame. The result is recorded.",
+    "The crowd reacts before the play does. {player} adjusts.",
+    "The replay won't sync. The stat sheet doesn't wait.",
+    "{player} catches it. Nobody saw the throw.",
+    "The audio dropped. By the time it came back, {player} was past the marker.",
+    "The route as drawn doesn't lead to where {player} ended up. The yards are real.",
+    "The yardage doesn't add up. The booth marks it down anyway.",
+    "{player} is officially credited. The footage disagrees.",
+    "Something in the broadcast does not match what just happened to {player}. The play stands.",
 ]
     
 class PassType(enum.Enum):

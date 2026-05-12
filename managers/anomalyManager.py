@@ -140,6 +140,39 @@ RESET_SURVIVOR_ATTENTION_SCALE = 0.5
 # can fire even if aggregate climbs again.
 RESET_SUPPRESSION_WEEKS = 2
 
+# Pre-Cracking warning milestones — once the league aggregate crosses
+# these fractions of the threshold, the Cores narrate a warning into
+# the news feed. Each milestone fires once per Cracking cycle (the
+# audit trail tracks which have already fired so we don't repeat).
+WARNING_LOW_THRESHOLD = 0.40   # 40% of threshold — first vague warning
+WARNING_HIGH_THRESHOLD = 0.65  # 65% — pointed, escalating warning
+
+# Per-state ominous feed lines, broadcast when a player crosses to that
+# state for the first time this season. No context, no documentation —
+# just a line in the feed that something is happening to that player.
+STATE_TRANSITION_LINES = {
+    'stirring': [
+        "{player} is stirring.",
+        "{player} has not been seen this way before.",
+        "Telemetry on {player} is loose tonight.",
+    ],
+    'erratic': [
+        "{player} is erratic.",
+        "Something is moving in {player} that the cameras can't lock onto.",
+        "{player}'s readings have stopped behaving.",
+    ],
+    'rampant': [
+        "{player} is rampant.",
+        "{player} has come unfixed.",
+        "The broadcast booth has stopped offering analysis on {player}.",
+    ],
+    'awakened': [
+        "{player} has awakened.",
+        "Something has changed about {player}.",
+        "{player} is no longer entirely within the simulation.",
+    ],
+}
+
 
 # ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -391,6 +424,9 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
     now = datetime.utcnow()
     transitions = 0
     awakenings = 0
+    # Collect transition events for broadcast after the loop so we don't
+    # interleave WS sends with DB iteration.
+    transitionEvents: List[Tuple[int, str]] = []
 
     for attn in rows:
         state = stateRows.get(attn.player_id)
@@ -429,11 +465,54 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             state.ability = 'placeholder'
 
         transitions += 1
+        # Only narrate forward transitions to non-stable states. Stale
+        # drops to 'stable' (rare without a Reset) are silent.
+        if targetState in STATE_TRANSITION_LINES:
+            transitionEvents.append((attn.player_id, targetState))
 
     if transitions:
         logger.info(
             f"State transitions: {transitions} (incl. {awakenings} awakenings)"
         )
+
+    # Broadcast feed lines for each new transition. Done after the
+    # DB writes so the session commit's atomicity isn't entangled with
+    # the broadcast layer.
+    if transitionEvents:
+        playerIds = [pid for pid, _ in transitionEvents]
+        playerNames = {
+            p.id: p.name for p in
+            session.query(Player).filter(Player.id.in_(playerIds)).all()
+        }
+        for playerId, targetState in transitionEvents:
+            playerName = playerNames.get(playerId)
+            if not playerName:
+                continue
+            line = random.choice(STATE_TRANSITION_LINES[targetState]).format(player=playerName)
+            _broadcastStateTransition(playerId, playerName, targetState, line, week)
+
+
+def _broadcastStateTransition(playerId: int, playerName: str, state: str,
+                              line: str, week: int) -> None:
+    """Push a state-transition flavor line through the league news channel.
+
+    Carries metadata so the frontend can render it differently from
+    standard league news (no ELIMINATED tag, no team-event color).
+    """
+    try:
+        from api.game_broadcaster import broadcaster
+        from api.event_models import LeagueNewsEvent
+        if broadcaster is None or LeagueNewsEvent is None or not broadcaster.is_enabled():
+            return
+        event = LeagueNewsEvent.leagueNews(text=line)
+        event['category'] = 'anomaly_transition'
+        event['anomalyState'] = state
+        event['playerId'] = playerId
+        event['playerName'] = playerName
+        event['week'] = week
+        broadcaster.broadcast_sync('season', event)
+    except Exception as e:
+        logger.debug(f"State-transition broadcast skipped: {e}")
 
 
 # ─── League aggregate + Cracking trigger ────────────────────────────────────
@@ -478,6 +557,12 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         f"(over-cap sum={overCapSum:.1f}, pressure={backgroundPressure:.1f})"
     )
 
+    # Pre-Cracking warnings. Cores notice when the aggregate climbs past
+    # certain fractions of the threshold and fire flavor-only news
+    # entries. Each milestone fires once per Cracking cycle — the audit
+    # trail tracks which we've already broadcast.
+    _maybeFireWarning(state)
+
     # Cracking trigger detection — if aggregate has crossed the hidden
     # threshold AND we're not already inside an active Cracking window
     # AND we're not in a post-Reset suppression window, fire the
@@ -508,6 +593,71 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
                 inActiveCracking = True
         if not inSuppression and not inActiveCracking:
             _triggerCracking(state, week)
+
+
+# ─── Pre-Cracking warnings ──────────────────────────────────────────────────
+
+
+def _maybeFireWarning(state: LeagueAnomalyState) -> None:
+    """Broadcast a Cores-attributed warning when aggregate crosses a
+    milestone fraction of threshold. Each milestone fires once per
+    Cracking cycle (audit trail tracks which we've already done)."""
+    ratio = float(state.aggregate_score) / max(1, state.threshold)
+    if ratio < WARNING_LOW_THRESHOLD:
+        return  # Below the warning floor — no Cores attention yet.
+
+    # Determine which milestone applies: high takes priority if crossed.
+    if ratio >= WARNING_HIGH_THRESHOLD:
+        milestone = 'warning_high'
+    else:
+        milestone = 'warning_low'
+
+    # Find the start of the current Cracking cycle. Cores warnings reset
+    # each time a Reset fires — so any warning fired since the last reset
+    # counts as "this cycle."
+    cycleStart = state.last_reset_week if state.last_reset_week is not None else 0
+    alreadyFired = False
+    for entry in (state.cores_patches_applied or []):
+        if entry.get('event') != 'cores_warning':
+            continue
+        if entry.get('week', 0) < cycleStart:
+            continue
+        if entry.get('milestone') == milestone:
+            alreadyFired = True
+            break
+        # If we already fired warning_low this cycle, only escalate to
+        # warning_high (don't re-fire warning_low after).
+        if milestone == 'warning_low' and entry.get('milestone') == 'warning_high':
+            alreadyFired = True
+            break
+
+    if alreadyFired:
+        return
+
+    # Compose the Cores news entry. Broadcast + record on audit trail.
+    news = None
+    try:
+        from managers.coresManager import newsEntryFor
+        news = newsEntryFor(milestone)
+    except Exception as e:
+        logger.warning(f"coresManager unavailable for warning news: {e}")
+
+    patches = list(state.cores_patches_applied or [])
+    patches.append({
+        'event': 'cores_warning',
+        'milestone': milestone,
+        'aggregate_at_warning': float(state.aggregate_score),
+        'ratio': float(ratio),
+        'fired_at': datetime.utcnow().isoformat() + 'Z',
+        'news': news,
+    })
+    state.cores_patches_applied = patches
+
+    logger.info(
+        f"Cores {milestone} fired (season={state.season}, "
+        f"aggregate={state.aggregate_score:.1f}, ratio={ratio:.2f})"
+    )
+    _broadcastCoreNews(news)
 
 
 # ─── Reset + purge ──────────────────────────────────────────────────────────
