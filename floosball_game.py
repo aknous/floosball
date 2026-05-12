@@ -5567,6 +5567,17 @@ class Game:
                 'glitchPlayerId': getattr(self.play, 'glitchPlayerId', None),
                 'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
                 'glitchLayer': getattr(self.play, 'glitchLayer', None),
+                # Participant IDs — used by the frontend highlights feed
+                # to filter "plays involving players the user cares
+                # about." Null when the role didn't apply to this play.
+                'passerId':   getattr(getattr(self.play, 'passer', None),   'id', None),
+                'receiverId': getattr(getattr(self.play, 'receiver', None), 'id', None),
+                'runnerId':   getattr(getattr(self.play, 'runner', None),   'id', None),
+                'kickerId':   getattr(getattr(self.play, 'kicker', None),   'id', None),
+                'tacklerId':       getattr(getattr(self.play, 'tackledBy', None),       'id', None),
+                'sackerId':        getattr(getattr(self.play, 'sackedBy', None),        'id', None),
+                'interceptorId':   getattr(getattr(self.play, 'interceptedBy', None),   'id', None),
+                'forcedFumblerId': getattr(getattr(self.play, 'forcedFumbleBy', None),  'id', None),
                 'homeTeamScore': getattr(self.play, 'homeTeamScore', None),
                 'awayTeamScore': getattr(self.play, 'awayTeamScore', None),
                 'offensiveTeam': self.play.offense.abbr if hasattr(self.play, 'offense') else self.offensiveTeam.abbr,
