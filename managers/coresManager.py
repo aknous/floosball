@@ -21,10 +21,11 @@ announcing the Reset, and noting Awakenings.
 from __future__ import annotations
 
 import random
-import logging
 from typing import Dict, List, Optional, Any
 
-logger = logging.getLogger("floosball.cores")
+from logger_config import get_logger
+
+logger = get_logger("floosball.cores")
 
 
 # ─── The roster ─────────────────────────────────────────────────────────────

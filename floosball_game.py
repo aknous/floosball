@@ -6498,7 +6498,8 @@ class Game:
             self._anomalyAttention = {}
             self._thinningMultiplier = 1.0
             try:
-                logging.getLogger("floosball.anomaly").debug(
+                from logger_config import get_logger
+                get_logger("floosball.anomaly").debug(
                     f"Anomaly attention load failed: {e}"
                 )
             except Exception:

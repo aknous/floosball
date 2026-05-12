@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import random
-import logging
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 
@@ -42,9 +41,10 @@ from database.models import (
     User,
     Player,
 )
+from logger_config import get_logger
 
 
-logger = logging.getLogger("floosball.anomaly")
+logger = get_logger("floosball.anomaly")
 
 
 # ─── Tuning constants ───────────────────────────────────────────────────────
