@@ -1084,6 +1084,128 @@ async def get_player_quotes(player_id: int, limit: int = 10):
     return build_success_response(quotes)
 
 
+@app.get("/api/debug/anomaly-state", response_model=Dict[str, Any])
+async def debug_anomaly_state():
+    """Testing aid — dump current league anomaly state + top-attention
+    players. NOT for production users; intentionally not gated on admin
+    so local sims can poke at it freely. Includes the hidden Thinning
+    threshold — use only for testing."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import LeagueAnomalyState, PlayerAttention, AnomalyState, Player
+    from managers.anomalyManager import isThinningWeek, getThinningMultiplier
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        topAttn = (
+            session.query(PlayerAttention, Player.name)
+            .join(Player, Player.id == PlayerAttention.player_id)
+            .filter(PlayerAttention.season == seasonNumber)
+            .order_by(PlayerAttention.score.desc())
+            .limit(20)
+            .all()
+        )
+        awakeneds = (
+            session.query(AnomalyState, Player.name)
+            .join(Player, Player.id == AnomalyState.player_id)
+            .filter(AnomalyState.season == seasonNumber)
+            .filter(AnomalyState.state.in_(['rampant', 'awakened', 'cleansed']))
+            .all()
+        )
+        return build_success_response({
+            'season': seasonNumber,
+            'currentWeek': currentWeek,
+            'isThinningWeek': isThinningWeek(seasonNumber, currentWeek),
+            'thinningMultiplier': getThinningMultiplier(seasonNumber, currentWeek),
+            'league': ({
+                'aggregateScore': float(state.aggregate_score),
+                'threshold': state.threshold,
+                'progressPct': round(float(state.aggregate_score) / max(1, state.threshold) * 100, 1),
+                'thinningsThisSeason': state.thinnings_this_season,
+                'lastThinningWeek': state.last_thinning_week,
+                'lastResetWeek': state.last_reset_week,
+                'suppressionWindowEndsWeek': state.suppression_window_ends_week,
+                'recentPatches': (state.cores_patches_applied or [])[-5:],
+            } if state else None),
+            'topAttention': [
+                {
+                    'playerId': r[0].player_id,
+                    'playerName': r[1],
+                    'score': round(float(r[0].score), 1),
+                    'overCapCarry': round(float(r[0].over_cap_carry), 1),
+                    'peakScore': round(float(r[0].peak_score), 1),
+                }
+                for r in topAttn
+            ],
+            'elevatedPlayers': [
+                {
+                    'playerId': r[0].player_id,
+                    'playerName': r[1],
+                    'state': r[0].state,
+                    'ability': r[0].ability,
+                    'abilityTier': r[0].ability_tier,
+                    'awakenedAtWeek': r[0].awakened_at_week,
+                }
+                for r in awakeneds
+            ],
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/debug/anomaly-bump", response_model=Dict[str, Any])
+async def debug_anomaly_bump(player_id: int, amount: float = 50.0):
+    """Testing aid — force-add attention to a specific player. Skips
+    the weekly tick / engagement-source aggregation. Useful for jumping
+    a player past Awakening on demand. NOT gated on admin."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import PlayerAttention
+    session = get_session()
+    try:
+        row = session.query(PlayerAttention).filter_by(
+            player_id=player_id, season=seasonNumber,
+        ).first()
+        if row is None:
+            row = PlayerAttention(
+                player_id=player_id, season=seasonNumber,
+                score=0.0, over_cap_carry=0.0, peak_score=0.0,
+            )
+            session.add(row)
+        row.score = float(row.score) + amount
+        if row.score > float(row.peak_score):
+            row.peak_score = float(row.score)
+        session.commit()
+        return build_success_response({
+            'playerId': player_id,
+            'newScore': float(row.score),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/debug/anomaly-tick", response_model=Dict[str, Any])
+async def debug_anomaly_tick():
+    """Testing aid — fire the weekly anomaly aggregation NOW instead of
+    waiting for the next week_start. Useful in fast modes where the
+    week loop already finished by the time you want to poke at state."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    from managers.anomalyManager import weeklyTick
+    weeklyTick(seasonNumber, currentWeek)
+    return build_success_response({'fired': True, 'season': seasonNumber, 'week': currentWeek})
+
+
 @app.get("/api/players/{player_id}/anomaly", response_model=Dict[str, Any])
 async def get_player_anomaly(player_id: int):
     """Anomaly state for a player in the current season.

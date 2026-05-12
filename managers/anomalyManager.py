@@ -22,6 +22,7 @@ values written here.
 
 from __future__ import annotations
 
+import os
 import random
 import logging
 from datetime import datetime
@@ -48,15 +49,21 @@ logger = logging.getLogger("floosball.anomaly")
 
 # ─── Tuning constants ───────────────────────────────────────────────────────
 
+# Env-override for testing: set FLOOSBALL_ANOMALY_FAST=1 to compress
+# every threshold so a fresh sim run can produce Awakenings + Thinnings
+# within a single fast-mode season. Boosts contributions, slashes
+# thresholds, and raises per-play roll caps.
+_ANOMALY_FAST = os.environ.get('FLOOSBALL_ANOMALY_FAST', '').lower() in ('1', 'true', 'yes')
+
 # Attention contributions per source, applied each weekly tick.
-ATTENTION_PER_CARD_EQUIPPED = 10.0
-ATTENTION_PER_FANTASY_ROSTER = 8.0
-ATTENTION_PER_FOLLOWER = 2.0
-ATTENTION_PER_FAVORITE_TEAM_FAN = 0.5
+ATTENTION_PER_CARD_EQUIPPED = 40.0 if _ANOMALY_FAST else 10.0
+ATTENTION_PER_FANTASY_ROSTER = 32.0 if _ANOMALY_FAST else 8.0
+ATTENTION_PER_FOLLOWER = 8.0 if _ANOMALY_FAST else 2.0
+ATTENTION_PER_FAVORITE_TEAM_FAN = 2.0 if _ANOMALY_FAST else 0.5
 
 # Weekly decay multiplier applied BEFORE this week's contributions.
 # 0.9 = 10% decay; attention naturally settles toward zero absent input.
-ATTENTION_DECAY = 0.9
+ATTENTION_DECAY = 0.95 if _ANOMALY_FAST else 0.9  # slower decay in fast mode
 
 # Soft cap per player. Over-cap excess feeds the league aggregate
 # instead of further boosting that one player's per-play roll.
@@ -65,18 +72,30 @@ ATTENTION_SOFT_CAP = 100.0
 # State ladder thresholds. Once a player crosses the higher tier
 # they advance; once they cross AWAKEN_THRESHOLD they are awakened
 # and the transition is sticky (only Reset purge can undo it).
-STATE_THRESHOLDS = [
-    ('stable',    0.0),
-    ('stirring', 10.0),
-    ('erratic',  30.0),
-    ('rampant',  60.0),
-]
-AWAKEN_THRESHOLD = 90.0
+# Fast mode lowers these so a single locked roster + a few equipped
+# cards is enough to awaken in 1-2 weeks.
+if _ANOMALY_FAST:
+    STATE_THRESHOLDS = [
+        ('stable',    0.0),
+        ('stirring',  5.0),
+        ('erratic',  15.0),
+        ('rampant',  30.0),
+    ]
+    AWAKEN_THRESHOLD = 50.0
+else:
+    STATE_THRESHOLDS = [
+        ('stable',    0.0),
+        ('stirring', 10.0),
+        ('erratic',  30.0),
+        ('rampant',  60.0),
+    ]
+    AWAKEN_THRESHOLD = 90.0
 
 # League aggregate threshold for Thinning trigger.
 # Randomized per season in this range; the chosen value is hidden.
-THRESHOLD_MIN = 600
-THRESHOLD_MAX = 1200
+# Fast mode pulls it way down so any decently-engaged season triggers.
+THRESHOLD_MIN = 80 if _ANOMALY_FAST else 600
+THRESHOLD_MAX = 200 if _ANOMALY_FAST else 1200
 
 # Suppression window length (weeks) post-Reset where anomaly rate
 # is floored league-wide.
@@ -94,7 +113,7 @@ THINNING_DURATION_RUNAWAY = 2
 THINNING_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Thinning
 
 # During a Thinning round, per-play anomaly probabilities multiply.
-THINNING_MULTIPLIER = 5.0
+THINNING_MULTIPLIER = 8.0 if _ANOMALY_FAST else 5.0
 
 # Reset purge dodge multipliers, keyed by personality meta-awareness tier.
 # Aware-tier players resist purges better — they perceive the Cores'
