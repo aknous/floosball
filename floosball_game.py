@@ -6551,18 +6551,19 @@ class Game:
         self._anomalyAttentionLoaded = True
 
     def _maybeFireAnomalies(self) -> None:
-        """Roll for Layer 1 micro-glitches — flavor only.
+        """Roll for Layer 1 / Layer 2 cosmetic glitches.
 
-        Layer 1 is the noise floor. Pure cosmetic — the line appends to
-        the play's text as a separate sentence, but the simulation's
-        stats and field state are NOT modified. Mechanical impact lives
-        in Layer 3 (signature abilities at Awakened state).
+        Pure flavor — no stat or field-state changes. Mechanical impact
+        lives in Layer 3 (signature abilities at Awakened state).
 
-        Candidates are the play's primary actors on either side of the
-        ball — the offensive player who advanced, and the defender who
-        stopped them or made the disruption. Each candidate with
-        attention rolls independently; the first hit fires the line and
-        we move on.
+        Layer 1 (subtle, generic) can fire on any play, including
+        incompletions and sacks — the line reads as "the player
+        glitched, and that's why the play resolved the way it did."
+        Layer 2 (more pronounced) is gated to plays where the
+        candidate's role succeeded — a receiver who actually caught
+        it, a tackler who actually tackled. On failed plays at
+        higher states, Layer 2 falls back to Layer 1 so the louder
+        flavor doesn't get attached to nothing happening.
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
@@ -6571,19 +6572,10 @@ class Game:
         p = self.play
         if p is None:
             return
-        # Skip plays with no meaningful result — incompletions,
-        # throwaways, spikes, kneels. The glitch is about the player's
-        # role in the play; no role means nothing to glitch.
-        hadResult = (
-            getattr(p, 'yardage', 0) != 0
-            or getattr(p, 'isTouchdown', False)
-            or getattr(p, 'isTurnover', False)
-            or getattr(p, 'isInterception', False)
-            or getattr(p, 'isFumbleLost', False)
-            or getattr(p, 'isSack', False)
-            or getattr(p, 'scoreChange', False)
-        )
-        if not hadResult:
+        # Skip deliberate clock kills — nothing to glitch.
+        playType = getattr(p, 'playType', None)
+        playTypeName = getattr(playType, 'name', None) or str(playType or '')
+        if playTypeName in ('Kneel', 'Spike'):
             return
 
         # Gather every primary actor — offensive ball-mover plus the
@@ -6619,10 +6611,41 @@ class Game:
                     layer = 'personality' if _random.random() < 0.8 else 'micro'
                 else:
                     layer = 'micro'
+
+                # Layer 2 only fires if the candidate's role succeeded
+                # on this play — otherwise the louder "the simulation
+                # is failing around them" framing reads dissonant on a
+                # failed catch / failed run. Fall back to Layer 1.
+                if layer == 'personality' and not self._candidateSucceeded(player, p):
+                    layer = 'micro'
+
                 self._injectAnomalyLine(player, layer=layer)
                 # One anomaly per play. Multiple Awakened players on
                 # the field don't stack glitch lines.
                 return
+
+    def _candidateSucceeded(self, player, play) -> bool:
+        """Did this candidate's role produce a positive outcome for
+        their side on this play?
+
+        Defensive actors are only populated when their action succeeded
+        (tackledBy / sackedBy / interceptedBy / forcedFumbleBy all
+        imply success by their presence).
+
+        Offensive actors succeeded if the play had positive yardage
+        and didn't end as a turnover.
+        """
+        for attr in ('tackledBy', 'sackedBy', 'interceptedBy', 'forcedFumbleBy'):
+            if player is getattr(play, attr, None):
+                return True
+        yardage = getattr(play, 'yardage', 0) or 0
+        if yardage <= 0:
+            return False
+        if (getattr(play, 'isInterception', False)
+                or getattr(play, 'isFumbleLost', False)
+                or getattr(play, 'isTurnover', False)):
+            return False
+        return True
 
     def _injectAnomalyLine(self, player, layer: str = 'micro') -> None:
         """Append a glitch line to the play's text + log the AnomalyEvent.
