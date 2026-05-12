@@ -479,14 +479,34 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
     )
 
     # Thinning trigger detection — if aggregate has crossed the hidden
-    # threshold AND we're not currently in a suppression window from a
-    # recent Reset, fire the Thinning for the next round.
+    # threshold AND we're not already inside an active Thinning window
+    # AND we're not in a post-Reset suppression window, fire the
+    # Thinning for the next round.
     if state.aggregate_score >= state.threshold:
         inSuppression = (
             state.suppression_window_ends_week is not None
             and week < state.suppression_window_ends_week
         )
-        if not inSuppression:
+        # Block re-triggering inside an active Thinning window. The
+        # Reset that follows clears last_thinning_week's "active" status
+        # by setting last_reset_week, so subsequent crossings only fire
+        # once the previous Thinning has been resolved.
+        inActiveThinning = False
+        if state.last_thinning_week is not None:
+            # Pull duration from the audit trail.
+            duration = THINNING_DURATION_DEFAULT
+            for entry in (state.cores_patches_applied or []):
+                if (entry.get('event') == 'thinning_trigger'
+                        and entry.get('start_week') == state.last_thinning_week):
+                    duration = entry.get('duration', THINNING_DURATION_DEFAULT)
+            thinningEndWeek = state.last_thinning_week + duration - 1
+            # Active window: between trigger and next-week Reset.
+            if week <= thinningEndWeek:
+                inActiveThinning = True
+            elif state.last_reset_week is None or state.last_reset_week < thinningEndWeek + 1:
+                # Thinning window has ended but Reset hasn't yet fired.
+                inActiveThinning = True
+        if not inSuppression and not inActiveThinning:
             _triggerThinning(state, week)
 
 
