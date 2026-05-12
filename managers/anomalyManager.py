@@ -572,7 +572,15 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
 
 def _recordResetEvent(state: LeagueAnomalyState, week: int,
                       purged: List[int], survivors: List[int]) -> None:
-    """Append a Reset record to the league audit trail."""
+    """Append a Reset record to the league audit trail and broadcast
+    the Cores' attributed news entry."""
+    news = None
+    try:
+        from managers.coresManager import newsEntryFor
+        news = newsEntryFor('reset')
+    except Exception as e:
+        logger.warning(f"coresManager unavailable for reset news: {e}")
+
     patches = list(state.cores_patches_applied or [])
     patches.append({
         'event': 'reset',
@@ -580,8 +588,10 @@ def _recordResetEvent(state: LeagueAnomalyState, week: int,
         'purged_player_ids': list(purged),
         'survivor_player_ids': list(survivors),
         'fired_at': datetime.utcnow().isoformat() + 'Z',
+        'news': news,
     })
     state.cores_patches_applied = patches
+    _broadcastCoreNews(news)
 
 
 def _purgeDodgeFor(personality: Optional[str]) -> float:
@@ -614,6 +624,7 @@ def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
     Records the trigger event in cores_patches_applied (which doubles as
     the league's audit trail). Bumps the threshold for next time so a
     second Thinning in the same season requires fresh attention buildup.
+    Broadcasts a Cores-attributed news entry to the league feed.
     """
     overRatio = state.aggregate_score / max(1, state.threshold)
     duration = (
@@ -627,6 +638,14 @@ def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
     # Reduce threshold for any subsequent Thinning in this season.
     state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_THINNING))
 
+    # Compose the Cores' news entry and record it on the audit trail.
+    news = None
+    try:
+        from managers.coresManager import newsEntryFor
+        news = newsEntryFor('thinning')
+    except Exception as e:
+        logger.warning(f"coresManager unavailable for thinning news: {e}")
+
     patches = list(state.cores_patches_applied or [])
     patches.append({
         'event': 'thinning_trigger',
@@ -636,6 +655,7 @@ def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
         'over_ratio': float(overRatio),
         'thinning_number': state.thinnings_this_season,
         'fired_at': datetime.utcnow().isoformat() + 'Z',
+        'news': news,
     })
     state.cores_patches_applied = patches
 
@@ -644,3 +664,29 @@ def _triggerThinning(state: LeagueAnomalyState, currentWeek: int) -> None:
         f"{state.season}): start_week={startWeek}, duration={duration} round(s), "
         f"aggregate={state.aggregate_score:.1f} (×{overRatio:.2f} threshold)"
     )
+
+    # Broadcast to the league news feed.
+    _broadcastCoreNews(news)
+
+
+def _broadcastCoreNews(news: Optional[Dict]) -> None:
+    """Push a Cores news entry through the existing league-news channel."""
+    if not news:
+        return
+    try:
+        from api.game_broadcaster import broadcaster
+        from api.event_models import LeagueNewsEvent
+        if broadcaster is None or LeagueNewsEvent is None:
+            return
+        if not broadcaster.is_enabled():
+            return
+        event = LeagueNewsEvent.leagueNews(text=news.get('text', ''))
+        # Carry the extra Cores metadata so the frontend can render the
+        # entry with a Core-specific accent / icon.
+        event['core'] = news.get('core')
+        event['coreDisplayName'] = news.get('coreDisplayName')
+        event['category'] = 'cores'
+        event['eventType'] = news.get('eventType')
+        broadcaster.broadcast_sync('season', event)
+    except Exception as e:
+        logger.debug(f"Cores news broadcast skipped: {e}")
