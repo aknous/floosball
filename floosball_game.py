@@ -6514,16 +6514,19 @@ class Game:
         self._anomalyAttentionLoaded = True
 
     def _maybeFireAnomalies(self) -> None:
-        """Roll for Layer 1 micro-glitches on this play's participants.
+        """Roll for Layer 1 micro-glitches and apply impact.
 
-        Probability per player = attention / 1000. Awakened-threshold
-        attention (~100) gives ~10% per-play chance.
+        Layer 1 is the noise floor — it fires on the play's ball-carrier
+        (the runner or receiver on a positive-yardage play) and ADDS
+        bonus yards that the simulation can't quite account for. The
+        bonus updates the player's stats and the play's displayed
+        yardage, but doesn't move the field — so the box score and the
+        field state stop matching, which is the "simulation is wrong"
+        signal.
 
-        Gated on the play producing a meaningful result — incomplete
-        passes, throwaways, spikes, kneels, and other no-event plays
-        skip the roll because the current glitch lines are about a
-        result that doesn't quite add up. If nothing happened, there's
-        nothing for the glitch to be the answer to.
+        Probability per ball-carrier = attention / 1000, scaled by the
+        active Cracking multiplier. Bonus is clamped to avoid retroactive
+        first-down crossings or red-zone overflow.
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
@@ -6532,36 +6535,73 @@ class Game:
         p = self.play
         if p is None:
             return
-        hadResult = (
-            getattr(p, 'yardage', 0) != 0
-            or getattr(p, 'isTouchdown', False)
-            or getattr(p, 'isTurnover', False)
-            or getattr(p, 'isInterception', False)
-            or getattr(p, 'isFumbleLost', False)
-            or getattr(p, 'isSack', False)
-            or getattr(p, 'scoreChange', False)
-        )
-        if not hadResult:
+        # Only fire on positive-yardage offensive plays — runs and
+        # completions. Sacks, turnovers, FGs, kicks, incompletions all
+        # skip Layer 1 (their flavor lives in Layer 2 / personality-
+        # keyed pools, which haven't shipped yet).
+        yardage = getattr(p, 'yardage', 0) or 0
+        if yardage <= 0:
             return
-        # Gather candidates — the offense's primary actors on this play.
-        candidates = []
-        for attr in ('passer', 'receiver', 'runner', 'kicker'):
-            actor = getattr(p, attr, None)
-            if actor is not None and getattr(actor, 'id', None) is not None:
-                candidates.append(actor)
-        for player in candidates:
-            attention = self._anomalyAttention.get(player.id, 0.0)
-            if attention <= 0:
-                continue
-            prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
-            if _random.random() < prob:
-                self._injectAnomalyLine(player)
-                # One anomaly per play is plenty for v1 — break before
-                # we surface two glitches on the same play.
-                break
+        if getattr(p, 'isSack', False) or getattr(p, 'isTurnover', False):
+            return
 
-    def _injectAnomalyLine(self, player) -> None:
-        """Add a glitch line to the game feed + log the AnomalyEvent."""
+        # Pick the ball-carrier — the player who actually moved with
+        # the ball. Receiver for pass plays, runner for run plays.
+        ballCarrier = getattr(p, 'receiver', None) or getattr(p, 'runner', None)
+        if ballCarrier is None or getattr(ballCarrier, 'id', None) is None:
+            return
+
+        attention = self._anomalyAttention.get(ballCarrier.id, 0.0)
+        if attention <= 0:
+            return
+        prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
+        if _random.random() >= prob:
+            return
+
+        # Compute bonus yardage. Clamp so the glitched yardage stays
+        # short of the first-down marker AND short of the end zone —
+        # we don't want retroactive scoring or chain-moving since the
+        # game state has already advanced past this play.
+        bonus = _random.randint(3, 10)
+        maxBonus = max(0, getattr(self, 'yardsToFirstDown', 99) - 1)
+        maxBonus = min(maxBonus, max(0, getattr(self, 'yardsToEndzone', 99) - 1))
+        bonus = min(bonus, maxBonus)
+        if bonus < 1:
+            # No safe bonus to apply (near first down or goal). Skip
+            # rather than fire a glitch line with no mechanical kick.
+            return
+
+        # Apply to ball-carrier + passer (if pass play).
+        isRegular = bool(self.isRegularSeasonGame)
+        passer = getattr(p, 'passer', None)
+        try:
+            if ballCarrier is getattr(p, 'receiver', None):
+                ballCarrier.addReceiveYards(bonus, isRegular)
+                if passer is not None:
+                    passer.addPassYards(bonus, isRegular)
+            elif ballCarrier is getattr(p, 'runner', None):
+                ballCarrier.addRushYards(bonus, isRegular)
+        except Exception:
+            # Stat update failed — abort the glitch entirely so the
+            # line doesn't fire without backing impact.
+            return
+
+        # Update play's reported yardage so the feed shows the inflated
+        # number rather than the original.
+        try:
+            p.yardage = yardage + bonus
+        except Exception:
+            pass
+
+        self._injectAnomalyLine(ballCarrier, bonusYards=bonus)
+
+    def _injectAnomalyLine(self, player, bonusYards: int = 0) -> None:
+        """Add a glitch line to the game feed + log the AnomalyEvent.
+
+        bonusYards: yardage the glitch retroactively added to the play.
+        Surfaces in the feed metadata so the frontend can render
+        "+N glitch yards" alongside the line.
+        """
         line = _random.choice(_LAYER_1_MICRO_GLITCHES).format(player=player.name)
         self.gameFeed.insert(0, {
             'event': {
@@ -6570,6 +6610,7 @@ class Game:
                 'anomalyLayer': 'micro',
                 'playerId': player.id,
                 'playerName': player.name,
+                'bonusYards': bonusYards,
                 'quarter': self.currentQuarter,
             }
         })
