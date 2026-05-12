@@ -1764,16 +1764,39 @@ class SeasonManager:
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
                     )
 
-                    # Populate streak conditions for breakdown display
+                    # Populate streak conditions for breakdown display AND
+                    # pre-bump streakCounts to the PROJECTED value when the
+                    # condition is met. Without the bump, the persisted
+                    # breakdown for week N pays at the count from end-of-
+                    # week-N-1 (always one tick behind) — meaning the very
+                    # first week the streak triggers pays base only, which
+                    # contradicts the per-week growth users expect.
+                    # The actual eq.streak_count DB bump still happens
+                    # post-calc at line ~1914; this just keeps the calc-time
+                    # view in sync with the live snapshot path.
                     from managers.cardEffects import STREAK_CONFIGS as _streakConfigs
                     streakConditions = {}
                     for eq in userEquipped:
                         ec = eq.user_card.card_template.effect_config or {}
                         eName = ec.get("effectName", "")
-                        if eName in _streakConfigs:
-                            streakConditions[eq.id] = checkStreakCondition(
-                                eName, calcCtx, eq.user_card.card_template.player_id
-                            )
+                        if eName not in _streakConfigs:
+                            continue
+                        cfg = _streakConfigs[eName]
+                        # Weekly accumulators (touchdown_jackpot) compute
+                        # their own ticks from this week's data; don't bump.
+                        if cfg.get("isWeekly"):
+                            streakConditions[eq.id] = True
+                            continue
+                        condMet = checkStreakCondition(
+                            eName, calcCtx, eq.user_card.card_template.player_id
+                        )
+                        streakConditions[eq.id] = condMet
+                        # Apply ironclad modifier — if active, treat as met
+                        # for the bump too (matches the eq.streak_count
+                        # bump path below at the streak-management block).
+                        effectiveMet = condMet or (userModifier == "ironclad")
+                        if effectiveMet:
+                            calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
                     calcCtx.liveStreakConditionsMet = streakConditions
 
                     # Calculate card bonuses
