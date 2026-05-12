@@ -1084,6 +1084,43 @@ async def get_player_quotes(player_id: int, limit: int = 10):
     return build_success_response(quotes)
 
 
+@app.get("/api/players/{player_id}/anomaly", response_model=Dict[str, Any])
+async def get_player_anomaly(player_id: int):
+    """Anomaly state for a player in the current season.
+
+    Returns the state ladder label (stable / stirring / erratic /
+    rampant / awakened / cleansed) and, for awakened players, the
+    rolled ability + tier. Intentionally does NOT expose the raw
+    attention score — users see symptoms (the badge label, the
+    occasional glitch line in plays) but not the underlying cause.
+
+    Returns null if the player has no anomaly record this season
+    (i.e., still Stable — never crossed Stirring threshold).
+    """
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import AnomalyState
+    session = get_session()
+    try:
+        row = session.query(AnomalyState).filter_by(
+            player_id=player_id, season=seasonNumber,
+        ).first()
+        if row is None or row.state in (None, 'stable'):
+            return build_success_response(None)
+        return build_success_response({
+            'state': row.state,
+            'ability': row.ability,
+            'abilityTier': row.ability_tier,
+            'awakenedAtWeek': row.awakened_at_week,
+            'seasonsCarried': row.seasons_carried,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/recent-off-day", response_model=Dict[str, Any])
 async def get_recent_off_day(limit: int = 30):
     """Recent off-day broadcast events for the highlights feed backfill.
