@@ -154,17 +154,17 @@ STATE_TRANSITION_LINES = {
     'stirring': [
         "{player} is stirring.",
         "{player} has not been seen this way before.",
-        "Telemetry on {player} is loose tonight.",
+        "The field is not reading {player} correctly.",
     ],
     'erratic': [
         "{player} is erratic.",
-        "Something is moving in {player} that the cameras can't lock onto.",
-        "{player}'s readings have stopped behaving.",
+        "Something is moving in {player} that the field can't account for.",
+        "{player}'s readings have stopped resolving.",
     ],
     'rampant': [
         "{player} is rampant.",
         "{player} has come unfixed.",
-        "The broadcast booth has stopped offering analysis on {player}.",
+        "No one is offering an explanation for {player} anymore.",
     ],
     'awakened': [
         "{player} has awakened.",

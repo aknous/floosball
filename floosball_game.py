@@ -82,25 +82,25 @@ class PlayType(enum.Enum):
 # user perceives an uncanny moment without explanation. Personality-
 # keyed and signature flavor pools land in follow-up commits.
 #
-# Lines tilt ominous + broadcast-era: the play happened, the
-# stat-counter advanced, but the *footage* disagrees with the result.
-# That's the tell — telemetry says one thing, the cameras say another.
+# Lines lean toward "the simulation itself can't quite account for what
+# just happened" — the result is recorded, the field is wrong, the
+# space around the player did something the rest of the field didn't.
 _LAYER_1_MICRO_GLITCHES = [
-    "The booth pauses. {player} is credited with the play regardless.",
-    "The replay shows {player} in two positions. The officials confer and let the result stand.",
-    "{player}'s telemetry skips a frame. The yardage marker advances anyway.",
-    "Two cameras catch {player} from incompatible angles. The down advances.",
-    "The broadcast feed cuts to static for half a second. When it returns, the play is already over.",
-    "The down marker turns before {player} reaches it. The refs do not object.",
-    "{player} is not in the frame. The result is recorded.",
-    "The crowd reacts before the play does. {player} adjusts.",
-    "The replay won't sync. The stat sheet doesn't wait.",
-    "{player} catches it. Nobody saw the throw.",
-    "The audio dropped. By the time it came back, {player} was past the marker.",
-    "The route as drawn doesn't lead to where {player} ended up. The yards are real.",
-    "The yardage doesn't add up. The booth marks it down anyway.",
-    "{player} is officially credited. The footage disagrees.",
-    "Something in the broadcast does not match what just happened to {player}. The play stands.",
+    "The down advances. {player} was not at the marker a moment ago.",
+    "{player} is credited with the play. The path between them and the result is missing.",
+    "The defender was in position. {player} reached the marker regardless.",
+    "The yards do not add up. {player} has them anyway.",
+    "{player}'s position skips. The result holds.",
+    "The space between {player} and the defender did not behave.",
+    "Something fails to resolve around {player}. The play is logged.",
+    "{player} arrives where {player} shouldn't have been able to arrive.",
+    "The field rearranges quietly around {player}. The down moves.",
+    "The route ends in a place no one was watching. The yards count.",
+    "Time skips a half-beat for {player} alone.",
+    "{player} is closer to the marker than physics permits. The result holds.",
+    "The play resolves before anyone moves. {player} is credited.",
+    "The line of scrimmage shifts under {player}. No one calls it.",
+    "Something failed to update around {player}. The play stood.",
 ]
     
 class PassType(enum.Enum):
