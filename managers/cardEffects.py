@@ -3439,7 +3439,12 @@ def _computeStackedDeck(primary, ctx, cardPlayerId, eqId):
 # -- Trigger-Chain (second pass) --
 
 def _computeCopycat(primary, ctx, cardPlayerId, eqId):
-    """+FP equal to the highest flat FP bonus among other cards."""
+    """+FP equal to the highest flat FP bonus among other cards.
+
+    Skips other Copycat cards in the read pool — otherwise two equipped
+    Copycats cascade through the convergence pass, each copying the
+    other's already-match-multiplied total and compounding the bonus.
+    """
     breakdowns = list(ctx._firstPassBreakdowns or [])
     spBreakdowns = getattr(ctx, '_secondPassBreakdowns', None) or []
     spEqIds = getattr(ctx, '_secondPassEqIds', None) or []
@@ -3448,6 +3453,8 @@ def _computeCopycat(primary, ctx, cardPlayerId, eqId):
             breakdowns.append(spBreakdowns[spIdx])
     bestFP = 0
     for b in breakdowns:
+        if b.effectName == "copycat":
+            continue
         if b.totalFP > bestFP:
             bestFP = b.totalFP
     if bestFP > 0:
