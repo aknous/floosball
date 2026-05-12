@@ -1942,14 +1942,17 @@ class SeasonManager:
                             isWeekly = cfg.get("isWeekly", False)
                             if conditionMet:
                                 eq.streak_count = getattr(eq, 'streak_count', 0) + 1
-                                # Snapshot the in-streak output as the new peak
-                                # so a future streak-break can decay from it.
+                                # Ratchet peak_output to the season high-water
+                                # mark. Take max(existing, this week's output)
+                                # so a streak that restarts at a decayed base
+                                # doesn't drag the stored peak back down.
                                 # peak-decay only applies to season streaks
                                 # (skip weekly accumulators and noReset cards).
                                 if not isWeekly and not isNoReset:
                                     weekOutput = self._extractStreakOutput(result, eq, effectConfig)
                                     if weekOutput is not None:
-                                        eq.peak_output = weekOutput
+                                        existingPeak = getattr(eq, 'peak_output', None) or 0.0
+                                        eq.peak_output = max(existingPeak, weekOutput)
                                     eq.weeks_since_break = 0
                             elif not isNoReset:
                                 # Streak just broke OR has been broken. Track decay tail.

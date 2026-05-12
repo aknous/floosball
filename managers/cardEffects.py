@@ -2647,28 +2647,46 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
     peerBonus = max(0, getattr(ctx, 'streakCardCount', 1) - 1)
     effectiveCount = streakCount + peerBonus
 
+    # Ratcheting base — when a streak resumes after a break, the new
+    # base = the decayed peak at this moment (capped to ≥ original
+    # base). This way successful streaks leave a higher floor for
+    # subsequent streaks: a card whose previous run peaked at 1.32
+    # picks up around 1.20 if one cold week passed before the
+    # restart, growing from there rather than from 1.07 again. If
+    # the decay has already floored back to base, this resolves to
+    # the original base and behaves as a fresh streak.
+    peak = ctx.streakPeakOutputs.get(eqId)
+    weeksSince = ctx.streakWeeksSinceBreak.get(eqId, 0)
+    if peak is not None and peak > baseReward:
+        decay = 0.85 if rewardType == "mult" else 0.7
+        decayedPeak = peak * (decay ** weeksSince)
+        effectiveBase = max(baseReward, decayedPeak)
+    else:
+        effectiveBase = baseReward
+
     # Log-tapered streaks (Conviction): set when `coef` is in primary.
-    # output = baseReward + coef × ln(1 + effectiveCount / kStreak)
+    # output = effectiveBase + coef × ln(1 + effectiveCount / kStreak)
     # Naturally plateaus on long streaks rather than scaling linearly.
     if "coef" in primary:
         import math
         coef = primary.get("coef", 0.0)
         kStreak = primary.get("kStreak", 4)
-        totalReward = baseReward + coef * math.log(1 + effectiveCount / kStreak)
+        totalReward = effectiveBase + coef * math.log(1 + effectiveCount / kStreak)
         if peerBonus > 0:
-            eq = f"{baseReward} + {coef} × ln(1 + {effectiveCount}/{kStreak}) [{streakCount} wk + {peerBonus} synergy]"
+            eq = f"{round(effectiveBase, 2)} + {coef} × ln(1 + {effectiveCount}/{kStreak}) [{streakCount} wk + {peerBonus} synergy]"
         else:
-            eq = f"{baseReward} + {coef} × ln(1 + {streakCount}/{kStreak})"
+            eq = f"{round(effectiveBase, 2)} + {coef} × ln(1 + {streakCount}/{kStreak})"
         result = _streakReward(primary, totalReward)
         result.equation = eq
         return result
 
     growthTicks = max(0, effectiveCount - 1)
-    totalReward = baseReward + growthPerTick * growthTicks
+    totalReward = effectiveBase + growthPerTick * growthTicks
+    baseLabel = "base" if effectiveBase == baseReward else "carried base"
     if peerBonus > 0:
-        eq = f"{baseReward} base + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
+        eq = f"{round(effectiveBase, 2)} {baseLabel} + ({growthPerTick}/streak × {growthTicks} [{max(0, streakCount - 1)} wk + {peerBonus} synergy])"
     else:
-        eq = f"{baseReward} base + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
+        eq = f"{round(effectiveBase, 2)} {baseLabel} + ({growthPerTick}/streak × {max(0, streakCount - 1)})"
     result = _streakReward(primary, totalReward)
     result.equation = eq
     return result
