@@ -816,6 +816,11 @@ class FantasyRosterSwap(Base):
     new_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
     swap_week: Mapped[int] = mapped_column(Integer, nullable=False)
     banked_fp: Mapped[float] = mapped_column(Float, default=0.0)
+    # Snapshot of the old player's swap-week FP at the moment of the swap.
+    # Used so the leaderboard's weekly FP doesn't drop when a user swaps
+    # post-games-end — the old player's current-week contribution is
+    # preserved here rather than being lost when they leave roster.players.
+    banked_week_fp: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships

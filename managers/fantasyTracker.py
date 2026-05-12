@@ -550,6 +550,15 @@ class FantasyTracker:
                     roster_id=roster.id
                 ).all()
                 previousPlayersFP = sum(s.banked_fp for s in swaps)
+                # Preserve old players' current-week FP so the leaderboard
+                # weekly total doesn't drop when a user swaps post-games-end.
+                # banked_week_fp is the snapshot of the old player's
+                # swap-week FP at the moment of the swap.
+                previousPlayersWeekFP = sum(
+                    (getattr(s, 'banked_week_fp', 0) or 0)
+                    for s in swaps if s.swap_week == currentWeek
+                )
+                currentWeekPlayerFP += previousPlayersWeekFP
                 if previousPlayersFP > 0:
                     seasonEarnedFP += previousPlayersFP
                     rosterPlayers.append({
@@ -560,7 +569,7 @@ class FantasyTracker:
                         "teamAbbr": "",
                         "teamId": None,
                         "earnedPoints": round(previousPlayersFP, 1),
-                        "weekFP": 0,
+                        "weekFP": round(previousPlayersWeekFP, 1),
                     })
 
                 # ── Favorite team data ──

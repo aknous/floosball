@@ -5524,6 +5524,14 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
             player_id=oldPlayerId, season=currentSeasonNum
         ).scalar()
         bankedFP = max(0.0, float(totalSeasonFP) - rosterPlayer.points_at_lock)
+        # Snapshot the old player's swap-week FP at the moment of swap so
+        # the leaderboard's weekly FP doesn't drop when a user swaps
+        # post-games-end. Without this, the old player's FP for the
+        # current week vanishes when they leave roster.players.
+        oldPlayerWeekFPRow = session.query(WeeklyPlayerFP.fantasy_points).filter_by(
+            player_id=oldPlayerId, season=currentSeasonNum, week=currentWeek
+        ).scalar()
+        bankedWeekFP = float(oldPlayerWeekFPRow or 0.0)
 
         totalSwaps = roster.swaps_available + roster.purchased_swaps
         if totalSwaps < 1:
@@ -5552,6 +5560,7 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
             new_player_id=req.newPlayerId,
             swap_week=currentWeek,
             banked_fp=round(bankedFP, 1),
+            banked_week_fp=round(bankedWeekFP, 1),
         ))
 
         # Update the roster player — new player starts at 0 earned FP
@@ -5875,7 +5884,7 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
     """Get fantasy leaderboard broken down by week."""
     response.headers["Cache-Control"] = "public, max-age=10"
     from database.connection import get_session
-    from database.models import FantasyRoster, FantasyRosterPlayer, User, Game, GamePlayerStats, WeeklyCardBonus
+    from database.models import FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap, User, Game, GamePlayerStats, WeeklyCardBonus
 
     seasonNum = season if season is not None else _getCurrentSeasonNumber()
     if seasonNum is None:
@@ -6001,6 +6010,30 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                     weekData[week][userId]["playerPoints"][playerId] = (
                         weekData[week][userId]["playerPoints"].get(playerId, 0) + earned
                     )
+
+        # Add swapped-out players' contribution per swap_week. Without this
+        # the weekly view drops the old player's FP the moment a user swaps
+        # them out, even though the week's games already played out with
+        # the old player on the roster. banked_week_fp is the snapshot
+        # captured at swap time.
+        if rosterIds:
+            swapRows = session.query(FantasyRosterSwap).filter(
+                FantasyRosterSwap.roster_id.in_(rosterIds),
+            ).all()
+            rosterIdToUserId = {info["roster"].id: uId for uId, info in rostersByUser.items()}
+            for swap in swapRows:
+                userId = rosterIdToUserId.get(swap.roster_id)
+                if userId is None:
+                    continue
+                bankedWeek = float(getattr(swap, 'banked_week_fp', 0) or 0)
+                if bankedWeek <= 0:
+                    continue
+                week = swap.swap_week
+                if week not in weekData:
+                    weekData[week] = {}
+                if userId not in weekData[week]:
+                    weekData[week][userId] = {"weekPoints": 0.0, "cardBonusPoints": 0.0, "playerPoints": {}}
+                weekData[week][userId]["weekPoints"] += bankedWeek
 
         # Inject card bonus into weekData for each user/week. Stored bonuses
         # (from WeeklyCardBonus) win over the live recomputation — at week-end

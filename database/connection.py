@@ -598,6 +598,14 @@ def _runPendingMigrations():
             logger.info("  Migration: added equipped_cards.weeks_since_break")
         except Exception:
             conn.rollback()
+        # Snapshot of the old player's swap-week FP at swap time. Lets the
+        # leaderboard preserve weekly FP across post-games-end swaps.
+        try:
+            conn.execute(text("ALTER TABLE fantasy_roster_swaps ADD COLUMN banked_week_fp REAL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added fantasy_roster_swaps.banked_week_fp")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
