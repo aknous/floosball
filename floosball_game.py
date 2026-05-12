@@ -6518,17 +6518,37 @@ class Game:
 
         Probability per player = attention / 1000. Awakened-threshold
         attention (~100) gives ~10% per-play chance.
+
+        Gated on the play producing a meaningful result — incomplete
+        passes, throwaways, spikes, kneels, and other no-event plays
+        skip the roll because the current glitch lines are about a
+        result that doesn't quite add up. If nothing happened, there's
+        nothing for the glitch to be the answer to.
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
         if not self._anomalyAttention:
             return
+        p = self.play
+        if p is None:
+            return
+        hadResult = (
+            getattr(p, 'yardage', 0) != 0
+            or getattr(p, 'isTouchdown', False)
+            or getattr(p, 'isTurnover', False)
+            or getattr(p, 'isInterception', False)
+            or getattr(p, 'isFumbleLost', False)
+            or getattr(p, 'isSack', False)
+            or getattr(p, 'scoreChange', False)
+        )
+        if not hadResult:
+            return
         # Gather candidates — the offense's primary actors on this play.
         candidates = []
         for attr in ('passer', 'receiver', 'runner', 'kicker'):
-            p = getattr(self.play, attr, None) if self.play is not None else None
-            if p is not None and getattr(p, 'id', None) is not None:
-                candidates.append(p)
+            actor = getattr(p, attr, None)
+            if actor is not None and getattr(actor, 'id', None) is not None:
+                candidates.append(actor)
         for player in candidates:
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
