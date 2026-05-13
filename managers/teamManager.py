@@ -832,6 +832,7 @@ class TeamManager:
                     team.elo = team.seasonTeamStats['elo']
                     team.seasonTeamStats['madePlayoffs'] = dbStats.made_playoffs
                     team.seasonTeamStats['bigPlays'] = dbStats.big_plays or 0
+                    team.seasonTeamStats['peakStreak'] = dbStats.peak_streak or 0
                     if dbStats.offense_stats:
                         team.seasonTeamStats['Offense'].update(dbStats.offense_stats)
                     if dbStats.defense_stats:

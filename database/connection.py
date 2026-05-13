@@ -598,6 +598,23 @@ def _runPendingMigrations():
             logger.info("  Migration: added equipped_cards.weeks_since_break")
         except Exception:
             conn.rollback()
+        # Snapshot of the old player's swap-week FP at swap time. Lets the
+        # leaderboard preserve weekly FP across post-games-end swaps.
+        try:
+            conn.execute(text("ALTER TABLE fantasy_roster_swaps ADD COLUMN banked_week_fp REAL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added fantasy_roster_swaps.banked_week_fp")
+        except Exception:
+            conn.rollback()
+        # Peak streak (longest win-or-loss run, abs value) per team-season.
+        # Column add only — backfill runs below via _backfillTeamPeakStreaks
+        # so it opens its own connection and can compute idempotently.
+        try:
+            conn.execute(text("ALTER TABLE team_season_stats ADD COLUMN peak_streak INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added team_season_stats.peak_streak")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -615,6 +632,7 @@ def _runPendingMigrations():
     _backfillPlayerSeasonTeamIds()
     _backfillPlayerSeasonStatsFromGames()
     _backfillPlayerCareerStatsFromGames()
+    _backfillTeamPeakStreaks()
 
 
 def _recomputeFundingTiers():
@@ -727,6 +745,71 @@ def _refreshCardEffectText():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillTeamPeakStreaks():
+    """Walk regular-season games chronologically per team-season and write
+    the longest win-or-loss run into team_season_stats.peak_streak.
+
+    Idempotent: only updates rows where peak_streak is below the computed
+    value. The Gone Streaking card reads this field via favoriteTeamPeakStreak,
+    so without a backfill, existing seasons would show 0 on cards even
+    after weeks of streaks already played out.
+    """
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        rows = conn.execute(text("""
+            SELECT g.season, g.id, g.week, g.game_date,
+                   g.home_team_id, g.away_team_id, g.home_score, g.away_score
+            FROM games g
+            WHERE g.is_playoff = 0
+              AND g.status = 'final'
+            ORDER BY g.season, g.week, g.game_date, g.id
+        """)).fetchall()
+        if not rows:
+            return
+        # streakByTeam: (season, team_id) → current signed streak
+        # peakByTeam:   (season, team_id) → max abs streak observed
+        streakByTeam = {}
+        peakByTeam = {}
+        def recordResult(season, teamId, won):
+            key = (season, teamId)
+            cur = streakByTeam.get(key, 0)
+            if won:
+                cur = cur + 1 if cur > 0 else 1
+            else:
+                cur = cur - 1 if cur < 0 else -1
+            streakByTeam[key] = cur
+            absCur = abs(cur)
+            if absCur > peakByTeam.get(key, 0):
+                peakByTeam[key] = absCur
+        for season, gid, week, gameDate, homeId, awayId, homeScore, awayScore in rows:
+            if homeScore is None or awayScore is None or homeScore == awayScore:
+                continue
+            if homeScore > awayScore:
+                recordResult(season, homeId, True)
+                recordResult(season, awayId, False)
+            else:
+                recordResult(season, awayId, True)
+                recordResult(season, homeId, False)
+        updated = 0
+        for (season, teamId), peak in peakByTeam.items():
+            result = conn.execute(text("""
+                UPDATE team_season_stats
+                SET peak_streak = :peak
+                WHERE team_id = :team_id AND season = :season
+                  AND COALESCE(peak_streak, 0) < :peak
+            """), {"team_id": teamId, "season": season, "peak": peak})
+            updated += result.rowcount or 0
+        if updated:
+            conn.commit()
+            logger.info(f"  Backfill: set peak_streak on {updated} team_season_stats rows")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Backfill warning (peak_streak): {e}")
     finally:
         conn.close()
 

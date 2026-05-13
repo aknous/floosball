@@ -1608,6 +1608,7 @@ class SeasonManager:
                     favoriteTeamElo = 1500.0
                     favoriteTeamStreak = 0
                     favoriteTeamPriorStreak = 0
+                    favoriteTeamPeakStreak = 0
                     favoriteTeamSeasonLosses = 0
                     favoriteTeamInPlayoffs = False
                     favoriteTeamWonThisWeek = False
@@ -1622,6 +1623,7 @@ class SeasonManager:
                             favStats = getattr(favTeam, 'seasonTeamStats', {})
                             favoriteTeamStreak = favStats.get('streak', 0)
                             favoriteTeamPriorStreak = favStats.get('priorStreak', 0)
+                            favoriteTeamPeakStreak = favStats.get('peakStreak', 0)
                             favoriteTeamSeasonLosses = favStats.get('losses', 0)
                             favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
                             favoriteTeamBigPlays = bigPlaysByTeam.get(userFavoriteTeamId, 0)
@@ -1751,6 +1753,7 @@ class SeasonManager:
                         leagueAverageElo=leagueAverageElo,
                         favoriteTeamStreak=favoriteTeamStreak,
                         favoriteTeamPriorStreak=favoriteTeamPriorStreak,
+                        favoriteTeamPeakStreak=favoriteTeamPeakStreak,
                         favoriteTeamSeasonLosses=favoriteTeamSeasonLosses,
                         favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
                         favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
@@ -5954,7 +5957,18 @@ class SeasonManager:
             # Initialize additional team attributes that Game class may need
             if not hasattr(team, 'winningStreak'):
                 team.winningStreak = False
-    
+
+        # On resume, hydrate seasonTeamStats from DB so live-tracked fields
+        # (streak, peakStreak, bigPlays, etc.) reflect the persisted values
+        # rather than the class-default zeros. Without this, the first
+        # _saveTeamSeasonStatsToDatabase after restart writes zeros back over
+        # the persisted values, permanently losing season-cumulative state
+        # for any field not also recomputed each game.
+        if isResume:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager and self.currentSeason:
+                teamManager.loadSeasonTeamStats(self.currentSeason.seasonNumber)
+
     def _updateWeeklyStats(self) -> None:
         """Update weekly statistics and averages for teams and players"""
         # Update team averages (matches original)
@@ -8610,6 +8624,11 @@ class SeasonManager:
                 # Big plays — persisted so Highlight Reel's per-game
                 # average survives backend restarts.
                 db_stats.big_plays = stats.get('bigPlays', 0)
+
+                # Peak streak — persisted so Gone Streaking survives
+                # restarts. peakStreak is the longest win-or-loss run
+                # (abs value) seen this season.
+                db_stats.peak_streak = stats.get('peakStreak', 0)
 
                 # JSON for detailed breakdown
                 db_stats.offense_stats = stats.get('Offense', {})
