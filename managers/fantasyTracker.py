@@ -716,11 +716,11 @@ class FantasyTracker:
                         gamesActive=gamesActive,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
-                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
+                    # Formula: (rosterFP + Σ flat FP) × (1 + Σ(FPxᵢ − 1))
+                    # Bonus-additive — see cardEffectCalculator.aggregateMultFactors.
+                    from managers.cardEffectCalculator import aggregateMultFactors
                     baseFP = weekRawFP + calcResult.totalBonusFP
-                    multProduct = 1.0
-                    for f in calcResult.multFactors:
-                        multProduct *= f
+                    multProduct = aggregateMultFactors(calcResult.multFactors)
                     weekCardBonus = round(baseFP * multProduct - weekRawFP, 2)
                     if weekCardBonus < 0:
                         weekCardBonus = 0.0

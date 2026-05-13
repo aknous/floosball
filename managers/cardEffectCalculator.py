@@ -861,6 +861,20 @@ def calculateWeekCardBonuses(
     return result
 
 
+def aggregateMultFactors(multFactors: List[float]) -> float:
+    """Combine FPx factors into a single multiplier using bonus-additive math.
+
+    Each factor's contribution above 1.0 is summed rather than multiplied.
+    Two 1.5x factors give 1 + 0.5 + 0.5 = 2.0x (not 2.25x).
+    Empty list / no FPx cards = 1.0x (no effect).
+
+    Replaces the prior multiplicative compounding so stacked FPx hands grow
+    linearly instead of geometrically. Single-FPx behavior is unchanged
+    (1.3 stays 1.3).
+    """
+    return 1.0 + sum(max(0.0, f - 1.0) for f in multFactors)
+
+
 def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     """Mutate breakdowns in-place for tradeoff effects like Lemons and Feast or Famine."""
     tradeoffNames = {b.effectName for b in breakdowns if b.effectName in _TRADEOFF_EFFECTS}

@@ -1812,11 +1812,12 @@ class SeasonManager:
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
+                    # Formula: (rosterFP + Σ flat FP) × (1 + Σ(FPxᵢ − 1))
+                    # Bonus-additive — stacked FPx grows linearly, not
+                    # geometrically. Single-FPx hands unchanged.
+                    from managers.cardEffectCalculator import aggregateMultFactors
                     baseFP = weekRawFP + result.totalBonusFP
-                    multProduct = 1.0
-                    for f in result.multFactors:
-                        multProduct *= f
+                    multProduct = aggregateMultFactors(result.multFactors)
                     totalFP = round(baseFP * multProduct, 2)
                     # Subtract raw FP so we store only the card bonus portion
                     totalFP = round(totalFP - weekRawFP, 2)

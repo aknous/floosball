@@ -810,18 +810,15 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
             peakBySlot.get(b.slotNumber),
         ))
 
-    multProduct = 1.0
-    for m in result.multFactors:
-        multProduct *= m
+    from managers.cardEffectCalculator import aggregateMultFactors
+    multProduct = aggregateMultFactors(result.multFactors)
     projectedTotalFP = (ctx.weekRawFP + result.totalBonusFP) * multProduct
 
     # Ceiling total — same formula applied to the peak (hot-week) calc
     # with inflated stats. Gives a realistic "up to" number for the
     # Projected This Week block.
     peakCtx = _peakContext(ctx)
-    peakMultProduct = 1.0
-    for m in peakResult.multFactors:
-        peakMultProduct *= m
+    peakMultProduct = aggregateMultFactors(peakResult.multFactors)
     bestCaseTotalFP = (peakCtx.weekRawFP + peakResult.totalBonusFP) * peakMultProduct
 
     return {
