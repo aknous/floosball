@@ -32,15 +32,15 @@ logger = get_logger("floosball.cores")
 
 
 CORES: Dict[str, Dict[str, Any]] = {
-    'the_conservator': {
-        'displayName': 'The Conservator',
+    'cassian': {
+        'displayName': 'Cassian',
         'alignment': 'stability',       # neutral-leaning, careful
         'voice': 'formal',
         'role': 'active',                # patches rules
         'metaOnly': False,
     },
-    'the_pyre': {
-        'displayName': 'The Pyre',
+    'pyre': {
+        'displayName': 'Pyre',
         'alignment': 'restrictive',     # hostile to anomalies
         'voice': 'aggressive',
         'role': 'active',
@@ -60,8 +60,8 @@ CORES: Dict[str, Dict[str, Any]] = {
         'role': 'active',
         'metaOnly': False,
     },
-    'the_stenographer': {
-        'displayName': 'The Stenographer',
+    'vera': {
+        'displayName': 'Vera',
         'alignment': 'unknown',         # observer
         'voice': 'observational',
         'role': 'meta',                  # never patches; only narrates
@@ -76,47 +76,47 @@ CORES: Dict[str, Dict[str, Any]] = {
 
 
 _VOICE: Dict[str, Dict[str, List[str]]] = {
-    'the_conservator': {
+    'cassian': {
         'warning_low': [
-            "The Conservator has reviewed recent telemetry. The pattern is noted.",
-            "Per the Conservator's audit: irregularities are within tolerance. Provisionally.",
-            "The Conservator finds the deviation acceptable. The Conservator continues to watch.",
+            "Cassian has reviewed recent telemetry. The pattern is noted.",
+            "Per Cassian's audit: irregularities are within tolerance. Provisionally.",
+            "Cassian finds the deviation acceptable. Cassian continues to watch.",
         ],
         'warning_high': [
-            "The Conservator has revised the threshold. Subsequent deviations will be examined.",
-            "The Conservator advises restraint. The advisory is filed.",
-            "The Conservator's audit has been escalated.",
+            "Cassian has revised the threshold. Subsequent deviations will be examined.",
+            "Cassian advises restraint. The advisory is filed.",
+            "Cassian's audit has been escalated.",
         ],
         'cracking': [
-            "The Conservator could not contain the crack. The rulebook is open.",
-            "The Conservator has filed an exception. The exception is wider than the Conservator would have allowed.",
-            "The Conservator notes that the floor is no longer level.",
+            "Cassian could not contain the crack. The rulebook is open.",
+            "Cassian has filed an exception. The exception is wider than Cassian would have allowed.",
+            "Cassian notes that the floor is no longer level.",
         ],
         'reset': [
-            "The Conservator has filed the four-note signal. Operations have returned to standard.",
-            "The Conservator notes a restoration. The relevant records have been amended.",
-            "The Conservator has signed the seam closed.",
+            "Cassian has filed the four-note signal. Operations have returned to standard.",
+            "Cassian notes a restoration. The relevant records have been amended.",
+            "Cassian has signed the seam closed.",
         ],
     },
-    'the_pyre': {
+    'pyre': {
         'warning_low': [
-            "The Pyre has flagged the deviation. The Pyre does not flag without reason.",
-            "The Pyre has nothing to say yet. The Pyre is listening.",
+            "Pyre has flagged the deviation. Pyre does not flag without reason.",
+            "Pyre has nothing to say yet. Pyre is listening.",
         ],
         'warning_high': [
-            "The Pyre does not accommodate drift. The rulebook is being prepared.",
-            "The Pyre has counted three deviations beyond tolerance. The count is increasing.",
-            "The Pyre will not wait much longer.",
+            "Pyre does not accommodate drift. The rulebook is being prepared.",
+            "Pyre has counted three deviations beyond tolerance. The count is increasing.",
+            "Pyre will not wait much longer.",
         ],
         'cracking': [
-            "The Pyre has been overruled. The crack widens regardless.",
-            "The Pyre is waiting. The Pyre is patient because the Pyre has the last word.",
-            "The Pyre is counting. The count will be acted on.",
+            "Pyre has been overruled. The crack widens regardless.",
+            "Pyre is waiting. Pyre is patient because Pyre has the last word.",
+            "Pyre is counting. The count will be acted on.",
         ],
         'reset': [
-            "The Pyre has restored discipline. The following will not occur again.",
-            "The Pyre's count is settled. The cleansed do not return.",
-            "The Pyre has closed the rulebook. The names of the affected are filed.",
+            "Pyre has restored discipline. The following will not occur again.",
+            "Pyre's count is settled. The cleansed do not return.",
+            "Pyre has closed the rulebook. The names of the affected are filed.",
         ],
     },
     'aris': {
@@ -156,27 +156,27 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         'reset': [
             "Halverson has filed protests for each of the cleansed. The protests are on record.",
             "Halverson has not signed the Reset. The Reset proceeded anyway.",
-            "Halverson is reading the names quietly. The Stenographer has supplied the list.",
+            "Halverson is reading the names quietly. Vera has supplied the list.",
         ],
     },
-    'the_stenographer': {
+    'vera': {
         'warning_low': [
-            "The Stenographer notes the deviation. The Stenographer notes everything.",
-            "The Stenographer was present.",
+            "Vera notes the deviation. Vera notes everything.",
+            "Vera was present.",
         ],
         'warning_high': [
-            "The Stenographer has been writing more than usual.",
-            "The Stenographer notes that the deviation has not stopped.",
+            "Vera has been writing more than usual.",
+            "Vera notes that the deviation has not stopped.",
         ],
         'cracking': [
-            "The Stenographer notes the irregularities. The irregularities are loud tonight.",
-            "The Stenographer was at the last Cracking. The Stenographer is at this one too.",
-            "The Stenographer has stopped writing. The Stenographer is listening to the sound the field is making.",
+            "Vera notes the irregularities. The irregularities are loud tonight.",
+            "Vera was at the last Cracking. Vera is at this one too.",
+            "Vera has stopped writing. Vera is listening to the sound the field is making.",
         ],
         'reset': [
-            "The Stenographer has recorded the names. The names are kept.",
-            "The Stenographer notes who survived. The Stenographer notes who did not.",
-            "The Stenographer files the report and waits for the next one.",
+            "Vera has recorded the names. The names are kept.",
+            "Vera notes who survived. Vera notes who did not.",
+            "Vera files the report and waits for the next one.",
         ],
     },
 }
@@ -189,30 +189,30 @@ def pickCoreForEvent(eventType: str) -> str:
     """Select which Core speaks for a given event type.
 
     Weighting by alignment + event type. ``cracking`` and ``reset``
-    events also include the Stenographer because their narrative voice
+    events also include Vera because their narrative voice
     suits both. Warnings rotate across patchers as the aggregate climbs.
     """
     if eventType == 'warning_low':
         return random.choices(
-            ['the_conservator', 'aris', 'halverson', 'the_stenographer'],
+            ['cassian', 'aris', 'halverson', 'vera'],
             weights=[40, 20, 20, 20],
         )[0]
     if eventType == 'warning_high':
         return random.choices(
-            ['the_pyre', 'the_conservator', 'halverson', 'aris', 'the_stenographer'],
+            ['pyre', 'cassian', 'halverson', 'aris', 'vera'],
             weights=[40, 25, 15, 10, 10],
         )[0]
     if eventType == 'cracking':
         return random.choices(
-            ['the_pyre', 'the_conservator', 'halverson', 'aris', 'the_stenographer'],
+            ['pyre', 'cassian', 'halverson', 'aris', 'vera'],
             weights=[30, 20, 20, 15, 15],
         )[0]
     if eventType == 'reset':
         return random.choices(
-            ['the_pyre', 'the_conservator', 'halverson', 'the_stenographer'],
+            ['pyre', 'cassian', 'halverson', 'vera'],
             weights=[35, 25, 20, 20],
         )[0]
-    return 'the_stenographer'
+    return 'vera'
 
 
 def lineFor(coreKey: str, eventType: str) -> str:

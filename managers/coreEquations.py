@@ -1,11 +1,11 @@
 """Per-Core signature equations — used during a Cracking.
 
-Each active Core (the Conservator, the Pyre, Aris, Halverson) has its own
-math shape that replaces the baseline `(R + ΣF) × (1 + Σ(M−1))` aggregator
-while the Cracking is live. The Stenographer is meta-only and never takes
-control, so it has no equation. The "broken simulation" framing is the
-point: these equations are intentionally uncapped and produce outputs
-many multiples above baseline.
+Each active Core (Cassian, Pyre, Aris, Halverson) has its own math shape
+that replaces the baseline `(R + ΣF) × (1 + Σ(M−1))` aggregator while
+the Cracking is live. Vera is meta-only and never takes control, so it
+has no equation. The "broken simulation" framing is the point: these
+equations are intentionally uncapped and produce outputs many multiples
+above baseline.
 
 Inputs (same three across all equations):
   R   = rosterFP (sum of fantasy points from the user's drafted players)
@@ -26,7 +26,7 @@ from typing import List, Optional, Tuple
 
 # Public list of Cores that can actually take control during a Cracking.
 # Stenographer is excluded — per the design, it remains a meta-narrator.
-CONTROLLING_CORES = ('the_conservator', 'the_pyre', 'aris', 'halverson')
+CONTROLLING_CORES = ('cassian', 'pyre', 'aris', 'halverson')
 
 
 def _bonusAdditiveMultiplier(multFactors: List[float]) -> float:
@@ -44,7 +44,7 @@ def applyCoreEquation(
 ) -> Tuple[float, str]:
     """Apply the active Core's signature equation. Returns (output, prettyEquation).
 
-    `coreKey` is the Cores roster key (e.g. 'the_pyre'). Returns the baseline
+    `coreKey` is the Cores roster key (e.g. 'pyre'). Returns the baseline
     bonus-additive result if `coreKey` is None or unknown — this is the
     on-ramp for callers that always invoke this helper regardless of
     Cracking state.
@@ -53,7 +53,7 @@ def applyCoreEquation(
     F = float(flatFPSum or 0.0)
     M = _bonusAdditiveMultiplier(multFactors)
 
-    if coreKey == 'the_conservator':
+    if coreKey == 'cassian':
         out = (R + F) * M * (M + 1.0)
         eqn = (
             f"(R + ΣF) × ΣM × (ΣM + 1)  "
@@ -62,7 +62,7 @@ def applyCoreEquation(
         )
         return out, eqn
 
-    if coreKey == 'the_pyre':
+    if coreKey == 'pyre':
         # Cap exponent input so 32-bit math doesn't overflow on extreme stacks.
         # e^25 ≈ 7.2e10 — already absurd, beyond that just clamp.
         safeM = min(M, 25.0)
@@ -146,9 +146,9 @@ def equationTemplate(coreKey: Optional[str]) -> str:
     Used to render the "current Core's formula" pill in the card breakdown
     UI without needing live numbers.
     """
-    if coreKey == 'the_conservator':
+    if coreKey == 'cassian':
         return "(R + ΣF) × ΣM × (ΣM + 1)"
-    if coreKey == 'the_pyre':
+    if coreKey == 'pyre':
         return "(R + ΣF) × e^ΣM"
     if coreKey == 'aris':
         return "(R + ΣF) × Γ(ΣM + 1) + 4R"
