@@ -707,12 +707,19 @@ class FantasyTracker:
                         gamesActive=gamesActive,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
-                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
-                    baseFP = weekRawFP + calcResult.totalBonusFP
-                    multProduct = 1.0
-                    for f in calcResult.multFactors:
-                        multProduct *= f
-                    weekCardBonus = round(baseFP * multProduct - weekRawFP, 2)
+                    # When a Cracking is active, the controlling Core's
+                    # signature equation replaces the baseline aggregator.
+                    try:
+                        from managers.anomalyManager import getActiveCrackingCore
+                        crackingCore = getActiveCrackingCore(seasonNum, currentWeek)
+                    except Exception:
+                        crackingCore = None
+                    from managers.coreEquations import computeFinalOutput, equationTemplate
+                    rawTotalFP, crackingEquation = computeFinalOutput(
+                        weekRawFP, calcResult.totalBonusFP, calcResult.multFactors,
+                        coreKey=crackingCore,
+                    )
+                    weekCardBonus = round(rawTotalFP - weekRawFP, 2)
                     if weekCardBonus < 0:
                         weekCardBonus = 0.0
                     cardBreakdowns = [
@@ -761,6 +768,9 @@ class FantasyTracker:
                         "totalBonusFP": round(calcResult.totalBonusFP, 2),
                         "multFactors": [round(f, 2) for f in calcResult.multFactors],
                         "handSynergies": handSynergies,
+                        "crackingCore": crackingCore,
+                        "crackingEquation": crackingEquation if crackingCore else None,
+                        "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
                     }
                 elif hasStoredCurrentWeekBonus:
                     stored = userWeekBonuses[currentWeek]

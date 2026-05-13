@@ -810,19 +810,28 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
             peakBySlot.get(b.slotNumber),
         ))
 
-    multProduct = 1.0
-    for m in result.multFactors:
-        multProduct *= m
-    projectedTotalFP = (ctx.weekRawFP + result.totalBonusFP) * multProduct
+    # Projection uses the Core's signature equation when a Cracking is
+    # active so the projected total previews what the user will actually
+    # see on their breakdown that week.
+    try:
+        from managers.anomalyManager import getActiveCrackingCore
+        crackingCore = getActiveCrackingCore(ctx.season, ctx.weekNumber)
+    except Exception:
+        crackingCore = None
+    from managers.coreEquations import computeFinalOutput, equationTemplate
+    projectedTotalFP, projectedEquation = computeFinalOutput(
+        ctx.weekRawFP, result.totalBonusFP, result.multFactors,
+        coreKey=crackingCore,
+    )
 
     # Ceiling total — same formula applied to the peak (hot-week) calc
     # with inflated stats. Gives a realistic "up to" number for the
     # Projected This Week block.
     peakCtx = _peakContext(ctx)
-    peakMultProduct = 1.0
-    for m in peakResult.multFactors:
-        peakMultProduct *= m
-    bestCaseTotalFP = (peakCtx.weekRawFP + peakResult.totalBonusFP) * peakMultProduct
+    bestCaseTotalFP, _ = computeFinalOutput(
+        peakCtx.weekRawFP, peakResult.totalBonusFP, peakResult.multFactors,
+        coreKey=crackingCore,
+    )
 
     return {
         "cards": cards,
@@ -834,6 +843,9 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
         "bestCaseTotalFP": round(max(projectedTotalFP, bestCaseTotalFP), 2),
         "opponent": ctx.favoriteTeamOpponentName,
         "winProbability": round(ctx.favoriteTeamWinProb, 2),
+        "crackingCore": crackingCore,
+        "crackingEquation": projectedEquation if crackingCore else None,
+        "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
     }
 
 

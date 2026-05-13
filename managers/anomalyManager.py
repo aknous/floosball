@@ -269,6 +269,69 @@ def getCrackingMultiplier(seasonNumber: int, week: int) -> float:
     return CRACKING_MULTIPLIER if isCrackingWeek(seasonNumber, week) else 1.0
 
 
+def getActiveCrackingCore(seasonNumber: int, week: int) -> Optional[str]:
+    """Return the controlling Core's key for the active Cracking, or None.
+
+    Scans the LeagueAnomalyState's audit trail for a thinning_trigger entry
+    whose [start_week, start_week + duration) span contains `week`. Returns
+    the `core` field on that entry — selected once at Cracking trigger time
+    via `_pickControllingCore` and pinned for the duration.
+    """
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        if state is None:
+            return None
+        for entry in (state.cores_patches_applied or []):
+            if entry.get('event') != 'thinning_trigger':
+                continue
+            start = entry.get('start_week')
+            duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
+            if start is None:
+                continue
+            if start <= week < start + duration:
+                return entry.get('core')
+        return None
+    finally:
+        session.close()
+
+
+def _pickControllingCore(state: LeagueAnomalyState) -> str:
+    """Weighted-random pick from the 4 active Cores. Stenographer never
+    takes control. Cores used more recently this season get less weight,
+    so each Cracking tends to rotate. If a Core hasn't been used this
+    season, it gets the heaviest weight."""
+    from managers.coreEquations import CONTROLLING_CORES
+
+    # Count how recently each Core has taken control. Most recent = lowest score.
+    seen: Dict[str, int] = {}
+    for idx, entry in enumerate(state.cores_patches_applied or []):
+        if entry.get('event') != 'thinning_trigger':
+            continue
+        core = entry.get('core')
+        if core in CONTROLLING_CORES:
+            seen[core] = idx  # later index = more recent
+
+    # Weight: never-used Cores get the highest weight; recently-used get the
+    # lowest. We use position-from-end as the "recency penalty" — Cores seen
+    # in the most recent slot get weight 1, never-seen get weight (n+1).
+    trail = state.cores_patches_applied or []
+    weights: List[Tuple[str, float]] = []
+    for core in CONTROLLING_CORES:
+        if core not in seen:
+            weights.append((core, float(len(trail) + 2)))
+        else:
+            weights.append((core, float(max(1, len(trail) - seen[core]))))
+    total = sum(w for _, w in weights)
+    pick = random.uniform(0, total)
+    running = 0.0
+    for core, w in weights:
+        running += w
+        if pick <= running:
+            return core
+    return CONTROLLING_CORES[0]  # defensive fallback
+
+
 # ─── Decay ──────────────────────────────────────────────────────────────────
 
 
@@ -857,6 +920,12 @@ def _triggerCracking(state: LeagueAnomalyState, currentWeek: int) -> None:
     except Exception as e:
         logger.warning(f"coresManager unavailable for thinning news: {e}")
 
+    # Pick the Core that controls the equation for this Cracking. Weighted
+    # toward Cores that haven't been active this season so the four active
+    # Cores rotate naturally. Pinned for the Cracking duration via the
+    # audit-trail entry below; `getActiveCrackingCore` reads it back out.
+    controllingCore = _pickControllingCore(state)
+
     patches = list(state.cores_patches_applied or [])
     patches.append({
         'event': 'thinning_trigger',
@@ -867,13 +936,15 @@ def _triggerCracking(state: LeagueAnomalyState, currentWeek: int) -> None:
         'thinning_number': state.thinnings_this_season,
         'fired_at': datetime.utcnow().isoformat() + 'Z',
         'news': news,
+        'core': controllingCore,
     })
     state.cores_patches_applied = patches
 
     logger.warning(
         f"THE CRACKING FIRED (#{state.thinnings_this_season}, season="
         f"{state.season}): start_week={startWeek}, duration={duration} round(s), "
-        f"aggregate={state.aggregate_score:.1f} (×{overRatio:.2f} threshold)"
+        f"core={controllingCore}, aggregate={state.aggregate_score:.1f} "
+        f"(×{overRatio:.2f} threshold)"
     )
 
     # Broadcast to the league news feed.

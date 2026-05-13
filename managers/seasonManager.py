@@ -1796,16 +1796,33 @@ class SeasonManager:
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
-                    baseFP = weekRawFP + result.totalBonusFP
+                    # When the Cracking is active, the simulation's math is
+                    # the controlling Core's signature equation rather than
+                    # the baseline aggregator. Resolved once per week per
+                    # user against the persisted Cracking state.
+                    try:
+                        from managers.anomalyManager import getActiveCrackingCore
+                        crackingCore = getActiveCrackingCore(season, week)
+                    except Exception:
+                        crackingCore = None
+
+                    from managers.coreEquations import computeFinalOutput, equationTemplate
+                    rawTotalFP, totalEquation = computeFinalOutput(
+                        weekRawFP, result.totalBonusFP, result.multFactors,
+                        coreKey=crackingCore,
+                    )
+                    # Subtract raw FP so we store only the card bonus portion
+                    totalFP = round(rawTotalFP - weekRawFP, 2)
+                    if totalFP < 0:
+                        totalFP = 0.0
+                    # Cached values used by the Compound achievement hook below.
+                    # During Cracking the "effective multiplier" loses meaning
+                    # (the equation isn't a simple multiplier), so fall back to
+                    # the literal multFactors product so the achievement still
+                    # has a sensible value.
                     multProduct = 1.0
                     for f in result.multFactors:
                         multProduct *= f
-                    totalFP = round(baseFP * multProduct, 2)
-                    # Subtract raw FP so we store only the card bonus portion
-                    totalFP = round(totalFP - weekRawFP, 2)
-                    if totalFP < 0:
-                        totalFP = 0.0
 
                     # Achievement hook — Compound tiers (single-week FPx from cards only)
                     # Exclude the synergy weekly modifier's contribution so the achievement
@@ -1868,6 +1885,9 @@ class SeasonManager:
                                 "weekRawFP": round(weekRawFP, 1),
                                 "totalBonusFP": round(result.totalBonusFP, 2),
                                 "multFactors": [round(f, 2) for f in result.multFactors],
+                                "crackingCore": crackingCore,
+                                "crackingEquation": totalEquation if crackingCore else None,
+                                "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
                             },
                         })
                         weekBonus = WeeklyCardBonus(
