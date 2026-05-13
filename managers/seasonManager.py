@@ -5954,7 +5954,18 @@ class SeasonManager:
             # Initialize additional team attributes that Game class may need
             if not hasattr(team, 'winningStreak'):
                 team.winningStreak = False
-    
+
+        # On resume, hydrate seasonTeamStats from DB so live-tracked fields
+        # (streak, peakStreak, bigPlays, etc.) reflect the persisted values
+        # rather than the class-default zeros. Without this, the first
+        # _saveTeamSeasonStatsToDatabase after restart writes zeros back over
+        # the persisted values, permanently losing season-cumulative state
+        # for any field not also recomputed each game.
+        if isResume:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager and self.currentSeason:
+                teamManager.loadSeasonTeamStats(self.currentSeason.seasonNumber)
+
     def _updateWeeklyStats(self) -> None:
         """Update weekly statistics and averages for teams and players"""
         # Update team averages (matches original)
