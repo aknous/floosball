@@ -1399,6 +1399,15 @@ class SeasonManager:
                             {}, {}, {}, {}, fp,
                         )
 
+                # Inject Q4 fantasy points for Closer card effect — mirrors
+                # the fantasyTracker live-snapshot injection. Without this,
+                # the persisted week-end breakdown always read 0 Q4 FP and
+                # Closer paid nothing, because _dbStatsToCardFormat doesn't
+                # surface the q4_fantasy_points column on its own.
+                for gps in gameStats:
+                    if gps.q4_fantasy_points and gps.player_id in weekPlayerStats:
+                        weekPlayerStats[gps.player_id]["q4FantasyPoints"] = gps.q4_fantasy_points
+
                 # ─── Build shared context data ───────────────────────────────
 
                 # Team results from DB games (teamId → won)
