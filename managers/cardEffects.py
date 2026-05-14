@@ -920,60 +920,73 @@ def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context, 
 # ratingNorm = playerRating - 60 (range 0–40 for ratings 60–100)
 
 def _buildCrossPositionParams(effectName, playerRating, editionScale):
-    """Build params for effects that can appear in any category pool."""
+    """Cross-category effects (hand composition, trigger-chain, etc.).
+
+    NEXT-SEASON REBALANCE: FP outputs scaled 2.25×, FPx deltas curbed 0.70×.
+    Conductor's amplifier boost left untouched (it's a structural amp, not
+    a per-card value — adjusted at the calculator level if needed).
+    """
     rn = playerRating - 60
     if effectName == "spectacle":
-        return {"rewardType": "fp", "perPointFP": round((0.3 + rn * 0.015) * editionScale, 2)}
+        return {"rewardType": "fp", "perPointFP": round((0.68 + rn * 0.034) * editionScale, 2)}
     if effectName == "indemnity":
+        # Floobits output — leave untouched
         return {"rewardType": "floobits", "baseFloobits": int(round(8 * editionScale)),
                 "enhancedFloobits": int(round((30 + rn * 0.4) * editionScale)),
                 "isChanceEffect": True}
     # ── Hand Composition Effects ──
     if effectName == "full_roster":
-        return {"rewardType": "mult", "rewardValue": round(1 + (0.75 + rn * 0.015) * editionScale, 2)}
+        # FPx delta 0.75 → 0.525
+        return {"rewardType": "mult", "rewardValue": round(1 + (0.525 + rn * 0.011) * editionScale, 2)}
     if effectName == "all_in":
-        return {"rewardType": "mult", "baseXMult": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
-                "perDuplicateXMult": round((0.08 + rn * 0.004) * editionScale, 2)}
+        # FPx deltas 0.05 → 0.035; 0.08 → 0.056
+        return {"rewardType": "mult", "baseXMult": round(1 + (0.035 + rn * 0.0021) * editionScale, 2),
+                "perDuplicateXMult": round((0.056 + rn * 0.0028) * editionScale, 2)}
     if effectName == "diversified":
-        return {"rewardType": "fp", "perTypeFP": round((5.0 + rn * 0.12) * editionScale, 1)}
+        # FP output — bump 2.25×
+        return {"rewardType": "fp", "perTypeFP": round((11.0 + rn * 0.27) * editionScale, 1)}
     if effectName == "gold_rush":
+        # Floobits output — leave untouched
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stacked_deck":
-        return {"perCardMult": round((0.15 + rn * 0.005) * editionScale, 2)}
+        # FPx delta 0.15 → 0.105
+        return {"perCardMult": round((0.105 + rn * 0.0035) * editionScale, 2)}
     # ── Trigger-Chain Effects (second pass) ──
     if effectName == "copycat":
-        return {"rewardType": "fp", "_noParams": True}  # No params needed — copies highest flat FP from other cards
+        return {"rewardType": "fp", "_noParams": True}
     if effectName == "chain_reaction":
-        return {"rewardType": "mult", "perCardXMult": round((0.08 + rn * 0.004) * editionScale, 2)}
+        # FPx delta 0.08 → 0.056
+        return {"rewardType": "mult", "perCardXMult": round((0.056 + rn * 0.0028) * editionScale, 2)}
     if effectName == "bonus_round":
-        return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
+        # FP output — bump 2.25×
+        return {"rewardType": "fp", "rewardValue": round((27 + rn * 1.13) * editionScale, 1)}
     # ── Chance Synergy Effects (second pass) ──
     if effectName == "high_roller":
-        return {"rewardType": "mult", "perCardMult": round((0.30 + rn * 0.010) * editionScale, 2)}
+        # FPx delta 0.30 → 0.21
+        return {"rewardType": "mult", "perCardMult": round((0.21 + rn * 0.007) * editionScale, 2)}
     # ── Streak Synergy Effects (second pass) ──
     if effectName == "fortitude":
-        return {"rewardType": "mult", "perCardMult": round((0.30 + rn * 0.010) * editionScale, 2)}
+        # FPx delta 0.30 → 0.21
+        return {"rewardType": "mult", "perCardMult": round((0.21 + rn * 0.007) * editionScale, 2)}
     # ── Tradeoff Effects (second pass) ──
     if effectName == "double_down":
+        # Lemons — multiplies the lowest FP card. Not curbed, structural amp.
         return {"rewardType": "mult", "rewardValue": min(4.0, round(2.0 + (0.50 + rn * 0.02) * editionScale, 2))}
     if effectName == "last_resort":
-        return {"rewardType": "fp", "baseFP": round(5.0 * editionScale, 1),
-                "enhancedFP": round((20 + rn * 0.4) * editionScale, 1),
+        # FP output — bump 2.25×
+        return {"rewardType": "fp", "baseFP": round(11.0 * editionScale, 1),
+                "enhancedFP": round((45 + rn * 0.90) * editionScale, 1),
                 "isChanceEffect": True}
     # ── New cards (FP/FPx rebalance) ──
     if effectName == "anthem":
-        # Threshold-based flat FP. Pops when 3+ flat-FP cards are equipped,
-        # bigger pop at 4, biggest at 5. Numbers tuned so a 3-FP-card hand
-        # gets ~25 FP from Anthem; full-FP hands hit 50.
+        # FP threshold rewards — bump 2.25×
         return {"rewardType": "fp",
-                "tier3FP": round((22 + rn * 0.6) * editionScale, 1),
-                "tier4FP": round((32 + rn * 0.8) * editionScale, 1),
-                "tier5FP": round((48 + rn * 1.0) * editionScale, 1)}
+                "tier3FP": round((50 + rn * 1.35) * editionScale, 1),
+                "tier4FP": round((72 + rn * 1.80) * editionScale, 1),
+                "tier5FP": round((108 + rn * 2.25) * editionScale, 1)}
     if effectName == "conductor":
-        # Pure amplifier. Boosts every other flat-FP card in the hand by
-        # +20% (tunable via boostPct). Produces nothing on its own —
-        # marker-style, output applied via _applyConductorBoost in the
-        # calculator's tradeoff phase.
+        # Structural amplifier — left at 20% (it's a multiplier on already-
+        # rebalanced FP cards, so its absolute output scales with them).
         return {"rewardType": "mult",
                 "boostPct": int(round(20 + rn * 0.2)),
                 "isAmplifier": True}
@@ -981,231 +994,228 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
 
 
 def _buildFlatFPParams(effectName, playerRating, editionScale):
+    """Flat-FP card parameter builder.
+
+    NEXT-SEASON REBALANCE: All flat-FP constants and slopes scaled 2.25×.
+    The Balatro-style rebuild: chips must matter as much as mult. Pre-
+    rebalance, a Holographic flat-FP card averaged ~8 FP — barely enough
+    to keep up with a 1.2× FPx multiplier on a 70-FP roster. Post-rebalance,
+    same card averages ~18 FP, putting mixed FP+FPx hands ahead of pure-
+    FPx stacks under the bonus-additive aggregation.
+    """
     rn = playerRating - 60
 
     if effectName == "freebie":
-        return {"baseFP": round((7 + rn * 0.15) * editionScale, 1)}
+        return {"baseFP": round((16 + rn * 0.34) * editionScale, 1)}
     if effectName == "entourage":
-        return {"perPlayerFP": round((1.2 + rn * 0.04) * editionScale, 1), "minStars": 3}
+        return {"perPlayerFP": round((2.7 + rn * 0.09) * editionScale, 1), "minStars": 3}
     if effectName == "touchdown_pinata":
-        return {"perTdFP": round((1.0 + rn * 0.03) * editionScale, 1)}
+        return {"perTdFP": round((2.25 + rn * 0.07) * editionScale, 1)}
     if effectName == "scrappy":
-        return {"baseFP": round(4.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
+        return {"baseFP": round(9.0 * editionScale, 1), "enhancedFP": round((40 + rn * 0.68) * editionScale, 1),
                 "maxStars": 2, "isChanceEffect": True}
     if effectName == "rng":
-        return {"minFP": round((3 + rn * 0.06) * editionScale, 1),
-                "maxFP": round((14 + rn * 0.25) * editionScale, 1)}
+        return {"minFP": round((7 + rn * 0.14) * editionScale, 1),
+                "maxFP": round((31 + rn * 0.56) * editionScale, 1)}
     if effectName == "avalanche":
-        return {"td1": round((2.0 + rn * 0.08) * editionScale, 1),
-                "td2": round((4.0 + rn * 0.16) * editionScale, 1),
-                "td3": round((7.0 + rn * 0.28) * editionScale, 1),
-                "td4": round((11.0 + rn * 0.44) * editionScale, 1)}
+        return {"td1": round((4.5 + rn * 0.18) * editionScale, 1),
+                "td2": round((9.0 + rn * 0.36) * editionScale, 1),
+                "td3": round((16.0 + rn * 0.63) * editionScale, 1),
+                "td4": round((25.0 + rn * 1.00) * editionScale, 1)}
     if effectName == "hedge":
-        return {"floorFP": 100}
+        return {"floorFP": 225}
     if effectName == "honor_roll":
-        return {"perPlayerFP": round((2.0 + rn * 0.06) * editionScale, 1), "fpThreshold": 15}
+        return {"perPlayerFP": round((4.5 + rn * 0.14) * editionScale, 1), "fpThreshold": 15}
     if effectName == "three_pointer":
-        return {"perFgFP": round((2.5 + rn * 0.08) * editionScale, 1)}
+        return {"perFgFP": round((5.6 + rn * 0.18) * editionScale, 1)}
     if effectName == "garbage_time":
-        return {"perPlayerFP": round((2.0 + rn * 0.08) * editionScale, 1)}
+        return {"perPlayerFP": round((4.5 + rn * 0.18) * editionScale, 1)}
     if effectName == "loyalty_bonus":
-        return {"perStreakFP": round((3.0 + rn * 0.12) * editionScale, 1)}
+        return {"perStreakFP": round((6.8 + rn * 0.27) * editionScale, 1)}
     if effectName == "windfall":
+        # Windfall outputs floobits, not FP — leave untouched by the rebalance.
         return {"perPlayerFloobits": round((5 + rn * 0.20) * editionScale)}
     if effectName == "spotlight_moment":
-        return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((18 + rn * 0.68) * editionScale, 1)}
     if effectName == "ace_up_the_sleeve":
         return {"rewardType": "fp",
-                "baseFP": round((3 + rn * 0.10) * editionScale, 1),
-                "rewardValue": round((6 + rn * 0.22) * editionScale, 1),
+                "baseFP": round((7 + rn * 0.23) * editionScale, 1),
+                "rewardValue": round((14 + rn * 0.50) * editionScale, 1),
                 "stat": "recYards", "threshold": 125}
     if effectName == "possession":
-        return {"perReceptionFP": round((0.4 + rn * 0.012) * editionScale, 2)}
+        return {"perReceptionFP": round((0.9 + rn * 0.027) * editionScale, 2)}
     if effectName == "slippery":
-        return {"perYacFP": round((0.15 + rn * 0.008) * editionScale, 2)}
+        return {"perYacFP": round((0.34 + rn * 0.018) * editionScale, 2)}
     if effectName == "jailbreak":
         return {"rewardType": "fp",
-                "baseFP": round((3 + rn * 0.10) * editionScale, 1),
-                "rewardValue": round((7 + rn * 0.25) * editionScale, 1),
+                "baseFP": round((7 + rn * 0.23) * editionScale, 1),
+                "rewardValue": round((16 + rn * 0.56) * editionScale, 1),
                 "threshold": 30}
     if effectName == "expedition":
-        return {"perFiftyYardsFP": round((2.5 + rn * 0.12) * editionScale, 1)}
+        return {"perFiftyYardsFP": round((5.6 + rn * 0.27) * editionScale, 1)}
     if effectName == "homer":
-        return {"perPlayerFP": round((3.0 + rn * 0.10) * editionScale, 1)}
+        return {"perPlayerFP": round((6.8 + rn * 0.23) * editionScale, 1)}
     if effectName == "gone_streaking":
-        return {"baseFP": round((2.0 + rn * 0.08) * editionScale, 1), "perStreakFP": round((0.8 + rn * 0.04) * editionScale, 1)}
+        return {"baseFP": round((4.5 + rn * 0.18) * editionScale, 1), "perStreakFP": round((1.8 + rn * 0.09) * editionScale, 1)}
     if effectName == "safety_blanket":
-        return {"rewardType": "fp", "perReceptionFP": round((1.0 + rn * 0.04) * editionScale, 1)}
+        return {"rewardType": "fp", "perReceptionFP": round((2.25 + rn * 0.09) * editionScale, 1)}
     if effectName == "lead_blocker":
-        return {"rewardType": "fp", "perTdFP": round((4.0 + rn * 0.2) * editionScale, 1)}
+        return {"rewardType": "fp", "perTdFP": round((9.0 + rn * 0.45) * editionScale, 1)}
     if effectName == "sniper":
-        return {"perFgFP": round((3.0 + rn * 0.10) * editionScale, 1)}
+        return {"perFgFP": round((6.8 + rn * 0.23) * editionScale, 1)}
     if effectName == "squire":
-        return {"perTdFP": round((4 + rn * 0.15) * editionScale, 1)}
+        return {"perTdFP": round((9 + rn * 0.34) * editionScale, 1)}
     # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
     if effectName == "crescendo":
-        # Position-specific tuning set at compute time; params store rarity-scaled values.
-        # Base lifted to 4 (was 1) so a no-trigger week pays competitively with other
-        # prismatic chance floors (Babysitter / Martyr / Underdog at 5).
-        return {"baseFP": round((4.0 + rn * 0.06) * editionScale, 1),
-                "bonusFP": round((8.0 + rn * 0.3) * editionScale, 1),
-                "baseChance": 15, "chanceStep": 12,  # QB defaults; compute overrides per position
+        return {"baseFP": round((9.0 + rn * 0.14) * editionScale, 1),
+                "bonusFP": round((18.0 + rn * 0.68) * editionScale, 1),
+                "baseChance": 15, "chanceStep": 12,
                 "isChanceEffect": True}
     # ── Yardage chance: Traverse (end-of-game roll scaled by yards)
     if effectName == "traverse":
-        # Base lifted to 4 (was 0.5) so missed rolls aren't punishing — Traverse's appeal
-        # is its big jackpot, but a 0.5 floor felt like punishment for not hitting.
-        return {"baseFP": round((4.0 + rn * 0.06) * editionScale, 1),
-                "bonusFP": round((15.0 + rn * 0.5) * editionScale, 1),
+        return {"baseFP": round((9.0 + rn * 0.14) * editionScale, 1),
+                "bonusFP": round((34.0 + rn * 1.13) * editionScale, 1),
                 "baseChance": 2, "chancePerStep": 5, "yardStep": 50, "yardType": "passing",
                 "isChanceEffect": True}
-    # ── Meta: Advantage (no direct payout, enables roll-twice on all chance cards)
+    # ── Meta: Advantage (no direct payout)
     if effectName == "advantage":
         return {"isAdvantage": True}
     # ── Strategy-Warping: Opulence (FP per Floobits balance)
     if effectName == "fat_cat":
-        # 1 FP per X Floobits, capped
+        # Cap on FP output bumped 2.25× per rebalance.
         floobitsPerFP = max(1, int(round((3 - rn * 0.02) / editionScale)))
-        maxFP = int(round((15 + rn * 0.5) * editionScale))
+        maxFP = int(round((34 + rn * 1.13) * editionScale))
         return {"floobitsPerFP": floobitsPerFP, "maxFP": maxFP}
-    # ── Strategy-Warping: Alchemy (FG → TD upgrade)
     if effectName == "alchemy":
-        # Diamond-tier card. Bumped from 3 to 6 base so a 3-FG game pays ~24 FP
-        # rather than ~14, putting Alchemy in line with other diamond outputs
-        # while preserving the FG → TD secondary-effect combo upside.
-        return {"perFgBonusFP": round((6.0 + rn * 0.20) * editionScale, 1)}
-    # ── Strategy-Warping: Consolation (base FP + loss bonus)
-    # ── Strategy-Warping: Overtime (Q4 FP multiplier)
+        return {"perFgBonusFP": round((13.5 + rn * 0.45) * editionScale, 1)}
+    # ── FPx card — closer (Q4 multiplier) — DELTA scaled 0.70× per rebalance
     if effectName == "closer":
-        return {"q4MultFactor": round((1.5 + rn * 0.03) * editionScale, 1)}
-    # ── Roster-trait flat FP cards (FP/FPx rebalance) ──
+        # delta was 0.5 (1.5 - 1.0); now 0.35 (1.35 - 1.0). Slope curbed too.
+        return {"q4MultFactor": round((1.35 + rn * 0.021) * editionScale, 2)}
+    # ── Roster-trait flat FP cards
     if effectName == "castaway":
-        # Sub-.500 team player check; flat reward when at least one is on roster.
-        return {"rewardFP": round((14.0 + rn * 0.40) * editionScale, 1)}
+        return {"rewardFP": round((31.5 + rn * 0.90) * editionScale, 1)}
     if effectName == "sleeper":
-        # Chance card; enhanced odds scale with how many low-rated (<3★) players
-        # the user keeps on roster. Floor stays competitive with other prismatic
-        # chance cards (Babysitter / Underdog at 5).
-        return {"baseFP": round((5.0 + rn * 0.10) * editionScale, 1),
-                "enhancedFP": round((22.0 + rn * 0.35) * editionScale, 1),
+        return {"baseFP": round((11.0 + rn * 0.23) * editionScale, 1),
+                "enhancedFP": round((50.0 + rn * 0.80) * editionScale, 1),
                 "baseChance": 15, "chancePerLow": 12,
                 "isChanceEffect": True}
     if effectName == "patient":
-        # Per-week reward for keeping a sub-3★ slot intact. Small base FP
-        # multiplied by weeks-held; effectively growing flat FP as long as
-        # the user resists swapping out the underperformer.
-        return {"baseFP": round((1.5 + rn * 0.04) * editionScale, 1)}
+        return {"baseFP": round((3.4 + rn * 0.09) * editionScale, 1)}
     if effectName == "rookie_hype":
-        # Per-rookie FP. Pays meaningful reward if the user trusts the
-        # rookie draft class instead of grabbing safe vets.
-        return {"perRookieFP": round((4.5 + rn * 0.12) * editionScale, 1)}
+        return {"perRookieFP": round((10.0 + rn * 0.27) * editionScale, 1)}
     if effectName == "wanderer":
-        # Per unique team represented. Scales with roster diversity; max
-        # payout when no two roster players share a team.
-        return {"perTeamFP": round((3.0 + rn * 0.08) * editionScale, 1)}
-    return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(2 * editionScale, 1)}
+        return {"perTeamFP": round((6.8 + rn * 0.18) * editionScale, 1)}
+    return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(4.5 * editionScale, 1)}
 
 
 def _buildMultiplierParams(effectName, playerRating, editionScale):
+    """FPx (multiplier) card parameter builder.
+
+    NEXT-SEASON REBALANCE: FPx delta values (the (M - 1) portion) scaled
+    0.70×. So a card that gave +12% (1.12×) now gives +8.4% (1.084×).
+    Multiplier-only stacking under bonus-additive could no longer
+    outpace mixed FP+FPx hands. Cards that produce FP outputs from
+    inside this builder (babysitter, martyr, underdog, etc.) get the
+    FP bump (2.25×) instead.
+    """
     rn = playerRating - 60
 
     # ── FPx effects (delta-based, wrapped as 1+val in compute) ──
     if effectName == "cornucopia":
-        # `perTdMult` is now the log-curve coefficient (mult = 1 + perTd*ln(1 + TDs/3))
-        # rather than per-TD delta. Scaled so 5 TDs ≈ 1.39x, plateauing toward
-        # ~1.7x on monster TD weeks. See _computeTriggerHappy.
-        return {"perTdMult": round((0.40 + rn * 0.006) * editionScale, 2)}
+        # Log-curve coefficient curbed 0.70×. 5 TDs goes from ~1.39x to ~1.27x,
+        # plateau drops from ~1.7x to ~1.5x.
+        return {"perTdMult": round((0.28 + rn * 0.004) * editionScale, 2)}
+    # ── FP-output cards from inside this builder — get FP bump (2.25×)
     if effectName == "babysitter":
-        return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
+        return {"baseFP": round(11.0 * editionScale, 1), "enhancedFP": round((40 + rn * 0.68) * editionScale, 1),
                 "fpThreshold": 8, "isChanceEffect": True}
     if effectName == "martyr":
-        return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
+        return {"baseFP": round(11.0 * editionScale, 1), "enhancedFP": round((40 + rn * 0.68) * editionScale, 1),
                 "isChanceEffect": True}
     if effectName == "resplendent":
-        return {"perPlayerFP": round((1.5 + rn * 0.05) * editionScale, 1)}
-    # ── FPx effects (factor-based, values > 1) ──
+        return {"perPlayerFP": round((3.4 + rn * 0.11) * editionScale, 1)}
+    # ── FPx effects (factor-based, values > 1) — DELTA curbed 0.70×
     if effectName == "big_deal":
-        return {"xMultValue": round(1 + (playerRating / 100) * 0.12 * editionScale, 2)}
+        # delta 0.12 → 0.084
+        return {"xMultValue": round(1 + (playerRating / 100) * 0.084 * editionScale, 2)}
     if effectName == "snake_eyes":
-        # Tiered FPx: lower lowest-FP player = higher multiplier
-        # Tiers read as (maxFP_inclusive, xMult). Applies to the whole
-        # weekly FP total, so multipliers are tuned more conservatively
-        # than single-card mults. Top tier capped at 2.0 — match bonus
-        # stacks on top and can push the visible multiplier up to ~3x
-        # on Diamond, so anything higher than 2.0 base crowded out other
-        # cards.
-        return {"tiers": [(0, 2.0), (4, 1.7), (9, 1.5), (14, 1.3), (19, 1.1)],
+        # Tiered FPx. Top tier 2.0 → 1.70, descending tiers curbed proportionally.
+        return {"tiers": [(0, 1.70), (4, 1.50), (9, 1.35), (14, 1.21), (19, 1.07)],
                 "minMult": 1.0}
     if effectName == "luminary":
-        return {"fpShareScale": round((0.25 + rn * 0.012) * editionScale, 2)}
+        return {"fpShareScale": round((0.18 + rn * 0.008) * editionScale, 2)}
     if effectName == "juggernaut":
-        # `growthPerWin` is now the log-curve coefficient (mult = base + growth*ln(1 + streak/3))
-        # rather than per-win delta. Scaled so a 5-win streak ≈ 1.37x, plateauing
-        # toward ~1.7x on long undefeated runs. See _computeJuggernaut.
-        return {"baseXMult": round(1 + (0.05 + rn * 0.002) * editionScale, 2),
-                "growthPerWin": round((0.25 + rn * 0.005) * editionScale, 2)}
+        # Curbed: 5-win streak ~1.27x instead of ~1.37x; plateau ~1.5x not ~1.7x.
+        return {"baseXMult": round(1 + (0.035 + rn * 0.0014) * editionScale, 2),
+                "growthPerWin": round((0.18 + rn * 0.004) * editionScale, 2)}
     if effectName == "underdog":
-        return {"baseFP": round(5.0 * editionScale, 1), "enhancedFP": round((18 + rn * 0.3) * editionScale, 1),
+        # FP-output card; FP bump 2.25×
+        return {"baseFP": round(11.0 * editionScale, 1), "enhancedFP": round((40 + rn * 0.68) * editionScale, 1),
                 "isChanceEffect": True}
     if effectName == "stockpiler":
-        return {"perSwapXMult": round((0.04 + rn * 0.002) * editionScale, 2)}
+        return {"perSwapXMult": round((0.028 + rn * 0.0014) * editionScale, 2)}
     if effectName == "hometown_hero":
+        # Floobits output — left alone
         return {"rewardFloobits": int(round((15 + rn * 0.6) * editionScale))}
     if effectName == "providence":
-        return {"baseMult": round(1 + 0.05 * editionScale, 2),
+        # delta 0.05 → 0.035; chanceBonus untouched (it's a probability bump)
+        return {"baseMult": round(1 + 0.035 * editionScale, 2),
                 "chanceBonus": round(0.12 * editionScale, 2),
                 "isChanceAmplifier": True}
     if effectName == "house_money":
-        return {"baseFP": round((3 + rn * 0.12) * editionScale, 1),
-                "perUpsetFP": round((3 + rn * 0.12) * editionScale, 1)}
+        # FP-output card; FP bump 2.25×
+        return {"baseFP": round((7 + rn * 0.27) * editionScale, 1),
+                "perUpsetFP": round((7 + rn * 0.27) * editionScale, 1)}
     if effectName == "rising_tide":
-        return {"perPlayerMult": round((0.04 + rn * 0.002) * editionScale, 2),
-                "maxMult": round(1 + (0.40 + rn * 0.010) * editionScale, 2)}
+        # delta 0.04 → 0.028; cap delta 0.40 → 0.28
+        return {"perPlayerMult": round((0.028 + rn * 0.0014) * editionScale, 2),
+                "maxMult": round(1 + (0.28 + rn * 0.007) * editionScale, 2)}
     if effectName == "trebuchet":
+        # FP-output card; FP bump 2.25×
         return {"rewardType": "fp",
-                "baseFP": round((3 + rn * 0.10) * editionScale, 1),
-                "rewardValue": round((8 + rn * 0.35) * editionScale, 1),
+                "baseFP": round((7 + rn * 0.23) * editionScale, 1),
+                "rewardValue": round((18 + rn * 0.78) * editionScale, 1),
                 "threshold": 25}
     if effectName == "double_trouble":
+        # FP-output card; FP bump 2.25×
         return {"rewardType": "fp",
-                "singleWrFP": round((6 + rn * 0.25) * editionScale, 1),
-                "rewardValue": round((14 + rn * 0.55) * editionScale, 1)}
+                "singleWrFP": round((13.5 + rn * 0.56) * editionScale, 1),
+                "rewardValue": round((31.5 + rn * 1.24) * editionScale, 1)}
     if effectName == "gunslinger":
-        return {"rewardType": "fp", "perHundredYardsFP": round((2.0 + rn * 0.06) * editionScale, 1)}
+        # FP-output card; FP bump 2.25×
+        return {"rewardType": "fp", "perHundredYardsFP": round((4.5 + rn * 0.14) * editionScale, 1)}
     if effectName == "air_raid":
+        # Floobits output — left alone
         return {"rewardType": "floobits", "perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stampede":
-        return {"baseMult": round(1 + (0.06 + rn * 0.003) * editionScale, 2),
-                "enhancedMult": round(1 + (0.18 + rn * 0.008) * editionScale, 2),
+        # FPx deltas curbed 0.70×
+        return {"baseMult": round(1 + (0.042 + rn * 0.0021) * editionScale, 2),
+                "enhancedMult": round(1 + (0.126 + rn * 0.0056) * editionScale, 2),
                 "yardThreshold": 75}
     if effectName == "stack":
-        return {"rewardValue": round(1 + (0.15 + rn * 0.008) * editionScale, 2)}
+        # delta 0.15 → 0.105
+        return {"rewardValue": round(1 + (0.105 + rn * 0.0056) * editionScale, 2)}
     if effectName == "backfield_buddies":
-        return {"rewardValue": round((0.15 + rn * 0.008) * editionScale, 2)}
-    # ── Pace multiplier: Eminence (FPx from season pace above position avg)
+        # delta 0.15 → 0.105
+        return {"rewardValue": round((0.105 + rn * 0.0056) * editionScale, 2)}
     if effectName == "eminence":
         return {"rewardType": "mult",
-                "bonusPerFP": round((0.015 + rn * 0.0008) * editionScale, 2),
-                "maxMult": min(1.60, round(1 + (0.40 + rn * 0.010) * editionScale, 2))}
-    # ── Strategy-Warping: Austerity (FPx per empty roster slot)
+                "bonusPerFP": round((0.0105 + rn * 0.00056) * editionScale, 2),
+                "maxMult": min(1.42, round(1 + (0.28 + rn * 0.007) * editionScale, 2))}
     if effectName == "home_alone":
-        return {"perSlotMult": round((0.12 + rn * 0.004) * editionScale, 2)}
-    # ── Strategy-Warping: Humility (FPx per star under 5 of rostered player)
+        return {"perSlotMult": round((0.084 + rn * 0.0028) * editionScale, 2)}
     if effectName == "dark_horse":
-        return {"perStarMult": round((0.08 + rn * 0.003) * editionScale, 2)}
-    # ── Strategy-Warping: Vagabond (FPx per swap used, inverse Stockpiler)
+        return {"perStarMult": round((0.056 + rn * 0.0021) * editionScale, 2)}
     if effectName == "vagabond":
-        return {"perSwapXMult": round((0.03 + rn * 0.001) * editionScale, 2)}
+        return {"perSwapXMult": round((0.021 + rn * 0.0007) * editionScale, 2)}
     if effectName == "parlay":
-        # FPx scaling with weekly Prognostication points via log-taper.
-        # Same shape as Cornucopia: 1.0 + coef × ln(1 + pts/kPoints).
-        # Counts auto-picks. kPoints=80 tunes the curve to span the
-        # realistic weekly score range (20-120 pts). coef grows with rating.
+        # Log-curve coefficient curbed 0.70×
         return {"rewardType": "mult",
                 "baseXMult": 1.0,
-                "coef": round((0.30 + rn * 0.012) * editionScale, 3),
+                "coef": round((0.21 + rn * 0.008) * editionScale, 3),
                 "kPoints": 80}
-    return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.2 * editionScale, 1)}
+    return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.14 * editionScale, 1)}
 
 
 def _buildFloobitsParams(effectName, playerRating, editionScale):
@@ -1266,118 +1276,128 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
 
 
 def _buildConditionalParams(effectName, playerRating, editionScale):
+    """Conditional card parameter builder.
+
+    NEXT-SEASON REBALANCE: FP-output conditionals scaled 2.25×;
+    FPx-output conditionals (bandwagon) had delta curbed 0.70×.
+    """
     rn = playerRating - 60
 
     if effectName == "showoff":
-        return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((18 + rn * 0.68) * editionScale, 1)}
     if effectName == "bandwagon":
-        return {"rewardType": "mult", "rewardValue": round(1 + (0.08 + rn * 0.004) * editionScale, 2)}
+        # FPx delta 0.08 → 0.056
+        return {"rewardType": "mult", "rewardValue": round(1 + (0.056 + rn * 0.0028) * editionScale, 2)}
     if effectName == "upset_special":
-        return {"rewardType": "fp", "rewardValue": round((12 + rn * 0.5) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((27 + rn * 1.13) * editionScale, 1)}
     if effectName == "believe":
-        return {"rewardType": "fp", "rewardValue": round((6 + rn * 0.25) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((13.5 + rn * 0.56) * editionScale, 1)}
     if effectName == "reclamation":
-        return {"rewardType": "fp", "rewardValue": round((8 + rn * 0.3) * editionScale, 1)}
+        return {"rewardType": "fp", "rewardValue": round((18 + rn * 0.68) * editionScale, 1)}
     if effectName == "pedigree":
         return {"rewardType": "fp",
-                "baseFP": round((4 + rn * 0.15) * editionScale, 1),
-                "rewardValue": round((12 + rn * 0.5) * editionScale, 1),
+                "baseFP": round((9 + rn * 0.34) * editionScale, 1),
+                "rewardValue": round((27 + rn * 1.13) * editionScale, 1),
                 "eloThreshold": 1600}
     if effectName == "mismatch":
         return {"rewardType": "fp",
-                "perTdFP": round((5 + rn * 0.20) * editionScale, 1),
-                "bonusFP": round((8 + rn * 0.30) * editionScale, 1),
+                "perTdFP": round((11 + rn * 0.45) * editionScale, 1),
+                "bonusFP": round((18 + rn * 0.68) * editionScale, 1),
                 "tdThreshold": 2}
     if effectName == "comeback_kid":
         return {"rewardType": "fp",
-                "baseFP": round((4 + rn * 0.15) * editionScale, 1),
-                "perPointFP": round((1.0 + rn * 0.04) * editionScale, 1)}
+                "baseFP": round((9 + rn * 0.34) * editionScale, 1),
+                "perPointFP": round((2.25 + rn * 0.09) * editionScale, 1)}
     if effectName == "domination":
         return {"rewardType": "fp",
-                "lossFP": round((4 + rn * 0.12) * editionScale, 1),
-                "baseFP": round((7 + rn * 0.22) * editionScale, 1),
-                "rewardValue": round((18 + rn * 0.7) * editionScale, 1),
+                "lossFP": round((9 + rn * 0.27) * editionScale, 1),
+                "baseFP": round((16 + rn * 0.50) * editionScale, 1),
+                "rewardValue": round((40 + rn * 1.58) * editionScale, 1),
                 "marginThreshold": 21}
     if effectName == "walk_off":
         return {"rewardType": "fp",
-                "lossFP": round((4 + rn * 0.12) * editionScale, 1),
-                "baseFP": round((6 + rn * 0.20) * editionScale, 1),
-                "rewardValue": round((20 + rn * 0.8) * editionScale, 1)}
+                "lossFP": round((9 + rn * 0.27) * editionScale, 1),
+                "baseFP": round((13.5 + rn * 0.45) * editionScale, 1),
+                "rewardValue": round((45 + rn * 1.80) * editionScale, 1)}
     if effectName == "medium":
-        # Weekly Prognostication accuracy bonus, three tiers tuned for
-        # ~70% user-average accuracy. 65-84% is the typical-hit zone;
-        # 85%+ is the chase tier (~15% of weeks).
         return {"rewardType": "fp",
-                "lowFP": round((5.0 + rn * 0.15) * editionScale, 1),
-                "midFP": round((14.0 + rn * 0.30) * editionScale, 1),
-                "highFP": round((26.0 + rn * 0.50) * editionScale, 1)}
-    return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(3 * editionScale, 1)}
+                "lowFP": round((11.0 + rn * 0.34) * editionScale, 1),
+                "midFP": round((31.5 + rn * 0.68) * editionScale, 1),
+                "highFP": round((58.0 + rn * 1.13) * editionScale, 1)}
+    return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(6.8 * editionScale, 1)}
 
 
 def _buildStreakParams(effectName, playerRating, editionScale):
+    """Streak card parameter builder.
+
+    NEXT-SEASON REBALANCE: FP-output streaks scaled 2.25× (base + growthPerTick).
+    FPx-output streaks (on_fire, momentum) had their *delta* portion curbed
+    0.70× — peak multipliers come down so a mature streak no longer carries
+    a hand by itself.
+    """
     rn = playerRating - 60
 
     if effectName == "complacency":
         return {"rewardType": "fp",
-                "baseReward": round((3.0 + rn * 0.10) * editionScale, 1),
-                "growthPerTick": round((1.5 + rn * 0.06) * editionScale, 1)}
+                "baseReward": round((6.8 + rn * 0.23) * editionScale, 1),
+                "growthPerTick": round((3.4 + rn * 0.14) * editionScale, 1)}
     if effectName == "on_fire":
+        # FPx streak — DELTA curbed 0.70×. Peak ~1.6x instead of ~1.9x.
         return {"rewardType": "mult",
-                "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
-                "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
+                "baseReward": round(1 + (0.035 + rn * 0.0021) * editionScale, 2),
+                "growthPerTick": round((0.035 + rn * 0.0014) * editionScale, 2)}
     if effectName == "snowball_fight":
         return {"rewardType": "fp",
-                "baseReward": round((2.0 + rn * 0.08) * editionScale, 1),
-                "growthPerTick": round((1.0 + rn * 0.04) * editionScale, 1)}
+                "baseReward": round((4.5 + rn * 0.18) * editionScale, 1),
+                "growthPerTick": round((2.25 + rn * 0.09) * editionScale, 1)}
     if effectName == "fairweather_fan":
+        # Floobits output — leave untouched
         return {"rewardType": "floobits",
                 "baseReward": int(round((4 + rn * 0.2) * editionScale)),
                 "growthPerTick": int(round((2 + rn * 0.08) * editionScale))}
     if effectName == "bandwagon_express":
         return {"rewardType": "fp",
-                "baseReward": round((3.0 + rn * 0.12) * editionScale, 1),
-                "growthPerTick": round((1.0 + rn * 0.04) * editionScale, 1)}
+                "baseReward": round((6.8 + rn * 0.27) * editionScale, 1),
+                "growthPerTick": round((2.25 + rn * 0.09) * editionScale, 1)}
     if effectName == "touchdown_jackpot":
+        # Floobits output — leave untouched
         return {"rewardType": "floobits",
                 "baseReward": int(round((4 + rn * 0.2) * editionScale)),
                 "growthPerTick": int(round((2 + rn * 0.1) * editionScale))}
     if effectName == "odometer":
         return {"rewardType": "fp",
                 "gates": [
-                    {"yards": 200, "fp": round((3.0 + rn * 0.05) * editionScale, 1)},
-                    {"yards": 400, "fp": round((6.0 + rn * 0.10) * editionScale, 1)},
-                    {"yards": 600, "fp": round((10.0 + rn * 0.15) * editionScale, 1)},
-                    {"yards": 800, "fp": round((14.0 + rn * 0.20) * editionScale, 1)},
+                    {"yards": 200, "fp": round((6.8 + rn * 0.11) * editionScale, 1)},
+                    {"yards": 400, "fp": round((13.5 + rn * 0.23) * editionScale, 1)},
+                    {"yards": 600, "fp": round((22.5 + rn * 0.34) * editionScale, 1)},
+                    {"yards": 800, "fp": round((31.5 + rn * 0.45) * editionScale, 1)},
                 ]}
     if effectName == "leg_day":
         return {"rewardType": "fp",
-                "baseReward": round((3.0 + rn * 0.12) * editionScale, 1),
-                "growthPerTick": round((1.2 + rn * 0.05) * editionScale, 1)}
+                "baseReward": round((6.8 + rn * 0.27) * editionScale, 1),
+                "growthPerTick": round((2.7 + rn * 0.11) * editionScale, 1)}
     if effectName == "automatic":
         return {"rewardType": "fp",
-                "baseReward": round((3.0 + rn * 0.12) * editionScale, 1),
-                "growthPerTick": round((1.5 + rn * 0.06) * editionScale, 1)}
+                "baseReward": round((6.8 + rn * 0.27) * editionScale, 1),
+                "growthPerTick": round((3.4 + rn * 0.14) * editionScale, 1)}
     if effectName == "momentum":
+        # FPx streak — DELTA curbed 0.70×. Peak ~1.6x instead of ~1.9x.
         return {"rewardType": "mult",
-                "baseReward": round(1 + (0.05 + rn * 0.003) * editionScale, 2),
-                "growthPerTick": round((0.05 + rn * 0.002) * editionScale, 2)}
-    # ── Inverse streaks (FP/FPx rebalance) — grow when roster underperforms
+                "baseReward": round(1 + (0.035 + rn * 0.0021) * editionScale, 2),
+                "growthPerTick": round((0.035 + rn * 0.0014) * editionScale, 2)}
+    # ── Inverse streaks — grow when roster underperforms (FP outputs, bump)
     if effectName == "sandbagger":
-        # Roster slot scoring ≤5 FP. Most achievable trigger of the three;
-        # smaller per-tick reward, smaller cap.
         return {"rewardType": "fp",
-                "baseReward": round((6.0 + rn * 0.15) * editionScale, 1),
-                "growthPerTick": round((4.0 + rn * 0.10) * editionScale, 1)}
+                "baseReward": round((13.5 + rn * 0.34) * editionScale, 1),
+                "growthPerTick": round((9.0 + rn * 0.23) * editionScale, 1)}
     if effectName == "quiet_storm":
-        # No roster player ≥15 FP. Whole-roster spread-thin; medium reward.
         return {"rewardType": "fp",
-                "baseReward": round((14.0 + rn * 0.30) * editionScale, 1),
-                "growthPerTick": round((8.0 + rn * 0.20) * editionScale, 1)}
+                "baseReward": round((31.5 + rn * 0.68) * editionScale, 1),
+                "growthPerTick": round((18.0 + rn * 0.45) * editionScale, 1)}
     if effectName == "drought":
-        # Roster total <50 FP. Nuclear-cold week; biggest reward, rarest trigger.
         return {"rewardType": "fp",
-                "baseReward": round((20.0 + rn * 0.45) * editionScale, 1),
-                "growthPerTick": round((12.0 + rn * 0.30) * editionScale, 1)}
+                "baseReward": round((45.0 + rn * 1.01) * editionScale, 1),
+                "growthPerTick": round((27.0 + rn * 0.68) * editionScale, 1)}
     # ── Prognostication cards ─────────────────────────────────────────
     if effectName == "nose_picker":
         # Log-tapered streak — pays for showing up to Prognostications
