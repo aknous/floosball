@@ -879,6 +879,10 @@ def _refreshCardEffectText():
         # FPx delta-notation sweep — existing cards stored 1.x values in
         # their tooltip/detail strings; re-render with the *Delta variants.
         "backfield_buddies", "all_in", "stacked_deck",
+        # Full-roster-required tightening — drought/sandbagger/quiet_storm
+        # /hedge now refuse to pay on a gutted roster (<5 filled slots),
+        # so the description should surface that.
+        "drought", "sandbagger", "quiet_storm", "hedge",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these

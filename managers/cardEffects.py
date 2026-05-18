@@ -569,7 +569,7 @@ EFFECT_TOOLTIPS = {
     "rng": "Feeling lucky? Random FP rolled each week.",
     "snake_eyes": "Bad is good. The lower your lowest-scoring roster player's FP this week, the bigger the FPx on your total.",
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
-    "hedge": "Insurance policy. Starts with an FP pool. Roster FP subtracts from it, and whatever remains is your payout.",
+    "hedge": "Insurance policy for a full roster of underperformers. Starts with an FP pool; roster FP subtracts from it, and whatever remains is your payout. Requires 5+ rostered players — no empty-slot exploits.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth.",
     "spotlight_moment": "Lights, camera, action. FP whenever your roster's {posLabel} scores a TD. For WR, either counts.",
     "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when your roster's WRs hit a combined stat threshold.",
@@ -681,9 +681,9 @@ EFFECT_TOOLTIPS = {
     "patient": "Stick with the bench. Earns FP each week you keep a sub-3-star roster slot intact, with the bonus growing the longer you hold.",
     "rookie_hype": "Believe in the new class. Bonus FP per rookie on your roster.",
     "wanderer": "A bit of everywhere. Output scales with how many different teams your roster players come from. Max payout when no two share a team.",
-    "sandbagger": "Hold the line on a weak slot. Streak grows each week one of your roster slots scores 5 FP or less.",
-    "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP.",
-    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total.",
+    "sandbagger": "Hold the line on a weak slot. Streak grows each week one of your roster slots scores 5 FP or less. Requires 5+ rostered players.",
+    "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP. Requires 5+ rostered players.",
+    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total. Requires 5+ rostered players.",
     # ── Prognostication cards ──
     "nose_picker": "Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
     "medium": "Bonus FP when your weekly Prognostication accuracy is high.",
@@ -704,7 +704,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "rng": "Random +{minFP}–{maxFP} FP each week",
     "snake_eyes": "FPx based on lowest roster FP: 0 FP=+1.50 · 1-4 FP=+1.05 · 5-9 FP=+0.70 · 10-14 FP=+0.40 · 15-19 FP=+0.15",
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
-    "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains",
+    "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains. Needs 5+ filled roster slots.",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged.",
     "spotlight_moment": "+{rewardValue} FP when your roster's {posLabel} scores a TD. WR counts either WR scoring a TD.",
     "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if your roster's WRs combine for {threshold}+ {statDisplay}",
@@ -817,9 +817,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "patient": "+{baseFP} FP per week a sub-3-star roster slot stays unchanged",
     "rookie_hype": "+{perRookieFP} FP per rookie on your roster",
     "wanderer": "+{perTeamFP} FP per unique team represented across your roster",
-    "sandbagger": "+{baseReward} FP, +{growthPerTick} per consecutive week any roster slot scored 5 FP or less.",
-    "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP.",
-    "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP.",
+    "sandbagger": "+{baseReward} FP, +{growthPerTick} per consecutive week any roster slot scored 5 FP or less. Needs 5+ filled roster slots.",
+    "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. Needs 5+ filled roster slots.",
+    "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. Needs 5+ filled roster slots.",
     # ── Prognostication cards ──
     "nose_picker": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds.",
     "medium": "+{lowFP} FP at 50%+ Prognostication accuracy, +{midFP} FP at 65%+, +{highFP} FP at 85%+. Counts auto-picks",
@@ -1913,6 +1913,10 @@ def _computeAvalanche(primary, ctx, cardPlayerId, eqId):
 
 def _computeHedge(primary, ctx, cardPlayerId, eqId):
     """FP floor: guarantees a minimum roster output. Pays the difference between floor and actual."""
+    if not _meetsFullRosterRequirement(ctx):
+        return EffectResult(
+            equation=f"Requires {_FULL_ROSTER_MIN_FILLED}+ rostered players (full-roster insurance, not an empty-slot payout)"
+        )
     floorFP = primary.get("floorFP", 50)
     rosterFP = round(ctx.weekRawFP, 1)
     bonus = round(max(0, floorFP - rosterFP), 1)
@@ -2753,6 +2757,15 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
     """
     streakConfig = STREAK_CONFIGS.get(ctx._currentEffectName, {})
     isWeekly = streakConfig.get("isWeekly", False)
+
+    # Inverse-streak cards (Drought / Sandbagger / Quiet Storm) need a
+    # near-full roster — they're meant for "field a team of bad players"
+    # not "gut your roster to easily clear the under-50 / under-5 / no-15
+    # bars." Empty payout when below the filled-slot threshold.
+    if ctx._currentEffectName in _FULL_ROSTER_INTENT_EFFECTS and not _meetsFullRosterRequirement(ctx):
+        return EffectResult(
+            equation=f"Requires {_FULL_ROSTER_MIN_FILLED}+ rostered players (full-roster intent)"
+        )
 
     baseReward = primary.get("baseReward", 0)
     growthPerTick = primary.get("growthPerTick", 0)
@@ -3794,6 +3807,24 @@ def _computeWalkOff(primary, ctx, cardPlayerId, eqId):
 
 BASE_ROSTER_SLOTS = 6  # QB, RB, WR1, WR2, TE, K (FLEX adds +1 when active)
 
+# Effects that mean "field a full roster of underperformers, not an
+# empty one." Their condition is easy to trigger with a gutted roster
+# (fewer slots = fewer ways to score 15+, fewer paths to break the
+# under-50 line, etc.), so we gate them on a near-full roster. Home
+# Alone is intentionally excluded — empty slots ARE its mechanic.
+_FULL_ROSTER_INTENT_EFFECTS = frozenset({"drought", "sandbagger", "quiet_storm", "hedge"})
+# Need at least this many filled roster slots for the gated effects
+# to pay out. 5 of 6 base slots = allows 1 empty (injury / bye), blocks
+# the 2-3 player gut strategy.
+_FULL_ROSTER_MIN_FILLED = 5
+
+
+def _meetsFullRosterRequirement(ctx) -> bool:
+    """True when the user has enough filled slots for the full-roster-
+    intent effects to fire. Used by Drought / Sandbagger / Quiet Storm /
+    Hedge to deny payouts on gutted rosters."""
+    return len(ctx.rosterPlayerIds or set()) >= _FULL_ROSTER_MIN_FILLED
+
 
 def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
     """FGs count as TDs for other cards (Cornucopia, Touchdown Piñata, etc.)
@@ -4199,7 +4230,12 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
     # ── Inverse-streak triggers (FP/FPx rebalance) ──
     # All three return True when the roster is UNDERPERFORMING; the streak
     # grows on bad weeks, breaks on good ones (peak-decay handles the tail).
+    # Each also requires a near-full roster — these effects are designed
+    # for a hand of bad players, not a gutted roster that trivially clears
+    # the under-50 / under-5 / no-15 bars.
     if condition == "roster_slot_low_5fp":
+        if not _meetsFullRosterRequirement(ctx):
+            return False
         # Streak grows if any roster slot scored ≤5 FP this week.
         for pid in (ctx.rosterPlayerIds or set()):
             stats = (ctx.weekPlayerStats or {}).get(pid, {}) or {}
@@ -4208,6 +4244,8 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return False
 
     if condition == "no_player_15fp":
+        if not _meetsFullRosterRequirement(ctx):
+            return False
         # Streak grows if NO roster player scored 15+ FP this week.
         for pid in (ctx.rosterPlayerIds or set()):
             stats = (ctx.weekPlayerStats or {}).get(pid, {}) or {}
@@ -4216,6 +4254,8 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return True
 
     if condition == "roster_under_50fp":
+        if not _meetsFullRosterRequirement(ctx):
+            return False
         # Streak grows if total roster FP this week was under 50.
         return (ctx.weekRawFP or 0) < 50
 
