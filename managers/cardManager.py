@@ -3,7 +3,7 @@
 import random
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
-from managers.cardEffects import buildEffectConfig as _buildEffectConfig
+from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType
 
 logger = get_logger("floosball.cardManager")
 
@@ -47,15 +47,11 @@ BLENDER_THRESHOLDS = [
     (0, 'base'),            # 0-49 → base
 ]
 
-# Daily pack purchase limits (resets on calendar day, same as featured shop refresh).
-# Pack revamp (feature/pack-revamp): every rotated pack now caps at 1/day; the
-# 2-packs-per-day intent is enforced by which packs the rotation surfaces in
-# the shop on a given day. 'proper' is deprecated and not in the rotation.
-DAILY_PACK_LIMITS = {
-    'humble': 1,
-    'grand': 1,
-    'exquisite': 1,
-}
+# Daily pack purchase limits — currently empty. After the unified-rotation
+# rework, grand and exquisite are no longer guaranteed daily fixtures, so
+# capping them at 1/day created the bad UX of a user rerolling into 3 packs
+# they already bought today. Per-pack daily caps removed for all tiers.
+DAILY_PACK_LIMITS: Dict[str, int] = {}
 
 # Shop rotation: 4 "shop days" map to 7-week segments of the season,
 # matching the existing featured-shop SWAP_CYCLE_WEEKS cycle.
@@ -74,16 +70,76 @@ def shopDayOfSeason(currentWeek: int) -> int:
 
 
 def getActivePackNames(shopDay: int) -> list:
-    """Pack tiers visible in the shop on the given shop day.
+    """Standard pack tiers always visible in the shop, regardless of shop_day.
 
-    Shop day 1 (weeks 1-7):    humble + grand           — two-pack starter
-    Shop day 2 (weeks 8-14):   humble + grand           — same lineup
-    Shop day 3 (weeks 15-21):  humble + grand + exquisite — top tier unlocks
-    Shop day 4 (weeks 22-28):  humble + grand + exquisite — full lineup
+    Empty after the disappear-on-buy rework — every pack tier now flows
+    through FeaturedPackRotation so it can be marked purchased and removed
+    from the shop until reroll/cycle refresh. Humble was previously here
+    but moved into the rotation pool with a high category weight.
     """
-    if shopDay <= 2:
-        return ['humble', 'grand']
-    return ['humble', 'grand', 'exquisite']
+    return []
+
+
+# Map position code → position int for theme filtering
+_POSITION_CODE_TO_INT = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+
+
+def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
+                      session=None, currentSeason: int = 0) -> list:
+    """Filter a CardTemplate pool down to the rows matching a themed pack.
+
+    Static themes (position/team/output) resolve from theme_value alone.
+    Dynamic prestige themes (champion/allpro) resolve from prior-season
+    Season state — caller must supply session + currentSeason. Returns
+    an empty list if the prior season's data isn't yet recorded (e.g.
+    season 1 before any season has completed).
+
+    Mixed/contextual effects (output_type IS NULL on the template) are
+    excluded from output-themed packs by design — themed packs deliver
+    concrete output types only.
+    """
+    if themeType == 'position':
+        posInt = _POSITION_CODE_TO_INT.get(themeValue)
+        if posInt is None:
+            return []
+        return [t for t in templates if t.position == posInt]
+    if themeType == 'team':
+        try:
+            teamIdInt = int(themeValue)
+        except (TypeError, ValueError):
+            return []
+        return [t for t in templates if t.team_id == teamIdInt]
+    if themeType == 'output':
+        return [t for t in templates if getattr(t, 'output_type', None) == themeValue]
+    if themeType in ('champion', 'allpro'):
+        if session is None or currentSeason <= 1:
+            return []
+        from database.models import Season
+        priorSeason = (
+            session.query(Season)
+            .filter(Season.season_number == currentSeason - 1)
+            .first()
+        )
+        if priorSeason is None:
+            return []
+        if themeType == 'champion':
+            champTeamId = priorSeason.champion_team_id
+            if champTeamId is None:
+                return []
+            return [t for t in templates if t.team_id == champTeamId]
+        # allpro
+        rawIds = priorSeason.all_pro_player_ids
+        if not rawIds:
+            return []
+        try:
+            import json as _json
+            allProIds = set(_json.loads(rawIds)) if isinstance(rawIds, str) else set(rawIds)
+        except Exception:
+            return []
+        if not allProIds:
+            return []
+        return [t for t in templates if t.player_id in allProIds]
+    return templates
 
 # Classification value multipliers (stacking for compound classifications)
 CLASSIFICATION_VALUE_MULTIPLIERS = {
@@ -256,6 +312,7 @@ class CardManager:
                     rarity_weight=rarityWeight,
                     sell_value=sellValue,
                     classification=classification,
+                    output_type=getEffectOutputType(effectConfig.get("effectName")),
                 )
                 templates.append(template)
 
@@ -340,6 +397,7 @@ class CardManager:
                     rarity_weight=rarityWeight,
                     sell_value=sellValue,
                     classification="rookie",
+                    output_type=getEffectOutputType(effectConfig.get("effectName")),
                 )
                 templates.append(template)
 
@@ -558,6 +616,7 @@ class CardManager:
             rarity_weight=computeRarityWeight(newEdition, sourceTemplate.player_rating),
             sell_value=getSellValue(newEdition, isActive=isActive),
             is_upgraded=True,
+            output_type=getEffectOutputType(effectConfig.get("effectName")),
         )
         templateRepo = CardTemplateRepository(session)
         return templateRepo.save(template)
@@ -633,6 +692,7 @@ class CardManager:
             rarity_weight=computeRarityWeight(resultEdition, sourceTemplate.player_rating),
             sell_value=getSellValue(resultEdition, isActive=isActive),
             is_upgraded=True,
+            output_type=getEffectOutputType(effectConfig.get("effectName")),
         )
         templateRepo.save(newTemplate)
 
@@ -779,8 +839,12 @@ class CardManager:
     def _drawPackCards(self, session, packType, currentSeason: int) -> list:
         """Shared draw routine: returns N templates per packType.cards_per_pack.
 
-        guaranteed_rarity branch was removed in the pack revamp — rate weights
-        on each pack carry the rarity guarantees probabilistically instead.
+        Two extensions for the themed-pack rework:
+          - theme_type/theme_value filter the candidate pool before edition rolling
+            (position/team are direct column filters; output uses the denormalized
+            CardTemplate.output_type so NULL-typed effects are excluded by design).
+          - guaranteed_rarity forces ONE drawn slot to land at that edition (or
+            higher); remaining slots roll the normal weights.
         """
         from database.repositories.card_repositories import CardTemplateRepository
         templateRepo = CardTemplateRepository(session)
@@ -791,8 +855,85 @@ class CardManager:
         if not allTemplates:
             raise ValueError("No card templates available for the current season")
 
+        # ── Themed-pack pool filter ──
+        themeType = getattr(packType, 'theme_type', None)
+        themeValue = getattr(packType, 'theme_value', None)
+        if themeType:
+            pool = _applyThemeFilter(
+                allTemplates, themeType, themeValue,
+                session=session, currentSeason=currentSeason,
+            )
+            if not pool:
+                raise ValueError(f"No templates match this themed pack ({themeType}={themeValue or ''})")
+        else:
+            pool = allTemplates
+
         packWeights = packType.rarity_weights or EDITION_BASE_WEIGHTS
-        return self._weightedDraw(allTemplates, packWeights, count=packType.cards_per_pack)
+        count = packType.cards_per_pack
+        guaranteedRarity = getattr(packType, 'guaranteed_rarity', None)
+        # Prestige themed packs (champion / all-pro) draw from a narrow
+        # pool of specific players, each with 1-4 edition templates. Without
+        # dedup, a 5-card pack could land 5 templates of the same player.
+        # These packs explicitly promise classification breadth (one card
+        # per qualifying player), so dedup by player_id.
+        dedupByPlayer = getattr(packType, 'theme_type', None) in ('champion', 'allpro')
+
+        # ── Guaranteed-rarity slot ──
+        # If the pack guarantees a minimum rarity, draw one slot constrained
+        # to that rarity (or higher) and fill the rest with normal weights.
+        if guaranteedRarity:
+            qualifying = self._editionsAtOrAbove(guaranteedRarity)
+            guaranteedPool = [t for t in pool if t.edition in qualifying]
+            if guaranteedPool:
+                guaranteedDraw = self._weightedDraw(
+                    guaranteedPool, packWeights, count=1
+                )
+                excludedPlayerIds = (
+                    {t.player_id for t in guaranteedDraw} if dedupByPlayer else set()
+                )
+                restPool = [t for t in pool if t.player_id not in excludedPlayerIds]
+                rest = self._weightedDrawDedup(
+                    restPool, packWeights, count=max(0, count - 1),
+                    dedupByPlayer=dedupByPlayer,
+                ) if dedupByPlayer else self._weightedDraw(
+                    pool, packWeights, count=max(0, count - 1),
+                )
+                return guaranteedDraw + rest
+            # Fallback to unconstrained draw if no eligible templates exist
+
+        if dedupByPlayer:
+            return self._weightedDrawDedup(pool, packWeights, count=count, dedupByPlayer=True)
+        return self._weightedDraw(pool, packWeights, count=count)
+
+    def _weightedDrawDedup(self, pool: list, packWeights: dict, count: int,
+                           dedupByPlayer: bool = False) -> list:
+        """Like _weightedDraw but ensures each drawn template has a unique
+        player_id. Used by prestige themed packs (champion, all-pro) where
+        the pool is narrow and we want one card per qualifying player.
+
+        Draws one template at a time; after each draw, filters the pool to
+        exclude templates sharing the picked template's player_id. Falls
+        through to whatever's available if the pool runs out (rare — would
+        only happen if `count` exceeds the number of unique players).
+        """
+        if not pool or count <= 0:
+            return []
+        if not dedupByPlayer:
+            return self._weightedDraw(pool, packWeights, count=count)
+        drawn = []
+        seenPlayerIds: set = set()
+        remaining = list(pool)
+        for _ in range(count):
+            if not remaining:
+                break
+            picked = self._weightedDraw(remaining, packWeights, count=1)
+            if not picked:
+                break
+            card = picked[0]
+            drawn.append(card)
+            seenPlayerIds.add(card.player_id)
+            remaining = [t for t in remaining if t.player_id not in seenPlayerIds]
+        return drawn
 
     # ─── Reveal / Select flow (purchases) ─────────────────────────────────────
 
@@ -826,18 +967,30 @@ class CardManager:
             raise ValueError("Starter pack uses claimStarterPack, not revealPack")
 
         if not skipCurrency:
-            # Block out-of-rotation packs (deprecated tiers like 'proper' or
-            # tiered packs not yet unlocked today). Can't trust the frontend
-            # to filter — a crafted call would otherwise let a user buy any
-            # pack at any time.
+            # Block packs the user can't actually see right now. After the
+            # rotation rework, only humble is "always available"; grand,
+            # exquisite, and themed packs must be present in this user's
+            # rotation. Crafted calls otherwise let a user buy any pack.
             if shopDay is not None:
                 activeNames = set(getActivePackNames(shopDay))
-                if packType.name not in activeNames:
-                    raise ValueError(f"{packType.display_name} is not available in the shop right now")
+                if packType.name in activeNames:
+                    pass  # always-available standard tier (humble)
+                else:
+                    from database.models import FeaturedPackRotation
+                    inRotation = session.query(FeaturedPackRotation).filter(
+                        FeaturedPackRotation.user_id == userId,
+                        FeaturedPackRotation.season == currentSeason,
+                        FeaturedPackRotation.shop_day == shopDay,
+                        FeaturedPackRotation.pack_type_id == packType.id,
+                        FeaturedPackRotation.purchased == False,
+                    ).first()
+                    if not inRotation:
+                        raise ValueError(f"{packType.display_name} is not in this week's rotation")
 
-            # Daily limit — counts both committed openings AND pending reveals
-            # so a user can't open + abandon + open again for the same pack
-            # today. Only paid openings count; free grants (cost=0) do not.
+            # Daily limit — empty by default since the unified-rotation
+            # rework made per-pack caps a footgun (reroll into a 'sold-out'
+            # pack). If we ever bring caps back, this block already handles
+            # null skip via DAILY_PACK_LIMITS.get().
             dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
             if dailyLimit is not None:
                 now = datetime.utcnow()
@@ -878,6 +1031,27 @@ class CardManager:
         )
         session.add(pending)
         session.flush()
+
+        # Mark the rotation slot purchased so it disappears from the shop
+        # for the rest of this cycle. Mirrors FeaturedShopCard.purchased.
+        # Only rotation-driven packs (themed + grand + exquisite) are
+        # affected; humble is always-available and free grants don't
+        # consume rotation slots.
+        cameFromRotation = (
+            not skipCurrency
+            and shopDay is not None
+            and packType.name not in set(getActivePackNames(shopDay))
+        )
+        if cameFromRotation:
+            from database.models import FeaturedPackRotation
+            session.query(FeaturedPackRotation).filter(
+                FeaturedPackRotation.user_id == userId,
+                FeaturedPackRotation.season == currentSeason,
+                FeaturedPackRotation.shop_day == shopDay,
+                FeaturedPackRotation.pack_type_id == packType.id,
+                FeaturedPackRotation.purchased == False,
+            ).update({FeaturedPackRotation.purchased: True})
+            session.flush()
 
         revealed = [self._serializeTemplate(t, currentSeason) for t in drawnTemplates]
         return {
@@ -1252,6 +1426,287 @@ class CardManager:
             })
 
         return result
+
+    # ─── Themed Pack Rotation ────────────────────────────────────────────────
+
+    THEMED_PACK_SLOT_COUNT = 3
+
+    def getActiveThemedPacks(self, session, userId: int, currentSeason: int,
+                              currentWeek: int = 0) -> list:
+        """Return the themed packs visible to a user for the current
+        (season, shop_day). Per-user rotation — generated lazily on first
+        read of a cycle; regenerated when shop_day advances or the user rerolls.
+        """
+        from database.models import FeaturedPackRotation
+        from sqlalchemy import and_
+
+        shopDay = shopDayOfSeason(currentWeek)
+
+        # Any rows for this user/cycle, including purchased ones — used to
+        # detect whether the cycle has been generated yet. Featuring filters
+        # purchased=False below so spent packs disappear from the shop.
+        anyRows = (
+            session.query(FeaturedPackRotation)
+            .filter(and_(
+                FeaturedPackRotation.user_id == userId,
+                FeaturedPackRotation.season == currentSeason,
+                FeaturedPackRotation.shop_day == shopDay,
+            ))
+            .order_by(FeaturedPackRotation.slot.asc())
+            .all()
+        )
+
+        if not anyRows:
+            anyRows = self._generateThemedPackRotation(session, userId, currentSeason, shopDay, currentWeek)
+
+        return [
+            row.pack_type for row in anyRows
+            if row.pack_type is not None and not row.purchased
+        ]
+
+    def rerollThemedPacks(self, session, userId: int, currentSeason: int,
+                           currentWeek: int = 0) -> list:
+        """Force-regenerate this user's themed pack rotation for the current
+        cycle. Caller is responsible for charging the floobit cost. Returns
+        the new pack list.
+
+        Purchased rows are deliberately preserved — they're how
+        _generateThemedPackRotation tracks once-per-cycle lockouts on grand
+        and exquisite (and once-per-season lockouts on champion/all-pro).
+        Wiping them would silently re-eligible those tiers, which produced
+        the 'bought grand then saw it again 2 rerolls later' bug.
+        """
+        from database.models import FeaturedPackRotation
+        shopDay = shopDayOfSeason(currentWeek)
+        session.query(FeaturedPackRotation).filter(
+            FeaturedPackRotation.user_id == userId,
+            FeaturedPackRotation.season == currentSeason,
+            FeaturedPackRotation.shop_day == shopDay,
+            FeaturedPackRotation.purchased == False,
+        ).delete()
+        session.flush()
+        rows = self._generateThemedPackRotation(
+            session, userId, currentSeason, shopDay, currentWeek, isReroll=True,
+        )
+        return [row.pack_type for row in rows if row.pack_type is not None]
+
+    # Per-category base weight for the rotation's two-stage weighted pick.
+    # Each slot first rolls a category, then picks a specific pack uniformly
+    # within it. Humble has a high weight so it almost always shows up;
+    # grand and exquisite start rare but climb each cycle via pity.
+    # Base per-slot odds (total weight 136):
+    #   humble ~37% · position 18% · team 18% · output 18% · grand 6% · exquisite 2%
+    # Base per-cycle (any of 3 slots) odds:
+    #   humble ~75% · grand ~17% · exquisite ~6%
+    ROTATION_CATEGORY_WEIGHTS = {
+        'humble':    50,
+        'position':  25,
+        'output':    25,
+        # Grand and Exquisite cut down from 8/3 — testing showed they
+        # appeared "pretty consistently" even early in the season,
+        # which conflicts with the prestige framing. Combined with the
+        # achievement rewards (Banner Week IV / Dedicated VI / etc.
+        # grant Grand or Exquisite packs), the total exposure was way
+        # too high. New base odds: ~10% per cycle Grand, ~2.5% Exquisite.
+        'grand':      4,
+        'exquisite':  1,
+        # Prestige themed packs — once-per-season per user. Bumped to 8
+        # each so they appear in roughly 1 of every 4-5 cycles — testing
+        # showed users were running 5+ rerolls without ever seeing the
+        # All-Pro pack. Still rare enough to feel like a treat, but
+        # actually visible.
+        'champion':   8,
+        'allpro':     8,
+    }
+    # Weight bump for grand/exquisite per shop cycle elapsed in the season.
+    # Pure monotonic ramp — purchases don't reset it. By cycle 4 (last shop
+    # cycle of a 28-week season), pity is maxed:
+    #   Grand:     4 → 4+(2×3)  = 10 weight, ~8% per slot,  ~21% per cycle
+    #   Exquisite: 1 → 1+(1×3)  =  4 weight, ~3% per slot,  ~9% per cycle
+    # Ramp step halved alongside the base cut so the pity slope feels
+    # similar in shape but lands at lower absolute odds.
+    PITY_STEP_PER_CYCLE = {
+        'grand':     2,
+        'exquisite': 1,
+    }
+
+    def _generateThemedPackRotation(self, session, userId: int, currentSeason: int,
+                                     shopDay: int, currentWeek: int,
+                                     isReroll: bool = False) -> list:
+        """Pick THEMED_PACK_SLOT_COUNT packs for this user's rotation via the
+        two-stage weighted scheme:
+          1. Roll a category (humble/position/team/output/grand/exquisite) by weight.
+          2. Pick a specific pack uniformly within the category.
+
+        - Grand and Exquisite already purchased in this cycle are excluded
+          from the pool so they can't reroll back in.
+        - Pity ramp: grand/exquisite weight grows by PITY_STEP_PER_CYCLE
+          for each shop_day elapsed (cycle 1 → 0, cycle 4 → +3). Pure
+          monotonic — purchases do not reset it, so the rare tiers feel
+          increasingly likely as the season closes.
+        - Initial generation (isReroll=False) guarantees Humble in slot 0
+          if viable, so every new cycle opens with the cheap entry tier.
+          Rerolls don't guarantee humble.
+
+        Skipped if a category's underlying template pool is empty for the
+        current season — keeps unwinnable packs from being featured."""
+        from database.models import FeaturedPackRotation, PackType, CardTemplate
+        from datetime import datetime
+
+        allPacks = session.query(PackType).all()
+        if not allPacks:
+            return []
+
+        # Two-flavor lockout for already-purchased rare packs:
+        #   Cycle-only (grand, exquisite): excluded within (season, shop_day)
+        #     but eligible again next cycle.
+        #   Season-only (themed_champion, themed_allpro): excluded for the
+        #     entire season once purchased — one shot per user per season.
+        cycleLockoutNames = {'grand', 'exquisite'}
+        seasonLockoutNames = {'themed_champion', 'themed_allpro'}
+
+        cycleLockedRows = (
+            session.query(FeaturedPackRotation.pack_type_id)
+            .join(PackType, PackType.id == FeaturedPackRotation.pack_type_id)
+            .filter(
+                FeaturedPackRotation.user_id == userId,
+                FeaturedPackRotation.season == currentSeason,
+                FeaturedPackRotation.shop_day == shopDay,
+                FeaturedPackRotation.purchased == True,
+                PackType.name.in_(cycleLockoutNames),
+            )
+            .all()
+        )
+        seasonLockedRows = (
+            session.query(FeaturedPackRotation.pack_type_id)
+            .join(PackType, PackType.id == FeaturedPackRotation.pack_type_id)
+            .filter(
+                FeaturedPackRotation.user_id == userId,
+                FeaturedPackRotation.season == currentSeason,
+                FeaturedPackRotation.purchased == True,
+                PackType.name.in_(seasonLockoutNames),
+            )
+            .all()
+        )
+        purchasedIds = {row[0] for row in (cycleLockedRows + seasonLockedRows)}
+
+        # Build season-aware viability check so we don't feature a pack
+        # whose pool has no eligible templates this season.
+        seasonTemplates = (
+            session.query(CardTemplate)
+            .filter(
+                CardTemplate.season_created == currentSeason,
+                CardTemplate.team_id.isnot(None),
+            )
+            .all()
+        )
+
+        def _categoryFor(pt) -> Optional[str]:
+            # 'team' category dropped — Champion Team Pack (themed_champion)
+            # is the only team-flavored pack and lives in the 'champion'
+            # category. Legacy themed_team_* rows are pruned at seed time
+            # so they don't show up here even if some still exist.
+            if pt.theme_type in ('position', 'output', 'champion', 'allpro'):
+                return pt.theme_type
+            if pt.name in ('humble', 'grand', 'exquisite'):
+                return pt.name
+            return None
+
+        def _viable(pt) -> bool:
+            if pt.theme_type:
+                pool = _applyThemeFilter(
+                    seasonTemplates, pt.theme_type, pt.theme_value,
+                    session=session, currentSeason=currentSeason,
+                )
+                return len(pool) >= pt.cards_per_pack
+            # Grand/Exquisite draw from the full season pool — viable as
+            # long as enough templates exist.
+            return len(seasonTemplates) >= pt.cards_per_pack
+
+        # Group viable packs by category. Grand/Exquisite already purchased
+        # in this cycle are excluded so they can't be rerolled into again.
+        byCategory: Dict[str, list] = {}
+        for pt in allPacks:
+            cat = _categoryFor(pt)
+            if cat is None:
+                continue
+            if pt.id in purchasedIds:
+                continue  # grand/exquisite already bought this cycle
+            if not _viable(pt):
+                continue
+            byCategory.setdefault(cat, []).append(pt)
+
+        if not byCategory:
+            return []
+
+        # Pity ramp: grand/exquisite weights grow by (shopDay - 1) × step.
+        # Monotonic across the season — no reset on purchase. Cycle 1 uses
+        # base weights; cycle 4 uses base + 3×step.
+        pityFactor = max(0, shopDay - 1)
+        effectiveWeights = dict(self.ROTATION_CATEGORY_WEIGHTS)
+        for cat, step in self.PITY_STEP_PER_CYCLE.items():
+            effectiveWeights[cat] = effectiveWeights.get(cat, 0) + step * pityFactor
+
+        chosen: list = []
+        chosenIds: set = set()
+        availableCats = {c: list(packs) for c, packs in byCategory.items() if packs}
+
+        # Initial generation: guarantee Humble in slot 0 (if viable) so every
+        # new cycle opens with the cheap entry tier. Rerolls don't get this
+        # guarantee — rerolling is a gamble that may lose the humble slot.
+        if not isReroll and 'humble' in availableCats:
+            humblePool = availableCats['humble']
+            if humblePool:
+                pt = humblePool[0]  # singleton category, one pack
+                chosen.append(pt)
+                chosenIds.add(pt.id)
+                del availableCats['humble']
+
+        # Sample remaining slots via weighted category rolls
+        maxAttempts = self.THEMED_PACK_SLOT_COUNT * 20
+        attempts = 0
+        while len(chosen) < self.THEMED_PACK_SLOT_COUNT and availableCats and attempts < maxAttempts:
+            attempts += 1
+            categories = list(availableCats.keys())
+            weights = [effectiveWeights.get(c, 1) for c in categories]
+            if sum(weights) <= 0:
+                break
+            cat = random.choices(categories, weights=weights, k=1)[0]
+            pickPool = availableCats[cat]
+            pt = random.choice(pickPool)
+            if pt.id in chosenIds:
+                # Duplicate — remove and try again. Same-category multi-picks
+                # within a single rotation are fine (e.g. two position packs),
+                # but the same exact pack twice is not.
+                pickPool.remove(pt)
+                if not pickPool:
+                    del availableCats[cat]
+                continue
+            chosen.append(pt)
+            chosenIds.add(pt.id)
+            pickPool.remove(pt)
+            if not pickPool:
+                del availableCats[cat]
+
+        if not chosen:
+            return []
+
+        now = datetime.utcnow()
+        rows = []
+        for slot, pt in enumerate(chosen):
+            row = FeaturedPackRotation(
+                user_id=userId,
+                season=currentSeason,
+                shop_day=shopDay,
+                slot=slot,
+                pack_type_id=pt.id,
+                generated_at=now,
+                generated_at_week=currentWeek,
+            )
+            session.add(row)
+            rows.append(row)
+        session.flush()
+        return rows
 
     def buyFeaturedCard(self, session, userId: int, templateId: int, currentSeason: int) -> dict:
         """Buy a single card from the featured shop.

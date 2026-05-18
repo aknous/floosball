@@ -6781,10 +6781,10 @@ def _requireShopOpen():
 def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
     """Get available pack types with costs and daily purchase limits.
 
-    Filtered by the current week's pack rotation: only packs visible in
-    the daily shop are returned (plus the starter pack as a separate
-    `starter` field). Pack revamp design — 'proper' tier deprecated and
-    Exquisite gated to week 2+ for season-progression feel.
+    Three slices in the response:
+      - packs: standard tiers in the current shop_day rotation (humble/grand/exquisite)
+      - themedPacks: 4 themed packs from this cycle's FeaturedPackRotation
+      - starter: free starter pack (returned separately, special UX)
     """
     # No public cache — response is user-specific (starter claim status +
     # per-pack daily-limit counters). A shared cache here would mix users.
@@ -6808,12 +6808,31 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
         rotated = [p for p in packs if p.name in activeNames]
         starterPack = next((p for p in packs if p.name == 'starter'), None)
 
+        # Themed packs come from the rotation table. Pull (or lazily generate)
+        # via cardManager. Rotation is per-user so each player sees their own
+        # set; the reroll endpoint regenerates it.
+        themedPacks = []
+        if user is not None and currentSeason > 0:
+            try:
+                from managers.cardManager import CardManager
+                cm = CardManager(floosball_app.serviceContainer if floosball_app else None)
+                themedPacks = cm.getActiveThemedPacks(
+                    session, user.id, currentSeason, currentWeek
+                )
+                # Commit the rotation rows that getActiveThemedPacks may have
+                # inserted; otherwise they vanish when the session closes.
+                session.commit()
+            except Exception as e:
+                logger.warning(f"Themed pack rotation fetch failed: {e}")
+                session.rollback()
+                themedPacks = []
+
         # Count today's purchases per pack type (committed + pending) if authed
         todayCounts = {}
         starterClaimed = False
         if user:
             dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            for p in rotated:
+            for p in list(rotated) + list(themedPacks):
                 # Only paid openings count toward the daily shop limit.
                 # Free grants (achievement rewards, starter packs) have
                 # cost=0 and must not consume the shop allowance.
@@ -6834,7 +6853,8 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
             starterClaimed = (dbUser and dbUser.starter_pack_claimed_season == currentSeason)
 
         def _packDict(p):
-            return {
+            dailyLimit = DAILY_PACK_LIMITS.get(p.name)
+            base = {
                 "id": p.id,
                 "name": p.name,
                 "displayName": p.display_name,
@@ -6842,18 +6862,86 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
                 "cardsPerPack": p.cards_per_pack,
                 "cardsKept": p.cards_kept,
                 "description": p.description,
-                "dailyLimit": DAILY_PACK_LIMITS.get(p.name),
-                "remainingToday": max(0, DAILY_PACK_LIMITS.get(p.name, 99) - todayCounts.get(p.id, 0)) if user else None,
+                "guaranteedRarity": p.guaranteed_rarity,
+                "dailyLimit": dailyLimit,
+                "remainingToday": max(0, (dailyLimit or 99) - todayCounts.get(p.id, 0)) if (user and dailyLimit is not None) else None,
             }
+            if p.theme_type:
+                base["themeType"] = p.theme_type
+                base["themeValue"] = p.theme_value
+            return base
 
         return build_success_response({
             "packs": [_packDict(p) for p in rotated],
+            "themedPacks": [_packDict(p) for p in themedPacks],
             "starter": ({
                 **_packDict(starterPack),
                 "claimedThisSeason": starterClaimed,
             } if starterPack else None),
             "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/packs/pending")
+def getPendingPack(user: _User = Depends(_getCurrentUser)):
+    """Return the user's most recent un-selected pack reveal, if any.
+
+    The reveal+select purchase flow creates a PendingPackOpening row when
+    the user pays/claims a pack, and only deletes it when they confirm
+    their card picks via /api/packs/select. If the page refreshes between
+    those two steps, the modal disappears from the UI but the row stays
+    in the DB — the user has effectively paid (or claimed an achievement
+    reward) but can't complete the selection. This endpoint lets the
+    frontend re-open the picker on next page load.
+
+    Returns `null` data when no pending pack exists.
+    """
+    from database.connection import get_session
+    from database.models import PendingPackOpening, CardTemplate
+    from managers.cardManager import CardManager
+
+    session = get_session()
+    try:
+        pending = (
+            session.query(PendingPackOpening)
+            .filter(PendingPackOpening.user_id == user.id)
+            .order_by(PendingPackOpening.opened_at.desc())
+            .first()
+        )
+        if pending is None:
+            return build_success_response(None)
+
+        revealedIds = list(pending.revealed_template_ids or [])
+        if not revealedIds:
+            return build_success_response(None)
+
+        sm = floosball_app.seasonManager if floosball_app else None
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else pending.season
+        cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+        # Re-serialize the templates the same way revealPack did originally.
+        templates = (
+            session.query(CardTemplate)
+            .filter(CardTemplate.id.in_(revealedIds))
+            .all()
+        )
+        # Preserve the original draw order — DB query returns them
+        # arbitrarily; we want indices to match what selectPackKeeps expects.
+        byId = {t.id: t for t in templates}
+        ordered = [byId[tid] for tid in revealedIds if tid in byId]
+        revealed = [cardManager._serializeTemplate(t, currentSeason) for t in ordered]
+
+        packType = pending.pack_type
+        return build_success_response({
+            "pendingId": pending.id,
+            "packName": packType.display_name if packType else "Pack",
+            "cost": pending.cost_paid or 0,
+            "cardsPerPack": packType.cards_per_pack if packType else len(revealed),
+            "cardsKept": packType.cards_kept if packType else len(revealed),
+            "revealed": revealed,
         })
     finally:
         session.close()
@@ -6944,6 +7032,11 @@ def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
                 _am.unlockSecret(session, user.id, "completist")
         except Exception as _e:
             logger.warning(f"Completist hook failed: {_e}")
+        # Secret: Anthology (one of every paid pack type in a single season)
+        try:
+            _am.checkAnthology(session, user.id, currentSeason)
+        except Exception as _e:
+            logger.warning(f"Anthology hook failed: {_e}")
 
         session.commit()
         return build_success_response(result)
@@ -7225,6 +7318,122 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
 
 
 # ============================================================================
+# THEMED PACK REROLL
+# ============================================================================
+
+
+def _computeThemedPackRerollContext(session, userId: int):
+    """Shared helper for cost endpoint + reroll endpoint. Returns
+    (rerollCount, cost, currentSeasonNum, currentWeek, isScheduledMode)."""
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from constants import (
+        THEMED_PACK_REROLL_BASE_COST, THEMED_PACK_REROLL_COST_INCREMENT,
+    )
+
+    shopRepo = ShopPurchaseRepository(session)
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    isScheduledMode = sm and sm.timingManager and sm.timingManager._isScheduledMode
+
+    if isScheduledMode:
+        rerollCount = shopRepo.getPurchasesToday(userId, "themed_pack_reroll")
+    else:
+        cycleLen = 7
+        cycleStartWeek = max(1, ((currentWeek - 1) // cycleLen) * cycleLen + 1)
+        cycleEndWeek = cycleStartWeek + cycleLen - 1
+        rerollCount = shopRepo.getPurchasesForCycle(
+            userId, currentSeasonNum, "themed_pack_reroll", cycleStartWeek, cycleEndWeek
+        )
+    cost = THEMED_PACK_REROLL_BASE_COST + (rerollCount * THEMED_PACK_REROLL_COST_INCREMENT)
+    return rerollCount, cost, currentSeasonNum, currentWeek, isScheduledMode
+
+
+@app.get("/api/shop/themed-pack-reroll-cost")
+def getThemedPackRerollCost(user: _User = Depends(_getCurrentUser)):
+    """Get the current themed pack reroll cost (escalates per cycle)."""
+    from database.connection import get_session
+
+    session = get_session()
+    try:
+        rerollCount, cost, *_ = _computeThemedPackRerollContext(session, user.id)
+        return build_success_response({"cost": cost, "rerollCount": rerollCount})
+    finally:
+        session.close()
+
+
+@app.post("/api/shop/reroll-themed-packs")
+def rerollThemedPacks(user: _User = Depends(_getCurrentUser)):
+    """Reroll the user's themed pack rotation. Cost escalates per cycle."""
+    _requireShopOpen()
+    from database.connection import get_session
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from managers.cardManager import CardManager
+
+    session = get_session()
+    try:
+        rerollCount, cost, currentSeasonNum, currentWeek, _ = _computeThemedPackRerollContext(session, user.id)
+
+        if currentWeek < 1 or currentSeasonNum < 1:
+            raise HTTPException(status_code=400, detail="No active week")
+
+        currencyRepo = CurrencyRepository(session)
+        result = currencyRepo.spendFunds(
+            userId=user.id, amount=cost,
+            transactionType="themed_pack_reroll",
+            description=f"Themed pack reroll #{rerollCount + 1}",
+            season=currentSeasonNum, week=currentWeek,
+        )
+        if result is None:
+            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {cost})")
+
+        shopRepo = ShopPurchaseRepository(session)
+        shopRepo.createPurchase(
+            userId=user.id, itemSlug="themed_pack_reroll", season=currentSeasonNum,
+            week=currentWeek, pricePaid=cost,
+        )
+
+        cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+        newPacks = cardManager.rerollThemedPacks(session, user.id, currentSeasonNum, currentWeek)
+
+        from constants import THEMED_PACK_REROLL_COST_INCREMENT
+        nextCost = cost + THEMED_PACK_REROLL_COST_INCREMENT
+
+        def _packDict(p):
+            return {
+                "id": p.id,
+                "name": p.name,
+                "displayName": p.display_name,
+                "cost": p.cost,
+                "cardsPerPack": p.cards_per_pack,
+                "cardsKept": p.cards_kept,
+                "description": p.description,
+                "guaranteedRarity": p.guaranteed_rarity,
+                "dailyLimit": None,
+                "remainingToday": None,
+                "themeType": p.theme_type,
+                "themeValue": p.theme_value,
+            }
+
+        session.commit()
+        return build_success_response({
+            "themedPacks": [_packDict(p) for p in newPacks],
+            "newBalance": result.balance,
+            "nextRerollCost": nextCost,
+        })
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Themed pack reroll failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reroll themed packs")
+    finally:
+        session.close()
+
+
+# ============================================================================
 # POWER-UPS
 # ============================================================================
 
@@ -7441,15 +7650,14 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are running, the current partial week can't actually be
-            # used (rosters/cards locked), so defer the effective start to next
-            # week. Otherwise start this week.
-            # Defer start to next week only if games have actually started.
-            # bool(activeGames) was returning True for merely-Scheduled games
-            # at week setup, deferring purchases that should activate this
-            # week. _areGamesStarted() requires Active/Final status.
-            gamesRunning = _areGamesStarted()
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            # Defer effective start to next week if the current week's games
+            # are in progress OR already complete (week hasn't rolled). In
+            # both states the user can't actually benefit from the powerup
+            # this week — rosters/cards are locked during play, and after
+            # games end the week-end card calc has already run. Charging
+            # the user a week of duration they can't use is the bug.
+            deferStart = _areGamesStarted() or _areGamesCompleted()
+            effectiveStartWeek = currentWeek + 1 if deferStart else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         elif slug == "temp_card_slot":
@@ -7465,15 +7673,10 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are running, the current partial week can't actually be
-            # used (rosters/cards locked), so defer the effective start to next
-            # week. Otherwise start this week.
-            # Defer start to next week only if games have actually started.
-            # bool(activeGames) was returning True for merely-Scheduled games
-            # at week setup, deferring purchases that should activate this
-            # week. _areGamesStarted() requires Active/Final status.
-            gamesRunning = _areGamesStarted()
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            # See temp_flex branch for the deferral rationale — the same
+            # in-progress-or-completed-this-week guard applies here.
+            deferStart = _areGamesStarted() or _areGamesCompleted()
+            effectiveStartWeek = currentWeek + 1 if deferStart else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         elif slug == "fortunes_favor":
@@ -7489,12 +7692,10 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 3)
-            # Defer start to next week only if games have actually started.
-            # bool(activeGames) was returning True for merely-Scheduled games
-            # at week setup, deferring purchases that should activate this
-            # week. _areGamesStarted() requires Active/Final status.
-            gamesRunning = _areGamesStarted()
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            # See temp_flex branch for the deferral rationale — the same
+            # in-progress-or-completed-this-week guard applies here.
+            deferStart = _areGamesStarted() or _areGamesCompleted()
+            effectiveStartWeek = currentWeek + 1 if deferStart else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         elif slug == "income_boost":
@@ -7510,15 +7711,10 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if seasonCount >= seasonLimit:
                 raise HTTPException(status_code=409, detail=f"Season limit reached ({seasonLimit})")
             durationWeeks = itemInfo.get("durationWeeks", 4)
-            # If games are running, the current partial week can't actually be
-            # used (rosters/cards locked), so defer the effective start to next
-            # week. Otherwise start this week.
-            # Defer start to next week only if games have actually started.
-            # bool(activeGames) was returning True for merely-Scheduled games
-            # at week setup, deferring purchases that should activate this
-            # week. _areGamesStarted() requires Active/Final status.
-            gamesRunning = _areGamesStarted()
-            effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+            # See temp_flex branch for the deferral rationale — the same
+            # in-progress-or-completed-this-week guard applies here.
+            deferStart = _areGamesStarted() or _areGamesCompleted()
+            effectiveStartWeek = currentWeek + 1 if deferStart else currentWeek
             expiresAtWeek = effectiveStartWeek + durationWeeks - 1
 
         # ── Deduct Floobits ──
@@ -7674,8 +7870,10 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Income boost (Endowment) — flatter FP→F curve while active
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
-            gamesRunning = _areGamesStarted()
-            weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            # If games are in progress OR done-but-week-hasn't-rolled, the
+            # current week is already "spent" — don't count it as remaining.
+            weekConsumed = _areGamesStarted() or _areGamesCompleted()
+            weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if weekConsumed else 1)
             from constants import (
                 WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
                 WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
@@ -7695,8 +7893,10 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
         # Fortune's Favor (Patronage) — boosts chance card trigger rates
         activeFavor = shopRepo.getActiveFortunesFavor(user.id, currentSeasonNum, currentWeek)
         if activeFavor:
-            gamesRunning = _areGamesStarted()
-            weeksRemaining = activeFavor.expires_at_week - currentWeek + (0 if gamesRunning else 1)
+            # If games are in progress OR done-but-week-hasn't-rolled, the
+            # current week is already "spent" — don't count it as remaining.
+            weekConsumed = _areGamesStarted() or _areGamesCompleted()
+            weeksRemaining = activeFavor.expires_at_week - currentWeek + (0 if weekConsumed else 1)
             active.append({
                 "slug": "fortunes_favor",
                 "displayName": "Patronage",
@@ -8019,23 +8219,45 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "attitude": getattr(c, 'attitude', 80),
             }
 
-        # Available coaches in pool
-        availableCoaches = []
-        coachPool = session.query(Coach).filter(Coach.team_id == None).all()
-        for c in coachPool:
-            availableCoaches.append({
-                "id": c.id,
-                "name": c.name,
-                "overallRating": c.overall_rating,
-                "offensiveMind": c.offensive_mind,
-                "defensiveMind": c.defensive_mind,
-                "adaptability": c.adaptability,
-                "aggressiveness": c.aggressiveness,
-                "clockManagement": c.clock_management,
-                "playerDevelopment": c.player_development,
-                "scouting": getattr(c, 'scouting', 80),
-                "attitude": getattr(c, 'attitude', 80),
-            })
+        # Per-team coach candidates (per-team hiring rework).
+        # Candidates are pre-generated for every team at FA window open so
+        # users can vote on them during the same window as the fire vote.
+        # If FA hasn't opened yet (pre-week-22), the read returns whatever
+        # exists — typically empty until the front office opens.
+        from database.models import CoachCandidate
+        coachCandidates = []
+        if team and teamManager is not None and sm and sm.currentSeason:
+            try:
+                cands = (
+                    session.query(CoachCandidate)
+                    .filter(
+                        CoachCandidate.team_id == team.id,
+                        CoachCandidate.season == sm.currentSeason.seasonNumber,
+                    )
+                    .order_by(CoachCandidate.slot.asc())
+                    .all()
+                )
+            except Exception as e:
+                logger.warning(f"Coach candidate fetch failed for team {teamId}: {e}")
+                cands = []
+            for cand in cands:
+                c = cand.coach
+                if c is None:
+                    continue
+                coachCandidates.append({
+                    "id": c.id,
+                    "slot": cand.slot,
+                    "name": c.name,
+                    "overallRating": c.overall_rating,
+                    "offensiveMind": c.offensive_mind,
+                    "defensiveMind": c.defensive_mind,
+                    "adaptability": c.adaptability,
+                    "aggressiveness": c.aggressiveness,
+                    "clockManagement": c.clock_management,
+                    "playerDevelopment": c.player_development,
+                    "scouting": getattr(c, 'scouting', 80),
+                    "attitude": getattr(c, 'attitude', 80),
+                })
 
         # Rostered players (for cut votes — all players eligible)
         from floosball_player import Position as _Pos
@@ -8067,7 +8289,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
         return build_success_response({
             "teamId": teamId,
             "coach": coachInfo,
-            "availableCoaches": availableCoaches,
+            "coachCandidates": coachCandidates,
             "rosteredPlayers": rosteredPlayers,
             "expiringPlayers": expiringPlayers,
             "retiringPlayers": retiringPlayers,
@@ -8562,11 +8784,25 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
     rookies = [pm.scoutRookie(r, effectiveScouting) for r in upcoming]
     rookies.sort(key=lambda r: (-r['rating'], r['position'], r['name']))
 
+    # Voting window matches the submit endpoint exactly:
+    #   Opens when Front Office opens (week >= GM_ACTIVE_WEEK) OR the season
+    #   is complete (covers the 15+ hour post_bowl + frontoffice gap when
+    #   currentWeek resets to 0 but the user can still legitimately vote).
+    #   Closes the moment the rookie draft phase actually begins.
+    # The previous gate of `currentWeek >= GM_ACTIVE_WEEK` alone silently
+    # closed the UI at offseason start (currentWeek=0) even though the
+    # backend submit would still accept ballots.
+    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
+    seasonComplete = getattr(sm.currentSeason, 'isComplete', False) if sm and sm.currentSeason else False
+    weekOpen = isinstance(currentWeek, int) and currentWeek >= GM_ACTIVE_WEEK
+    draftStartedOrLater = flowPhase in ('rookie_draft', 'pre_fa', 'fa_draft', 'training')
+    votingOpen = (seasonComplete or weekOpen) and not draftStartedOrLater
+
     return build_success_response({
         "season": seasonNumber,
         "currentWeek": currentWeek,
         "votingOpensWeek": GM_ACTIVE_WEEK,
-        "votingOpen": isinstance(currentWeek, int) and currentWeek >= GM_ACTIVE_WEEK,
+        "votingOpen": votingOpen,
         "effectiveScouting": effectiveScouting,
         "scoutingTeamId": scoutTeam.id if scoutTeam else None,
         "rookies": rookies,
@@ -9847,10 +10083,12 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
             currentWeek = max(1, currentWeek)
             durationWeeks = powerupInfo.get("durationWeeks")
             if durationWeeks:
-                # Defer start to next week if games are live (current week can't
-                # be used). Active through the last week of the duration.
-                gamesRunning = _areGamesStarted()
-                effectiveStartWeek = currentWeek + 1 if gamesRunning else currentWeek
+                # Defer start to next week if the current week is already
+                # "spent" — either games are running, or they've ended but
+                # the week hasn't rolled. Either way the powerup can't
+                # affect what's already happened.
+                deferStart = _areGamesStarted() or _areGamesCompleted()
+                effectiveStartWeek = currentWeek + 1 if deferStart else currentWeek
                 expiresAtWeek = effectiveStartWeek + durationWeeks - 1
                 purchaseWeek = effectiveStartWeek
             else:
