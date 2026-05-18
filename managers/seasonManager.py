@@ -953,13 +953,22 @@ class SeasonManager:
                 self._resolvePickEmGame(gameIndex, gameInstance)
 
         except Exception as e:
+            tb = traceback.format_exc()
             logger.error(
                 f"Error simulating game ({game.homeTeam.name} vs {game.awayTeam.name}): {e}\n"
-                + traceback.format_exc()
+                + tb
             )
+            # Persist a crash dump to the volume so we can post-mortem even
+            # after the rotating in-app log overwrites the trail. Best-effort —
+            # never let dump failure block the force-finish below.
+            try:
+                self._writeGameCrashDump(game, e, tb)
+            except Exception as dumpErr:
+                logger.warning(f"Failed to write game crash dump: {dumpErr}")
             # Force-finish the game so it doesn't stay stuck as "Live" forever
             if getattr(game, 'status', None) != FloosGame.GameStatus.Final:
                 game.status = FloosGame.GameStatus.Final
+                tiedAtCrash = (game.homeScore == game.awayScore)
                 if not getattr(game, 'winningTeam', None):
                     if game.homeScore > game.awayScore:
                         game.winningTeam = game.homeTeam
@@ -968,18 +977,103 @@ class SeasonManager:
                         game.winningTeam = game.awayTeam
                         game.losingTeam = game.homeTeam
                     else:
+                        # Tied at crash time. Mark home as "winningTeam" for
+                        # the legacy fields that demand a value, but apply
+                        # a tie in the standings below — don't arbitrarily
+                        # credit one team with a win they didn't earn.
                         game.winningTeam = game.homeTeam
                         game.losingTeam = game.awayTeam
                 try:
-                    # Update season win/loss records (normally done inside playGame())
+                    # Update season win/loss/tie records.
                     if getattr(game, 'isRegularSeasonGame', False) and getattr(game, 'winningTeam', None):
-                        game.winningTeam.seasonTeamStats.setdefault('wins', 0)
-                        game.losingTeam.seasonTeamStats.setdefault('losses', 0)
-                        game.winningTeam.seasonTeamStats['wins'] += 1
-                        game.losingTeam.seasonTeamStats['losses'] += 1
+                        if tiedAtCrash:
+                            game.homeTeam.seasonTeamStats.setdefault('ties', 0)
+                            game.awayTeam.seasonTeamStats.setdefault('ties', 0)
+                            game.homeTeam.seasonTeamStats['ties'] += 1
+                            game.awayTeam.seasonTeamStats['ties'] += 1
+                        else:
+                            game.winningTeam.seasonTeamStats.setdefault('wins', 0)
+                            game.losingTeam.seasonTeamStats.setdefault('losses', 0)
+                            game.winningTeam.seasonTeamStats['wins'] += 1
+                            game.losingTeam.seasonTeamStats['losses'] += 1
                     self._updateTeamRecords(game)
                 except Exception as recordErr:
                     logger.warning(f"Failed to update records after game error recovery: {recordErr}")
+
+    def _writeGameCrashDump(self, game, err, tb: str) -> None:
+        """Persist a game's state at exception time to the data volume so
+        we can post-mortem even after the rotating in-app log overwrites
+        the original traceback. Keeps the most recent 50 dumps; older ones
+        get pruned so the volume doesn't fill up.
+        """
+        import datetime as _dt
+        import json as _json
+        dumpDir = '/data/crashes'
+        if not os.path.isdir('/data'):
+            # Local dev — fall back to project-relative logs dir.
+            dumpDir = os.path.join(os.getcwd(), 'logs', 'crashes')
+        os.makedirs(dumpDir, exist_ok=True)
+
+        ts = _dt.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+        gid = getattr(game, 'dbId', None) or getattr(game, 'id', 'unknown')
+        path = os.path.join(dumpDir, f'game_{gid}_{ts}.txt')
+
+        homeTeamName = getattr(game.homeTeam, 'name', '?')
+        awayTeamName = getattr(game.awayTeam, 'name', '?')
+        feedTail = []
+        for entry in (getattr(game, 'gameFeed', None) or [])[:25]:
+            try:
+                if isinstance(entry, dict):
+                    if 'play' in entry:
+                        p = entry['play']
+                        feedTail.append({
+                            'kind': 'play',
+                            'quarter': getattr(p, 'quarter', None),
+                            'time': getattr(p, 'timeRemaining', None),
+                            'result': str(getattr(p, 'playResult', None)),
+                            'text': getattr(p, 'playText', None),
+                        })
+                    elif 'event' in entry:
+                        feedTail.append({'kind': 'event', 'event': entry['event']})
+            except Exception:
+                continue
+
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(f"=== Game crash dump ===\n")
+            fh.write(f"timestamp: {ts}\n")
+            fh.write(f"game_id (dbId): {gid}\n")
+            fh.write(f"matchup: {awayTeamName} @ {homeTeamName}\n")
+            fh.write(f"score: away={getattr(game, 'awayScore', '?')} home={getattr(game, 'homeScore', '?')}\n")
+            fh.write(f"quarter: {getattr(game, 'currentQuarter', '?')}  clock: {getattr(game, 'gameClockSeconds', '?')}\n")
+            fh.write(f"isOvertime: {getattr(game, 'isOvertime', '?')}  otPeriod: {getattr(game, 'otPeriod', '?')}\n")
+            fh.write(f"otFirstPossComplete: {getattr(game, 'otFirstPossComplete', '?')}  "
+                     f"otSecondPossComplete: {getattr(game, 'otSecondPossComplete', '?')}\n")
+            fh.write(f"totalPlays: {getattr(game, 'totalPlays', '?')}\n")
+            fh.write(f"offense: {getattr(getattr(game, 'offensiveTeam', None), 'abbr', '?')}  "
+                     f"defense: {getattr(getattr(game, 'defensiveTeam', None), 'abbr', '?')}\n")
+            fh.write(f"down: {getattr(game, 'down', '?')}  "
+                     f"yardsToEndzone: {getattr(game, 'yardsToEndzone', '?')}  "
+                     f"yardsToFirstDown: {getattr(game, 'yardsToFirstDown', '?')}\n")
+            fh.write(f"\nexception: {type(err).__name__}: {err}\n\n")
+            fh.write("traceback:\n")
+            fh.write(tb)
+            fh.write("\nrecent_feed:\n")
+            fh.write(_json.dumps(feedTail, indent=2, default=str))
+            fh.write("\n")
+
+        # Prune to last 50 dumps so the volume doesn't grow unbounded.
+        try:
+            files = sorted(
+                (os.path.join(dumpDir, f) for f in os.listdir(dumpDir) if f.startswith('game_') and f.endswith('.txt')),
+                key=os.path.getmtime,
+            )
+            for old in files[:-50]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
     def _openGameStatsFile(self) -> None:
         """Open file for game statistics logging"""

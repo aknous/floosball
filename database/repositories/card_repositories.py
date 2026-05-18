@@ -440,8 +440,13 @@ class PackTypeRepository:
                 cards_per_pack=5,
                 cards_kept=3,
                 guaranteed_rarity='prismatic',
-                rarity_weights={'base': 30, 'holographic': 50, 'prismatic': 35, 'diamond': 5},
-                description='Reveal 5 cards, keep 3. Guaranteed Prismatic in every pack.',
+                # Non-guaranteed slots use the themed-pack rate table —
+                # slightly elevated from Humble (~66% base / 22% holo /
+                # 10% prismatic / 1.6% diamond) but well short of the
+                # old inflated Grand odds. Value comes from the
+                # guaranteed Prismatic; the rest are bonus odds.
+                rarity_weights={'base': 82, 'holographic': 28, 'prismatic': 13, 'diamond': 2},
+                description='Reveal 5 cards, keep 3. Guaranteed Prismatic; remaining cards at elevated odds.',
             ),
             PackType(
                 name='exquisite',
@@ -450,8 +455,10 @@ class PackTypeRepository:
                 cards_per_pack=5,
                 cards_kept=3,
                 guaranteed_rarity='diamond',
-                rarity_weights={'base': 15, 'holographic': 35, 'prismatic': 45, 'diamond': 12},
-                description='Reveal 5 cards, keep 3. Guaranteed Diamond in every pack.',
+                # Same themed-pack rates on non-guaranteed slots as Grand.
+                # The Diamond guarantee is what you're paying for.
+                rarity_weights={'base': 82, 'holographic': 28, 'prismatic': 13, 'diamond': 2},
+                description='Reveal 5 cards, keep 3. Guaranteed Diamond; remaining cards at elevated odds.',
             ),
         ]
 

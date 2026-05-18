@@ -113,8 +113,11 @@ ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same
 # Minimum player count required to lock a roster. /remove also enforces
 # this floor — caps the "gut your roster to ride Drought/Hedge/Home Alone
 # unbounded" exploit without taking partial-roster flexibility off the
-# table. Auto-lock at game start picks up anyone meeting the floor.
-ROSTER_MIN_PLAYERS = 3
+# table. Auto-lock at game start picks up anyone meeting the floor. Two
+# is the lowest meaningful floor: forces the user to keep at least one
+# scoring threat alongside the kicker so the gutted-roster exploit
+# still has a real cost.
+ROSTER_MIN_PLAYERS = 2
 
 # Weekly FP → Floobits conversion (participation reward).
 # Tapering power curve: F = round(SCALE * FP^EXPONENT), no hard cap. Big
