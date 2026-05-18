@@ -861,17 +861,61 @@ def _backfillCardTemplateOutputType():
 
 
 def _refreshCardEffectText():
-    """Update stale tooltip/detail text on card templates whose effects were reworked."""
+    """Update stale tooltip/detail text on card templates whose effects were reworked.
+
+    Re-runs the same placeholder substitution buildEffectConfig does — so
+    templates that reference {primary.fieldName} pick up the current text
+    AND the current value (computed from stored primary). Add an effect
+    name to refreshEffects when its tooltip / detail template changes
+    and existing card descriptions should re-render on next boot.
+    """
     import json as _json
-    from managers.cardEffects import EFFECT_TOOLTIPS, EFFECT_DETAIL_TEMPLATES
+    import re as _re
+    from managers.cardEffects import EFFECT_TOOLTIPS, EFFECT_DETAIL_TEMPLATES, STAT_DISPLAY_NAMES
     from sqlalchemy import text
 
-    # Map of effectName → fields to refresh from current definitions.
-    # Add an effect name here when its tooltip / detail template changes
-    # and you need existing templates to pick up the new text on next boot.
-    # Only works for STATIC description text (no {placeholder} substitutions)
-    # — placeholder-based descriptions need full template regeneration.
-    refreshEffects = {"odometer", "snake_eyes"}
+    refreshEffects = {
+        "odometer", "snake_eyes",
+        # FPx delta-notation sweep — existing cards stored 1.x values in
+        # their tooltip/detail strings; re-render with the *Delta variants.
+        "backfield_buddies", "all_in", "stacked_deck",
+    }
+
+    # Same FullMult → Delta synthesis buildEffectConfig does. Keep these
+    # two maps in sync.
+    _FULL_MULT_FIELDS = {
+        'xMultValue':    'xMultDelta',
+        'baseXMult':     'baseXDelta',
+        'baseMult':      'baseDelta',
+        'enhancedMult':  'enhancedDelta',
+        'maxMult':       'maxDelta',
+        'q4MultFactor':  'q4MultDelta',
+    }
+    _REWARDVALUE_IS_MULT_EFFECTS = {'bandwagon', 'stack', 'backfield_buddies', 'full_roster'}
+
+    def _renderTemplate(tmpl: str, primary: dict) -> str:
+        if not tmpl:
+            return ""
+        # Synthesize delta variants on a working copy of primary.
+        derived = dict(primary or {})
+        for fullKey, deltaKey in _FULL_MULT_FIELDS.items():
+            if fullKey in derived and isinstance(derived[fullKey], (int, float)):
+                derived[deltaKey] = round(derived[fullKey] - 1, 2)
+        if 'rewardValue' in derived:
+            rv = derived['rewardValue']
+            if isinstance(rv, (int, float)) and rv >= 1.0:
+                derived['rewardDelta'] = round(rv - 1, 2)
+        if derived.get('rewardType') == 'mult' and 'baseReward' in derived:
+            br = derived['baseReward']
+            if isinstance(br, (int, float)) and br >= 1.0:
+                derived['baseRewardDelta'] = round(br - 1, 2)
+        out = tmpl
+        for key, val in derived.items():
+            out = out.replace("{" + key + "}", str(val))
+        statKey = derived.get("stat", "")
+        if statKey:
+            out = out.replace("{statDisplay}", STAT_DISPLAY_NAMES.get(statKey, statKey))
+        return _re.sub(r'\{[a-zA-Z_]+\}', '?', out)
 
     conn = engine.connect()
     try:
@@ -882,12 +926,13 @@ def _refreshCardEffectText():
             effectName = cfg.get("effectName", "")
             if effectName not in refreshEffects:
                 continue
-            currentTooltip = EFFECT_TOOLTIPS.get(effectName, "")
-            currentDetail = EFFECT_DETAIL_TEMPLATES.get(effectName, "")
-            if cfg.get("tooltip") == currentTooltip and cfg.get("detail") == currentDetail:
+            primary = cfg.get("primary", {}) or {}
+            newTooltip = _renderTemplate(EFFECT_TOOLTIPS.get(effectName, ""), primary)
+            newDetail = _renderTemplate(EFFECT_DETAIL_TEMPLATES.get(effectName, ""), primary)
+            if cfg.get("tooltip") == newTooltip and cfg.get("detail") == newDetail:
                 continue
-            cfg["tooltip"] = currentTooltip
-            cfg["detail"] = currentDetail
+            cfg["tooltip"] = newTooltip
+            cfg["detail"] = newDetail
             conn.execute(
                 text("UPDATE card_templates SET effect_config = :cfg WHERE id = :id"),
                 {"cfg": _json.dumps(cfg), "id": row[0]},
