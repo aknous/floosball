@@ -818,8 +818,11 @@ class FantasyRosterSwap(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     roster_id: Mapped[int] = mapped_column(Integer, ForeignKey("fantasy_rosters.id"), nullable=False)
     slot: Mapped[str] = mapped_column(String(10), nullable=False)
-    old_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
-    new_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    # old_player_id NULL = filling a previously-emptied slot (no prior occupant).
+    # new_player_id NULL = removing the current occupant without immediate replacement.
+    # Either, but not both, may be NULL.
+    old_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    new_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     swap_week: Mapped[int] = mapped_column(Integer, nullable=False)
     banked_fp: Mapped[float] = mapped_column(Float, default=0.0)
     # Snapshot of the old player's swap-week FP at the moment of the swap.

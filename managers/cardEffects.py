@@ -2033,7 +2033,8 @@ def _computeTriggerHappy(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=1.0, equation="No roster TDs this week")
     bonus = perTd * math.log(1 + tds / 3.0)
     mult = round(1 + bonus, 3)
-    eq = f"1 + log-taper({tds} roster TDs) = {mult}x"
+    delta = round(mult - 1.0, 2)
+    eq = f"log-taper({tds} roster TDs) = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -2044,7 +2045,8 @@ def _computeMainCharacter(primary, ctx, cardPlayerId, eqId):
     rosterFP = rosterStats.get("fantasyPoints", 0)
     fpShare = rosterFP / max(ctx.weekRawFP, 1)
     scale = primary.get("fpShareScale", 0)
-    eq = f"1 + ({scale} × {round(fpShare * 100)}% roster {posLabel} FP share)"
+    delta = round(scale * fpShare, 2)
+    eq = f"{scale} × {round(fpShare * 100)}% roster {posLabel} FP share = +{delta:.2f} FPx"
     return EffectResult(multBonus=1 + scale * fpShare, equation=eq)
 
 
@@ -2136,7 +2138,9 @@ def _computeJuggernaut(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=1.0, equation="Waiting for win to extend streak")
     bonus = growth * math.log(1 + streak / 3.0)
     mult = round(baseX + bonus, 3)
-    eq = f"{baseX}x base + log-taper({streak} win streak) = {mult}x"
+    baseDelta = round(baseX - 1.0, 2)
+    delta = round(mult - 1.0, 2)
+    eq = f"+{baseDelta:.2f} base + log-taper({streak} win streak) = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -2153,8 +2157,10 @@ def _computeHotRoster(primary, ctx, cardPlayerId, eqId):
     # Legacy FPx path
     perPlayer = primary.get("perPlayerMult", 0)
     bonus = perPlayer * count
-    eq = f"1 + ({perPlayer}/player × {count} overperforming) = {1 + bonus:.2f}x"
-    return EffectResult(multBonus=1 + bonus, equation=eq)
+    mult = 1 + bonus
+    delta = round(mult - 1.0, 2)
+    eq = f"+{perPlayer}/player × {count} overperforming = +{delta:.2f} FPx"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeRisingTide(primary, ctx, cardPlayerId, eqId):
@@ -2164,7 +2170,9 @@ def _computeRisingTide(primary, ctx, cardPlayerId, eqId):
                 if ctx.playerPerformanceRatings.get(pid, 0) - ctx.rosterPlayerRatings.get(pid, 60) >= 5)
     rawMult = 1 + perPlayer * count
     mult = min(rawMult, maxMult)
-    eq = f"1 + ({perPlayer}/player × {count} overperforming) = {mult:.2f}x (max {maxMult}x)"
+    delta = round(mult - 1.0, 2)
+    maxDelta = round(maxMult - 1.0, 2)
+    eq = f"+{perPlayer}/player × {count} overperforming = +{delta:.2f} FPx (max +{maxDelta:.2f})"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -2208,7 +2216,8 @@ def _computeStockpiler(primary, ctx, cardPlayerId, eqId):
     unusedSwaps = ctx.unusedSwaps
     if unusedSwaps <= 0:
         return EffectResult(equation="no unused swaps")
-    eq = f"1 + ({perSwap}x × {unusedSwaps} unused swaps)"
+    delta = round(unusedSwaps * perSwap, 2)
+    eq = f"+{perSwap}/swap × {unusedSwaps} unused swaps = +{delta:.2f} FPx"
     return EffectResult(multBonus=1 + unusedSwaps * perSwap, equation=eq)
 
 
@@ -2216,7 +2225,8 @@ def _computeProvidence(primary, ctx, cardPlayerId, eqId):
     """Small FPx bonus + aura that boosts all chance card trigger rates."""
     baseMult = primary.get("baseMult", 1.05)
     chanceBonus = primary.get("chanceBonus", 0.12)
-    eq = f"{baseMult}x + {chanceBonus:.0%} chance boost"
+    baseDelta = round(baseMult - 1.0, 2)
+    eq = f"+{baseDelta:.2f} FPx + {chanceBonus:.0%} chance boost"
     return EffectResult(multBonus=baseMult, equation=eq)
 
 
@@ -2233,7 +2243,9 @@ def _computeHouseMoney(primary, ctx, cardPlayerId, eqId):
     baseXMult = primary.get("baseXMult", 1.0)
     perUpset = primary.get("perUpsetXMult", 0)
     xMult = baseXMult + perUpset * upsetWins
-    eq = f"{baseXMult} base + ({perUpset}x × {upsetWins} upset wins)"
+    baseDelta = round(baseXMult - 1.0, 2)
+    delta = round(xMult - 1.0, 2)
+    eq = f"+{baseDelta:.2f} base + ({perUpset}/upset × {upsetWins} upset wins) = +{delta:.2f} FPx"
     return EffectResult(multBonus=xMult, equation=eq)
 
 
@@ -2492,8 +2504,8 @@ def _computePedigree(primary, ctx, cardPlayerId, eqId):
         baseMult = primary["baseMult"]
         mult = primary.get("rewardValue", 1.3)
         if ctx.favoriteTeamElo >= eloThreshold:
-            return EffectResult(multBonus=mult, equation=f"{mult}x (legacy, ELO {teamElo})")
-        return EffectResult(multBonus=baseMult, equation=f"{baseMult}x (legacy, ELO {teamElo})")
+            return EffectResult(multBonus=mult, equation=f"+{mult - 1.0:.2f} FPx (legacy, ELO {teamElo})")
+        return EffectResult(multBonus=baseMult, equation=f"+{baseMult - 1.0:.2f} FPx (legacy, ELO {teamElo})")
     if ctx.favoriteTeamElo >= eloThreshold:
         eq = f"+{rewardValue} FP (team ELO {teamElo} >= {eloThreshold})"
         return EffectResult(fpBonus=rewardValue, equation=eq)
@@ -2710,7 +2722,8 @@ def _computeParlay(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=baseXMult, equation="No Prognostication points this week")
     mult = baseXMult + coef * math.log(1 + points / k)
     mult = round(mult, 2)
-    eq = f"1.0 + {coef:.2f} × ln(1 + {points}/{k}) = {mult:.2f}x"
+    delta = round(mult - 1.0, 2)
+    eq = f"{coef:.2f} × ln(1 + {points}/{k}) = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -2966,9 +2979,9 @@ def _computeStampede(primary, ctx, cardPlayerId, eqId):
     stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
     rushYards = stats.get("rushing_stats", {}).get("runYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     if rushYards >= threshold:
-        eq = f"{enhancedMult:.2f}x FPx ({rushYards} rush yds >= {threshold})"
+        eq = f"+{enhancedMult - 1.0:.2f} FPx ({rushYards} rush yds >= {threshold})"
         return EffectResult(multBonus=enhancedMult, equation=eq)
-    eq = f"{baseMult:.2f}x FPx (base — {rushYards} rush yds < {threshold})"
+    eq = f"+{baseMult - 1.0:.2f} FPx (base — {rushYards} rush yds < {threshold})"
     return EffectResult(multBonus=baseMult, equation=eq)
 
 
@@ -3167,7 +3180,7 @@ def _computeBoomWeek(primary, ctx, cardPlayerId, eqId):
     # Legacy FPx path
     perPoint = primary.get("perPointOver", 0.02)
     bonus = round(1 + perPoint * bestOver, 2)
-    return EffectResult(multBonus=bonus, equation=f"Overperformed — {bonus}x FP")
+    return EffectResult(multBonus=bonus, equation=f"Overperformed — +{bonus - 1.0:.2f} FPx")
 
 
 def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
@@ -3328,15 +3341,16 @@ def _computeEminence(primary, ctx, cardPlayerId, eqId):
         playerAvg = max(fpMap.get(pid, 0.0) for pid in pids)
 
     if posAvg <= 0:
-        return EffectResult(multBonus=1.0, equation="1.00x FPx — no position data yet")
+        return EffectResult(multBonus=1.0, equation="+0.00 FPx — no position data yet")
 
     abovePace = playerAvg - posAvg
     if abovePace <= 0:
-        eq = f"1.00x FPx — {abovePace:+.1f} below pace ({playerAvg:.1f} vs {posAvg:.1f} avg)"
+        eq = f"+0.00 FPx — {abovePace:+.1f} below pace ({playerAvg:.1f} vs {posAvg:.1f} avg)"
         return EffectResult(multBonus=1.0, equation=eq)
 
     mult = min(maxMult, round(1.0 + abovePace * bonusPerFP, 2))
-    eq = f"{mult:.2f}x FPx — {abovePace:+.1f} above pace ({playerAvg:.1f} vs {posAvg:.1f} avg)"
+    delta = round(mult - 1.0, 2)
+    eq = f"+{delta:.2f} FPx — {abovePace:+.1f} above pace ({playerAvg:.1f} vs {posAvg:.1f} avg)"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -3527,7 +3541,9 @@ def _computeAllIn(primary, ctx, cardPlayerId, eqId):
         return EffectResult(equation=eq)
     dupes = maxCount - 1
     bonus = round(baseXMult + perDupe * dupes, 2)
-    eq = f"{baseXMult} base + ({perDupe} × {dupes} dupes) = {bonus}"
+    baseDelta = round(baseXMult - 1.0, 2)
+    delta = round(bonus - 1.0, 2)
+    eq = f"+{baseDelta:.2f} base + ({perDupe} × {dupes} dupes) = +{delta:.2f} FPx"
     return EffectResult(multBonus=bonus, equation=eq)
 
 
@@ -3560,7 +3576,8 @@ def _computeStackedDeck(primary, ctx, cardPlayerId, eqId):
     # Subtract 1 for this card itself
     otherMults = max(0, multCount - 1)
     mult = round((1 + perCard) ** otherMults, 2)
-    eq = f"(1 + {perCard})^{otherMults} other FPx cards = {mult:.2f}x"
+    delta = round(mult - 1.0, 2)
+    eq = f"(1 + {perCard})^{otherMults} other FPx cards = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -3602,7 +3619,8 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
     if triggeredCount > 0:
         bonus = round(1 + perCard * triggeredCount, 2)
-        eq = f"1 + ({perCard} × {triggeredCount} triggered cards) = {bonus}"
+        delta = round(bonus - 1.0, 2)
+        eq = f"+{perCard}/card × {triggeredCount} triggered cards = +{delta:.2f} FPx"
         return EffectResult(multBonus=bonus, equation=eq)
     eq = "No other cards triggered"
     return EffectResult(equation=eq)
@@ -3637,7 +3655,8 @@ def _computeHighRoller(primary, ctx, cardPlayerId, eqId):
     chanceTriggered = sum(1 for b in breakdowns if b.chanceTriggered)
     if chanceTriggered > 0:
         bonus = round(1 + perCardMult * chanceTriggered, 2)
-        eq = f"1 + ({perCardMult} x {chanceTriggered} chance hit{'s' if chanceTriggered != 1 else ''}) = {bonus}x"
+        delta = round(bonus - 1.0, 2)
+        eq = f"+{perCardMult}/hit × {chanceTriggered} chance hit{'s' if chanceTriggered != 1 else ''} = +{delta:.2f} FPx"
         return EffectResult(multBonus=bonus, equation=eq)
     eq = "No chance cards hit"
     return EffectResult(equation=eq)
@@ -3651,7 +3670,8 @@ def _computeIronWill(primary, ctx, cardPlayerId, eqId):
     activeStreaks = getattr(ctx, 'activeStreakCount', 0)
     if activeStreaks > 0:
         bonus = round(1 + perCardMult * activeStreaks, 2)
-        eq = f"1 + ({perCardMult} × {activeStreaks} active streaks) = {bonus}x"
+        delta = round(bonus - 1.0, 2)
+        eq = f"+{perCardMult}/streak × {activeStreaks} active streaks = +{delta:.2f} FPx"
         return EffectResult(multBonus=bonus, equation=eq)
     eq = "No active streak cards"
     return EffectResult(equation=eq)
@@ -3668,7 +3688,7 @@ def _computeLemons(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     nonZeroFP = [b for b in breakdowns if b.totalFP > 0 and b.effectName != "double_down"]
     if nonZeroFP:
-        eq = f"{rewardValue}x FP on your lowest-earning card"
+        eq = f"+{rewardValue - 1.0:.2f} FPx on your lowest-earning card"
         return EffectResult(multBonus=rewardValue, equation=eq)
     eq = "No FP-earning cards to amplify"
     return EffectResult(equation=eq)
@@ -3685,14 +3705,14 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
         breakdowns = ctx._firstPassBreakdowns or []
         anyTriggered = any(b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0 for b in breakdowns)
         if not anyTriggered:
-            eq = f"{rewardValue} (no other cards produced a bonus)"
+            eq = f"+{rewardValue - 1.0:.2f} FPx (no other cards produced a bonus)"
             return EffectResult(multBonus=rewardValue, equation=eq)
         triggeredCount = sum(1 for b in breakdowns if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
         eq = f"{triggeredCount} other card(s) produced a bonus"
         return EffectResult(equation=eq)
     if "baseFP" not in primary and "baseMult" in primary:
         baseMult = primary["baseMult"]
-        return EffectResult(multBonus=baseMult, equation=f"{baseMult}x FPx (legacy)")
+        return EffectResult(multBonus=baseMult, equation=f"+{baseMult - 1.0:.2f} FPx (legacy)")
     breakdowns = ctx._firstPassBreakdowns or []
     failedCount = sum(1 for b in breakdowns if b.totalFP <= 0 and b.floobitsEarned <= 0 and b.primaryMult <= 0)
     preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
@@ -3768,7 +3788,7 @@ def _computeWalkOff(primary, ctx, cardPlayerId, eqId):
 
 # ─── Strategy-Warping Effect Compute Functions ──────────────────────────────
 
-MAX_ROSTER_SLOTS = 6  # QB, RB, WR1, WR2, TE, K
+BASE_ROSTER_SLOTS = 6  # QB, RB, WR1, WR2, TE, K (FLEX adds +1 when active)
 
 
 def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
@@ -3794,12 +3814,14 @@ def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
 def _computeAusterity(primary, ctx, cardPlayerId, eqId):
     """FPx per empty roster slot. Fewer players = bigger multiplier."""
     perSlotMult = primary.get("perSlotMult", 0.15)
+    totalSlots = BASE_ROSTER_SLOTS + (1 if ctx.hasFlexSlot else 0)
     filledSlots = len(ctx.rosterPlayerIds)
-    emptySlots = max(0, MAX_ROSTER_SLOTS - filledSlots)
+    emptySlots = max(0, totalSlots - filledSlots)
     if emptySlots == 0:
         return EffectResult(multBonus=1.0, equation="No empty roster slots")
     mult = round(1.0 + perSlotMult * emptySlots, 3)
-    eq = f"1.0 + {perSlotMult}/slot × {emptySlots} empty = {mult}x"
+    delta = round(mult - 1.0, 2)
+    eq = f"+{perSlotMult:.2f}/slot × {emptySlots} empty = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -3838,8 +3860,9 @@ def _computeHumility(primary, ctx, cardPlayerId, eqId):
     if avgStarsUnder <= 0:
         return EffectResult(multBonus=1.0, equation="Rostered player is 5★ (no bonus)")
     mult = round(1.0 + perStarMult * avgStarsUnder, 2)
+    delta = round(mult - 1.0, 2)
     posLabel = POSITION_LABELS.get(cardPos, "player")
-    eq = f"1.0 + {perStarMult}/star × {avgStarsUnder:.1f} stars under 5 ({posLabel}) = {mult}x"
+    eq = f"+{perStarMult}/star × {avgStarsUnder:.1f} stars under 5 ({posLabel}) = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -3850,7 +3873,8 @@ def _computeVagabond(primary, ctx, cardPlayerId, eqId):
     if swapsUsed <= 0:
         return EffectResult(multBonus=1.0, equation="No swaps used this season")
     mult = round(1.0 + perSwap * swapsUsed, 3)
-    eq = f"1.0 + {perSwap}/swap × {swapsUsed} swaps used = {mult}x"
+    delta = round(mult - 1.0, 2)
+    eq = f"+{perSwap}/swap × {swapsUsed} swaps used = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 

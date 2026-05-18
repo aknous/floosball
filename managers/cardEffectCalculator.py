@@ -100,6 +100,11 @@ class CardCalcContext:
     # Swap data (for Stockpiler / swap-based effects)
     unusedSwaps: int = 0
     seasonSwapsUsed: int = 0
+    # True when the user currently has a 7th roster slot (FLEX) available —
+    # either from an equipped Champion-classified card or an active
+    # temp_flex powerup. Used by Home Alone so an empty FLEX slot counts
+    # as a vacancy.
+    hasFlexSlot: bool = False
 
     # Economy data (for balance-based effects)
     userFloobitsBalance: int = 0

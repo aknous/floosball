@@ -1299,6 +1299,35 @@ class FantasyTracker:
         from managers.cardEffectCalculator import computeEminenceData
         positionAvgFPs, playerSeasonFPPerGame = computeEminenceData(session, season, currentWeek)
 
+        # FLEX slot detection — Home Alone needs to know whether the user
+        # has a 7th roster slot in play (empty or filled) so an open FLEX
+        # counts as a vacancy. Active entitlement (champion card / temp_flex
+        # powerup) OR a FLEX row already on the roster both indicate the
+        # slot is in play — covers the entitlement-just-expired-but-roster-
+        # still-has-FLEX edge case.
+        hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+        if not hasFlexSlot:
+            try:
+                from database.models import ShopPurchase as _SP
+                for eq in userEquipped:
+                    uc = getattr(eq, 'user_card', None)
+                    tmpl = getattr(uc, 'card_template', None) if uc else None
+                    cls = getattr(tmpl, 'classification', None) or ''
+                    if 'champion' in cls:
+                        hasFlexSlot = True
+                        break
+                if not hasFlexSlot:
+                    activeFlex = session.query(_SP).filter(
+                        _SP.user_id == userId,
+                        _SP.season == season,
+                        _SP.item_slug == 'temp_flex',
+                        _SP.expires_at_week >= currentWeek,
+                    ).first()
+                    if activeFlex:
+                        hasFlexSlot = True
+            except Exception:
+                pass
+
         return CardCalcContext(
             userId=userId,
             season=season,
@@ -1341,6 +1370,7 @@ class FantasyTracker:
             activeModifier=activeModifier,
             unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
             seasonSwapsUsed=seasonSwapsUsed,
+            hasFlexSlot=hasFlexSlot,
             userFloobitsBalance=userFloobitsBalance,
             liveStreakConditionsMet=liveStreakConditionsMet,
             positionAvgFPs=positionAvgFPs,

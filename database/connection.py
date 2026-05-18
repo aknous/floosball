@@ -606,6 +606,45 @@ def _runPendingMigrations():
             logger.info("  Migration: added fantasy_roster_swaps.banked_week_fp")
         except Exception:
             conn.rollback()
+        # Roster /remove support — let fantasy_roster_swaps.old_player_id
+        # and new_player_id both accept NULL. A row with new_player_id=NULL
+        # represents a "remove" (emptied the slot). A row with
+        # old_player_id=NULL represents a paid fill of a previously-emptied
+        # slot. SQLite can't drop NOT NULL via ALTER, so we rebuild the
+        # table. Idempotent: skip if both columns are already nullable.
+        try:
+            colInfo = conn.execute(text("PRAGMA table_info(fantasy_roster_swaps)")).fetchall()
+            byName = {r[1]: r for r in colInfo}
+            oldNN = byName.get('old_player_id', (None,)*6)[3] == 1
+            newNN = byName.get('new_player_id', (None,)*6)[3] == 1
+            if oldNN or newNN:
+                conn.execute(text("""
+                    CREATE TABLE fantasy_roster_swaps_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        roster_id INTEGER NOT NULL REFERENCES fantasy_rosters(id),
+                        slot VARCHAR(10) NOT NULL,
+                        old_player_id INTEGER NULL REFERENCES players(id),
+                        new_player_id INTEGER NULL REFERENCES players(id),
+                        swap_week INTEGER NOT NULL,
+                        banked_fp REAL DEFAULT 0,
+                        banked_week_fp REAL DEFAULT 0,
+                        created_at DATETIME
+                    )
+                """))
+                conn.execute(text("""
+                    INSERT INTO fantasy_roster_swaps_new
+                    SELECT id, roster_id, slot, old_player_id, new_player_id, swap_week,
+                           banked_fp, COALESCE(banked_week_fp, 0), created_at
+                    FROM fantasy_roster_swaps
+                """))
+                conn.execute(text("DROP TABLE fantasy_roster_swaps"))
+                conn.execute(text("ALTER TABLE fantasy_roster_swaps_new RENAME TO fantasy_roster_swaps"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fantasy_swap_roster ON fantasy_roster_swaps(roster_id)"))
+                conn.commit()
+                logger.info("  Migration: fantasy_roster_swaps old/new_player_id are now nullable")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration skipped (swap player_id nullable): {e}")
         # Peak streak (longest win-or-loss run, abs value) per team-season.
         # Column add only — backfill runs below via _backfillTeamPeakStreaks
         # so it opens its own connection and can compute idempotently.
