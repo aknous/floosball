@@ -3542,8 +3542,21 @@ class Game:
             'timeRemaining': self.formatTime(self.gameClockSeconds)
         })
         
-        # Main game loop - run until game is over
+        # Main game loop - run until game is over. The MAX_OT_PERIODS
+        # cap is a backstop against indefinite stalemate (each OT period
+        # is 10 game-minutes — going past 5 means we've already simulated
+        # nearly an extra full game's worth of OT). Without the cap a
+        # genuinely-deadlocked sim could spin forever.
+        MAX_OT_PERIODS = 5
         while not self.isGameOver():
+            if (self.currentQuarter >= 5
+                    and getattr(self, 'otPeriod', 0) > MAX_OT_PERIODS
+                    and self.homeScore == self.awayScore):
+                logger.warning(
+                    f"[GAME] OT cap reached ({MAX_OT_PERIODS} periods) — accepting tie. "
+                    f"{self.awayTeam.name} {self.awayScore} - {self.homeScore} {self.homeTeam.name}"
+                )
+                break
             # Format and add previous play to feed BEFORE quarter transitions
             # This ensures Q4 plays appear before OT events
             lastPlayFormatted = getattr(self, '_pendingPossessionChange', False)
@@ -4377,7 +4390,19 @@ class Game:
                                             }
                                         })
         else:
-            # Tie game (should only happen in OT time expiration)
+            # Tie game. The main loop only exits with tied scores via two
+            # paths: (a) the OT-period cap below force-stops a no-score
+            # stalemate, or (b) some still-unidentified state transition
+            # set status=Final while tied. Log the second case loudly
+            # — every other tied-finalize means the bug recurred.
+            logger.warning(
+                f"[GAME] Tied finalize: {self.awayTeam.name} {self.awayScore} - "
+                f"{self.homeScore} {self.homeTeam.name} | quarter={self.currentQuarter} "
+                f"otPeriod={getattr(self, 'otPeriod', 0)} clock={self.gameClockSeconds} "
+                f"otFirstPossComplete={getattr(self, 'otFirstPossComplete', None)} "
+                f"otSecondPossComplete={getattr(self, 'otSecondPossComplete', None)} "
+                f"totalPlays={self.totalPlays}"
+            )
             self.winningTeam = self.homeTeam  # Arbitrary - treat as home team win
             self.losingTeam = self.awayTeam
             self.gameDict['score'] = '{0} - {1} (TIE)'.format(self.homeScore, self.awayScore)
