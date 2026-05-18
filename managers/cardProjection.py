@@ -352,6 +352,31 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                         EquippedCard.season == season,
                         EquippedCard.week == week)
                 .all())
+    # FLEX slot detection — mirrors the fantasyTracker logic. Either an
+    # active entitlement (champion card / temp_flex powerup) or a FLEX
+    # row already on the roster signals the slot is in play.
+    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+    if not hasFlexSlot:
+        try:
+            from database.models import ShopPurchase as _SP
+            for eq in equipped:
+                uc = getattr(eq, 'user_card', None)
+                tmpl = getattr(uc, 'card_template', None) if uc else None
+                cls = getattr(tmpl, 'classification', None) or ''
+                if 'champion' in cls:
+                    hasFlexSlot = True
+                    break
+            if not hasFlexSlot:
+                activeFlex = session.query(_SP).filter(
+                    _SP.user_id == userId,
+                    _SP.season == season,
+                    _SP.item_slug == 'temp_flex',
+                    _SP.expires_at_week >= week,
+                ).first()
+                if activeFlex:
+                    hasFlexSlot = True
+        except Exception:
+            pass
     streakCounts = {eq.id: getattr(eq, 'streak_count', 1) for eq in equipped}
     # Peak-decay state — projection mirrors the live computation so the
     # pill shows the decaying tail when a streak's broken, not just base.
@@ -555,6 +580,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         activeModifier=activeModifier,
         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
         seasonSwapsUsed=seasonSwapsUsed,
+        hasFlexSlot=hasFlexSlot,
         userFloobitsBalance=userFloobitsBalance,
         liveStreakConditionsMet={},
         positionAvgFPs=positionAvgFPs,

@@ -5100,25 +5100,36 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
 
         totalEarned = sum(p["earnedPoints"] for p in rosterPlayers)
 
-        # Build swap history
+        # Build swap history. old/new player_id may be NULL for remove/fill rows.
         swapHistory = []
         for swap in roster.swaps:
-            oldPlayerObj = session.get(Player, swap.old_player_id)
-            newPlayerObj = session.get(Player, swap.new_player_id)
+            oldPlayerObj = session.get(Player, swap.old_player_id) if swap.old_player_id else None
+            newPlayerObj = session.get(Player, swap.new_player_id) if swap.new_player_id else None
             swapHistory.append({
                 "slot": swap.slot,
-                "oldPlayerName": oldPlayerObj.name if oldPlayerObj else "Unknown",
-                "newPlayerName": newPlayerObj.name if newPlayerObj else "Unknown",
+                "oldPlayerName": oldPlayerObj.name if oldPlayerObj else None,
+                "newPlayerName": newPlayerObj.name if newPlayerObj else None,
                 "swapWeek": swap.swap_week,
                 "bankedFP": round(swap.banked_fp, 1),
             })
 
-        # Per-slot swap cost preview (escalating based on prior swaps)
+        # Per-slot swap cost preview. Escalation counts only paid actions —
+        # rows with a non-null new_player_id (regular swaps + fills of empty
+        # slots). /remove rows (new_player_id NULL) don't escalate the price.
+        # Fresh FLEX (temp_flex powerup) with no movement history at all gets
+        # a free first fill — surface that as cost=0 so the UI can say "Free".
         from constants import ROSTER_SWAP_COST, ROSTER_SWAP_COST_INCREMENT
         from collections import Counter
-        slotSwapCounts = Counter(swap.slot for swap in roster.swaps)
+        slotSwapCounts = Counter(swap.slot for swap in roster.swaps if swap.new_player_id is not None)
+        anyMovementBySlot = Counter(swap.slot for swap in roster.swaps)
+        flexFilled = any(rp.slot == "FLEX" for rp in roster.players)
         allSlots = ["QB", "RB", "WR1", "WR2", "TE", "K", "FLEX"]
-        swapCosts = {slot: ROSTER_SWAP_COST + ROSTER_SWAP_COST_INCREMENT * slotSwapCounts.get(slot, 0) for slot in allSlots}
+        swapCosts = {}
+        for slot in allSlots:
+            if slot == "FLEX" and not flexFilled and anyMovementBySlot.get("FLEX", 0) == 0:
+                swapCosts[slot] = 0
+            else:
+                swapCosts[slot] = ROSTER_SWAP_COST + ROSTER_SWAP_COST_INCREMENT * slotSwapCounts.get(slot, 0)
 
         # gamesActive: scoring visible (in progress or just finished between weeks)
         # gamesInProgress: blocks roster swaps (only while a game is actively being played)
@@ -5396,6 +5407,99 @@ class FantasySwapRequest(BaseModel):
     newPlayerId: int
 
 
+class FantasyRemoveRequest(BaseModel):
+    slot: str
+
+
+@app.post("/api/fantasy/roster/remove")
+def remove_fantasy_roster_player(req: FantasyRemoveRequest, user: _User = Depends(_getCurrentUser)):
+    """Empty a roster slot. Free (no swap consumed, no Floobits charged).
+
+    Re-filling the empty slot later via /swap requires a paid swap — see
+    the empty-slot branch in swap_fantasy_roster_player. This prevents a
+    "remove then re-add for free" exploit.
+    """
+    from database.connection import get_session
+    from database.models import FantasyRoster, FantasyRosterSwap, FantasyRosterPlayer, WeeklyPlayerFP
+    from sqlalchemy import func
+
+    currentSeasonNum = _getCurrentSeasonNumber()
+    if currentSeasonNum is None:
+        raise HTTPException(status_code=400, detail="No active season")
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    # Same gate as /swap: only available while the swap window is open
+    # (roster locked + no games actively in progress).
+    sm = floosball_app.seasonManager
+    if sm.currentSeason and sm.currentSeason.activeGames:
+        gamesInProgress = any(
+            hasattr(g, 'status') and hasattr(g.status, 'name') and g.status.name == 'Active'
+            for g in sm.currentSeason.activeGames
+        )
+        if gamesInProgress:
+            raise HTTPException(status_code=409, detail="Cannot remove while games are active")
+
+    session = get_session()
+    try:
+        roster = session.query(FantasyRoster).filter_by(
+            user_id=user.id, season=currentSeasonNum
+        ).first()
+        if roster is None:
+            raise HTTPException(status_code=404, detail="No roster found")
+        if not roster.is_locked:
+            raise HTTPException(status_code=400, detail="Roster is not locked — edit it directly instead")
+
+        rosterPlayer = None
+        for rp in roster.players:
+            if rp.slot == req.slot:
+                rosterPlayer = rp
+                break
+        if rosterPlayer is None:
+            raise HTTPException(status_code=400, detail=f"No player in slot {req.slot}")
+
+        oldPlayerId = rosterPlayer.player_id
+        currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
+
+        # Preserve post-lock FP earned by the removed player so it stays
+        # banked into the user's season + week totals (same accounting as
+        # a swap — but with new_player_id=NULL marking it as a remove).
+        totalSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
+            player_id=oldPlayerId, season=currentSeasonNum
+        ).scalar()
+        bankedFP = max(0.0, float(totalSeasonFP) - rosterPlayer.points_at_lock)
+        oldPlayerWeekFPRow = session.query(WeeklyPlayerFP.fantasy_points).filter_by(
+            player_id=oldPlayerId, season=currentSeasonNum, week=currentWeek
+        ).scalar()
+        bankedWeekFP = float(oldPlayerWeekFPRow or 0.0)
+
+        session.add(FantasyRosterSwap(
+            roster_id=roster.id,
+            slot=req.slot,
+            old_player_id=oldPlayerId,
+            new_player_id=None,
+            swap_week=currentWeek,
+            banked_fp=round(bankedFP, 1),
+            banked_week_fp=round(bankedWeekFP, 1),
+        ))
+        session.delete(rosterPlayer)
+        session.commit()
+
+        return build_success_response({
+            "message": f"Removed player from {req.slot}",
+            "slot": req.slot,
+            "bankedFP": round(bankedFP, 1),
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error removing roster player: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove player")
+    finally:
+        session.close()
+
+
 @app.post("/api/fantasy/roster/swap")
 def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_getCurrentUser)):
     """Swap a single player in a locked roster (costs 1 Floobit)."""
@@ -5501,10 +5605,22 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
 
         currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
 
-        # Empty FLEX slot: add player for free (no swap cost, no swap consumed)
+        # Empty slot. Two cases:
+        #   1. Initial temp_flex fill — FLEX slot that has never been filled
+        #      before (no swap history for the slot). Free; no swap consumed.
+        #   2. Re-filling a slot that was emptied via /remove — paid swap.
+        #      The /remove endpoint logs a FantasyRosterSwap row with
+        #      new_player_id=NULL, so any swap-history row for the slot
+        #      flags this case (including FLEX once it's been filled).
+        isFreshFlexFill = False
         if rosterPlayer is None:
-            if req.slot != "FLEX":
-                raise HTTPException(status_code=400, detail=f"No player in slot {req.slot}")
+            priorSlotHistory = session.query(func.count(FantasyRosterSwap.id)).filter_by(
+                roster_id=roster.id, slot=req.slot,
+            ).scalar() or 0
+            if req.slot == "FLEX" and priorSlotHistory == 0:
+                isFreshFlexFill = True
+
+        if isFreshFlexFill:
             from database.models import FantasyRosterPlayer
             newPlayerSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
                 player_id=req.newPlayerId, season=currentSeasonNum
@@ -5518,29 +5634,40 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
             session.commit()
             return build_success_response({"message": "FLEX player added", "slot": "FLEX"})
 
-        # Calculate old player's earned FP
-        oldPlayerId = rosterPlayer.player_id
-        totalSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
-            player_id=oldPlayerId, season=currentSeasonNum
-        ).scalar()
-        bankedFP = max(0.0, float(totalSeasonFP) - rosterPlayer.points_at_lock)
-        # Snapshot the old player's swap-week FP at the moment of swap so
-        # the leaderboard's weekly FP doesn't drop when a user swaps
-        # post-games-end. Without this, the old player's FP for the
-        # current week vanishes when they leave roster.players.
-        oldPlayerWeekFPRow = session.query(WeeklyPlayerFP.fantasy_points).filter_by(
-            player_id=oldPlayerId, season=currentSeasonNum, week=currentWeek
-        ).scalar()
-        bankedWeekFP = float(oldPlayerWeekFPRow or 0.0)
+        # Paid path — covers both regular swaps (slot was filled) and
+        # re-fills of slots emptied via /remove.
+        if rosterPlayer is not None:
+            oldPlayerId = rosterPlayer.player_id
+            totalSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
+                player_id=oldPlayerId, season=currentSeasonNum
+            ).scalar()
+            bankedFP = max(0.0, float(totalSeasonFP) - rosterPlayer.points_at_lock)
+            # Snapshot the old player's swap-week FP at the moment of swap so
+            # the leaderboard's weekly FP doesn't drop when a user swaps
+            # post-games-end. Without this, the old player's FP for the
+            # current week vanishes when they leave roster.players.
+            oldPlayerWeekFPRow = session.query(WeeklyPlayerFP.fantasy_points).filter_by(
+                player_id=oldPlayerId, season=currentSeasonNum, week=currentWeek
+            ).scalar()
+            bankedWeekFP = float(oldPlayerWeekFPRow or 0.0)
+        else:
+            # Re-filling an empty slot. Banked FP for the prior occupant was
+            # already recorded when /remove fired — nothing to bank here.
+            oldPlayerId = None
+            bankedFP = 0.0
+            bankedWeekFP = 0.0
 
         totalSwaps = roster.swaps_available + roster.purchased_swaps
         if totalSwaps < 1:
             raise HTTPException(status_code=409, detail="No swaps available")
 
-        # Calculate escalating swap cost based on prior swaps in this slot
+        # Escalating swap cost — count only the actual swaps and paid fills
+        # (rows with a non-null new_player_id). /remove rows don't escalate.
         from constants import ROSTER_SWAP_COST, ROSTER_SWAP_COST_INCREMENT
-        priorSlotSwaps = session.query(func.count(FantasyRosterSwap.id)).filter_by(
-            roster_id=roster.id, slot=req.slot,
+        priorSlotSwaps = session.query(func.count(FantasyRosterSwap.id)).filter(
+            FantasyRosterSwap.roster_id == roster.id,
+            FantasyRosterSwap.slot == req.slot,
+            FantasyRosterSwap.new_player_id.isnot(None),
         ).scalar() or 0
         swapCost = ROSTER_SWAP_COST + ROSTER_SWAP_COST_INCREMENT * priorSlotSwaps
 
@@ -5552,7 +5679,7 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         if result is None:
             raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {swapCost})")
 
-        # Record the swap
+        # Record the swap (old_player_id=NULL means "fill empty slot")
         session.add(FantasyRosterSwap(
             roster_id=roster.id,
             slot=req.slot,
@@ -5564,12 +5691,21 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         ))
 
         # Update the roster player — new player starts at 0 earned FP
-        import json as _json
         newPlayerSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
             player_id=req.newPlayerId, season=currentSeasonNum
         ).scalar()
-        rosterPlayer.player_id = req.newPlayerId
-        rosterPlayer.points_at_lock = float(newPlayerSeasonFP)
+        if rosterPlayer is not None:
+            rosterPlayer.player_id = req.newPlayerId
+            rosterPlayer.points_at_lock = float(newPlayerSeasonFP)
+        else:
+            # Filling a previously-emptied slot — create a new row.
+            from database.models import FantasyRosterPlayer
+            session.add(FantasyRosterPlayer(
+                roster_id=roster.id,
+                player_id=req.newPlayerId,
+                slot=req.slot,
+                points_at_lock=float(newPlayerSeasonFP),
+            ))
 
         # Consume purchased swaps first, then organic.
         # When consuming from swaps_available, mark one equipped All-Pro card's

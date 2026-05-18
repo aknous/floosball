@@ -1748,6 +1748,31 @@ class SeasonManager:
                     except Exception as e:
                         logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
 
+                    # FLEX slot detection — mirrors fantasyTracker._buildCardCalcContext.
+                    # Without this, Home Alone misses an empty FLEX slot at week-end.
+                    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+                    if not hasFlexSlot:
+                        try:
+                            from database.models import ShopPurchase as _SP
+                            for eqRow in userEquipped:
+                                uc2 = getattr(eqRow, 'user_card', None)
+                                tmpl = getattr(uc2, 'card_template', None) if uc2 else None
+                                cls = getattr(tmpl, 'classification', None) or ''
+                                if 'champion' in cls:
+                                    hasFlexSlot = True
+                                    break
+                            if not hasFlexSlot:
+                                activeFlex = session.query(_SP).filter(
+                                    _SP.user_id == userId,
+                                    _SP.season == season,
+                                    _SP.item_slug == 'temp_flex',
+                                    _SP.expires_at_week >= week,
+                                ).first()
+                                if activeFlex:
+                                    hasFlexSlot = True
+                        except Exception:
+                            pass
+
                     # Build context
                     calcCtx = CardCalcContext(
                         userId=userId,
@@ -1791,6 +1816,7 @@ class SeasonManager:
                         activeModifier=userModifier,
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
                         seasonSwapsUsed=seasonSwapsUsed,
+                        hasFlexSlot=hasFlexSlot,
                         userFloobitsBalance=userFloobitsBalance,
                         positionAvgFPs=positionAvgFPs,
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
