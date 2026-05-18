@@ -786,6 +786,24 @@ def calculateWeekCardBonuses(
         else:
             firstPassCards.append(eq)
 
+    # Pre-pass: Alchemy converts roster K FGs into TDs for other cards'
+    # tallies (Cornucopia, Touchdown Piñata, etc.). Must run before any
+    # card computes, otherwise cards in lower slot numbers miss the
+    # bumped count. Bumps ctx.rosterTotalTds; _computeAlchemy no longer
+    # mutates it.
+    alchemyEquipped = any(
+        (eq.user_card.card_template.effect_config or {}).get("effectName") == "alchemy"
+        for eq in firstPassCards
+    )
+    if alchemyEquipped and (ctx.gamesActive or ctx.teamResults):
+        fgsMade = 0
+        for pid in ctx.rosterPlayerIds:
+            if ctx.rosterPlayerPositions.get(pid) == 5:
+                kickStats = ctx.weekPlayerStats.get(pid, {}).get("kicking_stats", {}) or {}
+                fgsMade += kickStats.get("fgs", 0)
+        if fgsMade:
+            ctx.rosterTotalTds += fgsMade
+
     # First pass: compute non-second-pass cards
     firstPassBreakdowns = []
     for eq in firstPassCards:
@@ -890,10 +908,14 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     normalBreakdowns = [b for b in breakdowns if b.effectName not in _TRADEOFF_EFFECTS]
 
     if "double_down" in tradeoffNames and normalBreakdowns:
-        # Multiply the lowest non-zero card's FP payout. Pure upside at diamond tier.
+        # Multiply the lowest non-zero card's FP payout. Pure upside at
+        # diamond tier. Restrict to flat-FP cards only — FPx and floobits
+        # cards can carry a non-zero totalFP from a match-conditional
+        # bonus, and Lemons grabbing them treated FPx output like FP
+        # (multiplying the conditional FP, ignoring the actual multiplier).
         ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
         multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
-        nonZeroFP = [b for b in normalBreakdowns if b.totalFP > 0]
+        nonZeroFP = [b for b in normalBreakdowns if b.totalFP > 0 and b.outputType == "fp"]
         if nonZeroFP:
             lowest = min(nonZeroFP, key=lambda b: b.totalFP)
             originalFP = lowest.totalFP

@@ -5002,6 +5002,10 @@ _SLOT_POSITION_MAP = {
 }
 _VALID_SLOTS = set(_SLOT_POSITION_MAP.keys())
 
+# Minimum player count to lock a roster (also enforced by /remove).
+# Shared with seasonManager's auto-lock via constants.py.
+from constants import ROSTER_MIN_PLAYERS
+
 
 def _getPlayerLiveFantasyPoints(player) -> float:
     """Get a player's current live fantasy points (season + in-game)."""
@@ -5343,11 +5347,16 @@ def lock_fantasy_roster(user: _User = Depends(_getCurrentUser)):
         if roster.is_locked:
             raise HTTPException(status_code=409, detail="Roster is already locked")
 
-        # Validate all 6 slots are filled
-        filledSlots = {rp.slot for rp in roster.players}
-        missingSlots = _VALID_SLOTS - filledSlots
-        if missingSlots:
-            raise HTTPException(status_code=400, detail=f"Missing slots: {', '.join(sorted(missingSlots))}")
+        # Minimum 3 players required to lock. Empty slots are allowed —
+        # they just don't contribute to weekly FP. The floor exists so a
+        # user can't gut their roster to ride card-streak exploits like
+        # Drought + Hedge + Home Alone unbounded.
+        filledCount = sum(1 for rp in roster.players if rp.slot in _VALID_SLOTS or rp.slot == "FLEX")
+        if filledCount < ROSTER_MIN_PLAYERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Roster needs at least {ROSTER_MIN_PLAYERS} players to lock (have {filledCount})",
+            )
 
         # Snapshot each player's tracked FP at lock time (banked weeks + current week).
         # Uses the same data source as the snapshot so earned FP = seasonFP - points_at_lock
@@ -5457,6 +5466,13 @@ def remove_fantasy_roster_player(req: FantasyRemoveRequest, user: _User = Depend
                 break
         if rosterPlayer is None:
             raise HTTPException(status_code=400, detail=f"No player in slot {req.slot}")
+
+        # Enforce the roster minimum — can't drop below the floor.
+        if len(roster.players) <= ROSTER_MIN_PLAYERS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Roster minimum is {ROSTER_MIN_PLAYERS} players. Swap instead of removing.",
+            )
 
         oldPlayerId = rosterPlayer.player_id
         currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0

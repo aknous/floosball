@@ -772,7 +772,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "indemnity": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Chance grows with {posLabel} underperformance, up to 70%",
     # ── Same-Team Stacking Effects ──
     "stack": "+{rewardDelta} FPx when your roster's QB and WR share a team",
-    "backfield_buddies": "+{rewardValue} FPx when your roster's QB and RB share a team",
+    "backfield_buddies": "+{rewardDelta} FPx when your roster's QB and RB share a team",
     "homer": "+{perPlayerFP} FP per roster player on your favorite team",
     "gone_streaking": "+{baseFP} FP base, +{perStreakFP} per game in longest streak (winning or losing) by your favorite team this season. Streak does not need to be active.",
     "hometown_hero": "+{rewardFloobits} Floobits when 3+ roster players share a team",
@@ -782,10 +782,10 @@ EFFECT_DETAIL_TEMPLATES = {
     "walk_off": "+{lossFP} FP floor on loss, +{baseFP} FP on favorite-team win, +{rewardValue} FP on walk-off victory",
     # ── Card-to-Card Interaction Effects ──
     "full_roster": "+{rewardDelta} FPx when hand has all 5 positions",
-    "all_in": "+{baseXDelta} FPx + {perDuplicateXMult} per duplicate position card",
+    "all_in": "+{baseXDelta} FPx base, +{perDuplicateXMult} FPx per duplicate position card in your hand",
     "diversified": "+{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits)",
     "gold_rush": "{perCardFloobits} Floobits per other Floobits card in your hand",
-    "stacked_deck": "Compounds (1 + {perCardMult})x per other FPx card in your hand",
+    "stacked_deck": "Self-compounds: each other FPx card in your hand stacks +{perCardMult} on this card's own delta",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "+{perCardXMult} FPx for every card in your hand that produced a non-zero bonus this week",
     "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
@@ -1487,10 +1487,14 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "growthPerTick": 0}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
     if effectName == "bonsai":
+        # Roughly doubled from initial tuning (was 12/6) — opened far below
+        # other prismatic flat-FP cards (Drought 135, Sandbagger 95) and
+        # the threshold curve caps practical growth around level 5-7, so
+        # the old values topped out near 55 FP/wk where peers start.
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
         return {"rewardType": "fp",
-                "baseFP": round((12.0 + rn * 0.45) * editionScale, 1),
-                "growthFP": round((6.0 + rn * 0.24) * editionScale, 1),
+                "baseFP": round((24.0 + rn * 0.9) * editionScale, 1),
+                "growthFP": round((12.0 + rn * 0.5) * editionScale, 1),
                 "triggerEvent": trigger["event"],
                 "triggerLabel": trigger["label"],
                 "isChanceEffect": True}
@@ -2034,7 +2038,7 @@ def _computeTriggerHappy(primary, ctx, cardPlayerId, eqId):
     bonus = perTd * math.log(1 + tds / 3.0)
     mult = round(1 + bonus, 3)
     delta = round(mult - 1.0, 2)
-    eq = f"log-taper({tds} roster TDs) = +{delta:.2f} FPx"
+    eq = f"{tds} roster TDs = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -2140,7 +2144,7 @@ def _computeJuggernaut(primary, ctx, cardPlayerId, eqId):
     mult = round(baseX + bonus, 3)
     baseDelta = round(baseX - 1.0, 2)
     delta = round(mult - 1.0, 2)
-    eq = f"+{baseDelta:.2f} base + log-taper({streak} win streak) = +{delta:.2f} FPx"
+    eq = f"+{baseDelta:.2f} base + {streak} win streak = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -3792,11 +3796,14 @@ BASE_ROSTER_SLOTS = 6  # QB, RB, WR1, WR2, TE, K (FLEX adds +1 when active)
 
 
 def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
-    """FGs count as TDs: bonus FP per FG, and bump rosterTotalTds for synergy."""
+    """FGs count as TDs for other cards (Cornucopia, Touchdown Piñata, etc.)
+    plus a bonus FP per FG. The rosterTotalTds bump happens in the
+    calculator's pre-pass — see calculateWeekCardBonuses — so this
+    function only needs to compute its own FP payout.
+    """
     if not ctx.gamesActive and not ctx.teamResults:
         return EffectResult(equation="Waiting for games")
     perFgBonusFP = primary.get("perFgBonusFP", 3.0)
-    # Find kicker FGs from roster (K position = 5)
     fgsMade = 0
     for pid in ctx.rosterPlayerIds:
         if ctx.rosterPlayerPositions.get(pid) == 5:
@@ -3805,8 +3812,6 @@ def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
     if fgsMade == 0:
         return EffectResult(equation="No FGs made by roster K")
     bonus = round(perFgBonusFP * fgsMade, 1)
-    # Bump rosterTotalTds so TD-counting effects (Cornucopia, Touchdown Piñata, etc.) synergize
-    ctx.rosterTotalTds += fgsMade
     eq = f"{perFgBonusFP}/FG × {fgsMade} FGs (counted as TDs)"
     return EffectResult(fpBonus=bonus, equation=eq)
 

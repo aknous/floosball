@@ -648,9 +648,13 @@ class SeasonManager:
                 unlocked = lockSession.query(FantasyRoster).filter_by(
                     season=self.currentSeason.seasonNumber, is_locked=False
                 ).all()
+                # Auto-lock anyone with at least the ROSTER_MIN_PLAYERS
+                # floor. Previously required all 6 slots filled, so a
+                # partially-set-up roster silently forfeited the week.
+                from constants import ROSTER_MIN_PLAYERS as _ROSTER_MIN
                 for roster in unlocked:
                     filledSlots = {rp.slot for rp in roster.players}
-                    if len(filledSlots) >= 6:
+                    if len(filledSlots) >= _ROSTER_MIN:
                         roster.is_locked = True
                         roster.locked_at = datetime.datetime.utcnow()
                         for rp in roster.players:

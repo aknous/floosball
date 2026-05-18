@@ -110,6 +110,12 @@ SEASON_LEADERBOARD_TOP_PCT = 0.25
 ROSTER_SWAP_COST = 15          # Base cost per swap (escalates per slot)
 ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same slot
 
+# Minimum player count required to lock a roster. /remove also enforces
+# this floor — caps the "gut your roster to ride Drought/Hedge/Home Alone
+# unbounded" exploit without taking partial-roster flexibility off the
+# table. Auto-lock at game start picks up anyone meeting the floor.
+ROSTER_MIN_PLAYERS = 3
+
 # Weekly FP → Floobits conversion (participation reward).
 # Tapering power curve: F = round(SCALE * FP^EXPONENT), no hard cap. Big
 # weeks always pay more than small weeks, but with diminishing returns so
