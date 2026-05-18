@@ -615,6 +615,45 @@ def _runPendingMigrations():
             logger.info("  Migration: added team_season_stats.peak_streak")
         except Exception:
             conn.rollback()
+        # Themed-pack columns on pack_types (themed pack rework)
+        for col, colDef in [
+            ('theme_type', 'VARCHAR(20)'),
+            ('theme_value', 'VARCHAR(50)'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE pack_types ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added pack_types.{col}")
+            except Exception:
+                conn.rollback()
+        # Denormalized output_type on card_templates so themed packs can
+        # filter the candidate pool without scanning effect_config JSON.
+        try:
+            conn.execute(text("ALTER TABLE card_templates ADD COLUMN output_type VARCHAR(20)"))
+            conn.commit()
+            logger.info("  Migration: added card_templates.output_type")
+        except Exception:
+            conn.rollback()
+        # Per-user themed pack rotation: rotation flipped from global to
+        # per-user once we added reroll. Old rows have no user_id so they're
+        # unusable — drop them rather than backfill.
+        try:
+            result = conn.execute(text("PRAGMA table_info(featured_pack_rotation)"))
+            existingCols = {row[1] for row in result}
+            if 'user_id' not in existingCols and existingCols:
+                conn.execute(text("DROP TABLE featured_pack_rotation"))
+                conn.commit()
+                logger.info("  Migration: dropped global featured_pack_rotation (table recreated per-user by create_all)")
+        except Exception:
+            conn.rollback()
+        # Purchased flag for rotation rows so bought packs vanish from the
+        # shop within the cycle (mirrors FeaturedShopCard.purchased).
+        try:
+            conn.execute(text("ALTER TABLE featured_pack_rotation ADD COLUMN purchased BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added featured_pack_rotation.purchased")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -633,6 +672,7 @@ def _runPendingMigrations():
     _backfillPlayerSeasonStatsFromGames()
     _backfillPlayerCareerStatsFromGames()
     _backfillTeamPeakStreaks()
+    _backfillCardTemplateOutputType()
 
 
 def _recomputeFundingTiers():
@@ -648,12 +688,33 @@ def _recomputeFundingTiers():
     LARGE on restart. Tiers are supposed to be locked at season start —
     this migration's job is just to refresh stale labels after a threshold
     constant changes, which is invariant in `baseline + carried`.
+
+    EXCEPTION: when the active season is in offseason, the row for that
+    season has already been re-tiered by `_recomputeFundingTiersForOffseason`
+    using `effective_funding`. Overwriting that with baseline+carried here
+    would silently revert tier upgrades and undo offseason benefits, so we
+    skip that one row.
     """
     from sqlalchemy import text
     from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
 
     conn = engine.connect()
     try:
+        # Detect active offseason. If we're mid-offseason for season N,
+        # the offseason recompute has already set funding_tier on the
+        # season-N row using effective_funding — don't undo that here.
+        offseasonSeason = None
+        try:
+            res = conn.execute(text(
+                "SELECT current_season, in_offseason FROM simulation_state WHERE id = 1"
+            )).fetchone()
+            if res and res[1]:
+                offseasonSeason = res[0]
+        except Exception:
+            # simulation_state may not exist yet on a fresh DB — skip the
+            # guard and operate on all rows.
+            offseasonSeason = None
+
         seasons = [
             row[0] for row in conn.execute(
                 text("SELECT DISTINCT season FROM team_funding")
@@ -661,6 +722,10 @@ def _recomputeFundingTiers():
         ]
         totalUpdated = 0
         for season in seasons:
+            if offseasonSeason is not None and season == offseasonSeason:
+                # Offseason-active season — its tier is intentionally
+                # effective_funding-based right now. Leave it alone.
+                continue
             rows = conn.execute(
                 text(
                     "SELECT id, baseline_funding, carried_funding, funding_tier, tier_rank "
@@ -685,6 +750,15 @@ def _recomputeFundingTiers():
                 return FUNDING_TIER_NAMES[last], last + 1
 
             for rowId, baseline, carried, oldTier, oldRank in rows:
+                # Authoritative writers (_initializeTeamFunding's inherit
+                # step + _recomputeFundingTiersForOffseason) set the tier
+                # at the right moments using the right inputs. If a row
+                # already has a tier, leave it alone — overwriting with
+                # baseline+carried here would undo the inheritance chain
+                # and cause the baseline-compression flip we just fixed.
+                # Only operate on uninitialized rows (NULL tier).
+                if oldTier and oldRank is not None:
+                    continue
                 seasonStart = (baseline or 0) + (carried or 0)
                 newTier, newRank = tierFor(seasonStart)
                 if newTier != oldTier or newRank != oldRank:
@@ -708,14 +782,57 @@ def _recomputeFundingTiers():
         conn.close()
 
 
+def _backfillCardTemplateOutputType():
+    """Stamp output_type on card_templates rows that don't have it set yet.
+    Resolves effectName → concrete output type via the cardEffects classifier.
+    Idempotent: only touches rows where output_type IS NULL."""
+    import json as _json
+    from managers.cardEffects import getEffectOutputType
+    from sqlalchemy import text
+
+    conn = engine.connect()
+    try:
+        rows = conn.execute(
+            text("SELECT id, effect_config FROM card_templates WHERE output_type IS NULL")
+        ).fetchall()
+        if not rows:
+            return
+        updated = 0
+        for row in rows:
+            cfg = _json.loads(row[1]) if isinstance(row[1], str) else row[1]
+            effectName = (cfg or {}).get("effectName", "")
+            outputType = getEffectOutputType(effectName)
+            if outputType is None:
+                continue  # leave NULL — mixed/contextual effects are excluded by design
+            conn.execute(
+                text("UPDATE card_templates SET output_type = :ot WHERE id = :id"),
+                {"ot": outputType, "id": row[0]},
+            )
+            updated += 1
+        if updated:
+            conn.commit()
+            logger.info(f"  Migration: backfilled output_type on {updated} card templates")
+        else:
+            conn.rollback()
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Migration: output_type backfill skipped ({e})")
+    finally:
+        conn.close()
+
+
 def _refreshCardEffectText():
     """Update stale tooltip/detail text on card templates whose effects were reworked."""
     import json as _json
     from managers.cardEffects import EFFECT_TOOLTIPS, EFFECT_DETAIL_TEMPLATES
     from sqlalchemy import text
 
-    # Map of effectName → fields to refresh from current definitions
-    refreshEffects = {"odometer"}
+    # Map of effectName → fields to refresh from current definitions.
+    # Add an effect name here when its tooltip / detail template changes
+    # and you need existing templates to pick up the new text on next boot.
+    # Only works for STATIC description text (no {placeholder} substitutions)
+    # — placeholder-based descriptions need full template regeneration.
+    refreshEffects = {"odometer", "snake_eyes"}
 
     conn = engine.connect()
     try:
@@ -1235,15 +1352,45 @@ def clear_db():
 
 
 def _seedPackTypes():
-    """Seed default pack types if they don't exist."""
+    """Seed default pack types if they don't exist.
+
+    Per-team packs were initially seeded too, but the design walked back
+    to a single "Champion Team Pack" (themed_champion) that filters to
+    last season's champion roster. Existing per-team rows from older
+    builds get pruned here so they can't leak into the rotation.
+    """
     from database.repositories.card_repositories import PackTypeRepository
+    from database.models import PackType, FeaturedPackRotation
     session = SessionLocal()
     try:
         repo = PackTypeRepository(session)
         repo.seedDefaults()
+
+        # One-time cleanup: drop the deprecated `themed_team_*` rows + any
+        # rotation rows referencing them so the rotation pool can't pick
+        # them up. Idempotent — no-op once the rows are gone.
+        deprecatedTeamPacks = (
+            session.query(PackType)
+            .filter(PackType.name.like('themed_team_%'))
+            .all()
+        )
+        if deprecatedTeamPacks:
+            deprecatedIds = [pt.id for pt in deprecatedTeamPacks]
+            session.query(FeaturedPackRotation).filter(
+                FeaturedPackRotation.pack_type_id.in_(deprecatedIds)
+            ).delete(synchronize_session=False)
+            for pt in deprecatedTeamPacks:
+                session.delete(pt)
+            session.flush()
+            logger.info(
+                f"  Pruned {len(deprecatedTeamPacks)} deprecated themed_team_* "
+                f"pack rows (replaced by themed_champion)"
+            )
+
         session.commit()
-    except Exception:
+    except Exception as e:
         session.rollback()
+        logger.warning(f"  Pack type seed/prune failed: {e}")
     finally:
         session.close()
 
@@ -1332,19 +1479,21 @@ def _seedAchievements():
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week.
-            # Targets widened (next-season): rebalanced cards push elite weeks
-            # well above the old 300 cap; tier IV becomes a real flex goal.
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 175,
-             "description": "Earn 175+ fantasy points in a single week.",
-             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 250,
+            # Rescaled (Balatro pass): post-rebalance cards individually push
+            # weekly totals well past the old 600 cap (Hedge alone guarantees
+            # 675, Anthem tier5 hits 459, etc.). Tier I now matches a typical
+            # casual week, IV becomes a flex goal for elite mixed hands.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 250,
              "description": "Earn 250+ fantasy points in a single week.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 500,
+             "description": "Earn 500+ fantasy points in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 400,
-             "description": "Earn 400+ fantasy points in a single week.",
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 900,
+             "description": "Earn 900+ fantasy points in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 600,
-             "description": "Earn 600+ fantasy points in a single week.",
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 1500,
+             "description": "Earn 1,500+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
             # (renamed from Windfall to avoid clashing with the card effect of
@@ -1361,20 +1510,20 @@ def _seedAchievements():
             {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 400,
              "description": "Earn 400+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Dynamo tiers — cumulative season fantasy points. Targets
-            # widened (next-season): rebalanced FP cards push elite season
-            # totals well above 5,000.
-            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 1500,
-             "description": "Earn 1,500 total fantasy points this season.",
+            # Dynamo tiers — cumulative season fantasy points. Rescaled
+            # (Balatro pass): elite seasons routinely clear 25,000+ FP under
+            # new card outputs, so the old 9k cap became a casual checkpoint.
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 3000,
+             "description": "Earn 3,000 total fantasy points this season.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 3500,
-             "description": "Earn 3,500 total fantasy points this season.",
+            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 7000,
+             "description": "Earn 7,000 total fantasy points this season.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 6000,
-             "description": "Earn 6,000 total fantasy points this season.",
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 14000,
+             "description": "Earn 14,000 total fantasy points this season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 9000,
-             "description": "Earn 9,000 total fantasy points this season.",
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 25000,
+             "description": "Earn 25,000 total fantasy points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
@@ -1444,19 +1593,22 @@ def _seedAchievements():
              "description": "Contribute 5,000 floobits to your team this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Compound tiers — single-week total FP multiplier (stored as
-            # multiplier × 100). Targets widened (next-season): the FPx tapers
-            # make 2.0× routine, 3.5× requires real composition skill.
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 150,
-             "description": "Reach a 1.5x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 200,
+            # multiplier × 100). Rescaled (Balatro pass): with single FPx
+            # cards like Snake Eyes hitting 3.10× and Cornucopia capable of
+            # 5×+ on a hot week, the old 3.5× cap is hit by ONE card. Tiers
+            # now require actual stacking — Tier IV needs a full FPx hand
+            # with elite multipliers.
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 200,
              "description": "Reach a 2.0x total FP multiplier in a single week.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 300,
+             "description": "Reach a 3.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 250,
-             "description": "Reach a 2.5x total FP multiplier in a single week.",
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 450,
+             "description": "Reach a 4.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 350,
-             "description": "Reach a 3.5x total FP multiplier in a single week.",
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 700,
+             "description": "Reach a 7.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard
@@ -1493,7 +1645,7 @@ def _seedAchievements():
              "description": "Finish #1 overall on the season prognostication leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "zenith", "name": "Zenith", "category": "secret", "scope": "once", "sort_order": 600, "target": 1,
-             "description": "Earn a Perfect Week and 300+ fantasy points in the same week.",
+             "description": "Earn a Perfect Week and 800+ fantasy points in the same week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "consecration", "name": "Consecration", "category": "secret", "scope": "once", "sort_order": 610, "target": 1,
              "description": "Your favorite team wins the Floosbowl.",
@@ -1531,6 +1683,9 @@ def _seedAchievements():
             {"key": "completist", "name": "Completist", "category": "secret", "scope": "once", "sort_order": 710, "target": 1,
              "description": "Own all four editions (base, holographic, prismatic, diamond) of the same player.",
              "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "anthology", "name": "Anthology", "category": "secret", "scope": "once", "sort_order": 720, "target": 1,
+             "description": "Buy one of every pack type in a single season.",
+             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "sparkler", "name": "Sparkler", "category": "guidance", "scope": "per_season", "sort_order": 170, "target": 1,
              "description": "Open your first Diamond card of the season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},

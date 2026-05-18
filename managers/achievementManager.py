@@ -136,17 +136,40 @@ def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
         )
 
     now = datetime.utcnow()
-    for packSlug in cfg.get("packs") or []:
-        session.add(PendingReward(
+    packs = cfg.get("packs") or []
+    powerups = cfg.get("powerups") or []
+    # Diagnostic: trace each PendingReward the reward grant attempts. We had a
+    # production case (May 2026) where floobits credited and the user_achievement
+    # row got claimed_at set, but no PendingReward row appeared in the DB for
+    # tier-IV pack rewards. _applyReward and the surrounding _grantReward have
+    # no obvious failure path that would skip the insert while keeping the
+    # surrounding commits, so log enough to catch it in the act next time.
+    logger.info(
+        f"_applyReward user={userId} source={source} "
+        f"floobits={floobits} packs={packs} powerups={powerups}"
+    )
+    addedIds = []
+    for packSlug in packs:
+        pr = PendingReward(
             user_id=userId, kind="pack", slug=packSlug,
             source=source, available_at=now,
-        ))
-    for powerupSlug in cfg.get("powerups") or []:
-        session.add(PendingReward(
+        )
+        session.add(pr)
+        addedIds.append(("pack", packSlug, pr))
+    for powerupSlug in powerups:
+        pr = PendingReward(
             user_id=userId, kind="powerup", slug=powerupSlug,
             source=source, available_at=now,
-        ))
+        )
+        session.add(pr)
+        addedIds.append(("powerup", powerupSlug, pr))
     session.flush()
+    if addedIds:
+        # After flush, each PendingReward should have its primary key populated.
+        idSummary = ", ".join(
+            f"{kind}:{slug}#{pr.id}" for kind, slug, pr in addedIds
+        )
+        logger.info(f"_applyReward user={userId} source={source} flushed: {idSummary}")
 
 
 def processDeferredRewards(session: Session, userId: Optional[int] = None) -> int:
@@ -408,6 +431,47 @@ def onPickEmSubmitted(session: Session, userId: int, isAutoPick: bool) -> Option
 
 def onPackOpened(session: Session, userId: int) -> Optional[UserAchievement]:
     return recordProgress(session, userId, "pack_popper")
+
+
+# Required paid pack names for the Anthology secret. Excludes the free
+# starter pack — the achievement is about deliberate purchasing breadth.
+# Keep in sync with the PackTypeRepository.seedDefaults() pack list.
+ANTHOLOGY_REQUIRED_PACK_NAMES = frozenset({
+    'humble', 'grand', 'exquisite',
+    'themed_pos_qb', 'themed_pos_rb', 'themed_pos_wr',
+    'themed_pos_te', 'themed_pos_k',
+    'themed_out_fp', 'themed_out_fpx', 'themed_out_floobits',
+    'themed_champion', 'themed_allpro',
+})
+
+
+def checkAnthology(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
+    """Anthology — secret unlocked when a user has purchased every paid
+    pack type in a single season. Champion + All-Pro packs require
+    season ≥ 2 to even appear in rotation, so this can't fire in season 1.
+    Called after each successful pack purchase commit.
+    """
+    if not currentSeason:
+        return None
+    from database.models import PackOpening, PackType, Season
+    seasonRow = session.query(Season).filter_by(season_number=currentSeason).first()
+    if not seasonRow or not seasonRow.start_date:
+        return None
+    rows = (
+        session.query(PackType.name)
+        .join(PackOpening, PackOpening.pack_type_id == PackType.id)
+        .filter(
+            PackOpening.user_id == userId,
+            PackOpening.cost > 0,
+            PackOpening.opened_at >= seasonRow.start_date,
+        )
+        .distinct()
+        .all()
+    )
+    purchasedNames = {name for (name,) in rows}
+    if ANTHOLOGY_REQUIRED_PACK_NAMES.issubset(purchasedNames):
+        return unlockSecret(session, userId, "anthology")
+    return None
 
 
 def onFantasyRosterSet(session: Session, userId: int) -> Optional[UserAchievement]:

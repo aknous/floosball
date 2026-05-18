@@ -403,12 +403,14 @@ class PackTypeRepository:
     def seedDefaults(self):
         """Seed default pack types if they don't exist.
 
-        Pack revamp (feature/pack-revamp):
-          - Starter: free, once per season, 5 base cards (no selection).
-          - Daily packs: reveal/keep mechanic. Humble/Grand/Exquisite stay;
-            Proper deprecated (left in DB to preserve PackOpening history).
-          - guaranteed_rarity dropped — rates are bumped on higher tiers
-            so Exquisite still feels Exquisite without a hard guarantee.
+        Standard tiers (themed-pack rework):
+          - Humble: cheap entry tier, no rarity guarantee.
+          - Grand: guaranteed prismatic in one slot.
+          - Exquisite: guaranteed diamond in one slot.
+          - Themed: 5 position + 3 output + per-qualifying-team rows seeded
+            once. Cost/weights identical across themed rows; theme_type and
+            theme_value distinguish them. The shop rotation surfaces 4 of
+            them per 7-week cycle (FeaturedPackRotation).
         """
         defaults = [
             PackType(
@@ -437,9 +439,9 @@ class PackTypeRepository:
                 cost=350,
                 cards_per_pack=5,
                 cards_kept=3,
-                guaranteed_rarity=None,
+                guaranteed_rarity='prismatic',
                 rarity_weights={'base': 30, 'holographic': 50, 'prismatic': 35, 'diamond': 5},
-                description='Reveal 5 cards, keep 3. Modestly increased drop rates.',
+                description='Reveal 5 cards, keep 3. Guaranteed Prismatic in every pack.',
             ),
             PackType(
                 name='exquisite',
@@ -447,11 +449,107 @@ class PackTypeRepository:
                 cost=750,
                 cards_per_pack=5,
                 cards_kept=3,
-                guaranteed_rarity=None,
+                guaranteed_rarity='diamond',
                 rarity_weights={'base': 15, 'holographic': 35, 'prismatic': 45, 'diamond': 12},
-                description='Reveal 5 cards, keep 3. Greatly increased drop rates.',
+                description='Reveal 5 cards, keep 3. Guaranteed Diamond in every pack.',
             ),
         ]
+
+        # ── Themed packs ──────────────────────────────────────────────────
+        # Mid-tier price (150F) with a rarity table weighted ~75/25 toward
+        # Humble (100/20/8/1) vs Grand (30/50/35/5). Themed packs are about
+        # the player/position filter, not chasing rarity — Grand still owns
+        # that lane. Resulting drop %s: ~66% base / ~22% holo / ~10% prismatic / ~1.6% diamond
+        themedRarityWeights = {'base': 82, 'holographic': 28, 'prismatic': 13, 'diamond': 2}
+        themedCost = 150
+        themedCardsPerPack = 3
+        themedCardsKept = 2
+
+        def makeThemed(name, displayName, themeType, themeValue, desc):
+            return PackType(
+                name=name,
+                display_name=displayName,
+                cost=themedCost,
+                cards_per_pack=themedCardsPerPack,
+                cards_kept=themedCardsKept,
+                guaranteed_rarity=None,
+                rarity_weights=themedRarityWeights,
+                description=desc,
+                theme_type=themeType,
+                theme_value=themeValue,
+            )
+
+        # Position-themed: 5 packs (one per position)
+        positionInfo = [
+            ('QB', 'Quarterback'),
+            ('RB', 'Running Back'),
+            ('WR', 'Wide Receiver'),
+            ('TE', 'Tight End'),
+            ('K',  'Kicker'),
+        ]
+        for code, label in positionInfo:
+            defaults.append(makeThemed(
+                name=f'themed_pos_{code.lower()}',
+                displayName=f'{label} Pack',
+                themeType='position',
+                themeValue=code,
+                desc=f'Reveal 3, keep 2. {label}s only.',
+            ))
+
+        # Output-themed: 3 packs (FP / FPx / Floobits)
+        outputInfo = [
+            ('fp',       'FP',       'cards that pay raw fantasy points'),
+            ('fpx',      'FPx',      'cards that multiply fantasy points'),
+            ('floobits', 'Floobits', 'cards that mint floobits'),
+        ]
+        for code, label, blurb in outputInfo:
+            defaults.append(makeThemed(
+                name=f'themed_out_{code}',
+                displayName=f'{label} Pack',
+                themeType='output',
+                themeValue=code,
+                desc=f'Reveal 3, keep 2. Only {blurb}.',
+            ))
+
+        # Prestige themed packs — bigger reveal pool, special player filter.
+        # theme_value is resolved at draw time from Season state (last
+        # season's champion roster / all-pro selection). Once-per-season
+        # availability per user.
+        # Guaranteed Holographic+: classifications (champion, all-pro)
+        # only stamp onto non-base templates, so a base-only pack would
+        # be a wasted "Champion Pack" with no classification. One slot
+        # forced to holographic-or-better ensures at least one card carries
+        # the classification users opened the pack for.
+        defaults.append(PackType(
+            name='themed_champion',
+            display_name='Champion Pack',
+            cost=250,
+            cards_per_pack=5,
+            cards_kept=3,
+            guaranteed_rarity='holographic',
+            rarity_weights=themedRarityWeights,
+            description='Reveal 5, keep 3. Players from last season\u2019s champion.',
+            theme_type='champion',
+            theme_value=None,
+        ))
+        defaults.append(PackType(
+            name='themed_allpro',
+            display_name='All-Pro Pack',
+            cost=250,
+            cards_per_pack=5,
+            cards_kept=3,
+            guaranteed_rarity='holographic',
+            rarity_weights=themedRarityWeights,
+            description='Reveal 5, keep 3. Last season\u2019s All-Pro selections.',
+            theme_type='allpro',
+            theme_value=None,
+        ))
+
+        # Team-themed packs are seeded lazily once teams exist (see
+        # _seedTeamThemedPacks below) — they depend on the teams table
+        # being populated and on each team having enough card templates
+        # to make for a viable pool.
+
         for pt in defaults:
             existing = self.getByName(pt.name)
             if not existing:
@@ -464,7 +562,49 @@ class PackTypeRepository:
                 existing.guaranteed_rarity = pt.guaranteed_rarity
                 existing.cards_per_pack = pt.cards_per_pack
                 existing.cards_kept = pt.cards_kept
+                existing.theme_type = pt.theme_type
+                existing.theme_value = pt.theme_value
         self.session.flush()
+
+    def seedTeamThemed(self, minTemplates: int = 10):
+        """Seed one themed pack per team that has at least minTemplates
+        card templates. Idempotent — skips teams that already have a row."""
+        from database.models import Team, CardTemplate
+        from sqlalchemy import func
+
+        # Count templates per team
+        rows = (
+            self.session.query(CardTemplate.team_id, func.count(CardTemplate.id))
+            .filter(CardTemplate.team_id.isnot(None))
+            .group_by(CardTemplate.team_id)
+            .all()
+        )
+        eligibleTeamIds = {tid for tid, count in rows if count >= minTemplates}
+        if not eligibleTeamIds:
+            return 0
+
+        themedRarityWeights = {'base': 75, 'holographic': 20, 'prismatic': 4, 'diamond': 1}
+        added = 0
+        for team in self.session.query(Team).filter(Team.id.in_(eligibleTeamIds)).all():
+            name = f'themed_team_{team.id}'
+            if self.getByName(name):
+                continue
+            self.session.add(PackType(
+                name=name,
+                display_name=f'{team.name} Pack',
+                cost=150,
+                cards_per_pack=3,
+                cards_kept=2,
+                guaranteed_rarity=None,
+                rarity_weights=themedRarityWeights,
+                description=f'Reveal 3, keep 2. {team.name} players only.',
+                theme_type='team',
+                theme_value=str(team.id),
+            ))
+            added += 1
+        if added:
+            self.session.flush()
+        return added
 
 
 class PackOpeningRepository:

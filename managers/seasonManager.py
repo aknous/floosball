@@ -399,6 +399,13 @@ class SeasonManager:
 
         # Apply season-end tax on unspent Floobits
         self._applySeasonEndTax(self.currentSeason.seasonNumber)
+        # Lock in funding tiers for the offseason — fans' season-long
+        # contributions (mid-season + season-end tax) recompute the team's
+        # market tier NOW, so FA bidding power / training / GM thresholds /
+        # rookie scouting all use the upgraded tier instead of waiting for
+        # next season to begin. Until this point tiers stayed frozen at
+        # season-start values so in-season mechanics couldn't drift.
+        self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
         # Close game stats file
         self._closeGameStatsFile()
@@ -795,6 +802,12 @@ class SeasonManager:
                 # the GM vote threshold doesn't shift if new fans log in
                 # for the first time after the front office opens.
                 self._snapshotActiveFanCounts()
+                # Generate the per-team coach candidate slate so users can
+                # see + vote on potential replacements during the FA window
+                # rather than after the fire resolves. Names of unhired
+                # candidates return to the unused-name pool at hire
+                # resolution, so this isn't a net drain.
+                self._generateCoachCandidatesForFA()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -1399,6 +1412,15 @@ class SeasonManager:
                             {}, {}, {}, {}, fp,
                         )
 
+                # Inject Q4 fantasy points for Closer card effect — mirrors
+                # the fantasyTracker live-snapshot injection. Without this,
+                # the persisted week-end breakdown always read 0 Q4 FP and
+                # Closer paid nothing, because _dbStatsToCardFormat doesn't
+                # surface the q4_fantasy_points column on its own.
+                for gps in gameStats:
+                    if gps.q4_fantasy_points and gps.player_id in weekPlayerStats:
+                        weekPlayerStats[gps.player_id]["q4FantasyPoints"] = gps.q4_fantasy_points
+
                 # ─── Build shared context data ───────────────────────────────
 
                 # Team results from DB games (teamId → won)
@@ -1812,11 +1834,12 @@ class SeasonManager:
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
+                    # Formula: (rosterFP + Σ flat FP) × (1 + Σ(FPxᵢ − 1))
+                    # Bonus-additive — stacked FPx grows linearly, not
+                    # geometrically. Single-FPx hands unchanged.
+                    from managers.cardEffectCalculator import aggregateMultFactors
                     baseFP = weekRawFP + result.totalBonusFP
-                    multProduct = 1.0
-                    for f in result.multFactors:
-                        multProduct *= f
+                    multProduct = aggregateMultFactors(result.multFactors)
                     totalFP = round(baseFP * multProduct, 2)
                     # Subtract raw FP so we store only the card bonus portion
                     totalFP = round(totalFP - weekRawFP, 2)
@@ -5067,6 +5090,58 @@ class SeasonManager:
         
         self.playerManager.unusedNames.append(name)
     
+    def _generateCoachCandidatesForFA(self) -> None:
+        """Pre-generate 3 coach candidates per team at front office open.
+
+        Users need to see candidates DURING the FA voting window (so they
+        know who they're voting for) — not after the fire vote resolves.
+        We generate up front for every team; teams whose fire vote fails
+        will have their candidates wiped after hire resolution and the
+        names returned to the unused-name pool, so this isn't a permanent
+        name drain.
+
+        Names consumed during candidate generation are persisted in a
+        single save AFTER the outer DB commit. Per-call saves inside the
+        loop would hammer SQLite's write lock (96 separate transactions
+        contending with the outer one) and deadlock.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        if not self.currentSeason:
+            return
+        try:
+            from database.connection import get_session as _getSession
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            session = _getSession()
+            try:
+                season = self.currentSeason.seasonNumber
+                generatedTeams = 0
+                for team in teamManager.teams:
+                    cands = teamManager.generateCoachCandidates(team, season, session=session)
+                    if cands:
+                        generatedTeams += 1
+                session.commit()
+                logger.info(
+                    f"Front Office: pre-generated coach candidates for {generatedTeams} teams"
+                )
+            finally:
+                session.close()
+            # Persist the names that were popped during candidate generation.
+            # Done AFTER the outer commit so the write-lock contention seen
+            # in fast mode (database is locked on DELETE FROM unused_names)
+            # can't happen — the candidate transaction is fully committed
+            # and released before we open a new session here.
+            try:
+                playerMgr = self.serviceContainer.getService('player_manager')
+                if playerMgr is not None and hasattr(playerMgr, 'saveUnusedNames'):
+                    playerMgr.saveUnusedNames()
+            except Exception as e:
+                logger.warning(f"Name pool save after candidate gen failed: {e}")
+        except Exception as e:
+            logger.warning(f"FA coach candidate pre-generation failed: {e}")
+
     def _snapshotActiveFanCounts(self) -> None:
         """Freeze per-team active fan counts at front office open (week 22).
 
@@ -5146,12 +5221,37 @@ class SeasonManager:
                 for r in hireResults:
                     logger.info(f"GM hire_coach result: {r['teamName']} → {r['outcome']}")
 
+            # Phase 3: Wipe leftover candidates for teams whose fire vote
+            # FAILED. Their pre-generated slate is no longer needed and we
+            # want the names back in the pool for next season. Defer the
+            # per-team DB save — we issue one saveUnusedNames call after
+            # the outer commit so SQLite isn't running ~24 separate write
+            # transactions inside this one.
+            unfiredTeams = [t for t in teamManager.teams if t.id not in firedTeamIds]
+            for team in unfiredTeams:
+                teamManager.clearCoachCandidates(
+                    team.id, season, keepCoachId=None, session=session,
+                    deferNameSave=True,
+                )
+
             session.commit()
         except Exception as e:
             session.rollback()
             logger.error(f"GM fire/hire coach resolution error: {e}")
         finally:
             session.close()
+
+        # Single name-pool flush AFTER the session closes. Per-team flushes
+        # inside the loop above would contend with the outer write lock and
+        # deadlock under fast-mode timing. By the time we get here the GM
+        # resolution transaction is fully released, so saveUnusedNames'
+        # own session can acquire the lock without contention.
+        try:
+            playerMgr = self.serviceContainer.getService('player_manager')
+            if playerMgr is not None and hasattr(playerMgr, 'saveUnusedNames'):
+                playerMgr.saveUnusedNames()
+        except Exception as e:
+            logger.warning(f"Name pool save after GM hire resolution failed: {e}")
 
     async def _resolveGmResignVotes(self, gmResults: list) -> None:
         """Resolve resign_player GM votes. Sets _gmResigned flag on players."""
@@ -6169,24 +6269,30 @@ class SeasonManager:
 
     # ─── Weekly Modifier Selection ────────────────────────────────────────────
 
+    # Cascade was removed — it was a duplicate of Amplify (both doubled FPx
+    # bonus portions). Existing prod rows with modifier='cascade' resolve
+    # through the same code path as amplify in the calculator, but new
+    # weekly rolls won't pick cascade.
     MODIFIER_WEIGHTS = {
-        "amplify": 10, "cascade": 8, "ironclad": 10, "overdrive": 10,
+        "amplify": 10, "ironclad": 10, "overdrive": 10,
         "payday": 10, "grounded": 5, "wildcard": 8,
         "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
         "fortunate": 8,
     }
 
     MODIFIER_DISPLAY = {
-        "amplify": "Amplify", "cascade": "Cascade", "ironclad": "Ironclad",
+        "amplify": "Amplify", "ironclad": "Ironclad",
         "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
         "wildcard": "Wildcard", "longshot": "Longshot",
         "frenzy": "Frenzy", "synergy": "Synergy", "steady": "Steady",
         "fortunate": "Fortunate",
+        # Legacy display label kept so historical "cascade" rows still
+        # render with a friendly name in the recap screens.
+        "cascade": "Amplify",
     }
 
     MODIFIER_DESCRIPTIONS = {
         "amplify": "FPx bonus portions are doubled",
-        "cascade": "FPx bonus portions are doubled",
         "ironclad": "Streak cards can't reset this week",
         "overdrive": "Match bonus is 2.5x instead of 1.5x",
         "payday": "Floobits earned are tripled",
@@ -6197,6 +6303,8 @@ class SeasonManager:
         "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
         "fortunate": "Chance card trigger rates increased by 15%",
+        # Legacy — same behavior as amplify for historical rows.
+        "cascade": "FPx bonus portions are doubled",
     }
 
     def _selectWeeklyModifier(self, season: int, week: int) -> str:
@@ -7292,6 +7400,35 @@ class SeasonManager:
                     if cap > 0:
                         p.attributes.attitude = max(0, current - _attRand(0, cap))
 
+    def _recomputeFundingTiersForOffseason(self, completedSeason: int) -> None:
+        """Refresh funding tiers at offseason start using the completed
+        season's final effective_funding (baseline + carried + in-season
+        contributions + season-end tax).
+
+        Tiers stay locked during the regular season (so in-season
+        contributions don't shift competitive balance mid-game). At
+        offseason start we unfreeze them once, letting fans' contributions
+        translate immediately into FA bidding power, training quality, GM
+        vote thresholds, and rookie scouting. Season N+1's `_initialize-
+        TeamFunding` then carries the same effective_funding forward via
+        FUNDING_DECAY_RATE, so the relative tier ordering is preserved.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            session = get_session()
+            try:
+                self._assignFundingTiers(session, completedSeason)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Offseason tier recompute failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
         Contributions update the existing TeamFunding records created at season start."""
@@ -7544,12 +7681,37 @@ class SeasonManager:
             from database.models import TeamFunding
             session = get_session()
             try:
-                # Fetch previous season's effective funding for carry-forward
+                # Retrofit: ensure prev season's tier reflects its final
+                # effective_funding (baseline + carried + fan contributions
+                # + season-end tax) before inheriting. Idempotent — if
+                # the offseason recompute already ran for prev (post-
+                # deploy seasons), this produces the same value. On the
+                # FIRST season after this code deployed mid-cycle, prev
+                # season's tier is still the baseline+carried value from
+                # its start (the offseason recompute didn't exist when N
+                # was simulated). Running it now upgrades the label so
+                # the inheritance step picks up fans' contributions
+                # immediately — no one-season delay.
+                if previousSeason >= 1:
+                    self._assignFundingTiers(session, previousSeason)
+                    session.flush()
+
+                # Fetch previous season's effective funding for carry-forward,
+                # plus its (now-current) tier label so we can inherit rather
+                # than recompute. Recomputing N+1's tier from baseline+carried
+                # would compress ratios toward 1.0 (every team gets the same
+                # +baseline bump), shifting a team that earned MEGA at
+                # offseason end back to LARGE for no in-game reason.
                 prevFunding = {}
+                prevTiers: dict = {}
                 if previousSeason >= 1:
                     prevRecords = session.query(TeamFunding).filter_by(season=previousSeason).all()
                     for rec in prevRecords:
                         prevFunding[rec.team_id] = rec.effective_funding
+                        prevTiers[rec.team_id] = (
+                            rec.funding_tier or 'MID_MARKET',
+                            rec.tier_rank or 3,
+                        )
 
                 # Check if records already exist for this season (resume after restart)
                 existing = session.query(TeamFunding).filter_by(season=currentSeason).first()
@@ -7592,7 +7754,44 @@ class SeasonManager:
                     session.add(funding)
 
                 session.flush()
-                self._assignFundingTiers(session, currentSeason)
+                # Tier assignment:
+                #   Season 1 (no prior season): assign by ratio. All teams
+                #     start at baseline=200 with carried=0, so everyone
+                #     lands at MID_MARKET — same outcome as inheriting.
+                #   Season N>1: inherit the tier label from N-1's row.
+                #     N-1's row was finalized by _recomputeFundingTiers-
+                #     ForOffseason at the start of its offseason, so the
+                #     label carries the team's actual end-of-season
+                #     standing. Skipping the recompute here avoids the
+                #     baseline-compression tier-flip.
+                if prevTiers:
+                    newRecords = session.query(TeamFunding).filter_by(season=currentSeason).all()
+                    for rec in newRecords:
+                        inheritedTier, inheritedRank = prevTiers.get(
+                            rec.team_id, ('MID_MARKET', 3),
+                        )
+                        rec.funding_tier = inheritedTier
+                        rec.tier_rank = inheritedRank
+                    session.flush()
+                    # Mirror to runtime team objects so game-day effects
+                    # read the inherited tier immediately.
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    tierMap = {
+                        r.team_id: (r.funding_tier, r.tier_rank, r.effective_funding or 0)
+                        for r in newRecords
+                    }
+                    for team in teamManager.teams:
+                        tier, rank, eff = tierMap.get(team.id, ('MID_MARKET', 3, 0))
+                        team.fundingTier = tier
+                        team.fundingTierRank = rank
+                        team.effectiveFunding = eff
+                    tierCounts: dict = {}
+                    for r in newRecords:
+                        tierCounts[r.funding_tier] = tierCounts.get(r.funding_tier, 0) + 1
+                    logger.info(f"Inherited funding tiers from S{previousSeason}: {tierCounts}")
+                else:
+                    # Season 1 fallback — uniform MID via ratio path
+                    self._assignFundingTiers(session, currentSeason)
                 session.commit()
                 logger.info(f"Initialized team funding for season {currentSeason} (baseline={FUNDING_BASELINE_PER_TEAM}F)")
             except Exception as e:
@@ -8088,7 +8287,10 @@ class SeasonManager:
                     if equippedCount == 0:
                         _am.unlockSecret(session, uid, "purist")
 
-                # Crescendo — Perfect Week AND 300+ FP in the same week
+                # Zenith — Perfect Week AND 800+ FP in the same week.
+                # Threshold rescaled with the Balatro pass (was 300 — trivial
+                # now since Hedge alone floors at 675). 800 keeps the secret
+                # tied to a strong-composition week, not just any active one.
                 # Perfect Week = user had picks this week and all were correct.
                 # Aggregate per user, then compare in Python (portable across DBs).
                 from sqlalchemy import case
@@ -8102,7 +8304,7 @@ class SeasonManager:
                     PickEmPick.correct.isnot(None),
                 ).group_by(PickEmPick.user_id).all()
                 for uid, total, correct in pickAgg:
-                    if total > 0 and correct == total and weekFpByUser.get(uid, 0) >= 300:
+                    if total > 0 and correct == total and weekFpByUser.get(uid, 0) >= 800:
                         _am.unlockSecret(session, uid, "zenith")
 
                 session.commit()

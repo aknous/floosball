@@ -31,27 +31,41 @@ class ShopPurchaseRepository:
         return query.all()
 
     def getPurchasesToday(self, userId: int, itemSlug: str) -> int:
-        """Count purchases since the last daily reset boundary (DAILY_RESET_HOUR_UTC)."""
+        """Count PAID purchases since the last daily reset boundary.
+
+        Free grants (achievement-reward claims that insert ShopPurchase with
+        price_paid=0) are excluded so they don't consume the user's daily
+        buy limit — a user who claims an extra_swap reward should still be
+        able to buy one in the shop that day.
+        """
         boundary = _dailyResetBoundary()
         return self.session.query(func.count(ShopPurchase.id)).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.item_slug == itemSlug,
             ShopPurchase.created_at >= boundary,
+            ShopPurchase.price_paid > 0,
         ).scalar() or 0
 
     def getPurchasesForCycle(self, userId: int, season: int, itemSlug: str, cycleStartWeek: int, cycleEndWeek: int) -> int:
-        """Count purchases within a swap cycle (for testing-mode daily limit)."""
+        """Count PAID purchases within a swap cycle. Free grants excluded
+        (see getPurchasesToday)."""
         return self.session.query(func.count(ShopPurchase.id)).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.item_slug == itemSlug,
             ShopPurchase.season == season,
             ShopPurchase.week >= cycleStartWeek,
             ShopPurchase.week <= cycleEndWeek,
+            ShopPurchase.price_paid > 0,
         ).scalar() or 0
 
     def getSeasonPurchaseCount(self, userId: int, season: int, itemSlug: str) -> int:
-        return self.session.query(func.count(ShopPurchase.id)).filter_by(
-            user_id=userId, season=season, item_slug=itemSlug,
+        """Count PAID purchases this season. Used for per-season buy
+        limits; free grants from rewards don't burn the budget."""
+        return self.session.query(func.count(ShopPurchase.id)).filter(
+            ShopPurchase.user_id == userId,
+            ShopPurchase.season == season,
+            ShopPurchase.item_slug == itemSlug,
+            ShopPurchase.price_paid > 0,
         ).scalar() or 0
 
     def getActiveTempFlex(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:

@@ -863,6 +863,36 @@ class UserLoginDay(Base):
     )
 
 
+class CoachCandidate(Base):
+    """A coach offered as a candidate to a specific team during a hire cycle.
+
+    Per-team coach hiring (replaces the shared coach pool):
+      - Generated lazily when a team needs a new coach (post-fire or
+        post-retirement) — 3 candidates per vacancy with a quality spread
+        (premium/solid/developmental) so users always have at least one
+        attractive option.
+      - GM hire_coach votes target the coach_id of one of these candidates.
+      - On hire resolution, the winning candidate becomes the team's coach;
+        the other rows are deleted and their coach names returned to the
+        unused-name pool. No cross-team contention.
+    """
+    __tablename__ = "coach_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    coach_id: Mapped[int] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)  # 0..2
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    team: Mapped["Team"] = relationship("Team")
+    coach: Mapped["Coach"] = relationship("Coach")
+
+    __table_args__ = (
+        Index("idx_coach_candidates_team_season", "team_id", "season"),
+    )
+
+
 class UnusedName(Base):
     """Unused names table - stores available names for new players."""
     __tablename__ = "unused_names"
@@ -975,6 +1005,9 @@ class CardTemplate(Base):
     rarity_weight: Mapped[int] = mapped_column(Integer, nullable=False)
     sell_value: Mapped[int] = mapped_column(Integer, nullable=False)
     is_upgraded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Denormalized output type for themed-pack filtering.
+    # Values: "fp" | "fpx" | "floobits" | NULL (mixed/in-between).
+    output_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -1197,6 +1230,13 @@ class PackType(Base):
     guaranteed_rarity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     rarity_weights: Mapped[dict] = mapped_column(JSON, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    # Themed pack metadata. NULL on standard tiers (humble/grand/exquisite/starter).
+    # theme_type ∈ {"position", "team", "output"}; theme_value is the discriminator:
+    #   position → "QB" | "RB" | "WR" | "TE" | "K"
+    #   team     → stringified team id (e.g. "12")
+    #   output   → "fp" | "fpx" | "floobits"
+    theme_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    theme_value: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     def __repr__(self):
         return f"<PackType(name='{self.name}', cost={self.cost})>"
@@ -1269,6 +1309,32 @@ class FeaturedShopCard(Base):
 
     __table_args__ = (
         Index("idx_featured_shop_user_season", "user_id", "season"),
+    )
+
+
+class FeaturedPackRotation(Base):
+    """Per-user themed-pack rotation. Each user sees their own 3 themed packs
+    for a given (season, shop_day) cycle. Generated lazily on first read;
+    regenerated when the shop_day advances (every 7 in-game weeks) or when
+    the user rerolls. Once a pack is opened, its rotation row is marked
+    purchased=True and disappears from the shop view (mirrors FeaturedShopCard)."""
+    __tablename__ = "featured_pack_rotation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    shop_day: Mapped[int] = mapped_column(Integer, nullable=False)  # 1..4
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)  # 0..2
+    pack_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("pack_types.id"), nullable=False)
+    purchased: Mapped[bool] = mapped_column(Boolean, default=False)
+    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    generated_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    user: Mapped["User"] = relationship("User")
+    pack_type: Mapped["PackType"] = relationship("PackType")
+
+    __table_args__ = (
+        Index("idx_pack_rotation_user_season_day", "user_id", "season", "shop_day"),
     )
 
 

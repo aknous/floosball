@@ -116,17 +116,24 @@ ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same
 # the system can't run away. Tunable knobs:
 #   SCALE     — overall payout scale (raises floor + ceiling together)
 #   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
+# Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
+# which the prior (scale 0.30 / exponent 0.92) curve was paying out at
+# 175-475 F/week — enough to buy a Grand pack every week. New shape keeps
+# small weeks roughly the same but halves payouts at 1k+ and cuts ~65%
+# at 3k. Big weeks still pay more than small weeks, just not runaway.
 # Sample profile (default):
-#   100 FP → 17 F        (vs. old linear 15 F, capped at 40)
-#   500 FP → 67 F        (old: capped at 40)
-#  1000 FP → 121 F       (old: capped at 40)
-WEEKLY_FP_FLOOBIT_SCALE = 0.34
-WEEKLY_FP_FLOOBIT_EXPONENT = 0.85
+#   100 FP →  12 F
+#   500 FP →  40 F
+#  1000 FP →  69 F
+#  3000 FP → 161 F
+WEEKLY_FP_FLOOBIT_SCALE = 0.32
+WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 # Endowment (income_boost powerup) replaces the curve with a flatter one.
-# Less taper = monster weeks pay more; low weeks pay slightly less than
-# the default curve. Same cost (100 F).
+# Less taper = monster weeks pay more; low weeks pay roughly the same.
+# Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
+# at heavy play, breaking even around 1k FP/week × 4 weeks.
 WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.20
-WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.95
+WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -346,6 +353,12 @@ POWERUP_CATALOG = {
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
 SHOP_REROLL_COST_INCREMENT = 10  # Each reroll costs 10 more than the last
+
+# Themed pack rotation reroll — pricier than featured-card reroll because
+# the rotation pool now includes Grand (350F) and Exquisite (750F) packs.
+# Rerolling for an exquisite roll should be a real commitment.
+THEMED_PACK_REROLL_BASE_COST = 50
+THEMED_PACK_REROLL_COST_INCREMENT = 30
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
