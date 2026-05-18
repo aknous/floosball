@@ -6764,6 +6764,25 @@ def setEquippedCards(
             if template.classification and "mvp" in template.classification:
                 hasMvp = True
 
+        # No-duplicate-effects rule: a user can equip at most one card with
+        # each effectName. Two of the same effect stacked too hard under
+        # bonus-additive math (two Droughts both growing their streak, two
+        # Hedges adding 500 FP floor, etc.). A future "stack" powerup /
+        # card may relax this — for now, reject at equip time.
+        effectCounts: Dict[str, str] = {}
+        for c in req.cards:
+            cfg = cardTemplates[c.userCardId].effect_config or {}
+            effectName = cfg.get("effectName") or ""
+            if not effectName:
+                continue
+            if effectName in effectCounts:
+                displayName = cfg.get("displayName") or effectName
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Can't equip two of the same effect ({displayName}). Pick a different card.",
+                )
+            effectCounts[effectName] = effectName
+
         # Enforce slot limits: 5 base, 6 if MVP card equipped OR temp_card_slot active
         hasExtraSlot = hasMvp
         if not hasExtraSlot:
