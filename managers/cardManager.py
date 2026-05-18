@@ -877,6 +877,9 @@ class CardManager:
         # These packs explicitly promise classification breadth (one card
         # per qualifying player), so dedup by player_id.
         dedupByPlayer = getattr(packType, 'theme_type', None) in ('champion', 'allpro')
+        # Starter pack: no duplicate effectNames so new users can equip
+        # every starter card without hitting the no-duplicate-effects rule.
+        dedupByEffect = (packType.name == 'starter')
 
         # ── Guaranteed-rarity slot ──
         # If the pack guarantees a minimum rarity, draw one slot constrained
@@ -901,28 +904,43 @@ class CardManager:
                 return guaranteedDraw + rest
             # Fallback to unconstrained draw if no eligible templates exist
 
-        if dedupByPlayer:
-            return self._weightedDrawDedup(pool, packWeights, count=count, dedupByPlayer=True)
+        if dedupByPlayer or dedupByEffect:
+            return self._weightedDrawDedup(
+                pool, packWeights, count=count,
+                dedupByPlayer=dedupByPlayer,
+                dedupByEffect=dedupByEffect,
+            )
         return self._weightedDraw(pool, packWeights, count=count)
 
     def _weightedDrawDedup(self, pool: list, packWeights: dict, count: int,
-                           dedupByPlayer: bool = False) -> list:
-        """Like _weightedDraw but ensures each drawn template has a unique
-        player_id. Used by prestige themed packs (champion, all-pro) where
-        the pool is narrow and we want one card per qualifying player.
+                           dedupByPlayer: bool = False,
+                           dedupByEffect: bool = False) -> list:
+        """Like _weightedDraw but ensures each drawn template is unique
+        along the specified axis. Two modes:
 
-        Draws one template at a time; after each draw, filters the pool to
-        exclude templates sharing the picked template's player_id. Falls
-        through to whatever's available if the pool runs out (rare — would
-        only happen if `count` exceeds the number of unique players).
+          - dedupByPlayer: one card per player_id. Used by champion / all-pro
+            prestige packs.
+          - dedupByEffect: one card per effect_config.effectName. Used by
+            the starter pack so users can equip every card in the pack
+            without bumping into the no-duplicate-effects rule.
+
+        Both modes can be enabled simultaneously. Draws one template at a
+        time, filtering remaining pool after each pick. Falls through to
+        whatever's available if the pool runs out.
         """
         if not pool or count <= 0:
             return []
-        if not dedupByPlayer:
+        if not dedupByPlayer and not dedupByEffect:
             return self._weightedDraw(pool, packWeights, count=count)
         drawn = []
         seenPlayerIds: set = set()
+        seenEffectNames: set = set()
         remaining = list(pool)
+
+        def _effectName(t) -> str:
+            cfg = getattr(t, 'effect_config', None) or {}
+            return cfg.get('effectName') or ''
+
         for _ in range(count):
             if not remaining:
                 break
@@ -931,8 +949,17 @@ class CardManager:
                 break
             card = picked[0]
             drawn.append(card)
-            seenPlayerIds.add(card.player_id)
-            remaining = [t for t in remaining if t.player_id not in seenPlayerIds]
+            if dedupByPlayer:
+                seenPlayerIds.add(card.player_id)
+            if dedupByEffect:
+                effName = _effectName(card)
+                if effName:
+                    seenEffectNames.add(effName)
+            remaining = [
+                t for t in remaining
+                if (not dedupByPlayer or t.player_id not in seenPlayerIds)
+                and (not dedupByEffect or _effectName(t) not in seenEffectNames)
+            ]
         return drawn
 
     # ─── Reveal / Select flow (purchases) ─────────────────────────────────────
