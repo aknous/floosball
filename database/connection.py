@@ -1567,21 +1567,22 @@ def _seedAchievements():
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week.
-            # Rescaled (Balatro pass): post-rebalance cards individually push
-            # weekly totals well past the old 600 cap (Hedge alone guarantees
-            # 675, Anthem tier5 hits 459, etc.). Tier I now matches a typical
-            # casual week, IV becomes a flex goal for elite mixed hands.
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 250,
-             "description": "Earn 250+ fantasy points in a single week.",
+            # Rescaled again (next-season): amplify / overdrive modifier
+            # weeks routinely 2-3x weekly totals over a normal hand, so
+            # users were hitting tier IV on day 1 of a hot modifier week.
+            # New ceiling demands an exceptional week regardless of
+            # modifier draw.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 400,
+             "description": "Earn 400+ fantasy points in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 500,
-             "description": "Earn 500+ fantasy points in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 900,
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 900,
              "description": "Earn 900+ fantasy points in a single week.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 1800,
+             "description": "Earn 1,800+ fantasy points in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 1500,
-             "description": "Earn 1,500+ fantasy points in a single week.",
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 3500,
+             "description": "Earn 3,500+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
             # (renamed from Windfall to avoid clashing with the card effect of
@@ -1599,19 +1600,20 @@ def _seedAchievements():
              "description": "Earn 400+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Dynamo tiers — cumulative season fantasy points. Rescaled
-            # (Balatro pass): elite seasons routinely clear 25,000+ FP under
-            # new card outputs, so the old 9k cap became a casual checkpoint.
-            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 3000,
-             "description": "Earn 3,000 total fantasy points this season.",
+            # again (next-season): elite seasons under amplify-heavy
+            # rotations now bank 60k+ over 28 weeks, so the old 25k cap
+            # was a mid-season checkpoint.
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 5000,
+             "description": "Earn 5,000 total fantasy points this season.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 7000,
-             "description": "Earn 7,000 total fantasy points this season.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 14000,
+            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 14000,
              "description": "Earn 14,000 total fantasy points this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 30000,
+             "description": "Earn 30,000 total fantasy points this season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 25000,
-             "description": "Earn 25,000 total fantasy points this season.",
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 60000,
+             "description": "Earn 60,000 total fantasy points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
@@ -1686,17 +1688,21 @@ def _seedAchievements():
             # 5×+ on a hot week, the old 3.5× cap is hit by ONE card. Tiers
             # now require actual stacking — Tier IV needs a full FPx hand
             # with elite multipliers.
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 200,
-             "description": "Reach a 2.0x total FP multiplier in a single week.",
+            # Bumped (next-season): amplify modifier doubles the FPx
+            # bonus portion, so a hand of 4-5 modest FPx cards can hit
+            # 7x on a hot week. New top tier requires both a heavily
+            # stacked FPx hand AND a favorable modifier draw.
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 250,
+             "description": "Reach a 2.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 300,
-             "description": "Reach a 3.0x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 450,
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 450,
              "description": "Reach a 4.5x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 700,
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 700,
              "description": "Reach a 7.0x total FP multiplier in a single week.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1000,
+             "description": "Reach a 10.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard
