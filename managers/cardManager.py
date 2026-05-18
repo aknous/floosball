@@ -1235,14 +1235,21 @@ class CardManager:
         # effect-rebuilding / sellValue / combineValue logic intact.
         from database.models import UserCard
         from datetime import datetime
+        from sqlalchemy.orm.attributes import set_committed_value
         stub = UserCard(
             user_id=0,
             card_template_id=template.id,
             acquired_via='pack_reveal',
             acquired_at=datetime.utcnow(),
         )
-        # Wire the relationship in-memory so serializeCard can read template
-        stub.card_template = template
+        # Wire the relationship without triggering back-population —
+        # a plain `stub.card_template = template` would append `stub`
+        # into the (session-attached) template.user_cards collection and
+        # SAWarning at commit ("Object of type <UserCard> not in session,
+        # add operation along 'CardTemplate.user_cards' will not proceed").
+        # set_committed_value sets the attribute as "already-loaded" so
+        # the relationship event machinery doesn't fire.
+        set_committed_value(stub, 'card_template', template)
         result = self.serializeCard(stub, currentSeason)
         # Strip the fake id — the card doesn't exist yet
         result.pop('id', None)
