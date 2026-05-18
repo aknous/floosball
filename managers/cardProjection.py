@@ -48,6 +48,18 @@ _EXACT_EFFECTS = frozenset({
     "good_neighbor",
     # Streak / week-counter based (known state)
     "bonsai", "trust_fund",
+    # New roster-trait effects — all deterministic from current roster
+    # state (no RNG, no per-player stat scaling). Adding so the UI shows
+    # the value without an "est." prefix and dead states render as a
+    # clean red "+0 FP" rather than a misleading "est. +X" placeholder.
+    "patient", "wanderer", "castaway", "rookie_hype",
+    # Hand-composition effects (count of flat-FP cards in hand)
+    "anthem",
+    # Inverse-streak / streak effects with known streak counts
+    "sandbagger", "quiet_storm", "drought", "nose_picker",
+    # Pickem-driven (deterministic once weekly pickem totals are known;
+    # show 0 with explanatory equation during the games window)
+    "medium", "parlay",
 })
 
 
@@ -92,7 +104,6 @@ _AMPLIFIER_DEPENDS = {
     "providence":    lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "catalyst":      lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "advantage":     lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
-    "cascade":       lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "mult"),
     "conductor":     lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "fp"),
 }
 
@@ -148,8 +159,6 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         return "Roster-FP chance boost" if active else "Needs chance card"
     if effectName == "advantage":
         return "Chance rolls twice" if active else "Needs chance card"
-    if effectName == "cascade":
-        return "Stacks with FPx cards" if active else "Needs FPx card"
     if effectName == "conductor":
         boost = primary.get("boostPct", 20)
         return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"

@@ -1227,7 +1227,7 @@ class TeamManager:
     # Coach management
     # -------------------------------------------------------------------------
 
-    def generateCoach(self, seed: int = None) -> FloosCoach.Coach:
+    def generateCoach(self, seed: int = None, deferSave: bool = False) -> FloosCoach.Coach:
         """Create a new Coach with generated attributes and a unique name from the pool.
 
         Prefers playerManager.popUniqueName when available so any name
@@ -1235,6 +1235,12 @@ class TeamManager:
         pool rather than handed to the new coach. Defensive against the
         kind of pollution that produced coach/player and player/player
         collisions in past seasons.
+
+        deferSave=True skips the per-call saveUnusedNames database write.
+        Caller is responsible for invoking playerMgr.saveUnusedNames()
+        after the batch completes. Used by batch coach-generation paths
+        (e.g. generateCoachCandidates) to avoid 96 separate write-lock
+        acquisitions inside one outer transaction.
         """
         coach = FloosCoach.Coach()
         coach.generateAttributes(seed=seed)
@@ -1247,7 +1253,7 @@ class TeamManager:
         name = None
         if playerMgr and hasattr(playerMgr, 'popUniqueName'):
             name = playerMgr.popUniqueName()
-            if name is not None:
+            if name is not None and not deferSave:
                 playerMgr.saveUnusedNames()
         else:
             # Fallback: legacy path against the local pool. Still mutates
@@ -1256,7 +1262,7 @@ class TeamManager:
             if pool:
                 name = _random.choice(pool)
                 pool.remove(name)
-                if playerMgr and hasattr(playerMgr, 'saveUnusedNames'):
+                if playerMgr and hasattr(playerMgr, 'saveUnusedNames') and not deferSave:
                     playerMgr.saveUnusedNames()
 
         if name is not None:
@@ -1509,6 +1515,158 @@ class TeamManager:
             return []
         from database.models import Coach as DBCoach
         return self.db_session.query(DBCoach).filter(DBCoach.team_id == None).all()
+
+    # ── Per-team Coach Candidates (new hire flow) ────────────────────────────
+
+    # Quality seeds for the 3 generated candidates per vacancy. Each seed
+    # centers a normal(σ=10) distribution clamped to [60, 100] in
+    # Coach.generateAttributes — so a seed of 90 produces a coach with
+    # overall_rating ≈ 87-92, 80 ≈ 77-82, 72 ≈ 68-74. Premium guarantees
+    # the user always has at least one attractive option.
+    COACH_CANDIDATE_SEEDS = (90, 80, 72)
+
+    def generateCoachCandidates(self, team, season: int, session=None) -> list:
+        """Generate 3 candidate coaches for a team's hire vote.
+
+        Each is persisted as an unassigned Coach DB row (team_id=NULL) plus
+        a CoachCandidate join row tying them to this team's hire cycle.
+        Returns the list of CoachCandidate rows.
+
+        Idempotent — if candidates already exist for (team, season), they
+        are returned as-is. Use clearCoachCandidates to force a regen.
+        """
+        from database.models import Coach as DBCoach, CoachCandidate
+        targetSession = session if session is not None else self.db_session
+        if targetSession is None:
+            return []
+
+        existing = (
+            targetSession.query(CoachCandidate)
+            .filter(CoachCandidate.team_id == team.id, CoachCandidate.season == season)
+            .order_by(CoachCandidate.slot.asc())
+            .all()
+        )
+        if existing:
+            return existing
+
+        # Generate the 3 coaches with quality seeds. Shuffle slot order so
+        # the premium isn't always slot 0 in the UI.
+        seeds = list(self.COACH_CANDIDATE_SEEDS)
+        _random.shuffle(seeds)
+
+        candidates = []
+        for slot, seed in enumerate(seeds):
+            # deferSave=True: skip the per-call saveUnusedNames DB write so
+            # the outer batch transaction isn't fighting another session
+            # for SQLite's write lock 3 times per team × 32 teams. Names
+            # mutate self.unusedNames in memory; we flush once after the
+            # loop via the playerMgr.saveUnusedNames() call below.
+            coach = self.generateCoach(seed=seed, deferSave=True)
+            # Persist as unassigned Coach row
+            dbCoach = DBCoach(
+                name=coach.name,
+                team_id=None,
+                seasons_coached=0,
+                offensive_mind=coach.offensiveMind,
+                defensive_mind=coach.defensiveMind,
+                adaptability=coach.adaptability,
+                aggressiveness=coach.aggressiveness,
+                clock_management=coach.clockManagement,
+                player_development=coach.playerDevelopment,
+                scouting=getattr(coach, 'scouting', 80),
+                attitude=getattr(coach, 'attitude', 80),
+                overall_rating=coach.overallRating,
+            )
+            targetSession.add(dbCoach)
+            targetSession.flush()
+            cand = CoachCandidate(
+                team_id=team.id, coach_id=dbCoach.id,
+                season=season, slot=slot,
+            )
+            targetSession.add(cand)
+            candidates.append(cand)
+
+        targetSession.flush()
+        self.logger.info(
+            f"Generated {len(candidates)} coach candidates for {team.name} "
+            f"(ratings: {[c.coach.overall_rating for c in candidates]})"
+        )
+        return candidates
+
+    def getCoachCandidates(self, team, season: int, session=None) -> list:
+        """Read the team's candidate slate for the season (lazy gen if missing)."""
+        from database.models import CoachCandidate
+        targetSession = session if session is not None else self.db_session
+        if targetSession is None:
+            return []
+        rows = (
+            targetSession.query(CoachCandidate)
+            .filter(CoachCandidate.team_id == team.id, CoachCandidate.season == season)
+            .order_by(CoachCandidate.slot.asc())
+            .all()
+        )
+        if not rows:
+            rows = self.generateCoachCandidates(team, season, session=targetSession)
+        return rows
+
+    def clearCoachCandidates(self, teamId: int, season: int,
+                              keepCoachId: int = None, session=None,
+                              deferNameSave: bool = False) -> int:
+        """Remove this team's candidate slate after a hire resolves. Coaches
+        not chosen are deleted entirely and their names returned to the
+        unused-name pool (per design — coach names are scarce).
+
+        keepCoachId: the winning candidate's coach_id; that coach row is
+        preserved (it's now the team's hired coach). Pass None to wipe
+        all candidates (e.g. when retracting a vacancy).
+
+        deferNameSave=True appends the released names to the in-memory
+        pool but skips the database write. Used by batch callers (GM
+        hire resolution) so the per-team saves don't compete with the
+        outer transaction for SQLite's write lock. Caller must invoke
+        playerMgr.saveUnusedNames() once after the outer commit.
+        """
+        from database.models import Coach as DBCoach, CoachCandidate
+        targetSession = session if session is not None else self.db_session
+        if targetSession is None:
+            return 0
+
+        candidates = (
+            targetSession.query(CoachCandidate)
+            .filter(CoachCandidate.team_id == teamId, CoachCandidate.season == season)
+            .all()
+        )
+        if not candidates:
+            return 0
+
+        releasedNames = []
+        for cand in candidates:
+            if keepCoachId is not None and cand.coach_id == keepCoachId:
+                # Winner — leave Coach row alone, just drop the candidate link.
+                targetSession.delete(cand)
+                continue
+            coach = targetSession.get(DBCoach, cand.coach_id)
+            if coach is not None:
+                releasedNames.append(coach.name)
+                targetSession.delete(coach)
+            targetSession.delete(cand)
+        targetSession.flush()
+
+        # Return names to the unused-name pool so they cycle back into use.
+        if releasedNames:
+            try:
+                playerMgr = self.serviceContainer.getService('player_manager')
+                if playerMgr is not None and hasattr(playerMgr, 'unusedNames'):
+                    for nm in releasedNames:
+                        if nm and nm not in playerMgr.unusedNames:
+                            playerMgr.unusedNames.append(nm)
+                    if not deferNameSave and hasattr(playerMgr, 'saveUnusedNames'):
+                        playerMgr.saveUnusedNames()
+            except Exception as e:
+                self.logger.warning(
+                    f"clearCoachCandidates: failed to return names {releasedNames!r}: {e}"
+                )
+        return len(candidates)
 
     def hireCoachFromPool(self, team: FloosTeam.Team, coachId: int, session=None) -> bool:
         """Hire a coach from the pool by DB id. Returns True on success.
