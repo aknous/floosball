@@ -1567,22 +1567,23 @@ def _seedAchievements():
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week.
-            # Rescaled again (next-season): amplify / overdrive modifier
-            # weeks routinely 2-3x weekly totals over a normal hand, so
-            # users were hitting tier IV on day 1 of a hot modifier week.
-            # New ceiling demands an exceptional week regardless of
-            # modifier draw.
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 400,
-             "description": "Earn 400+ fantasy points in a single week.",
+            # Rescaled (next-season): a full week (4 game days) with an
+            # amplify or overdrive modifier can stack to 5-figure FP
+            # totals on optimized hands — and modifier draws cycle through
+            # the season, so most users see at least one favorable week.
+            # New top tier requires both a stacked hand AND a hot run
+            # across all 4 days, not just one big game.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 600,
+             "description": "Earn 600+ fantasy points in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 900,
-             "description": "Earn 900+ fantasy points in a single week.",
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 2000,
+             "description": "Earn 2,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 1800,
-             "description": "Earn 1,800+ fantasy points in a single week.",
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 5000,
+             "description": "Earn 5,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 3500,
-             "description": "Earn 3,500+ fantasy points in a single week.",
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 10000,
+             "description": "Earn 10,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
             # (renamed from Windfall to avoid clashing with the card effect of
