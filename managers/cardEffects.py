@@ -1915,7 +1915,7 @@ def _computeHedge(primary, ctx, cardPlayerId, eqId):
     """FP floor: guarantees a minimum roster output. Pays the difference between floor and actual."""
     if not _meetsFullRosterRequirement(ctx):
         return EffectResult(
-            equation=f"Requires {_FULL_ROSTER_MIN_FILLED}+ rostered players (full-roster insurance, not an empty-slot payout)"
+            equation=f"Requires {_FULL_ROSTER_MIN_FILLED}+ rostered players"
         )
     floorFP = primary.get("floorFP", 50)
     rosterFP = round(ctx.weekRawFP, 1)
@@ -2764,7 +2764,7 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
     # bars." Empty payout when below the filled-slot threshold.
     if ctx._currentEffectName in _FULL_ROSTER_INTENT_EFFECTS and not _meetsFullRosterRequirement(ctx):
         return EffectResult(
-            equation=f"Requires {_FULL_ROSTER_MIN_FILLED}+ rostered players (full-roster intent)"
+            equation=f"Requires {_FULL_ROSTER_MIN_FILLED}+ rostered players"
         )
 
     baseReward = primary.get("baseReward", 0)
