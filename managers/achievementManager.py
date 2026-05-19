@@ -124,24 +124,18 @@ def _grantReward(session: Session, userId: int, achievement: Achievement, ua: Us
         logger.warning(f"Failed to push achievement_unlocked event: {e}")
 
 
-# Cap on stashed (unclaimed) pack rewards in a user's PendingReward
-# queue. Excess pack grants convert to Floobits at the pack's shop cost
-# instead of piling up — keeps the rewards panel manageable and stops
-# users from hoarding packs across deferred-claim windows.
+# Soft cap on stashed pack rewards. Backend doesn't enforce — packs
+# queue freely. The frontend surfaces a Convert-to-Floobits button on
+# pending pack rows when the user is over this limit, letting users
+# decide whether to open the overflow pack now or trade it for Floobits.
 MAX_PENDING_PACK_REWARDS = 1
 
 
 def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
-    """Apply a reward config: floobits credited immediately, packs/powerups queued as PendingReward.
-
-    Stashed pack rewards are capped at MAX_PENDING_PACK_REWARDS. Once the
-    user's pack queue is full, additional pack grants are converted to
-    Floobits at the pack's shop cost so the user still gets value.
-    """
-    from database.models import PackType
+    """Apply a reward config: floobits credited immediately, packs/powerups queued as PendingReward."""
     floobits = int(cfg.get("floobits") or 0)
-    currencyRepo = CurrencyRepository(session)
     if floobits > 0:
+        currencyRepo = CurrencyRepository(session)
         currencyRepo.addFunds(
             userId=userId, amount=floobits,
             transactionType="achievement",
@@ -161,38 +155,14 @@ def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
         f"_applyReward user={userId} source={source} "
         f"floobits={floobits} packs={packs} powerups={powerups}"
     )
-
-    # Count current stashed (unclaimed) pack rewards once; we'll increment
-    # locally as new ones are queued. Defer rewards (defer_until_season)
-    # also count toward the cap — same stash.
-    existingPendingPacks = session.query(PendingReward).filter(
-        PendingReward.user_id == userId,
-        PendingReward.kind == "pack",
-        PendingReward.claimed_at.is_(None),
-    ).count()
-
     addedIds = []
-    convertedSlugs = []
     for packSlug in packs:
-        if existingPendingPacks >= MAX_PENDING_PACK_REWARDS:
-            # Queue full — convert this pack to Floobits at shop cost.
-            packType = session.query(PackType).filter(PackType.name == packSlug).first()
-            conversionValue = int(packType.cost) if packType and packType.cost else 0
-            if conversionValue > 0:
-                currencyRepo.addFunds(
-                    userId=userId, amount=conversionValue,
-                    transactionType="achievement",
-                    description=f"{source} (pack→Floobits, queue full)",
-                )
-            convertedSlugs.append((packSlug, conversionValue))
-            continue
         pr = PendingReward(
             user_id=userId, kind="pack", slug=packSlug,
             source=source, available_at=now,
         )
         session.add(pr)
         addedIds.append(("pack", packSlug, pr))
-        existingPendingPacks += 1
     for powerupSlug in powerups:
         pr = PendingReward(
             user_id=userId, kind="powerup", slug=powerupSlug,
@@ -207,11 +177,6 @@ def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
             f"{kind}:{slug}#{pr.id}" for kind, slug, pr in addedIds
         )
         logger.info(f"_applyReward user={userId} source={source} flushed: {idSummary}")
-    if convertedSlugs:
-        convSummary = ", ".join(f"{slug}->{val}F" for slug, val in convertedSlugs)
-        logger.info(
-            f"_applyReward user={userId} source={source} converted (queue full): {convSummary}"
-        )
 
 
 def processDeferredRewards(session: Session, userId: Optional[int] = None) -> int:

@@ -10190,6 +10190,74 @@ def deferPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+@app.post("/api/achievements/reward/{rewardId}/convert")
+def convertPendingPackReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
+    """Convert a pending pack reward to Floobits at the pack's shop cost.
+
+    Pack-only. Powerup rewards aren't convertible. Used when the user
+    would rather take the cash than open the pack — typically because
+    their stash is already full and they don't want to clear the
+    queued one yet. Marks the reward as claimed_at the conversion
+    moment so it disappears from the pending panel.
+    """
+    from database.connection import get_session
+    from database.models import PendingReward, PackType
+    from database.repositories.card_repositories import CurrencyRepository
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        reward = session.query(PendingReward).filter(
+            PendingReward.id == rewardId,
+            PendingReward.user_id == user.id,
+        ).first()
+        if not reward:
+            raise HTTPException(status_code=404, detail="Reward not found")
+        if reward.claimed_at is not None:
+            raise HTTPException(status_code=400, detail="Reward already claimed")
+        if reward.kind != "pack":
+            raise HTTPException(status_code=400, detail="Only pack rewards can be converted")
+        if reward.defer_until_season is not None and currentSeason < reward.defer_until_season:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Reward deferred until season {reward.defer_until_season}",
+            )
+
+        packType = session.query(PackType).filter(PackType.name == reward.slug).first()
+        if not packType:
+            raise HTTPException(status_code=500, detail=f"Unknown pack type: {reward.slug}")
+        conversionValue = int(packType.cost or 0)
+        if conversionValue <= 0:
+            raise HTTPException(status_code=400, detail="This pack has no shop value to convert")
+
+        currencyRepo = CurrencyRepository(session)
+        currencyRepo.addFunds(
+            userId=user.id, amount=conversionValue,
+            transactionType="achievement",
+            description=f"{reward.source} (converted to Floobits)",
+            season=currentSeason,
+        )
+        reward.claimed_at = datetime.utcnow()
+        session.commit()
+        return build_success_response({
+            "id": reward.id,
+            "kind": "floobits",
+            "floobits": conversionValue,
+            "packName": packType.display_name or packType.name,
+        })
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Convert reward failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to convert reward")
+    finally:
+        session.close()
+
+
 @app.post("/api/achievements/claim-reward/{rewardId}")
 def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
     """Claim a pending pack or powerup earned via achievement.
