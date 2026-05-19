@@ -1469,9 +1469,14 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((94.5 + rn * 2.04) * editionScale, 1),
                 "growthPerTick": round((54.0 + rn * 1.35) * editionScale, 1)}
     if effectName == "drought":
+        # Streak increment trimmed (81 -> 42) — the original was scaled
+        # for a no-floor sustained streak. Combined with the full-roster
+        # gate now in place, 81/tick stacked into runaway-territory by
+        # week 8-10. Base unchanged so a fresh trigger still pays a
+        # meaningful 135 FP.
         return {"rewardType": "fp",
                 "baseReward": round((135.0 + rn * 3.03) * editionScale, 1),
-                "growthPerTick": round((81.0 + rn * 2.04) * editionScale, 1)}
+                "growthPerTick": round((42.0 + rn * 1.05) * editionScale, 1)}
     # ── Prognostication cards ─────────────────────────────────────────
     if effectName == "nose_picker":
         # Log-tapered streak — pays for showing up to Prognostications
