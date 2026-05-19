@@ -1300,9 +1300,9 @@ class SeasonManager:
         the just-completed week's equipped rows so carry-forward later
         only propagates one copy per effectName per user. Picks the
         keeper by edition rarity, then by lowest slot for a stable tie
-        break. Compensates the user with the dropped card's sell value
-        in Floobits so they're not silently penalized — the card itself
-        stays in their collection, only the equipped slot is freed.
+        break. The dropped EquippedCard row is deleted; the underlying
+        UserCard stays in the user's collection, free to be sold,
+        combined, or re-equipped to its own slot.
 
         No-op when sourceWeek < 1 (pre-week-1).
         """
@@ -1313,9 +1313,6 @@ class SeasonManager:
         try:
             from database.connection import get_session
             from database.models import EquippedCard, UserCard, CardTemplate
-            from database.repositories.card_repositories import (
-                EquippedCardRepository, CurrencyRepository,
-            )
             from api.game_broadcaster import broadcaster as _broadcaster
         except Exception as e:
             logger.warning(f"Duplicate-effect resolver: import failed: {e}")
@@ -1326,9 +1323,6 @@ class SeasonManager:
 
         session = get_session()
         try:
-            equippedRepo = EquippedCardRepository(session)
-            currencyRepo = CurrencyRepository(session)
-
             rows = (
                 session.query(EquippedCard, UserCard, CardTemplate)
                 .join(UserCard, EquippedCard.user_card_id == UserCard.id)
@@ -1358,24 +1352,15 @@ class SeasonManager:
                     ))
                     keeper, *drops = group
                     for dropEq, dropUc, dropTmpl in drops:
-                        sellValue = int(getattr(dropUc, 'sell_value', 0) or 0)
-                        # Refund the sell value as Floobits so the user
-                        # isn't blindsided. Card stays in their collection.
-                        if sellValue > 0:
-                            currencyRepo.addFunds(
-                                userId=userId,
-                                amount=sellValue,
-                                transactionType='duplicate_effect_resolve',
-                                description=f"Duplicate {effName} unequipped (slot {dropEq.slot_number})",
-                                season=season, week=sourceWeek,
-                            )
                         # Delete the equipped row so carry-forward skips it.
+                        # UserCard stays in the collection — user can sell,
+                        # combine, or re-equip it on a free slot.
                         session.delete(dropEq)
                         droppedForUser.append({
                             'effectName': effName,
                             'displayName': (dropTmpl.effect_config or {}).get('displayName') or effName,
                             'slotNumber': dropEq.slot_number,
-                            'refund': sellValue,
+                            'userCardId': dropUc.id,
                         })
                         unequippedCount += 1
                 if droppedForUser:
