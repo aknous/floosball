@@ -586,6 +586,20 @@ class SeasonManager:
                 )
                 broadcaster.broadcast_sync('season', week_event)
 
+            # Resolve duplicate-effect equipped sets that pre-date the
+            # no-duplicate rule. Modifies the just-completed week's
+            # equipped rows so carry-forward later (at game start) only
+            # propagates one copy per effectName per user. Runs at week
+            # start, not at the game-start lock — users see the change
+            # before their cards lock.
+            try:
+                self._resolveDuplicateEquippedEffects(
+                    self.currentSeason.seasonNumber,
+                    sourceWeek=self.currentSeason.currentWeek - 1,
+                )
+            except Exception as _e:
+                logger.warning(f"Duplicate-effect resolution failed: {_e}")
+
             # Open the FA voting window mid-season once Week 22 arrives (the
             # Front Office's activation threshold). Fans can rank projected
             # FAs — walk-year rostered players + existing FAs — from here
@@ -1278,6 +1292,111 @@ class SeasonManager:
 
         # Broadcast final leaderboard with persisted card bonuses
         self._broadcastLeaderboardUpdate()
+
+    def _resolveDuplicateEquippedEffects(self, season: int, sourceWeek: int) -> None:
+        """Auto-unequip duplicate-effect cards from a user's equipped set.
+
+        Runs at week start (before the game-start auto-lock). Modifies
+        the just-completed week's equipped rows so carry-forward later
+        only propagates one copy per effectName per user. Picks the
+        keeper by edition rarity, then by lowest slot for a stable tie
+        break. The dropped EquippedCard row is deleted; the underlying
+        UserCard stays in the user's collection, free to be sold,
+        combined, or re-equipped to its own slot.
+
+        No-op when sourceWeek < 1 (pre-week-1).
+        """
+        if not sourceWeek or sourceWeek < 1:
+            return
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import EquippedCard, UserCard, CardTemplate
+            from api.game_broadcaster import broadcaster as _broadcaster
+        except Exception as e:
+            logger.warning(f"Duplicate-effect resolver: import failed: {e}")
+            return
+
+        # Edition rarity order — keep the rarest in the duplicate group.
+        editionRank = {'diamond': 4, 'prismatic': 3, 'holographic': 2, 'base': 1}
+
+        session = get_session()
+        try:
+            rows = (
+                session.query(EquippedCard, UserCard, CardTemplate)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(EquippedCard.season == season, EquippedCard.week == sourceWeek)
+                .all()
+            )
+            byUser: dict = {}
+            for eq, uc, tmpl in rows:
+                cfg = tmpl.effect_config or {}
+                effName = cfg.get('effectName') or ''
+                if not effName:
+                    continue
+                byUser.setdefault(eq.user_id, {}).setdefault(effName, []).append((eq, uc, tmpl))
+
+            unequippedCount = 0
+            usersAffected = []
+            for userId, effectGroups in byUser.items():
+                droppedForUser = []
+                for effName, group in effectGroups.items():
+                    if len(group) <= 1:
+                        continue
+                    # Keeper rule for a duplicate-effect group:
+                    #   1. Highest edition rarity wins (diamond > prismatic > holo > base).
+                    #   2. Same edition: keep the higher-rated depicted player.
+                    #   3. Same edition AND rating: keep the lower slot (stable).
+                    group.sort(key=lambda x: (
+                        -editionRank.get(x[2].edition, 0),
+                        -int(getattr(x[2], 'player_rating', 0) or 0),
+                        x[0].slot_number,
+                    ))
+                    keeper, *drops = group
+                    for dropEq, dropUc, dropTmpl in drops:
+                        # Delete the equipped row so carry-forward skips it.
+                        # UserCard stays in the collection — user can sell,
+                        # combine, or re-equip it on a free slot.
+                        session.delete(dropEq)
+                        droppedForUser.append({
+                            'effectName': effName,
+                            'displayName': (dropTmpl.effect_config or {}).get('displayName') or effName,
+                            'slotNumber': dropEq.slot_number,
+                            'userCardId': dropUc.id,
+                        })
+                        unequippedCount += 1
+                if droppedForUser:
+                    usersAffected.append((userId, droppedForUser))
+
+            if unequippedCount:
+                session.commit()
+                logger.info(
+                    f"Duplicate-effect resolver: unequipped {unequippedCount} cards "
+                    f"across {len(usersAffected)} users in week {sourceWeek}"
+                )
+                # Per-user WebSocket notification so the UI can surface
+                # what changed without forcing a manual refetch.
+                for userId, dropped in usersAffected:
+                    try:
+                        payload = {
+                            'type': 'duplicate_effects_resolved',
+                            'data': {
+                                'sourceWeek': sourceWeek,
+                                'dropped': dropped,
+                            },
+                        }
+                        _broadcaster.broadcast_to_user_sync(userId, payload)
+                    except Exception:
+                        pass
+            else:
+                session.rollback()
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"Duplicate-effect resolver: failed for season {season} week {sourceWeek}: {e}")
+        finally:
+            session.close()
 
     def _carryForwardEquippedCards(self, session, equippedRepo, season: int, currentWeek: int) -> None:
         """Carry forward equipped cards from the most recent week for users who don't have any yet."""
