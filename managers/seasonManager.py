@@ -1345,9 +1345,13 @@ class SeasonManager:
                 for effName, group in effectGroups.items():
                     if len(group) <= 1:
                         continue
-                    # Keep highest-edition card; tie-break by lowest slot.
+                    # Keeper rule for a duplicate-effect group:
+                    #   1. Highest edition rarity wins (diamond > prismatic > holo > base).
+                    #   2. Same edition: keep the higher-rated depicted player.
+                    #   3. Same edition AND rating: keep the lower slot (stable).
                     group.sort(key=lambda x: (
                         -editionRank.get(x[2].edition, 0),
+                        -int(getattr(x[2], 'player_rating', 0) or 0),
                         x[0].slot_number,
                     ))
                     keeper, *drops = group
