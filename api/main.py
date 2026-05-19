@@ -5120,17 +5120,21 @@ def get_fantasy_roster(user: _User = Depends(_getCurrentUser)):
         # Per-slot swap cost preview. Escalation counts only paid actions —
         # rows with a non-null new_player_id (regular swaps + fills of empty
         # slots). /remove rows (new_player_id NULL) don't escalate the price.
-        # Fresh FLEX (temp_flex powerup) with no movement history at all gets
-        # a free first fill — surface that as cost=0 so the UI can say "Free".
+        # Empty slots with no swap history at all get a free first fill —
+        # covers both initial temp_flex fill AND partial-roster locks where
+        # the user saved with empty slots. Surface as cost=0 so the UI
+        # can say "Free".
         from constants import ROSTER_SWAP_COST, ROSTER_SWAP_COST_INCREMENT
         from collections import Counter
         slotSwapCounts = Counter(swap.slot for swap in roster.swaps if swap.new_player_id is not None)
         anyMovementBySlot = Counter(swap.slot for swap in roster.swaps)
-        flexFilled = any(rp.slot == "FLEX" for rp in roster.players)
+        filledSlotKeys = {rp.slot for rp in roster.players}
         allSlots = ["QB", "RB", "WR1", "WR2", "TE", "K", "FLEX"]
         swapCosts = {}
         for slot in allSlots:
-            if slot == "FLEX" and not flexFilled and anyMovementBySlot.get("FLEX", 0) == 0:
+            slotEmpty = slot not in filledSlotKeys
+            slotUntouched = anyMovementBySlot.get(slot, 0) == 0
+            if slotEmpty and slotUntouched:
                 swapCosts[slot] = 0
             else:
                 swapCosts[slot] = ROSTER_SWAP_COST + ROSTER_SWAP_COST_INCREMENT * slotSwapCounts.get(slot, 0)
@@ -5622,21 +5626,22 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
         currentWeek = sm.currentSeason.currentWeek if sm.currentSeason else 0
 
         # Empty slot. Two cases:
-        #   1. Initial temp_flex fill — FLEX slot that has never been filled
-        #      before (no swap history for the slot). Free; no swap consumed.
-        #   2. Re-filling a slot that was emptied via /remove — paid swap.
-        #      The /remove endpoint logs a FantasyRosterSwap row with
-        #      new_player_id=NULL, so any swap-history row for the slot
-        #      flags this case (including FLEX once it's been filled).
-        isFreshFlexFill = False
+        #   1. Free first fill — slot has no swap history at all. Covers
+        #      both the initial temp_flex fill AND a slot the user left
+        #      empty when they saved their original roster (partial-lock
+        #      flow). No swap consumed.
+        #   2. Re-filling a slot that was emptied via /remove or swapped
+        #      out earlier — paid swap. Both leave a FantasyRosterSwap row
+        #      on the slot, so any swap-history row flags case 2.
+        isFreshFirstFill = False
         if rosterPlayer is None:
             priorSlotHistory = session.query(func.count(FantasyRosterSwap.id)).filter_by(
                 roster_id=roster.id, slot=req.slot,
             ).scalar() or 0
-            if req.slot == "FLEX" and priorSlotHistory == 0:
-                isFreshFlexFill = True
+            if priorSlotHistory == 0:
+                isFreshFirstFill = True
 
-        if isFreshFlexFill:
+        if isFreshFirstFill:
             from database.models import FantasyRosterPlayer
             newPlayerSeasonFP = session.query(func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0.0)).filter_by(
                 player_id=req.newPlayerId, season=currentSeasonNum
@@ -5644,11 +5649,11 @@ def swap_fantasy_roster_player(req: FantasySwapRequest, user: _User = Depends(_g
             session.add(FantasyRosterPlayer(
                 roster_id=roster.id,
                 player_id=req.newPlayerId,
-                slot="FLEX",
+                slot=req.slot,
                 points_at_lock=float(newPlayerSeasonFP),
             ))
             session.commit()
-            return build_success_response({"message": "FLEX player added", "slot": "FLEX"})
+            return build_success_response({"message": f"Player added to {req.slot}", "slot": req.slot})
 
         # Paid path — covers both regular swaps (slot was filled) and
         # re-fills of slots emptied via /remove.
