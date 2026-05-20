@@ -3845,14 +3845,14 @@ class Game:
                 # Reset flag after first iteration
                 lastPlayFormatted = False
 
-                # Create new play
-                self.play = Play(self)
-                
                 # Between-plays timing
                 if self.timingManager:
                     await self.timingManager.waitBetweenPlays()
 
-                # After the delay: broadcast possession change with new ball position
+                # After the delay: broadcast possession change with new ball position.
+                # Runs BEFORE new Play() construction because an onside recovery here
+                # flips possession again — constructing the Play first would freeze
+                # stale offense/defense/yardLine onto the play that actually executes.
                 if getattr(self, '_pendingPossessionChange', False):
                     if getattr(self, '_pendingKickoff', False):
                         kickingTeam = self.defensiveTeam
@@ -3927,6 +3927,17 @@ class Game:
                         # Punt/turnover: immediate possession-change broadcast
                         self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
                     self._pendingPossessionChange = False
+
+                    # Recompute yardLine for the post-kickoff offense — an onside
+                    # recovery may have flipped possession and moved the ball to
+                    # midfield, leaving the earlier yardLine stale.
+                    if self.yardsToEndzone > 50:
+                        self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100-self.yardsToEndzone))
+                    else:
+                        self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                # Create new play (after any possession flip from onside recovery)
+                self.play = Play(self)
 
                 # POST-PLAY: Defense can call timeout to stop the clock
                 self._timeoutCalled = False
