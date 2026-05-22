@@ -526,3 +526,10 @@ def calculateCertaintyMultiplier(quarter, homeWinProb):
     fullDecay = 1.0 - baseMult
     effectiveDecay = fullDecay * (PICKEM_MIN_DECAY_FRACTION + (1.0 - PICKEM_MIN_DECAY_FRACTION) * certainty)
     return round(1.0 - effectiveDecay, 2)
+
+
+# ─── Play Reactions ─────────────────────────────────────────────────────────────
+# Six reactions for plays + sideline quotes. UI renders SVG icons (no emoji).
+
+REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
+REACTION_TARGET_TYPES = {"play", "sideline_quote"}

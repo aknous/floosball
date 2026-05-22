@@ -403,15 +403,23 @@ class PackTypeRepository:
     def seedDefaults(self):
         """Seed default pack types if they don't exist.
 
-        Standard tiers (themed-pack rework):
-          - Humble: cheap entry tier, no rarity guarantee.
-          - Grand: guaranteed prismatic in one slot.
-          - Exquisite: guaranteed diamond in one slot.
-          - Themed: 5 position + 3 output + per-qualifying-team rows seeded
-            once. Cost/weights identical across themed rows; theme_type and
-            theme_value distinguish them. The shop rotation surfaces 4 of
-            them per 7-week cycle (FeaturedPackRotation).
+        Generic tiers (next-season rework — guarantees removed):
+          - Humble: cheap entry. 3 cards, keep 2.
+          - Grand: standard. 5 cards, keep 3.
+          - Exquisite: bulk. 7 cards, keep 4.
+        All three use the same rarity weights as themed packs. Higher tiers
+        just give more chances at the same odds — value comes from card
+        count, not from a rarity guarantee.
+
+        Themed packs: 5 position + 3 output + per-qualifying-team rows. The
+        Champion / All-Pro packs still carry a Holographic+ guarantee because
+        their classifications only stamp onto non-base templates — that's a
+        functional necessity, not a rarity upsell.
         """
+        # Single source of truth for all-pack rarity weights. Per-draw:
+        #   ~70.7% base / ~24.1% holo / ~4.3% prismatic / ~0.9% diamond
+        commonRarityWeights = {'base': 82, 'holographic': 28, 'prismatic': 5, 'diamond': 1}
+
         defaults = [
             PackType(
                 name='starter',
@@ -430,50 +438,35 @@ class PackTypeRepository:
                 cards_per_pack=3,
                 cards_kept=2,
                 guaranteed_rarity=None,
-                # Tightened (next-season): halved prismatic, removed
-                # diamond entirely. Humble is the bulk-grind pack —
-                # diamonds should not drop here.
-                #   Per draw: ~80% base / ~16% holo / ~3% prismatic / 0% diamond
-                rarity_weights={'base': 100, 'holographic': 20, 'prismatic': 4, 'diamond': 0},
-                description='Reveal 3 cards, keep 2. Anything is possible.',
+                rarity_weights=commonRarityWeights,
+                description='Reveal 3 cards, keep 2.',
             ),
             PackType(
                 name='grand',
                 display_name='Grand Pack',
-                cost=350,
+                cost=100,
                 cards_per_pack=5,
                 cards_kept=3,
-                guaranteed_rarity='prismatic',
-                # Tightened (next-season): non-guaranteed slot prism/diamond
-                # rates trimmed sharply so the guaranteed Prismatic is the
-                # actual value prop. Diamond can still upgrade the guaranteed
-                # slot (16-17% chance) for a lucky pull, but the other 4
-                # slots almost never carry diamond.
-                #   Per non-guaranteed draw: ~69% base / ~24% holo / ~4% prismatic / ~0.9% diamond
-                rarity_weights={'base': 82, 'holographic': 28, 'prismatic': 5, 'diamond': 1},
-                description='Reveal 5 cards, keep 3. Guaranteed Prismatic; remaining cards at elevated odds.',
+                guaranteed_rarity=None,
+                rarity_weights=commonRarityWeights,
+                description='Reveal 5 cards, keep 3.',
             ),
             PackType(
                 name='exquisite',
                 display_name='Exquisite Pack',
-                cost=750,
-                cards_per_pack=5,
-                cards_kept=3,
-                guaranteed_rarity='diamond',
-                # Same tightened non-guaranteed rates as Grand. The
-                # Diamond guarantee remains the entire reason to buy this.
-                rarity_weights={'base': 82, 'holographic': 28, 'prismatic': 5, 'diamond': 1},
-                description='Reveal 5 cards, keep 3. Guaranteed Diamond; remaining cards at elevated odds.',
+                cost=150,
+                cards_per_pack=7,
+                cards_kept=4,
+                guaranteed_rarity=None,
+                rarity_weights=commonRarityWeights,
+                description='Reveal 7 cards, keep 4.',
             ),
         ]
 
         # ── Themed packs ──────────────────────────────────────────────────
-        # Mid-tier price (150F). Tightened (next-season) to match the new
-        # Grand/Exquisite non-guaranteed rates — diamonds nearly gone from
-        # themed packs, prismatic less than half what it was. Themed value
-        # comes from the player / position filter, not from chasing rarity.
-        #   Per draw: ~69% base / ~24% holo / ~4% prismatic / ~0.9% diamond
-        themedRarityWeights = {'base': 82, 'holographic': 28, 'prismatic': 5, 'diamond': 1}
+        # Themed packs use the same rarity weights as Humble/Grand/Exquisite.
+        # Value comes from the player / position filter, not rarity odds.
+        themedRarityWeights = commonRarityWeights
         themedCost = 150
         themedCardsPerPack = 3
         themedCardsKept = 2

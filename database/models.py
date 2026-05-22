@@ -606,6 +606,10 @@ class GamePlayerStats(Base):
     
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
     q4_fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
+    # Count of TDs + FGs scored by this player during Q4/OT of this game.
+    # Drives the Walk Off card effect (pays per late-game scoring play
+    # by a roster player).
+    q4_scoring_plays: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game", back_populates="player_stats")
@@ -767,6 +771,10 @@ class FantasyRoster(Base):
     # Last week the user explicitly set their equipped-card slots via PUT. Used so an
     # intentional "unequip everything" doesn't get undone by the GET auto-carry-forward.
     last_equipped_set_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Snapshot of the original player_ids the user committed to on their first
+    # roster save. Used by the Loyalty card to reward keeping any of these
+    # players on roster. JSON list of integers.
+    initial_player_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1291,6 +1299,41 @@ class PackOpening(Base):
 
     def __repr__(self):
         return f"<PackOpening(user_id={self.user_id}, pack='{self.pack_type_id}')>"
+
+
+class PlayReaction(Base):
+    """User reaction on a play (or its sideline-quote personality event)
+    within a live game. One row per (game, play, target_type, user). Reacting
+    again with the same type removes the row; reacting with a different type
+    swaps it. Public counts only — UI may surface usernames via the
+    relationship.
+    """
+    __tablename__ = "play_reactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False)
+    # Stable sequence within a game (game.totalPlays at the time the play ran).
+    play_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'play' = the play row itself; 'sideline_quote' = the personality
+    # event attached to the play (player reaction quote on the sideline).
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False, default='play')
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    # One of: 'hype', 'love', 'wow', 'laugh', 'cry', 'mad'
+    reaction_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+    game: Mapped["Game"] = relationship("Game")
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "play_number", "target_type", "user_id",
+                         name="uq_play_reaction_user_target"),
+        Index("idx_play_reaction_game_play", "game_id", "play_number"),
+    )
+
+    def __repr__(self):
+        return (f"<PlayReaction(game={self.game_id} play={self.play_number} "
+                f"target={self.target_type} user={self.user_id} type={self.reaction_type})>")
 
 
 class FeaturedShopCard(Base):

@@ -53,6 +53,47 @@ BLENDER_THRESHOLDS = [
 # they already bought today. Per-pack daily caps removed for all tiers.
 DAILY_PACK_LIMITS: Dict[str, int] = {}
 
+# Total purchased packs (any tier) a user can open in one 7-week shop cycle.
+# Stops whales from buying dozens of packs and feeding the Combine to fabricate
+# rare cards in bulk. Free / achievement-granted packs (skipCurrency=True) and
+# the starter pack do NOT count toward this cap.
+MAX_PACKS_PER_SHOP_CYCLE: int = 5
+
+
+def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
+    """Datetime when the current 7-week shop cycle began, computed from
+    Season.start_date. Returns None if the season's start date isn't set
+    yet (caller should treat that as 'no cap enforced')."""
+    import datetime as _dt
+    from database.models import Season
+    season = session.query(Season).filter(Season.season_number == currentSeason).first()
+    if not season or not season.start_date:
+        return None
+    shopDay = shopDayOfSeason(currentWeek)
+    cycleStartWeek = (shopDay - 1) * 7 + 1  # 1, 8, 15, or 22
+    return season.start_date + _dt.timedelta(weeks=cycleStartWeek - 1)
+
+
+def _countPacksThisCycle(session, userId: int, currentSeason: int, currentWeek: int) -> int:
+    """Count packs the user has *purchased* (cost > 0) in the current shop
+    cycle. Counts both committed PackOpening rows and in-flight
+    PendingPackOpening rows so a user mid-reveal can't open another."""
+    from database.models import PackOpening, PendingPackOpening
+    cycleStart = _shopCycleStartDate(session, currentSeason, currentWeek)
+    if cycleStart is None:
+        return 0
+    committed = session.query(PackOpening).filter(
+        PackOpening.user_id == userId,
+        PackOpening.opened_at >= cycleStart,
+        PackOpening.cost > 0,
+    ).count()
+    pending = session.query(PendingPackOpening).filter(
+        PendingPackOpening.user_id == userId,
+        PendingPackOpening.opened_at >= cycleStart,
+        PendingPackOpening.cost_paid > 0,
+    ).count()
+    return committed + pending
+
 # Shop rotation: 4 "shop days" map to 7-week segments of the season,
 # matching the existing featured-shop SWAP_CYCLE_WEEKS cycle.
 #   Shop day 1 → weeks 1-7
@@ -966,6 +1007,7 @@ class CardManager:
 
     def revealPack(self, session, userId: int, packTypeId: int, currentSeason: int,
                    shopDay: Optional[int] = None,
+                   currentWeek: int = 0,
                    skipCurrency: bool = False) -> dict:
         """Reveal flow: draw cards into a PendingPackOpening without yet
         committing them. Returns a pendingId the user submits to
@@ -1036,6 +1078,19 @@ class CardManager:
                 ).count()
                 if committedCount + pendingCount >= dailyLimit:
                     raise ValueError(f"Daily limit reached for {packType.display_name} ({dailyLimit}/day)")
+
+            # Shop-cycle cap — stops whales from churning packs into Combine fuel.
+            # Free / achievement-granted packs (skipCurrency=True) skip this whole
+            # block, so they don't trip the cap and don't count toward it.
+            packsThisCycle = _countPacksThisCycle(
+                session, userId, currentSeason, currentWeek or 1
+            )
+            if packsThisCycle >= MAX_PACKS_PER_SHOP_CYCLE:
+                raise ValueError(
+                    f"Shop cycle pack limit reached "
+                    f"({MAX_PACKS_PER_SHOP_CYCLE} packs per 7-week cycle). "
+                    f"Refreshes next cycle."
+                )
 
             # Spend Floobits up-front. Selection step doesn't refund.
             result = currencyRepo.spendFunds(

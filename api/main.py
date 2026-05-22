@@ -1444,14 +1444,174 @@ async def get_game_by_id(game_id: int, response: Response):
             game_dict['plays'] = []
             game_dict['matchupPreview'] = _buildMatchupPreview(game)
 
+        # Attach the reaction aggregate for this game so the modal renders
+        # the existing reactions when it first opens. Live updates flow over
+        # the play_reaction_update WS event after that.
+        game_dict['reactions'] = _loadGameReactions(game_id)
+
         return game_dict
-    
+
     except HTTPException:
         raise
     except Exception as e:
         import traceback
         logger.error(f"Error getting game {game_id}: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Play reactions ────────────────────────────────────────────────────────
+#
+# Users react to plays (and the sideline-quote personality events attached
+# to plays) within games in the current week. One reaction per user per
+# target — clicking the same icon removes; clicking a different icon swaps.
+# Aggregated counts are public, with usernames attributed.
+
+def _loadGameReactions(gameId: int) -> Dict[str, Any]:
+    """Return all reactions on a game, shaped as:
+        { "<playNumber>": { "<targetType>": { "<reactionType>": {count, users}, ... }, ... }, ... }
+    Only types with count > 0 are included. Used by GET /api/games/{id}.
+    """
+    from database.connection import get_session
+    from database.models import PlayReaction, User as _UserModel
+
+    out: Dict[str, Any] = {}
+    session = get_session()
+    try:
+        rows = (
+            session.query(PlayReaction, _UserModel.username)
+            .join(_UserModel, _UserModel.id == PlayReaction.user_id)
+            .filter(PlayReaction.game_id == gameId)
+            .all()
+        )
+        for r, username in rows:
+            playKey = str(r.play_number)
+            playBucket = out.setdefault(playKey, {})
+            targetBucket = playBucket.setdefault(r.target_type, {})
+            typeBucket = targetBucket.setdefault(r.reaction_type, {"count": 0, "users": []})
+            typeBucket["count"] += 1
+            typeBucket["users"].append({"id": r.user_id, "username": username})
+    finally:
+        session.close()
+    return out
+
+
+def _buildReactionAggregate(session, gameId: int, playNumber: int, targetType: str) -> Dict[str, Any]:
+    """Build the {reactionType: {count, users}} aggregate for a single
+    (play, targetType) pair. Used both by the API response and the WS
+    broadcast payload."""
+    from database.models import PlayReaction, User as _UserModel
+    rows = (
+        session.query(PlayReaction, _UserModel.username)
+        .join(_UserModel, _UserModel.id == PlayReaction.user_id)
+        .filter(PlayReaction.game_id == gameId,
+                PlayReaction.play_number == playNumber,
+                PlayReaction.target_type == targetType)
+        .all()
+    )
+    agg: Dict[str, Any] = {}
+    for r, username in rows:
+        bucket = agg.setdefault(r.reaction_type, {"count": 0, "users": []})
+        bucket["count"] += 1
+        bucket["users"].append({"id": r.user_id, "username": username})
+    return agg
+
+
+def _broadcastReactionUpdate(gameId: int, playNumber: int, targetType: str,
+                             aggregate: Dict[str, Any]) -> None:
+    """Fire a play_reaction_update event on the season channel so any open
+    game modal updates without a refetch."""
+    try:
+        from api.game_broadcaster import broadcaster as _broadcaster
+        if not _broadcaster.is_enabled():
+            return
+        event = GameEvent.playReactionUpdate(
+            gameId=gameId,
+            playNumber=playNumber,
+            targetType=targetType,
+            reactions=aggregate,
+        )
+        _broadcaster.broadcast_sync(gameId, event)
+    except Exception as e:
+        logger.warning(f"reaction broadcast failed: {e}")
+
+
+def _validateLiveGameForReaction(gameId: int):
+    """Reactions are only allowed on games in the current week. Raises
+    HTTPException if the game isn't live this week."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason if sm else None
+    if currentSeason is None:
+        raise HTTPException(status_code=404, detail="No active season")
+    currentWeek = currentSeason.currentWeek
+    activeGames = getattr(currentSeason, 'activeGames', []) or []
+    game = next((g for g in activeGames if g.id == gameId), None)
+    if game is None:
+        # Reactions don't follow games out of the active window — once the
+        # week rolls, the play feed disappears so reactions can't be placed
+        # against it. Existing rows are preserved but new ones blocked.
+        raise HTTPException(status_code=409, detail="Reactions only on live games")
+    gameWeek = getattr(game, 'week', None) or getattr(game, 'weekNumber', None)
+    if gameWeek is not None and gameWeek != currentWeek:
+        raise HTTPException(status_code=409, detail="Reactions only on live games")
+    return game
+
+
+class _ReactionRequest(BaseModel):
+    playNumber: int
+    targetType: str = 'play'
+    reactionType: str
+
+
+@app.post("/api/games/{game_id}/reactions")
+def post_play_reaction(game_id: int, req: _ReactionRequest, user: _User = Depends(_getCurrentUser)):
+    """Upsert a reaction. If the user already reacted to this target with
+    the SAME type, the reaction is removed (toggle off). If they reacted
+    with a DIFFERENT type, the type is swapped. Otherwise inserted fresh."""
+    from constants import REACTION_TYPES, REACTION_TARGET_TYPES
+    from database.connection import get_session
+    from database.models import PlayReaction
+
+    if req.reactionType not in REACTION_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid reactionType: {req.reactionType}")
+    if req.targetType not in REACTION_TARGET_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid targetType: {req.targetType}")
+    if req.playNumber < 1:
+        raise HTTPException(status_code=400, detail="playNumber must be >= 1")
+
+    _validateLiveGameForReaction(game_id)
+
+    session = get_session()
+    try:
+        existing = session.query(PlayReaction).filter(
+            PlayReaction.game_id == game_id,
+            PlayReaction.play_number == req.playNumber,
+            PlayReaction.target_type == req.targetType,
+            PlayReaction.user_id == user.id,
+        ).first()
+        if existing and existing.reaction_type == req.reactionType:
+            session.delete(existing)
+            action = 'removed'
+        elif existing:
+            existing.reaction_type = req.reactionType
+            action = 'swapped'
+        else:
+            session.add(PlayReaction(
+                game_id=game_id,
+                play_number=req.playNumber,
+                target_type=req.targetType,
+                user_id=user.id,
+                reaction_type=req.reactionType,
+            ))
+            action = 'added'
+        session.commit()
+        aggregate = _buildReactionAggregate(session, game_id, req.playNumber, req.targetType)
+    finally:
+        session.close()
+
+    _broadcastReactionUpdate(game_id, req.playNumber, req.targetType, aggregate)
+    return build_success_response({"action": action, "reactions": aggregate})
 
 
 @app.get("/api/gameStats", response_model=Dict[str, Any])
@@ -5286,6 +5446,15 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 player_id=rp.playerId,
                 slot=rp.slot,
             ))
+
+        # Snapshot the initial roster on the FIRST save only. The Loyalty card
+        # pays per player still on roster from this snapshot, so we never
+        # overwrite it after the first commit.
+        if not roster.initial_player_ids:
+            import json as _json
+            roster.initial_player_ids = _json.dumps(
+                [int(rp.playerId) for rp in req.players]
+            )
         # Achievement hooks — first-time roster set + secrets (Shoestring, Homer)
         from managers import achievementManager as _am
         _am.onFantasyRosterSet(session, user.id)
@@ -6963,7 +7132,10 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
     from database.connection import get_session
     from database.models import PackOpening, PendingPackOpening, User
     from database.repositories.card_repositories import PackTypeRepository
-    from managers.cardManager import DAILY_PACK_LIMITS, getActivePackNames, shopDayOfSeason
+    from managers.cardManager import (
+        DAILY_PACK_LIMITS, MAX_PACKS_PER_SHOP_CYCLE,
+        getActivePackNames, shopDayOfSeason, _countPacksThisCycle,
+    )
     from datetime import datetime
 
     sm = floosball_app.seasonManager if floosball_app else None
@@ -7042,6 +7214,8 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
                 base["themeValue"] = p.theme_value
             return base
 
+        cyclePacksOpened = _countPacksThisCycle(session, user.id, currentSeason, currentWeek) if user else 0
+        cycleRemaining = max(0, MAX_PACKS_PER_SHOP_CYCLE - cyclePacksOpened)
         return build_success_response({
             "packs": [_packDict(p) for p in rotated],
             "themedPacks": [_packDict(p) for p in themedPacks],
@@ -7051,6 +7225,9 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
             } if starterPack else None),
             "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
+            "cycleLimit": MAX_PACKS_PER_SHOP_CYCLE,
+            "cyclePacksOpened": cyclePacksOpened,
+            "cycleRemaining": cycleRemaining,
         })
     finally:
         session.close()
@@ -7142,7 +7319,7 @@ def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
-        result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay)
+        result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay, currentWeek=currentWeek)
         session.commit()
         return build_success_response(result)
     except ValueError as e:

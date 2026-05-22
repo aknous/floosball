@@ -131,21 +131,10 @@ class FloosballApplication:
             logger.info("Conducting initial draft...")
             self.playerManager.conductInitialDraft()
 
-        # Seed each team with a starter prospect class. Runs on every boot,
-        # but seedInitialProspects is idempotent: skips any team that already
-        # has prospects. So this fires on:
-        #   - Fresh starts (all 24 teams seeded)
-        #   - First deploy of this feature to existing prod (teams have full
-        #     rosters but empty pipelines → all seeded)
-        #   - Subsequent boots (prospects exist → no-op per team)
-        logger.info("Seeding initial prospect pipelines (idempotent)...")
-        self.playerManager.seedInitialProspects(prospectsPerTeam=3)
-
-        # Assign personality + quirk + mood to the full player pool.
-        # Runs AFTER seedInitialProspects so prospects are included. Idempotent:
+        # Assign personality + quirk + mood to the full player pool. Idempotent:
         # players who already have a personality keep theirs. Catches any new
-        # players added by upstream steps (initial draft, prospect seeding,
-        # legacy DB rows with NULL personality).
+        # players added by upstream steps (initial draft, legacy DB rows with
+        # NULL personality).
         logger.info("Assigning personality traits...")
         allPlayers = (
             self.playerManager.activePlayers

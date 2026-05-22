@@ -154,6 +154,45 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Q4 scoring plays count on game_player_stats — Walk Off card uses this
+        try:
+            conn.execute(text("ALTER TABLE game_player_stats ADD COLUMN q4_scoring_plays INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added game_player_stats.q4_scoring_plays")
+        except Exception:
+            conn.rollback()
+
+        # Initial-player snapshot on fantasy_rosters — Loyalty card reads this
+        try:
+            conn.execute(text("ALTER TABLE fantasy_rosters ADD COLUMN initial_player_ids TEXT"))
+            conn.commit()
+            logger.info("  Migration: added fantasy_rosters.initial_player_ids")
+        except Exception:
+            conn.rollback()
+
+        # Play reactions — users react to plays / sideline quotes during live games
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS play_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id INTEGER NOT NULL REFERENCES games(id),
+                    play_number INTEGER NOT NULL,
+                    target_type VARCHAR(20) NOT NULL DEFAULT 'play',
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    reaction_type VARCHAR(10) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(game_id, play_number, target_type, user_id)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_play_reaction_game_play "
+                "ON play_reactions(game_id, play_number)"
+            ))
+            conn.commit()
+            logger.info("  Migration: created play_reactions table")
+        except Exception:
+            conn.rollback()
+
         # Discord linking columns (v0.9)
         # Note: SQLite doesn't support UNIQUE in ALTER TABLE ADD COLUMN,
         # so we add the column first, then create a unique index separately.
@@ -880,9 +919,21 @@ def _refreshCardEffectText():
         # their tooltip/detail strings; re-render with the *Delta variants.
         "backfield_buddies", "all_in", "stacked_deck",
         # Full-roster-required tightening — drought/sandbagger/quiet_storm
-        # /hedge now refuse to pay on a gutted roster (<5 filled slots),
+        # /hedge now refuse to pay on a gutted roster (<6 filled slots),
         # so the description should surface that.
         "drought", "sandbagger", "quiet_storm", "hedge",
+        # Fav-team-event cards reworked into roster-trait mechanics +
+        # floobits bonus on the rare event. (Note: this refresh only
+        # rewrites text — existing dev-DB cards have old primary keys
+        # and will render with `?` placeholders until they're rebuilt
+        # via fresh start or pack re-open. Fine for next-season's clean
+        # slate.)
+        "comeback_kid", "domination", "walk_off",
+        # Reworked: Believe (per fav-team season win), Showoff (per 5★),
+        # Eminence (per top-10 roster player).
+        "believe", "showoff", "eminence",
+        # FP → FPx conversions for Base FPx variety. Param keys changed.
+        "homer", "honor_roll",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these

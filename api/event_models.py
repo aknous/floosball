@@ -81,6 +81,9 @@ class EventType(Enum):
     # Achievements
     ACHIEVEMENT_UNLOCKED = "achievement_unlocked"
 
+    # Play reactions — user reactions to plays (and the sideline-quote personality events)
+    PLAY_REACTION_UPDATE = "play_reaction_update"
+
     # Currency — passive grants (excludes user-initiated spends/refunds)
     FLOOBITS_RECEIVED = "floobits_received"
 
@@ -263,6 +266,29 @@ class GameEvent:
             'timestamp': datetime.now().isoformat(),
             **gameState  # Spread all game state fields into the event
         }
+
+    @staticmethod
+    def playReactionUpdate(gameId: int, playNumber: int, targetType: str,
+                           reactions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Fired whenever a user adds, swaps, or removes a reaction on a play
+        or sideline quote. The full per-type aggregate is sent so the
+        frontend can replace its local copy without merging deltas.
+
+        reactions: {
+            'hype':  {'count': int, 'users': [{'id': int, 'username': str}, ...]},
+            'love':  {...},
+            ...
+        }
+        Only types with count > 0 are included.
+        """
+        return {
+            'event': EventType.PLAY_REACTION_UPDATE.value,
+            'gameId': gameId,
+            'playNumber': playNumber,
+            'targetType': targetType,
+            'reactions': reactions,
+        }
+
 
 class SeasonEvent:
     """Factory for creating season-related event messages"""

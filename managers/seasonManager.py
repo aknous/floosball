@@ -895,6 +895,14 @@ class SeasonManager:
                             player.stat_tracker._on_fantasy_points = _makeFpCallback(
                                 pid, gameInstance, fantasyTracker
                             )
+                            def _makeScoreCallback(_pid, _game, _ft):
+                                def cb(_kind):
+                                    if _game.currentQuarter >= 4:
+                                        _ft.addPlayerQ4Score(_pid)
+                                return cb
+                            player.stat_tracker._on_scoring_play = _makeScoreCallback(
+                                pid, gameInstance, fantasyTracker
+                            )
 
             # Simulate the game
             await gameInstance.playGame()
@@ -2664,13 +2672,15 @@ class SeasonManager:
                     gameFP = getattr(player, '_lastGameFantasyPoints', None)
                     if gameFP is None:
                         gameFP = gd.get('fantasyPoints', 0)
-                    # Get Q4 FP from fantasy tracker (in-memory accumulator)
+                    # Get Q4 FP + scoring play count from fantasy tracker
                     fantasyTracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
                     q4FP = fantasyTracker._weekQ4FP.get(player.id, 0) if fantasyTracker else 0
+                    q4Scores = fantasyTracker._weekQ4Scores.get(player.id, 0) if fantasyTracker else 0
                     playerStats[player.id] = {
                         'teamId': team.id,
                         'fantasyPoints': gameFP,
                         'q4FantasyPoints': q4FP,
+                        'q4ScoringPlays': q4Scores,
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -2690,6 +2700,7 @@ class SeasonManager:
                         team_id=stats.get('teamId', 0),
                         fantasy_points=stats.get('fantasyPoints', 0),
                         q4_fantasy_points=stats.get('q4FantasyPoints', 0),
+                        q4_scoring_plays=stats.get('q4ScoringPlays', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
                         receiving_stats=stats.get('receiving'),
@@ -8144,11 +8155,15 @@ class SeasonManager:
             pass
 
     def _sweepExpiredAchievementRewards(self) -> None:
-        """Drop pending rewards the user didn't claim or stash-in-time.
+        """Drop pending rewards the user didn't claim or stash-in-time, then
+        convert any over-cap pack stash to Floobits.
 
         Passes the new season number so the sweep can also clear stashed
         rewards whose deferral target season has already come and gone
-        without the reward being claimed.
+        without the reward being claimed. After the sweep, over-cap packs
+        (held in violation of the soft cap due to legacy state or future
+        bugs) are converted to Floobits at shop cost — keeps the cap
+        consistent at the start of every new season.
         """
         try:
             from database.connection import get_session
@@ -8157,10 +8172,11 @@ class SeasonManager:
             session = get_session()
             try:
                 _am.sweepExpiredRewards(session, currentSeason=newSeason)
+                _am.convertOverCapPackStash(session)
                 session.commit()
             except Exception as e:
                 session.rollback()
-                logger.warning(f"Expired reward sweep failed: {e}")
+                logger.warning(f"Expired reward sweep / overcap conversion failed: {e}")
             finally:
                 session.close()
         except Exception:
