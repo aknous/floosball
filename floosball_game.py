@@ -1415,6 +1415,127 @@ class Game:
         except Exception:
             pass
 
+    def _logPlayAnalytics(self) -> None:
+        """Append one JSONL entry per game to logs/sim_analytics.jsonl
+        aggregating per-play data so an offline analyzer can answer:
+          - how often do long runs / deep passes go for TDs
+          - YAC distribution
+          - rushing vs passing yards
+          - interception rate, by pass tier
+
+        Never raises — diagnostic must not break the game loop.
+        """
+        try:
+            import json as _json
+            import os
+
+            agg = {
+                'season': getattr(self, 'seasonNumber', None),
+                'week': getattr(self, 'week', None),
+                'gameId': getattr(self, 'id', None),
+                'home': self.homeTeam.abbr,
+                'away': self.awayTeam.abbr,
+                'homeScore': self.homeScore,
+                'awayScore': self.awayScore,
+                # Play counts
+                'totalPlays': 0,
+                'runPlays': 0,
+                'passAttempts': 0,
+                'passCompletions': 0,
+                'passByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Touchdowns
+                'runTd': 0,
+                'passTd': 0,
+                'runTd30plus': 0,
+                'passTd30plus': 0,
+                'passTdByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Turnovers
+                'interceptions': 0,
+                'intByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'fumblesLost': 0,
+                # Yardage
+                'totalRushYards': 0,
+                'totalPassYards': 0,
+                'totalAirYards': 0,
+                'totalYac': 0,
+                'longestRun': 0,
+                'longestPass': 0,
+                # Big plays
+                'runs20plus': 0,
+                'runs30plus': 0,
+                'passes20plus': 0,
+                'passes30plus': 0,
+                'passes40plus': 0,
+            }
+
+            for item in self.gameFeed:
+                play = item.get('play') if isinstance(item, dict) else None
+                if play is None or not hasattr(play, 'playType'):
+                    continue
+                pt = getattr(play, 'playType', None)
+                ptName = pt.name if pt and hasattr(pt, 'name') else None
+
+                if ptName == 'Run':
+                    agg['totalPlays'] += 1
+                    agg['runPlays'] += 1
+                    yd = int(getattr(play, 'yardage', 0) or 0)
+                    agg['totalRushYards'] += yd
+                    agg['longestRun'] = max(agg['longestRun'], yd)
+                    if yd >= 20:
+                        agg['runs20plus'] += 1
+                    if yd >= 30:
+                        agg['runs30plus'] += 1
+                    if getattr(play, 'isTd', False):
+                        agg['runTd'] += 1
+                        if yd >= 30:
+                            agg['runTd30plus'] += 1
+
+                elif ptName == 'Pass':
+                    agg['totalPlays'] += 1
+                    agg['passAttempts'] += 1
+                    passType = getattr(play, 'passType', None)
+                    tierName = passType.name if passType and hasattr(passType, 'name') else None
+                    if tierName in agg['passByTier']:
+                        agg['passByTier'][tierName] += 1
+                    isComplete = getattr(play, 'isPassCompletion', False)
+                    isInt = getattr(play, 'isInterception', False)
+                    if isInt:
+                        agg['interceptions'] += 1
+                        if tierName in agg['intByTier']:
+                            agg['intByTier'][tierName] += 1
+                    if isComplete:
+                        agg['passCompletions'] += 1
+                        yd = int(getattr(play, 'yardage', 0) or 0)
+                        agg['totalPassYards'] += yd
+                        agg['longestPass'] = max(agg['longestPass'], yd)
+                        insights = getattr(play, 'insights', None) or {}
+                        passInsight = insights.get('pass', {}) if isinstance(insights, dict) else {}
+                        airYards = int(passInsight.get('airYards', 0) or 0)
+                        yac = int(passInsight.get('yac', 0) or 0)
+                        agg['totalAirYards'] += airYards
+                        agg['totalYac'] += yac
+                        if yd >= 20:
+                            agg['passes20plus'] += 1
+                        if yd >= 30:
+                            agg['passes30plus'] += 1
+                        if yd >= 40:
+                            agg['passes40plus'] += 1
+                        if getattr(play, 'isTd', False):
+                            agg['passTd'] += 1
+                            if tierName in agg['passTdByTier']:
+                                agg['passTdByTier'][tierName] += 1
+                            if yd >= 30:
+                                agg['passTd30plus'] += 1
+
+                if getattr(play, 'isFumbleLost', False):
+                    agg['fumblesLost'] += 1
+
+            os.makedirs('logs', exist_ok=True)
+            with open('logs/sim_analytics.jsonl', 'a') as f:
+                f.write(_json.dumps(agg) + '\n')
+        except Exception:
+            pass
+
     def _estimateAvailablePlays(self) -> int:
         """Conservative estimate of productive offensive plays remaining before
         regulation ends, RESERVING ~7s for a closing FG attempt.
@@ -4511,6 +4632,11 @@ class Game:
         # for offline analysis of how pressure relates to outcomes/metrics.
         self._logPressureCorrelation()
 
+        # Per-game play analytics — aggregates TDs, INTs, yardage, big plays
+        # by tier so we can tune the pass/run distributions post-hoc.
+        # Written to logs/sim_analytics.jsonl.
+        self._logPlayAnalytics()
+
         # Postgame personality reactions — winners go positive, losers go negative.
         # Inserted into gameFeed as cutaway-style entries so they render alongside
         # plays in the modal feed and survive page reloads via /api/games/{id}.
@@ -7172,31 +7298,33 @@ class Play():
 
     def calculateSackProbability(self, defensePassRush: int, qbMobility: int, blockingModifier: int, dropbackDepth: int) -> float:
         """
-        Calculate sack probability using logistic curve based on pass rush vs protection.
-        Returns probability (0-100) that QB gets sacked.
+        Calculate sack probability using logistic curve based on pass rush vs
+        protection. Returns probability (0-100) that QB gets sacked.
+
+        Dropback depth materially scales sack risk — longer routes need more
+        time to develop, so a sustained rush gets home more often. The depth
+        multiplier scales the curve's asymptote AND the cap.
         """
         # Calculate pass rush differential (defense rush vs offensive protection)
         # blockingModifier per player is 0-6; combined TE+RB typically 3-8
         qbProtection = qbMobility + (blockingModifier * 4)
         rushDifferential = defensePassRush - qbProtection
 
-        # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
+        # Dropback depth adds to the rush differential — longer time exposed
         rushDifferential += (dropbackDepth - 1) * 2
 
-        # Base sack rate at even matchup (differential = 0) is ~3%
-        # Logistic function: probability increases smoothly with rush advantage
+        # Per-depth asymptote multiplier + cap. Without this the logistic curve
+        # tops out near 6% regardless of dropback. Long/extraLong dropbacks need
+        # a meaningfully higher ceiling so sustained pressure on deep routes
+        # actually gets home.
+        depthScale = {0: 1.5, 2: 2.0, 4: 3.0, 6: 4.5}.get(dropbackDepth, 2.0)
+        depthCap   = {0: 12,  2: 16,  4: 22,  6: 32}.get(dropbackDepth, 15)
+
         baseSackRate = 3.0
         steepness = 0.15
+        probability = (baseSackRate * depthScale) / (1 + np.exp(-steepness * rushDifferential))
 
-        # Shift the curve so 0 differential = baseSackRate
-        probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
-
-        # Extra-long dropbacks (Hail Mary) leave QB exposed in pocket much
-        # longer than normal — the standard 15% cap underestimates real risk.
-        # Lift cap to 28% so a strong rush against thin protection can wreck
-        # the play before it leaves the QB's hand.
-        capMax = 28 if dropbackDepth >= 6 else 15
-        return max(0.5, min(capMax, probability))
+        return max(0.5, min(depthCap, probability))
     
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
