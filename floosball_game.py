@@ -78,11 +78,12 @@ class PlayType(enum.Enum):
     Kneel = 'Kneel'
     
 class PassType(enum.Enum):
-    short = 1
-    medium = 2
-    long = 3
-    hailMary = 4
+    short = 1     # 0-4 air yards   (screen, quick hitch)
+    medium = 2    # 5-8 air yards   (short crossing, hitch)
+    long = 3      # 9-14 air yards  (over-the-middle, deep curl)
+    hailMary = 4  # endzone / max QB throw distance
     throwAway = 5
+    deep = 6      # 15+ air yards   (go route, post, deep cross)
 
 class GameStatus(enum.Enum):
     Scheduled = 1
@@ -594,6 +595,45 @@ passPlayBook = {
                             'wr1': PassType.medium,
                             'wr2': None,
                             'te': PassType.medium,
+                            'rb': None
+                        }
+                    },
+                    # ── Deep shot plays (15+ air yards) ──────────────────
+                    # Used sparingly by aggressive coaches. Built around one
+                    # primary deep target with a checkdown option.
+                    'Play21': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': PassType.deep,
+                            'wr2': PassType.medium,
+                            'te': None,
+                            'rb': None
+                        }
+                    },
+                    'Play22': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': PassType.deep,
+                            'wr2': PassType.deep,
+                            'te': None,
+                            'rb': None
+                        }
+                    },
+                    'Play23': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': None,
+                            'wr2': PassType.deep,
+                            'te': PassType.medium,
+                            'rb': None
+                        }
+                    },
+                    'Play24': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': PassType.deep,
+                            'wr2': PassType.short,
+                            'te': PassType.short,
                             'rb': None
                         }
                     },
@@ -2109,61 +2149,46 @@ class Game:
                 return
 
     def _getBasePlayWeights(self) -> dict:
-        """Return raw down/distance base weights before any modifier layers."""
+        """Return raw down/distance base weights before any modifier layers.
+        Deep gets a small base on 1st down and 3rd & 13+; coach aggressiveness
+        scales it up from there.
+        """
         ytg = self.yardsToFirstDown
         if self.down == 1:
-            return {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 15.0}
+            return {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 13.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
-                return {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0}
+                return {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0, 'deep': 0.0}
             elif ytg <= 9:
-                return {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 15.0}
+                return {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 14.0, 'deep': 1.0}
             else:
-                return {'run': 20.0, 'short': 20.0, 'medium': 30.0, 'long': 30.0}
+                return {'run': 20.0, 'short': 20.0, 'medium': 28.0, 'long': 28.0, 'deep': 4.0}
         else:
             if ytg <= 3:
-                return {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0}
+                return {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0, 'deep': 0.0}
             elif ytg <= 5:
-                return {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0}
+                return {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0, 'deep': 0.0}
             elif ytg <= 12:
-                return {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 25.0}
+                return {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 23.0, 'deep': 2.0}
             else:
-                return {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 70.0}
+                return {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 62.0, 'deep': 8.0}
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""
-        ytg = self.yardsToFirstDown
-        if self.down == 1:
-            weights = {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 15.0}
-        elif self.down == 2:
-            if ytg <= 4:
-                weights = {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0}
-            elif ytg <= 9:
-                weights = {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 15.0}
-            else:
-                weights = {'run': 20.0, 'short': 20.0, 'medium': 30.0, 'long': 30.0}
-        else:  # down == 3
-            if ytg <= 3:
-                weights = {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0}
-            elif ytg <= 5:
-                weights = {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0}
-            elif ytg <= 12:
-                weights = {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 25.0}
-            else:
-                weights = {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 70.0}
+        weights = dict(self._getBasePlayWeights())
 
         weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
-        # moving. Avoid deep passes (incomplete = clock stop) and medium-deep
-        # routes that risk turnover or sideline catches.
+        # moving. Avoid downfield passes (incomplete = clock stop).
         if self._isFgDrainMode():
             weights['run'] = weights.get('run', 0) * 3.0
             weights['short'] = weights.get('short', 0) * 1.0
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
+            weights['deep'] = weights.get('deep', 0) * 0.05
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
@@ -2180,51 +2205,64 @@ class Game:
         clockIQ = self._coachClockIQ(coach)
         sit = 0.4 + 0.6 * clockIQ
 
+        def _mul(key, m):
+            weights[key] = weights.get(key, 0) * (1 + (m - 1) * sit)
+
+        def _flat(key, m):
+            weights[key] = weights.get(key, 0) * m
+
         if q == 4 and scoreDiff < 0:
             if secs < 120:
-                weights['run'] *= 1 + (0.1 - 1) * sit       # optimal: ×0.1
-                weights['short'] *= 1 + (1.3 - 1) * sit     # optimal: ×1.3
-                weights['medium'] *= 1 + (1.8 - 1) * sit    # optimal: ×1.8
-                weights['long'] *= 1 + (2.5 - 1) * sit      # optimal: ×2.5
+                _mul('run', 0.1)
+                _mul('short', 1.3)
+                _mul('medium', 1.8)
+                _mul('long', 2.5)
+                _mul('deep', 3.0)         # big shot plays late
             elif secs < 300:
-                weights['run'] *= 1 + (0.3 - 1) * sit
-                weights['medium'] *= 1 + (1.5 - 1) * sit
-                weights['long'] *= 1 + (1.8 - 1) * sit
+                _mul('run', 0.3)
+                _mul('medium', 1.5)
+                _mul('long', 1.8)
+                _mul('deep', 2.2)
             else:
-                weights['run'] *= 1 + (0.6 - 1) * sit
-                weights['medium'] *= 1 + (1.2 - 1) * sit
-                weights['long'] *= 1 + (1.3 - 1) * sit
+                _mul('run', 0.6)
+                _mul('medium', 1.2)
+                _mul('long', 1.3)
+                _mul('deep', 1.5)
 
         if q == 4 and scoreDiff > 0:
-            weights['run'] *= 1 + (1.6 - 1) * sit
-            weights['long'] *= 1 + (0.3 - 1) * sit
-            weights['medium'] *= 1 + (0.7 - 1) * sit
+            _mul('run', 1.6)
+            _mul('long', 0.3)
+            _mul('medium', 0.7)
+            _mul('deep', 0.2)            # don't risk shots when leading late
 
         if q == 3 and scoreDiff < -10:
-            weights['run'] *= 1 + (0.7 - 1) * sit
-            weights['medium'] *= 1 + (1.2 - 1) * sit
-            weights['long'] *= 1 + (1.4 - 1) * sit
+            _mul('run', 0.7)
+            _mul('medium', 1.2)
+            _mul('long', 1.4)
+            _mul('deep', 1.6)
 
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:
-            weights['run'] *= 1 + (0.3 - 1) * sit        # cut runs significantly
-            weights['short'] *= 1 + (1.2 - 1) * sit      # slight short boost
-            weights['medium'] *= 1 + (1.4 - 1) * sit     # moderate medium boost
-            weights['long'] *= 1 + (1.6 - 1) * sit       # less extreme than Q4
+            _mul('run', 0.3)
+            _mul('short', 1.2)
+            _mul('medium', 1.4)
+            _mul('long', 1.6)
+            _mul('deep', 2.0)            # shot before halftime
 
         # Q2 end-of-half: leading team milks clock into halftime
         if q == 2 and scoreDiff > 0 and secs < 120:
-            weights['run'] *= 1 + (1.4 - 1) * sit        # run-heavy
-            weights['long'] *= 1 + (0.5 - 1) * sit       # avoid risky deep shots
+            _mul('run', 1.4)
+            _mul('long', 0.5)
+            _mul('deep', 0.3)
 
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
-            weights['run'] *= 1.3; weights['long'] *= 0.2
+            _flat('run', 1.3); _flat('long', 0.2); _flat('deep', 0.1)
         elif self.yardsToEndzone <= 25:
-            weights['long'] *= 0.5
+            _flat('long', 0.5); _flat('deep', 0.3)
 
         if self.yardsToSafety <= 5:
-            weights['run'] *= 1.4; weights['short'] *= 0.7; weights['long'] *= 0.1
+            _flat('run', 1.4); _flat('short', 0.7); _flat('long', 0.1); _flat('deep', 0.05)
 
         return weights
 
@@ -2241,18 +2279,23 @@ class Game:
 
         if defPassRating < 70:
             boost = 1 + 0.3 * max(0.0, adaptNorm) * (70 - defPassRating) / 10
-            for k in ('short', 'medium', 'long'):
-                weights[k] *= boost
+            for k in ('short', 'medium', 'long', 'deep'):
+                if k in weights:
+                    weights[k] *= boost
 
         return weights
 
     def _applyCoachMods(self, weights: dict, coach) -> dict:
-        """Apply coach personality multipliers to the weight distribution."""
+        """Apply coach personality multipliers to the weight distribution.
+        Deep shots scale most aggressively with the aggressiveness attribute —
+        elite-aggressive coaches (90+) take shots ~3x more often than neutral.
+        """
         if coach is None:
             return weights
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         offMindNorm = (coach.offensiveMind - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
 
+        weights['deep']   = weights.get('deep', 0) * max(0.1, 1 + 1.8 * aggrNorm)
         weights['long']   *= max(0.2, 1 + 0.5 * aggrNorm)
         weights['medium'] *= max(0.5, 1 + 0.15 * aggrNorm)
         weights['run']    *= max(0.5, 1 - 0.2 * aggrNorm)
@@ -2260,6 +2303,7 @@ class Game:
 
         weights['medium'] *= max(0.5, 1 + 0.3 * offMindNorm)
         weights['long']   *= max(0.5, 1 + 0.2 * offMindNorm)
+        weights['deep']   = weights.get('deep', 0) * max(0.5, 1 + 0.3 * offMindNorm)
         weights['short']  *= max(0.5, 1 - 0.1 * offMindNorm)
 
         return weights
@@ -2275,6 +2319,7 @@ class Game:
             'short':  ['Play8', 'Play10', 'Play11', 'Play12', 'Play14'],
             'medium': ['Play3', 'Play6', 'Play7', 'Play13', 'Play15', 'Play16', 'Play17'],
             'long':   ['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'],
+            'deep':   ['Play21', 'Play22', 'Play23', 'Play24'],
         }
         pool = pools[tier]
 
@@ -2306,8 +2351,9 @@ class Game:
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
         playCall = _random.choices(
-            ['run', 'short', 'medium', 'long'],
-            weights=[weights['run'], weights['short'], weights['medium'], weights['long']]
+            ['run', 'short', 'medium', 'long', 'deep'],
+            weights=[weights['run'], weights['short'], weights['medium'],
+                     weights['long'], weights.get('deep', 0)]
         )[0]
 
         self.play.insights['playCall'] = playCall
@@ -6987,22 +7033,24 @@ class Play():
         runMean = max(-1, min(5.5, runMean))
 
         runStdDev = 3.0
-        maxYards = min(12, self.yardsToEndzone + 3)
+        maxYards = min(15, self.yardsToEndzone + 3)
         runYardages = np.arange(-3, maxYards + 1)
         runCurve = np.exp(-((runYardages - runMean) ** 2) / (2 * runStdDev ** 2))
         runCurve /= np.sum(runCurve)
         self.yardage = int(np.random.choice(runYardages, p=runCurve))
         baseYards = self.yardage
 
-        # Breakaway: if RB got 6+ yards, chance to hit open field
-        if self.yardage >= 6 and self.yardage < self.yardsToEndzone:
+        # Breakaway: if RB hit the second level (5+ yards), small chance to
+        # break it open. Elite speed RBs hit this ~20% of the time on
+        # qualifying runs, opening up the occasional 30+ yard TD.
+        if self.yardage >= 5 and self.yardage < self.yardsToEndzone:
             speedRating = (self.runner.attributes.speed * 2 +
                           self.runner.attributes.agility +
                           self.runner.attributes.playMakingAbility) / 4
-            breakChance = max(2, min(15, (speedRating - 60) * 0.25 + 2))
+            breakChance = max(4, min(22, (speedRating - 60) * 0.35 + 4))
             if batched_randint(1, 100) <= breakChance:
                 remaining = self.yardsToEndzone - self.yardage
-                self.yardage += min(remaining, int(np.random.exponential(8)))
+                self.yardage += min(remaining, int(np.random.exponential(11)))
 
         # Fumble check
         fumbleRoll = batched_randint(1, 100)
@@ -7403,26 +7451,33 @@ class Play():
     
     def calculatePassYardage(self, passType, throwQuality: float) -> int:
         """
-        Calculate air yards using Gaussian distribution based on pass type and throw quality.
-        Better throws travel farther and more accurately.
+        Calculate air yards using a Gaussian distribution per pass tier.
+
+        Quality penalty scales with pass distance: a bad throw barely affects
+        a screen but heavily under-throws a deep ball. Each tier has its own
+        floor (worst-case retention of base distance) and divisor (the throw
+        quality the receiver needs to hit the base distance exactly).
+
+        Tiers (air-yards distribution):
+          short    0-4   (screen, quick hitch)
+          medium   5-8   (short crossing, hitch)
+          long     9-14  (over-the-middle, deep curl)
+          deep     15+   (go route, post, deep cross)
+          hailMary endzone / max QB throw
         """
-        # Base mean and std dev for each pass type - BOOSTED for better offense
         passTypeParams = {
-            PassType.short: {'mean': 3.5, 'stdDev': 1.5},
-            PassType.medium: {'mean': 11, 'stdDev': 3.5},
-            PassType.long: {'mean': 22, 'stdDev': 5},
-            PassType.hailMary: {'mean': 50, 'stdDev': 10}
+            PassType.short:    {'mean': 2.0,  'stdDev': 1.3,  'floor': 0.85, 'divisor': 75},
+            PassType.medium:   {'mean': 6.5,  'stdDev': 1.3,  'floor': 0.70, 'divisor': 80},
+            PassType.long:     {'mean': 11.0, 'stdDev': 1.8,  'floor': 0.55, 'divisor': 85},
+            PassType.deep:     {'mean': 20.0, 'stdDev': 4.5,  'floor': 0.40, 'divisor': 95},
+            PassType.hailMary: {'mean': 50.0, 'stdDev': 10.0, 'floor': 0.30, 'divisor': 100},
         }
-        
-        params = passTypeParams.get(passType, {'mean': 11, 'stdDev': 3.5})
-        
-        # Adjust mean based on throw quality (better throws travel intended distance)
-        qualityFactor = max(0.7, throwQuality / 70)  # was 75, now easier threshold
+        params = passTypeParams.get(passType, passTypeParams[PassType.medium])
+
+        qualityFactor = max(params['floor'], throwQuality / params['divisor'])
         adjustedMean = params['mean'] * qualityFactor
-        
-        # Sample from Gaussian
+
         airYards = int(np.random.normal(adjustedMean, params['stdDev']))
-        
         return max(0, airYards)
 
     def passPlay(self, playKey):
@@ -7929,8 +7984,11 @@ class Play():
 
                             yac = int(np.random.choice(yacYardages, p=yacCurve))
 
-                        # YAC breakaway — receiver beats last defender
-                        if yac >= 7 and (passYards + yac) < self.yardsToEndzone:
+                        # YAC breakaway — receiver beats last defender. Hits
+                        # ~25% of the time on qualifying YAC for elite receivers,
+                        # which makes short/medium passes occasionally turn into
+                        # 30+ yard scoring plays via the open field.
+                        if yac >= 5 and (passYards + yac) < self.yardsToEndzone:
                             rcvSpeed = (self.receiver.gameAttributes.speed * 2 +
                                        self.receiver.gameAttributes.agility +
                                        self.receiver.gameAttributes.playMakingAbility) / 4
@@ -7940,10 +7998,10 @@ class Play():
                                 execBonus += 5
                             if self.selectedTarget['openness'] >= 70:
                                 execBonus += 5
-                            breakChance = max(3, min(25, (rcvSpeed - 60) * 0.3 + 3 + execBonus))
+                            breakChance = max(5, min(28, (rcvSpeed - 60) * 0.35 + 5 + execBonus))
                             if batched_randint(1, 100) <= breakChance:
                                 remYards = self.yardsToEndzone - passYards - yac
-                                yac += min(remYards, int(np.random.exponential(10)))
+                                yac += min(remYards, int(np.random.exponential(13)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
