@@ -7383,7 +7383,7 @@ class Play():
 
         return max(5, min(100, throwQuality))
     
-    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float) -> dict:
+    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None) -> dict:
         """
         Two-phase catch model:
         Phase 1 (Contact): Can the receiver physically get their hands on the ball?
@@ -7431,10 +7431,34 @@ class Play():
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
 
-        # INT probability — bad throws to covered receivers get picked
+        # INT probability — bad throws to covered receivers get picked.
+        # Pass distance matters: deep/long balls give defenders more time
+        # to read the throw and break on it, and under-thrown deep balls
+        # become jump-ball gifts. Tier multipliers + relaxed thresholds for
+        # longer passes reflect that.
+        TIER_INT_MULT = {
+            PassType.short:    0.4,
+            PassType.medium:   1.0,
+            PassType.long:     1.6,
+            PassType.deep:     2.4,
+            PassType.hailMary: 3.0,
+        }
+        # Longer passes can be intercepted at moderate throw quality; short
+        # passes need to be genuinely bad. Same gate widens for openness.
+        if passType in (PassType.long, PassType.deep, PassType.hailMary):
+            qualityGate, opennessGate = 65, 60
+        else:
+            qualityGate, opennessGate = 50, 50
+
         intProb = 0
-        if throwQuality < 50 and receiverOpenness < 50:
-            intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
+        if throwQuality < qualityGate and receiverOpenness < opennessGate:
+            intProb = (
+                ((qualityGate - throwQuality) / 10)
+                * ((opennessGate - receiverOpenness) / opennessGate)
+                * (defensePassCoverage / 100)
+                * 12
+                * TIER_INT_MULT.get(passType, 1.0)
+            )
 
         # Drop probability — receiver gets hands on it but doesn't secure
         # Only a fraction of non-secured contacts are visible "drops" (rest are deflections)
@@ -7445,7 +7469,7 @@ class Play():
             'contactProb': round(min(98, max(5, contactProb)), 1),
             'secureProb': round(min(97, max(15, secureProb)), 1),
             'catchProb': round(min(95, max(3, catchProb)), 1),
-            'intProb': round(min(25, max(0, intProb)), 1),
+            'intProb': round(min(35, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
     
@@ -7871,7 +7895,8 @@ class Play():
                     getattr(self.receiver.gameAttributes, 'reach', 70),
                     self.selectedTarget['openness'],
                     catchDefCoverage,
-                    receiverPressureMod
+                    receiverPressureMod,
+                    passType=self.passType,
                 )
 
                 # Choke boosts only in high-pressure situations (Q4 close games, etc.)
@@ -7909,7 +7934,7 @@ class Play():
                     # Determine who intercepts: covering CB, or Safety on deep overthrows
                     safetyPlayer = coverageAssignments.get('rb')
                     if (safetyPlayer and coveringDefender is not safetyPlayer
-                            and self.passType in (PassType.long, PassType.hailMary)
+                            and self.passType in (PassType.long, PassType.deep, PassType.hailMary)
                             and batched_randint(1, 100) <= 35):
                         # Safety reads the deep throw and jumps the route
                         self.interceptedBy = safetyPlayer
