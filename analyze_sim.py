@@ -119,6 +119,15 @@ def report(rows):
         rate = (100 * count / attempts) if attempts else 0
         print(f'    {tier:10s}            {count/n:6.3f}/game   ({rate:.2f}% per {tier} attempt)')
 
+    print()
+    print('SACKS  (per game avg)')
+    print(f'  Total sacks:             {avg("sacks"):.2f}')
+    print('  Sacks by pass tier:')
+    for tier, count in bytier('sackByTier').items():
+        attempts = bytier('passByTier').get(tier, 0)
+        rate = (100 * count / attempts) if attempts else 0
+        print(f'    {tier:10s}            {count/n:6.3f}/game   ({rate:.2f}% sack rate on {tier})')
+
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)

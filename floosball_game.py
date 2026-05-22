@@ -1453,6 +1453,9 @@ class Game:
                 'interceptions': 0,
                 'intByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
                 'fumblesLost': 0,
+                # Sacks (a sack is a pass play that ended before the throw)
+                'sacks': 0,
+                'sackByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
                 # Yardage
                 'totalRushYards': 0,
                 'totalPassYards': 0,
@@ -1499,10 +1502,15 @@ class Game:
                         agg['passByTier'][tierName] += 1
                     isComplete = getattr(play, 'isPassCompletion', False)
                     isInt = getattr(play, 'isInterception', False)
+                    isSack = getattr(play, 'isSack', False)
                     if isInt:
                         agg['interceptions'] += 1
                         if tierName in agg['intByTier']:
                             agg['intByTier'][tierName] += 1
+                    if isSack:
+                        agg['sacks'] += 1
+                        if tierName in agg['sackByTier']:
+                            agg['sackByTier'][tierName] += 1
                     if isComplete:
                         agg['passCompletions'] += 1
                         yd = int(getattr(play, 'yardage', 0) or 0)
