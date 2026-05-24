@@ -76,7 +76,13 @@ class Team(Base):
     top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
     playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
-    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id", use_alter=True, name="fk_teams_coach_id"), nullable=True)
+    # Single source of truth for "which coach does this team have".
+    # UNIQUE enforces the 1:1 invariant at the schema level — a Coach can be
+    # assigned to AT MOST one Team. Multiple teams pointing at the same
+    # coach_id (a bug class) is impossible. Multiple NULLs are allowed
+    # (a coachless team is fine). See migration in connection.py that
+    # backfills the constraint via unique index on existing prod DBs.
+    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id", use_alter=True, name="fk_teams_coach_id"), nullable=True, unique=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -104,12 +110,19 @@ class Team(Base):
 
 
 class Coach(Base):
-    """Coach table - represents a team's head coach."""
+    """Coach table - represents a team's head coach.
+
+    Note: there is intentionally no team_id column here. The single source
+    of truth for "what coach does this team have" is Team.coach_id. The
+    previous schema kept both directions (Team.coach_id + Coach.team_id)
+    which created a class of orphan-row bugs when the two diverged on a
+    failed write. The legacy column may still exist on older databases — the
+    inline migration in connection.py drops it on boot when present.
+    """
     __tablename__ = "coaches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     seasons_coached: Mapped[int] = mapped_column(Integer, default=0)
     offensive_mind: Mapped[int] = mapped_column(Integer, default=80)
     defensive_mind: Mapped[int] = mapped_column(Integer, default=80)
@@ -502,6 +515,14 @@ class TeamFunding(Base):
     effective_funding: Mapped[int] = mapped_column(Integer, default=0)
     funding_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     tier_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Snapshot of the funding value the current tier was computed from.
+    # At season start = baseline + carried (the value _initializeTeamFunding
+    # ranks against). At offseason recompute = effective_funding at that
+    # moment (includes mid-season fan contributions). Markets chart uses
+    # this to position the filled "locked" dot so it always sits inside the
+    # tier band the badge displays — without it the dot can drift out of
+    # band as post-recompute contributions inflate effective_funding.
+    tier_locked_funding: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("team_id", "season", name="uq_team_funding_season"),

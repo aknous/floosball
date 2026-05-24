@@ -359,7 +359,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
             "passing_stats": {"passYards": 0, "tds": 0},
             "rushing_stats": {"runYards": 0, "runTds": 0, "carries": 0},
             "receiving_stats": {"rcvYards": 0, "rcvTds": 0, "receptions": 0, "yac": 0, "longest": 0},
-            "kicking_stats": {"fgs": 0, "fgAtt": 0, "longest": 0, "fg40plus": 0},
+            "kicking_stats": {"fgs": 0, "fgAtt": 0, "fgYards": 0, "longest": 0, "fg40plus": 0},
         }
         weekPlayerStats[pid] = avg
         weekRawFP += avg.get("fantasyPoints", 0)

@@ -50,6 +50,7 @@ def _liveStatsToDbFormat(gameStatsDict: dict, teamId: int = 0) -> dict:
         "kicking_stats": {
             "fgs": kicking.get("fgs", 0),
             "fgAtt": kicking.get("fgAtt", 0),
+            "fgYards": kicking.get("fgYards", 0),
             "longest": kicking.get("longest", 0),
             "fg40plus": kicking.get("fg40+", 0),
         },
@@ -86,6 +87,7 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         "kicking_stats": {
             "fgs": (kickingStats or {}).get("fgs", 0),
             "fgAtt": (kickingStats or {}).get("fgAtt", 0),
+            "fgYards": (kickingStats or {}).get("fgYards", 0),
             "longest": (kickingStats or {}).get("longest", 0),
             "fg40plus": (kickingStats or {}).get("fg40+", (kickingStats or {}).get("fg40plus", 0)),
         },

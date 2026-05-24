@@ -30,7 +30,7 @@ import floosball_game as FloosGame
 # Auth deps used by handlers defined early in the file (e.g. /api/players
 # with the 'followed' status filter). Later sections re-import these
 # closer to their use; that's fine — module-level imports are idempotent.
-from api.auth import getOptionalUser as _getOptionalUser
+from api.auth import getOptionalUser as _getOptionalUser, getCurrentUser as _getCurrentUser
 from database.models import User as _User
 
 logger = get_logger("floosball.api")
@@ -1536,8 +1536,12 @@ def _broadcastReactionUpdate(gameId: int, playNumber: int, targetType: str,
 
 
 def _validateLiveGameForReaction(gameId: int):
-    """Reactions are only allowed on games in the current week. Raises
-    HTTPException if the game isn't live this week."""
+    """Reactions are allowed on games from the current week — both still-live
+    games and ones that just completed (users may still be viewing the modal
+    after the game ends). Once the week rolls over, completedWeekGames stays
+    populated until the next week's games kick off; we still honor reactions
+    on those. Older weeks return 409.
+    """
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     sm = floosball_app.seasonManager
@@ -1545,16 +1549,19 @@ def _validateLiveGameForReaction(gameId: int):
     if currentSeason is None:
         raise HTTPException(status_code=404, detail="No active season")
     currentWeek = currentSeason.currentWeek
-    activeGames = getattr(currentSeason, 'activeGames', []) or []
-    game = next((g for g in activeGames if g.id == gameId), None)
+    activeGames = getattr(currentSeason, 'activeGames', None) or []
+    completedThisWeek = getattr(currentSeason, 'completedWeekGames', None) or []
+    game = next(
+        (g for g in list(activeGames) + list(completedThisWeek) if g.id == gameId),
+        None,
+    )
     if game is None:
-        # Reactions don't follow games out of the active window — once the
-        # week rolls, the play feed disappears so reactions can't be placed
-        # against it. Existing rows are preserved but new ones blocked.
-        raise HTTPException(status_code=409, detail="Reactions only on live games")
+        raise HTTPException(status_code=409, detail="Reactions only on current-week games")
     gameWeek = getattr(game, 'week', None) or getattr(game, 'weekNumber', None)
-    if gameWeek is not None and gameWeek != currentWeek:
-        raise HTTPException(status_code=409, detail="Reactions only on live games")
+    # Games from prior weeks fall through here (completedWeekGames is single-
+    # week; older games never re-enter the list). Defensive check anyway.
+    if gameWeek is not None and gameWeek != currentWeek and gameWeek != currentWeek - 1:
+        raise HTTPException(status_code=409, detail="Reactions only on current-week games")
     return game
 
 
@@ -1579,6 +1586,11 @@ def post_play_reaction(game_id: int, req: _ReactionRequest, user: _User = Depend
         raise HTTPException(status_code=400, detail=f"Invalid targetType: {req.targetType}")
     if req.playNumber < 1:
         raise HTTPException(status_code=400, detail="playNumber must be >= 1")
+    # Cutaways use fractional playNumbers (X.5/X.9) to sort between real
+    # plays; the DB column is Integer and would truncate, causing the
+    # reaction to land on the wrong adjacent play. Reject fractional values.
+    if req.playNumber != int(req.playNumber):
+        raise HTTPException(status_code=400, detail="playNumber must be an integer (cutaways aren't reactable)")
 
     _validateLiveGameForReaction(game_id)
 
@@ -4609,6 +4621,13 @@ def get_league_markets():
                 "baselineFunding": fundingRec.baseline_funding if fundingRec else 0,
                 "fanContributions": fundingRec.fan_contributions if fundingRec else 0,
                 "carriedFunding": fundingRec.carried_funding if fundingRec else 0,
+                # Funding value the current tier was computed from — chart's
+                # filled "locked" dot lands here so it always sits inside the
+                # band the tier badge displays.
+                "tierLockedFunding": (
+                    getattr(fundingRec, 'tier_locked_funding', None)
+                    or (fundingRec.effective_funding if fundingRec else 0)
+                ),
                 "fanCount": fanCountByTeam.get(team.id, 0),
                 "totalFans": totalFansByTeam.get(team.id, 0),
                 "topPatrons": patronsByTeam.get(team.id, []),
@@ -4793,7 +4812,7 @@ def get_team_retirement_watch(team_id: int):
         })
 
     # Sort by risk severity (most at-risk first), then by rating (higher = more impactful loss)
-    riskOrder = {'forced': 0, 'very_likely': 1, 'likely': 2, 'possible': 3}
+    riskOrder = {'retiring': 0, 'very_likely': 1, 'likely': 2, 'possible': 3}
     watch.sort(key=lambda w: (riskOrder.get(w['risk'], 9), -w['rating']))
 
     return build_success_response({
@@ -5951,6 +5970,7 @@ def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
         },
         "kicking_stats": {
             "fgs": kicking.get("fgs", 0),
+            "fgYards": kicking.get("fgYards", 0),
             "longest": kicking.get("longest", 0),
         },
     }
@@ -6711,8 +6731,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 template = session.get(CardTemplate, userCard.card_template_id)
                 if not template or template.season_created != currentSeason:
                     continue
-                # Carry forward existing streak count — actual increment happens at week end
-                prevStreak = getattr(prev, 'streak_count', 1) or 1
+                # Carry forward existing streak count — actual increment happens at week end.
+                # Preserve a 0 (just-broken) — `or 1` would clobber the restart-penalty signal.
+                prevStreak = getattr(prev, 'streak_count', 1)
+                if prevStreak is None:
+                    prevStreak = 1
                 # Carry forward the All-Pro swap-bonus flag too. Without this,
                 # a card that granted a swap last week looks like a fresh equip
                 # this week, and unequipping it skips the refund — letting users
@@ -6971,21 +6994,55 @@ def setEquippedCards(
         # Track previously equipped cards before clearing
         previousEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
-        # Build streak count lookup so re-equipped cards keep their streak,
-        # plus peak-decay state so the cold-week decay tail survives an
-        # equip change.
-        prevStreakByCardId = {
-            prev.user_card_id: getattr(prev, 'streak_count', 1) or 1
-            for prev in previousEquipped
-        }
-        prevPeakByCardId = {
-            prev.user_card_id: getattr(prev, 'peak_output', None)
-            for prev in previousEquipped
-        }
-        prevWeeksSinceByCardId = {
-            prev.user_card_id: getattr(prev, 'weeks_since_break', 0) or 0
-            for prev in previousEquipped
-        }
+        # Streaks need to inherit from the LAST WEEK the card was equipped,
+        # not just the current week's prior row. Without this, every PUT to
+        # the equipped set on a new week resets streak_count to default 1,
+        # because previousEquipped (current week) is empty on a first-equip
+        # of the week. Build a lookup by user_card_id from the most recent
+        # week the card appeared, falling back to current-week prior row,
+        # then default 1.
+        priorWeekEquipped = []
+        try:
+            from database.models import EquippedCard as _EC
+            priorRows = (
+                session.query(_EC)
+                .filter(
+                    _EC.user_id == user.id,
+                    _EC.season == currentSeason,
+                    _EC.week < currentWeek,
+                )
+                .order_by(_EC.week.desc())
+                .all()
+            )
+            # First (most recent) row per user_card_id wins.
+            seen = set()
+            for r in priorRows:
+                if r.user_card_id in seen:
+                    continue
+                seen.add(r.user_card_id)
+                priorWeekEquipped.append(r)
+        except Exception:
+            pass
+
+        # Merge: current-week rows take precedence (already-active streaks
+        # on a re-PUT this same week), then fall back to prior-week.
+        def _buildLookup(field, default):
+            out: dict = {}
+            for prev in priorWeekEquipped:
+                v = getattr(prev, field, default)
+                out[prev.user_card_id] = v if v is not None else default
+            for prev in previousEquipped:
+                v = getattr(prev, field, default)
+                out[prev.user_card_id] = v if v is not None else default
+            return out
+
+        prevStreakByCardId = _buildLookup('streak_count', 1)
+        prevPeakByCardId = {}
+        for prev in priorWeekEquipped + list(previousEquipped):
+            v = getattr(prev, 'peak_output', None)
+            if v is not None:
+                prevPeakByCardId[prev.user_card_id] = v
+        prevWeeksSinceByCardId = _buildLookup('weeks_since_break', 0)
 
         # Clear existing and set new. Mark the roster so the GET auto-carry-forward
         # doesn't un-do an intentional empty equip set.
@@ -8343,7 +8400,12 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             if not req.targetPlayerId:
                 raise HTTPException(400, "targetPlayerId (coach ID) required for hire_coach")
             coach = session.query(Coach).filter_by(id=req.targetPlayerId).first()
-            if not coach or coach.team_id is not None:
+            if not coach:
+                raise HTTPException(400, "Coach not available in the hiring pool")
+            # Coach is "available" if no team has them as coach_id.
+            from database.models import Team as DBTeam
+            assignedAt = session.query(DBTeam).filter_by(coach_id=coach.id).first()
+            if assignedAt is not None:
                 raise HTTPException(400, "Coach not available in the hiring pool")
 
         # Check limits
@@ -8739,7 +8801,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 # Retirement risk — an aging veteran projected to retire at
                 # season end creates an opening even with multi-year contract.
                 retireRisk = pm.computeRetirementRisk(rosterPlayer)
-                retireLikely = retireRisk in ('forced', 'very_likely', 'likely')
+                retireLikely = retireRisk in ('retiring', 'very_likely', 'likely')
 
                 # Slot opens if ANY of: cut-vote at quorum, walk-year without
                 # resign backing, or high retirement risk.

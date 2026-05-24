@@ -680,7 +680,7 @@ EFFECT_TOOLTIPS = {
     "odometer": "Hit the milestones. Escalating FP at each yardage gate your roster hits. Resets weekly.",
     "leg_day": "Never skip it. FP growing each week your roster's K nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week your roster's K goes perfect on FGs. Stacking streak cards accelerates growth.",
-    "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 75 FP. Stacking streak cards accelerates growth.",
+    "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
     # ── New Position-Based Effects ──
     "gunslinger": "Let it fly. FP that scales with how many passing yards your roster's QB racks up.",
     "air_raid": "Death from above. Floobits for each passing TD your roster's QB throws.",
@@ -749,7 +749,7 @@ EFFECT_TOOLTIPS = {
     "wanderer": "A bit of everywhere. Output scales with how many different teams your roster players come from. Max payout when no two share a team.",
     "sandbagger": "Hold the line on a weak slot. Streak grows each week one of your roster slots scores 5 FP or less. Requires a full 6-player roster.",
     "quiet_storm": "Spread the love. Streak grows each week no roster player scores 15 or more FP. Requires a full 6-player roster.",
-    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 50 FP total. Requires a full 6-player roster.",
+    "drought": "Cold rosters get hot rewards. Streak grows each week your roster scores under 35 FP total. Requires a full 6-player roster.",
     # ── Prognostication cards ──
     "nose_picker": "Streak grows each week you submit picks yourself instead of letting auto-pick fill them in.",
     "medium": "Bonus FP when your weekly Prognostication accuracy is high.",
@@ -826,7 +826,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "odometer": "Escalating FP at 200, 400, 600, and 800+ total roster yards. Resets weekly",
     "leg_day": "+{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak.",
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
-    "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 75+ FP.",
+    "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
     # ── New Position-Based Effects ──
     "gunslinger": "+{perHundredYardsFP} FP for every 100 passing yards in one game by your roster's QB",
     "air_raid": "{perTdFloobits} Floobits for every passing TD in one game by your roster's QB",
@@ -895,7 +895,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "wanderer": "+{perTeamFP} FP per unique team represented across your roster",
     "sandbagger": "+{baseReward} FP, +{growthPerTick} per consecutive week any roster slot scored 5 FP or less. Needs a full 6-player roster.",
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. Needs a full 6-player roster.",
-    "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 50 FP. Needs a full 6-player roster.",
+    "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 35 FP. Needs a full 6-player roster.",
     # ── Prognostication cards ──
     "nose_picker": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds.",
     "medium": "+{lowFP} FP at 50%+ Prognostication accuracy, +{midFP} FP at 65%+, +{highFP} FP at 85%+. Counts auto-picks",
@@ -1141,10 +1141,15 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
                 "isChanceEffect": True}
     # ── New cards (FP/FPx rebalance) ──
     if effectName == "anthem":
+        # Builder values halved again (next-season tightening): Anthem's
+        # raw outputs after the Balatro 0.5 pullback still produced 90+ FP
+        # at tier 3, which dwarfed peer holos (Loyalty caps ~72 FP,
+        # Showoff ~75). Prismatic rarity warrants a premium but not 2-3×
+        # the holo ceiling.
         return {"rewardType": "fp",
-                "tier3FP": round((150 + rn * 4.05) * editionScale * _BAL_FP_MULT, 1),
-                "tier4FP": round((216 + rn * 5.40) * editionScale * _BAL_FP_MULT, 1),
-                "tier5FP": round((324 + rn * 6.75) * editionScale * _BAL_FP_MULT, 1)}
+                "tier3FP": round((75 + rn * 2.00) * editionScale * _BAL_FP_MULT, 1),
+                "tier4FP": round((108 + rn * 2.70) * editionScale * _BAL_FP_MULT, 1),
+                "tier5FP": round((162 + rn * 3.40) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "conductor":
         # Structural amplifier — left at 20% (multiplies already-rebalanced
         # FP outputs, so its absolute contribution scales with them).
@@ -1577,9 +1582,14 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((94.5 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
                 "growthPerTick": round((54.0 + rn * 1.35) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "drought":
+        # Builder values halved again (next-season tightening): the original
+        # post-Balatro values still let Drought peak above 500 FP after
+        # ~10-week streaks, which carried forward when the streak restarted.
+        # New values cap a comparable peak around ~260 FP — still rewarding
+        # for a deep cold spell, no longer single-card-runs-the-week.
         return {"rewardType": "fp",
-                "baseReward": round((135.0 + rn * 3.03) * editionScale * _BAL_FP_MULT, 1),
-                "growthPerTick": round((81.0 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1)}
+                "baseReward": round((68.0 + rn * 1.50) * editionScale * _BAL_FP_MULT, 1),
+                "growthPerTick": round((40.0 + rn * 1.00) * editionScale * _BAL_FP_MULT, 1)}
     # ── Prognostication cards ─────────────────────────────────────────
     if effectName == "nose_picker":
         # Log-tapered streak — pays for showing up to Prognostications each
@@ -2074,8 +2084,8 @@ def _computeScrappy(primary, ctx, cardPlayerId, eqId):
     if count <= 0:
         eq = f"+{baseFP} FP. No {maxStars}★ or lower players"
         return EffectResult(fpBonus=baseFP, equation=eq)
-    baseChance = min(0.75, count * 0.125 + 0.125)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, count * 0.150 + 0.150)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -2196,8 +2206,8 @@ def _computeBabysitter(primary, ctx, cardPlayerId, eqId):
     if count <= 0:
         eq = f"+{baseFP} FP. No players under {threshold} FP"
         return EffectResult(fpBonus=baseFP, equation=eq)
-    baseChance = min(0.70, count * 0.125 + 0.075)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, count * 0.150 + 0.100)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -2230,8 +2240,8 @@ def _computeTankCommander(primary, ctx, cardPlayerId, eqId):
         eq = f"+{baseFP} FP. Game not final"
         return EffectResult(fpBonus=baseFP, equation=eq)
     losses = ctx.favoriteTeamSeasonLosses
-    baseChance = min(0.60, losses * 0.06 + 0.08) if losses >= 2 else (0.10 if losses == 1 else 0)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, losses * 0.085 + 0.10) if losses >= 2 else (0.12 if losses == 1 else 0)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -2319,8 +2329,8 @@ def _computeUnderdog(primary, ctx, cardPlayerId, eqId):
     if eloBelowAvg <= 0:
         eq = f"+{baseFP} FP. Team not below avg ELO"
         return EffectResult(fpBonus=baseFP, equation=eq)
-    baseChance = min(0.75, eloBelowAvg / 400)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, eloBelowAvg / 320)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     eloDiff = round(eloBelowAvg)
@@ -2426,8 +2436,8 @@ def _computeConsolationPrize(primary, ctx, cardPlayerId, eqId):
     if count <= 0:
         eq = f"+{baseFloobits}F. No players under {threshold} FP"
         return EffectResult(floobits=baseFloobits, equation=eq)
-    baseChance = min(0.70, count * 0.125 + 0.075)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, count * 0.150 + 0.100)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -2454,8 +2464,8 @@ def _computeRockBottom(primary, ctx, cardPlayerId, eqId):
     if lossStreak <= 0:
         eq = f"+{baseFloobits}F. No losing streak"
         return EffectResult(floobits=baseFloobits, equation=eq)
-    baseChance = min(0.65, lossStreak * 0.10 + 0.10)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, lossStreak * 0.135 + 0.10)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -2706,7 +2716,7 @@ def _computeSleeper(primary, ctx, cardPlayerId, eqId):
         if (ctx.rosterPlayerRatings or {}).get(pid, 80) < 76
     )
     threshold = min(0.85, baseChance + chancePerLow * lowStarCount)
-    threshold = min(0.95, threshold + getattr(ctx, 'chanceBonus', 0.0))
+    threshold = min(0.97, threshold + getattr(ctx, 'chanceBonus', 0.0))
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= threshold and not getattr(ctx, 'gamesActive', False)
@@ -2837,24 +2847,22 @@ def _computeCornerstone(primary, ctx, cardPlayerId, eqId):
     if not top1:
         return EffectResult(multBonus=1.0, equation="Leaderboard not yet populated")
     positions = ctx.rosterPlayerPositions or {}
-    leaders = []
-    for pid in (ctx.rosterPlayerIds or set()):
-        pos = positions.get(pid)
-        if pos and pid in top1.get(pos, set()):
-            leaders.append(ctx.rosterPlayerNames.get(pid, "?"))
-    count = len(leaders)
+    count = sum(
+        1 for pid in (ctx.rosterPlayerIds or set())
+        if positions.get(pid) and pid in top1.get(positions[pid], set())
+    )
     if count == 0:
         return EffectResult(multBonus=1.0, equation="No roster player ranks #1 at their position")
     mult = min(maxMult, round(1.0 + perPlayerMult * count, 2))
     delta = round(mult - 1.0, 2)
-    eq = f"+{delta:.2f} FPx — {count} position leader(s): {', '.join(leaders)}"
+    eq = f"+{delta:.2f} FPx — {count} position leader{'s' if count != 1 else ''}"
     return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeLoyalty(primary, ctx, cardPlayerId, eqId):
     """FP per roster player still on roster from the user's first-save
     snapshot. Rewards keeping originals through the season."""
-    perPlayerFP = primary.get("perPlayerFP", 7.5)
+    perPlayerFP = primary.get("perPlayerFP", 12)
     initial = getattr(ctx, 'initialRosterPlayerIds', None) or set()
     if not initial:
         return EffectResult(equation="Initial roster snapshot not set yet")
@@ -3426,8 +3434,8 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
             worstUnder = under
     if worstUnder <= 0:
         return EffectResult(floobits=baseFloobits, equation=f"+{baseFloobits}F. Did not underperform")
-    baseChance = min(0.70, worstUnder * 0.025 + 0.075)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, worstUnder * 0.030 + 0.100)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -3495,7 +3503,7 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
     # During live games, show current escalated chance without rolling
     if getattr(ctx, 'gamesActive', False):
         currentBase = (baseChance + (triggers - 1) * chanceStep) / 100.0
-        totalWithBonus = min(0.95, currentBase + ctx.chanceBonus)
+        totalWithBonus = min(0.97, currentBase + ctx.chanceBonus)
         eq = _chanceEq(currentBase, ctx.chanceBonus, totalWithBonus, False,
                        f"+{bonusFP} FP", f"{triggers} {triggerLabel}", ctx=ctx, base=f"+{baseFP} FP")
         return EffectResult(fpBonus=baseFP, equation=eq)
@@ -3505,7 +3513,7 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
     hit = False
     hitOnTrigger = 0
     for i in range(triggers):
-        chance = min(0.95, (baseChance + i * chanceStep) / 100.0 + ctx.chanceBonus)
+        chance = min(0.97, (baseChance + i * chanceStep) / 100.0 + ctx.chanceBonus)
         roll = rng.random()
         if roll <= chance:
             hit = True
@@ -3514,7 +3522,7 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
 
     fp = bonusFP if hit else baseFP
     finalBase = (baseChance + (hitOnTrigger - 1 if hit else triggers - 1) * chanceStep) / 100.0
-    finalChance = min(0.95, finalBase + ctx.chanceBonus)
+    finalChance = min(0.97, finalBase + ctx.chanceBonus)
     bonusStr = f"+{ctx.chanceBonus:.0%}" if ctx.chanceBonus > 0 else ""
     pctStr = f"({finalBase:.0%}{bonusStr})" if bonusStr else f"{finalChance:.0%}"
     if hit:
@@ -3542,18 +3550,16 @@ def _computeEminence(primary, ctx, cardPlayerId, eqId):
         return EffectResult(multBonus=1.0, equation="Leaderboard not yet populated")
 
     positions = ctx.rosterPlayerPositions or {}
-    leaders = []
-    for pid in (ctx.rosterPlayerIds or set()):
-        pos = positions.get(pid)
-        if pos and pid in top10.get(pos, set()):
-            leaders.append(ctx.rosterPlayerNames.get(pid, "?"))
-    count = len(leaders)
+    count = sum(
+        1 for pid in (ctx.rosterPlayerIds or set())
+        if positions.get(pid) and pid in top10.get(positions[pid], set())
+    )
     if count == 0:
         return EffectResult(multBonus=1.0, equation="No roster player ranks top-10 at their position")
 
     mult = min(maxMult, round(1.0 + perPlayerMult * count, 2))
     delta = round(mult - 1.0, 2)
-    eq = f"+{delta:.2f} FPx — {count} top-10 roster player(s): {', '.join(leaders)}"
+    eq = f"+{delta:.2f} FPx — {count} top-10 roster player{'s' if count != 1 else ''}"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -3572,7 +3578,7 @@ def _computeTraverse(primary, ctx, cardPlayerId, eqId):
     yards = _getPositionYards(ctx, pos)
     steps = int(yards // yardStep)
     baseChance = (primary.get("baseChance", 5) + steps * chancePerStep) / 100.0
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
 
     if getattr(ctx, 'gamesActive', False):
         eq = _chanceEq(baseChance, ctx.chanceBonus, totalChance, False,
@@ -3928,7 +3934,11 @@ def _computeLemons(primary, ctx, cardPlayerId, eqId):
     breakdowns = ctx._firstPassBreakdowns or []
     nonZeroFP = [b for b in breakdowns if b.totalFP > 0 and b.effectName != "double_down"]
     if nonZeroFP:
-        eq = f"+{rewardValue - 1.0:.2f} FPx on your lowest-earning card"
+        # Use the same "× N" notation as the affected card's tag in
+        # _applyTradeoffEffects (cardEffectCalculator.py). Avoids the
+        # earlier mismatch where this row said "+1.50 FPx" while the
+        # impacted card showed "× 2.5" — same operation, two formats.
+        eq = f"× {rewardValue} on your lowest-earning card"
         return EffectResult(multBonus=rewardValue, equation=eq)
     eq = "No FP-earning cards to amplify"
     return EffectResult(equation=eq)
@@ -3960,8 +3970,8 @@ def _computeLastResort(primary, ctx, cardPlayerId, eqId):
     if failedCount <= 0:
         eq = f"+{baseFP} FP. All cards triggered"
         return EffectResult(fpBonus=baseFP, equation=eq)
-    baseChance = min(0.70, failedCount * 0.14 + 0.01)
-    totalChance = min(0.95, baseChance + ctx.chanceBonus)
+    baseChance = min(0.85, failedCount * 0.170 + 0.05)
+    totalChance = min(0.97, baseChance + ctx.chanceBonus)
     rng = _chanceRoll(ctx, eqId)
     roll = rng.random()
     triggered = roll <= totalChance and not getattr(ctx, 'gamesActive', False)
@@ -4476,7 +4486,9 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return cardPlayerTds > 0
 
     if condition == "roster_75fp":
-        return ctx.weekRawFP >= 75
+        # Threshold is 100 despite the condition name — kept the key for
+        # backwards-compat with stored STREAK_CONFIGS so no DB migration.
+        return ctx.weekRawFP >= 100
 
     if condition == "favorite_team_upset_win":
         return ctx.favoriteTeamWonThisWeek and ctx.favoriteTeamOpponentElo > ctx.favoriteTeamElo
@@ -4510,8 +4522,13 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
     if condition == "roster_under_50fp":
         if not _meetsFullRosterRequirement(ctx):
             return False
-        # Streak grows if total roster FP this week was under 50.
-        return (ctx.weekRawFP or 0) < 50
+        # Streak grows if total roster FP this week was under 35.
+        # Threshold lowered from 50 — typical rosters score 60+ so 50 was
+        # too easy to slip under during a mediocre week, letting Drought
+        # streaks chain naturally instead of requiring genuine cold spells.
+        # Key name kept as "roster_under_50fp" for backwards-compat with
+        # stored STREAK_CONFIGS — no DB migration needed.
+        return (ctx.weekRawFP or 0) < 35
 
     if condition == "pickem_manual_submit":
         # Streak grows when the user submitted Prognostications manually

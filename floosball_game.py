@@ -1,5 +1,6 @@
 import enum
 import logging
+logger = logging.getLogger(__name__)
 import random as _random
 from random import randint
 from random_batch import batched_randint, batched_random, batched_choice
@@ -1449,12 +1450,27 @@ class Game:
                 'runTd30plus': 0,
                 'passTd30plus': 0,
                 'passTdByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'compByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'dropByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'incompleteByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'throwAways': 0,
+                'throwAwayByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Diagnostic sums (avg = sum/count). 'thrownByTier' = balls
+                # actually launched (excludes sacks & throwaways).
+                'thrownByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'tqSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'opennessSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'catchProbSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'contactProbSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'secureProbSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'covDefSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
                 # Turnovers
                 'interceptions': 0,
                 'intByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
                 'fumblesLost': 0,
                 # Sacks (a sack is a pass play that ended before the throw)
                 'sacks': 0,
+                'sackYards': 0,  # negative yards lost to sacks (positive int — magnitude)
                 'sackByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
                 # Yardage
                 'totalRushYards': 0,
@@ -1497,12 +1513,20 @@ class Game:
                     agg['totalPlays'] += 1
                     agg['passAttempts'] += 1
                     passType = getattr(play, 'passType', None)
-                    tierName = passType.name if passType and hasattr(passType, 'name') else None
+                    ptName2 = passType.name if passType and hasattr(passType, 'name') else None
+                    # Throwaways and sacks fall back to intendedPassTier so they
+                    # still get bucketed under the play's designed tier.
+                    if ptName2 in agg['passByTier']:
+                        tierName = ptName2
+                    else:
+                        tierName = getattr(play, 'intendedPassTier', None)
                     if tierName in agg['passByTier']:
                         agg['passByTier'][tierName] += 1
                     isComplete = getattr(play, 'isPassCompletion', False)
                     isInt = getattr(play, 'isInterception', False)
                     isSack = getattr(play, 'isSack', False)
+                    isDrop = getattr(play, 'passIsDropped', False)
+                    isThrowAway = (ptName2 == 'throwAway')
                     if isInt:
                         agg['interceptions'] += 1
                         if tierName in agg['intByTier']:
@@ -1511,8 +1535,41 @@ class Game:
                         agg['sacks'] += 1
                         if tierName in agg['sackByTier']:
                             agg['sackByTier'][tierName] += 1
+                        # Sack play.yardage is stored negative (loss); record
+                        # the magnitude so we can compute Net Yards Per Attempt.
+                        sackYd = int(getattr(play, 'yardage', 0) or 0)
+                        if sackYd < 0:
+                            agg['sackYards'] += -sackYd
+                    if isDrop and tierName in agg['dropByTier']:
+                        agg['dropByTier'][tierName] += 1
+                    if isThrowAway:
+                        agg['throwAways'] += 1
+                        if tierName in agg['throwAwayByTier']:
+                            agg['throwAwayByTier'][tierName] += 1
+                    # Incomplete = pass attempt, not sacked, not throwaway,
+                    # not caught, not picked, not dropped (true missed throw).
+                    if (not isSack and not isThrowAway and not isComplete
+                            and not isInt and not isDrop):
+                        if tierName in agg['incompleteByTier']:
+                            agg['incompleteByTier'][tierName] += 1
+                    # Per-tier diagnostic sums — only counted on actual throws
+                    # (not sacks or throwaways) since that's where the model
+                    # produced contact/secure/catch probabilities.
+                    if not isSack and not isThrowAway and tierName in agg['thrownByTier']:
+                        insights2 = getattr(play, 'insights', None) or {}
+                        passI = insights2.get('pass', {}) if isinstance(insights2, dict) else {}
+                        if 'throwQuality' in passI:
+                            agg['thrownByTier'][tierName] += 1
+                            agg['tqSumByTier'][tierName] += passI.get('throwQuality', 0) or 0
+                            agg['opennessSumByTier'][tierName] += passI.get('rcvOpenness', 0) or 0
+                            agg['catchProbSumByTier'][tierName] += passI.get('catchProbability', 0) or 0
+                            agg['contactProbSumByTier'][tierName] += passI.get('contactProbability', 0) or 0
+                            agg['secureProbSumByTier'][tierName] += passI.get('secureProbability', 0) or 0
+                            agg['covDefSumByTier'][tierName] += passI.get('catchDefCoverage', 0) or 0
                     if isComplete:
                         agg['passCompletions'] += 1
+                        if tierName in agg['compByTier']:
+                            agg['compByTier'][tierName] += 1
                         yd = int(getattr(play, 'yardage', 0) or 0)
                         agg['totalPassYards'] += yd
                         agg['longestPass'] = max(agg['longestPass'], yd)
@@ -7136,12 +7193,17 @@ class Play():
             self.runner.attributes.discipline
         )
         
-        # ── Yardage calculation ──
-        # Single-sample model: one Gaussian draw for base yards + breakaway chance
+        # ── Three-gate yardage model ──
+        # Gate 1: The Line — RB power + blocker vs front-7 run defense
+        # Gate 2: Second Level — RB agility/vision vs LB-S box (tackling)
+        # Gate 3: Open Field — RB speed vs deep coverage/safety angles
+        # Most runs end at Gate 1 or 2 (4-9 yds). Clearing all three is rare
+        # and produces the 30+ yard scamper.
         gapQuality = selectedGap['actualQuality']
         gapType = selectedGap['type']
 
-        # RB composite rating weighted by gap type (power inside, agility outside)
+        # Gap-weighted hybrid rating (kept from old model — informs Gate 1
+        # since gap selection drives line-of-scrimmage matchup style)
         if gapType == 'A-gap':
             rbRating = (self.runner.attributes.power * 1.5 + self.runner.attributes.agility * 0.5) / 2
         elif gapType == 'B-gap':
@@ -7151,40 +7213,55 @@ class Play():
         else:  # bounce
             rbRating = self.runner.attributes.agility
 
-        # Mental drift: RB in rhythm hits holes harder, frustrated RB is tentative
-        rbRating += self._mentalDrift(self.runner) / 15
+        rbMental = self._mentalDrift(self.runner) / 15
 
-        # Offensive rating: RB skill + TE blocking + pressure modifier
-        offRating = (rbRating * 0.6) + (blockerRating * 0.4) + runnerPressureMod
+        # GATE 1 — Line of scrimmage (power)
+        linePower = (self.runner.attributes.power * 1.4 +
+                     rbRating * 0.6 +
+                     blockerRating * 0.7) / 2.7
+        linePower += rbMental + runnerPressureMod
+        gapBonus = (gapQuality - 50) / 4
+        lineMatchup = linePower - effectiveRunDef + gapBonus
+        gate1Chance = max(20, min(85, 40 + lineMatchup * 1.2))
 
-        # Gap quality bonus: clean hole = better yards (±2.5 range)
-        qualityBonus = (gapQuality - 50) / 20
+        # GATE 2 — Second level (agility/vision vs box tackling)
+        secondLevel = (self.runner.attributes.agility * 1.3 +
+                       self.runner.attributes.vision * 0.5 +
+                       self.runner.attributes.playMakingAbility * 0.2) / 2
+        secondLevel += rbMental + runnerPressureMod
+        # LB-S box: blend of run defense (LB) and coverage (S) ratings
+        secondLevelDef = effectiveRunDef * 0.55 + self.defense.defensePassCoverageRating * 0.45
+        gate2Chance = max(4, min(40, 12 + (secondLevel - secondLevelDef) * 1.3))
 
-        # Skill differential determines mean yardage
-        # Baseline 4.0 for even matchups, divisor 10.0 compresses mismatch spread
-        diff = offRating + qualityBonus - effectiveRunDef
-        runMean = 4.0 + (diff / 10.0)
-        runMean = max(-1, min(5.5, runMean))
+        # GATE 3 — Open field (speed vs safety angles)
+        openField = (self.runner.attributes.speed * 1.7 +
+                     self.runner.attributes.playMakingAbility * 0.3) / 2
+        openField += rbMental
+        openFieldDef = self.defense.defensePassCoverageRating * 0.95
+        gate3Chance = max(8, min(55, 22 + (openField - openFieldDef) * 1.2))
 
-        runStdDev = 3.0
-        maxYards = min(15, self.yardsToEndzone + 3)
-        runYardages = np.arange(-3, maxYards + 1)
-        runCurve = np.exp(-((runYardages - runMean) ** 2) / (2 * runStdDev ** 2))
-        runCurve /= np.sum(runCurve)
-        self.yardage = int(np.random.choice(runYardages, p=runCurve))
+        if batched_randint(1, 100) > gate1Chance:
+            # Stuffed at the line — -2 to 2 yards
+            self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
+        else:
+            # Through the line: 2-5 baseline yards (avg 3)
+            self.yardage = max(2, min(6, int(np.random.normal(3.0, 1.0))))
+            if batched_randint(1, 100) > gate2Chance:
+                # Wrapped up at second level: 1-4 more yards (avg 2.5)
+                self.yardage += max(1, min(5, int(np.random.normal(2.5, 1.2))))
+            else:
+                # Broke through: 5-10 more yards (avg 7)
+                self.yardage += max(4, min(11, int(np.random.normal(7.0, 1.8))))
+                if batched_randint(1, 100) > gate3Chance:
+                    # Chased down by deep coverage: 6-20 more yards (avg 11)
+                    self.yardage += max(4, min(22, int(np.random.normal(11.0, 4.0))))
+                else:
+                    # Housecall — exponential tail (housecall avg ~20)
+                    remaining = self.yardsToEndzone - self.yardage
+                    self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
+
+        self.yardage = min(self.yardage, self.yardsToEndzone)
         baseYards = self.yardage
-
-        # Breakaway: if RB hit the second level (5+ yards), small chance to
-        # break it open. Elite speed RBs hit this ~20% of the time on
-        # qualifying runs, opening up the occasional 30+ yard TD.
-        if self.yardage >= 5 and self.yardage < self.yardsToEndzone:
-            speedRating = (self.runner.attributes.speed * 2 +
-                          self.runner.attributes.agility +
-                          self.runner.attributes.playMakingAbility) / 4
-            breakChance = max(4, min(22, (speedRating - 60) * 0.35 + 4))
-            if batched_randint(1, 100) <= breakChance:
-                remaining = self.yardsToEndzone - self.yardage
-                self.yardage += min(remaining, int(np.random.exponential(11)))
 
         # Fumble check
         fumbleRoll = batched_randint(1, 100)
@@ -7258,7 +7335,10 @@ class Play():
             'blockerName': blocker.name if blocker else None,
             'blockingVsDefense': round(blockerRating - effectiveRunDef, 1),
             'effectiveRunDef': round(effectiveRunDef),
-            'offenseVsDefense': round(offRating + qualityBonus - effectiveRunDef, 1),
+            'lineMatchup': round(lineMatchup, 1),
+            'gate1Chance': round(gate1Chance, 1),
+            'gate2Chance': round(gate2Chance, 1),
+            'gate3Chance': round(gate3Chance, 1),
             'baseYards': baseYards,
             'fumbleRisk': round(100 - fumbleThreshold),
             'isFumble': self.isFumble,
@@ -7328,7 +7408,7 @@ class Play():
         depthScale = {0: 1.5, 2: 2.0, 4: 3.0, 6: 4.5}.get(dropbackDepth, 2.0)
         depthCap   = {0: 12,  2: 16,  4: 22,  6: 32}.get(dropbackDepth, 15)
 
-        baseSackRate = 3.0
+        baseSackRate = 4.5
         steepness = 0.15
         probability = (baseSackRate * depthScale) / (1 + np.exp(-steepness * rushDifferential))
 
@@ -7364,6 +7444,25 @@ class Play():
         confDrift = player.gameAttributes.confidenceModifier - baseConf
         detDrift = player.gameAttributes.determinationModifier - baseDet
         return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
+
+    def _defenderMentalMod(self, defender):
+        """Combined mental swing for a defender on a single resolution.
+        Mirrors the pressureMod + mentalDrift/15 pattern used on offense so
+        defenders are equally subject to clutch/choke and in-game flow state.
+        Returns a rating delta (typically ±0 to ±8) to add onto the defender's
+        effective rating for the gate being resolved.
+        """
+        if defender is None or not hasattr(defender, 'attributes'):
+            return 0.0
+        try:
+            pressureMod = defender.attributes.getPressureModifier(self.game.gamePressure)
+        except Exception:
+            pressureMod = 0.0
+        try:
+            drift = self._mentalDrift(defender) / 15
+        except Exception:
+            drift = 0.0
+        return pressureMod + drift
 
     def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
         """
@@ -7451,39 +7550,45 @@ class Play():
         # Sort by perceived openness (what QB thinks they see)
         sortedTargets = sorted(perceivedTargets, key=lambda t: t['openness'], reverse=True)
         
-        # QB makes decision based on perceived openness
+        # QB makes decision based on perceived openness. Thresholds loosened
+        # so QBs more often throw to tight windows — real NFL throwaway rate
+        # is ~3-5% of attempts, not the 12% the old strict thresholds produced.
         for target in sortedTargets:
             perceivedOpenness = target['openness']
-            
+
             # Discipline check using perceived openness
             if qbDiscipline >= 90:
-                # Elite discipline: only throw to open receivers (60+) or throw away
-                if perceivedOpenness >= 60 or batched_randint(1, 100) <= 20:
+                # Elite: prefers 50+ openness, otherwise frequently throws
+                # to next-best read instead of stalling.
+                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50:
                     return (target, False)
             elif qbDiscipline >= 75:
-                # Good discipline: prefer open, sometimes throw to partial (40+)
-                if perceivedOpenness >= 40 or batched_randint(1, 100) <= 30:
+                # Good: throws to 30+ openness or rolls to throw anyway.
+                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70:
                     return (target, False)
             elif qbDiscipline >= 60:
-                # Average discipline: will throw to most receivers
-                if perceivedOpenness >= 25 or batched_randint(1, 100) <= 50:
+                # Average: throws to 15+, mostly forces it otherwise.
+                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85:
                     return (target, False)
             else:
                 # Low discipline: throws to anyone, risky
-                if batched_randint(1, 100) <= 70:
+                if batched_randint(1, 100) <= 95:
                     return (target, False)
-        
-        # No suitable receiver found - throw away or force it
+
+        # No suitable receiver found - force throw to the most-open target
+        # unless QB has decent discipline AND every target is buried.
+        # Calibrated so ~3-5% of attempts end in throwaway (NFL benchmark).
         if mustThrow:
-            # Desperation: QB must attempt a throw (4th down trailing, time expiring)
             return (sortedTargets[0], False)
-        if qbDiscipline >= 80:
-            return (None, True)  # Throw away
-        elif batched_randint(1, 100) <= qbDiscipline:
-            return (None, True)  # Throw away based on discipline
-        else:
-            # Force throw to what QB thinks is least covered
-            return (sortedTargets[0], False)
+        topOpenness = sortedTargets[0]['openness'] if sortedTargets else 0
+        # Disciplined QBs (80+) bail when no target is reasonably open.
+        # openness < 50 is the trigger — even a moderately covered top read
+        # is enough to throw away rather than force it. Below-80 discipline
+        # QBs always force the throw (they don't have the patience to bail).
+        if qbDiscipline >= 80 and topOpenness < 50:
+            return (None, True)
+        # Otherwise force the throw to the most-open option.
+        return (sortedTargets[0], False)
     
     def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
         """
@@ -7499,12 +7604,15 @@ class Play():
         mentalEffect = self._mentalDrift(self.passer) / 15
         baseAccuracy += mentalEffect
 
-        # Pass type difficulty modifier
+        # Pass type difficulty modifier — eased so even deep balls land in the
+        # "decent throw" contact bucket on average. Real NFL deep completion %
+        # sits ~40%; without this the model nearly zeros out 15+ yard catches.
         passTypeDifficulty = {
-            PassType.short: 1.0,     # Easiest
-            PassType.medium: 0.85,   # Moderate
-            PassType.long: 0.7,      # Hardest
-            PassType.hailMary: 0.45  # Last-ditch heave — accuracy degraded
+            PassType.short:    1.00,   # Easiest
+            PassType.medium:   0.92,
+            PassType.long:     0.82,
+            PassType.deep:     0.72,
+            PassType.hailMary: 0.50,   # Last-ditch heave
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
 
@@ -7545,12 +7653,19 @@ class Play():
             baseContact = 10 + throwQuality * 0.9  # 10-55
             reachFactor = (receiverReach - 60) * 0.7  # 0-28
 
-        # Defenders in coverage can deflect/disrupt before receiver reaches
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 20
+        # Defenders in coverage can deflect/disrupt before receiver reaches.
+        # The 25 multiplier is the "max coverage hit" when openness is 0 and
+        # defCov is 100. Raised from 20 because the throwaway-recovery change
+        # surfaced too many low-openness throws as catches; this keeps the
+        # defense relevant when receivers aren't actually open.
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 25
         contactProb = min(98, max(5, baseContact + reachFactor - coverageDisruption))
 
         # PHASE 2: Secure — given contact, do they catch it?
-        baseSecure = adjustedHands * 0.85 + 10
+        # Coefficient and floor tuned to match NFL drop rate (~3-4% of catches).
+        # Old 0.85*hands + 10 produced ~12% drops on contacted catches; raised
+        # to 0.95*hands + 8 (hands=80 → secure 84, was 78).
+        baseSecure = adjustedHands * 0.95 + 8
 
         # Contested catches are harder to secure
         if receiverOpenness < 40:
@@ -7597,9 +7712,11 @@ class Play():
             )
 
         # Drop probability — receiver gets hands on it but doesn't secure
-        # Only a fraction of non-secured contacts are visible "drops" (rest are deflections)
+        # Only a fraction of non-secured contacts are visible "drops" (rest are
+        # deflections from the defender). NFL drop rate is ~3-4% of catches;
+        # 0.3 multiplier lands closer to that than the previous 0.5.
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
-        dropProb = nonsecuredContact * 0.5
+        dropProb = nonsecuredContact * 0.3
 
         return {
             'contactProb': round(min(98, max(5, contactProb)), 1),
@@ -7626,15 +7743,17 @@ class Play():
           hailMary endzone / max QB throw
         """
         passTypeParams = {
-            PassType.short:    {'mean': 2.0,  'stdDev': 1.3,  'floor': 0.85, 'divisor': 75},
-            PassType.medium:   {'mean': 6.5,  'stdDev': 1.3,  'floor': 0.70, 'divisor': 80},
-            PassType.long:     {'mean': 11.0, 'stdDev': 1.8,  'floor': 0.55, 'divisor': 85},
-            PassType.deep:     {'mean': 20.0, 'stdDev': 4.5,  'floor': 0.40, 'divisor': 95},
-            PassType.hailMary: {'mean': 50.0, 'stdDev': 10.0, 'floor': 0.30, 'divisor': 100},
+            PassType.short:    {'mean': 2.0,  'stdDev': 1.3,  'floor': 0.85, 'divisor': 70},
+            PassType.medium:   {'mean': 6.5,  'stdDev': 1.3,  'floor': 0.70, 'divisor': 65},
+            PassType.long:     {'mean': 11.0, 'stdDev': 1.8,  'floor': 0.55, 'divisor': 58},
+            PassType.deep:     {'mean': 20.0, 'stdDev': 4.5,  'floor': 0.40, 'divisor': 50},
+            PassType.hailMary: {'mean': 50.0, 'stdDev': 10.0, 'floor': 0.30, 'divisor': 40},
         }
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
 
-        qualityFactor = max(params['floor'], throwQuality / params['divisor'])
+        # Cap at 1.2 so above-average throws can slightly overshoot, but a
+        # great throw doesn't turn a deep ball into a 30-yard moonshot.
+        qualityFactor = min(1.2, max(params['floor'], throwQuality / params['divisor']))
         adjustedMean = params['mean'] * qualityFactor
 
         airYards = int(np.random.normal(adjustedMean, params['stdDev']))
@@ -7661,6 +7780,13 @@ class Play():
             t == PassType.hailMary
             for t in passPlayBook[playKey]['targets'].values()
         )
+        # Pre-assign intended pass tier from dropback depth so sack analytics
+        # can attribute tier even when the play never reaches target selection.
+        _dropbackTierMap = {0: 'short', 2: 'medium', 4: 'long', 6: 'deep'}
+        if self._isHailMaryPlay:
+            self.intendedPassTier = 'hailMary'
+        else:
+            self.intendedPassTier = _dropbackTierMap.get(passPlayBook[playKey]['dropback'].value, 'medium')
         self.passBlockers = []  # Track who's blocking for insights
 
         if passPlayBook[playKey]['targets']['te'] is None:
@@ -7697,6 +7823,7 @@ class Play():
         if passRusher:
             deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
             basePassRush = deAttrs.get('passRush', self.defense.defensePassRushRating)
+            basePassRush += self._defenderMentalMod(passRusher)
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
@@ -7854,6 +7981,7 @@ class Play():
                     if assignedDefender:
                         defAttrs = assignedDefender.attributes.getDefensiveAttributes(assignedDefender.position)
                         individualCoverage = defAttrs.get('coverage', effectivePassDef)
+                        individualCoverage += self._defenderMentalMod(assignedDefender)
 
                         # Coverage type modifies how individual coverage applies
                         if GAMEPLAN_AVAILABLE and coverageType is not None:
@@ -7871,6 +7999,7 @@ class Play():
                                 if safetyPlayer:
                                     sAttrs = safetyPlayer.attributes.getDefensiveAttributes(safetyPlayer.position)
                                     safetyPlayReading = sAttrs.get('playReading', 70)
+                                    safetyPlayReading += self._defenderMentalMod(safetyPlayer)
                                 # Better safety play-reading → more man-like (stronger)
                                 manWeight = 0.4 + (safetyPlayReading - 60) / 100
                                 manWeight = max(0.3, min(0.7, manWeight))
@@ -8016,6 +8145,7 @@ class Play():
                 self.insights['pass']['rcvHands'] = self.receiver.gameAttributes.hands
                 self.insights['pass']['rcvReach'] = getattr(self.receiver.gameAttributes, 'reach', 0)
                 self.insights['pass']['rcvRouteRunning'] = self.selectedTarget.get('routeQuality', self.receiver.gameAttributes.routeRunning)
+                self.insights['pass']['rcvOpenness'] = round(self.selectedTarget.get('openness', 0))
 
                 # STAGE 4: Calculate catch probability and outcome
                 # Use individual defender coverage if available
@@ -8023,8 +8153,10 @@ class Play():
                 if coveringDefender:
                     defAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
                     catchDefCoverage = defAttrs.get('coverage', self.defense.defensePassCoverageRating)
+                    catchDefCoverage += self._defenderMentalMod(coveringDefender)
                 else:
                     catchDefCoverage = self.defense.defensePassCoverageRating
+                self.insights['pass']['catchDefCoverage'] = round(catchDefCoverage)
                 catchProbs = self.calculateCatchProbability(
                     throwQuality,
                     self.receiver.gameAttributes.hands,
@@ -8090,79 +8222,79 @@ class Play():
                     passYards = self.calculatePassYardage(self.passType, throwQuality)
                     passYards = min(passYards, self.yardsToEndzone)
                     
-                    # STAGE 5: Calculate YAC (similar to running play breakaway)
+                    # ── Three-gate YAC model ──
+                    # Gate A: Slip the first defender (WR agility vs covering CB tackling)
+                    # Gate B: Open field (WR speed vs deep safety help)
+                    # Sideline routes still cap YAC via discipline (receiver heads
+                    # for the boundary instead of upfield).
                     yac = 0
                     if passYards < self.yardsToEndzone:
-                        receiverYACRating = (self.receiver.gameAttributes.agility + 
-                                           self.receiver.gameAttributes.speed + 
-                                           self.receiver.gameAttributes.playMakingAbility) / 3
-                        
-                        # YAC potential based on field position and sideline targeting
-                        # Receiver discipline affects YAC cap on sideline routes
+                        # Bad throws can't be caught in stride — limits all YAC.
+                        if throwQuality >= 80:
+                            throwYacMult = 1.0
+                        elif throwQuality >= 60:
+                            throwYacMult = 0.75
+                        elif throwQuality >= 40:
+                            throwYacMult = 0.45
+                        else:
+                            throwYacMult = 0.20
+
+                        # Sideline cap from receiver discipline (heads for boundary).
                         if self.targetSideline:
                             rcvDisc = self.receiver.attributes.discipline
                             if rcvDisc >= 85:
-                                yacCap = 5        # Elite: gets out ASAP
-                                decayMult = 2.0   # Very steep — minimal YAC
+                                sidelineCap = 5
                             elif rcvDisc >= 75:
-                                yacCap = 8        # Good: balances getting out with some YAC
-                                decayMult = 1.6
+                                sidelineCap = 8
                             elif rcvDisc >= 70:
-                                yacCap = 10       # Average: tries a bit more
-                                decayMult = 1.3
+                                sidelineCap = 12
                             else:
-                                yacCap = 12       # 60-69: tries to stretch it
-                                decayMult = 1.1
+                                sidelineCap = 16
                         else:
-                            yacCap = 15
-                            decayMult = 1.0
+                            sidelineCap = 99
 
-                        # Throw quality affects YAC — bad throws can't be caught in stride
-                        if throwQuality >= 80:
-                            throwYacMult = 1.0     # Caught in stride
-                        elif throwQuality >= 60:
-                            throwYacMult = 0.7     # Had to adjust
-                        elif throwQuality >= 40:
-                            throwYacMult = 0.4     # Reaching/stretching
+                        # Covering defender tackling rating — falls back to team
+                        # coverage if no individual matchup is available.
+                        if coveringDefender:
+                            covAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
+                            slipDef = covAttrs.get('tackling', catchDefCoverage)
+                            slipDef += self._defenderMentalMod(coveringDefender)
                         else:
-                            throwYacMult = 0.15    # Lucky to hold on
-                        yacCap = max(1, int(yacCap * throwYacMult))
+                            slipDef = catchDefCoverage
 
-                        yacMaxYards = min(yacCap, self.yardsToEndzone - passYards)
+                        # GATE A — slip the first tackler (agility)
+                        slipPower = (self.receiver.gameAttributes.agility * 1.3 +
+                                     self.receiver.gameAttributes.playMakingAbility * 0.5 +
+                                     self.receiver.gameAttributes.routeRunning * 0.2) / 2
+                        slipPower += receiverPressureMod
+                        slipExec = (4 if throwQuality >= 75 else 0) + (4 if self.selectedTarget['openness'] >= 70 else 0)
+                        gateAChance = max(6, min(55, 22 + (slipPower - slipDef) * 1.3 + slipExec))
 
-                        if yacMaxYards > 0:
-                            yacYardages = np.arange(0, yacMaxYards + 1)
+                        # GATE B — open field (speed vs deep coverage)
+                        rcvSpeed = (self.receiver.gameAttributes.speed * 1.7 +
+                                    self.receiver.gameAttributes.playMakingAbility * 0.3) / 2
+                        openFieldDef = self.defense.defensePassCoverageRating * 0.95
+                        gateBChance = max(6, min(50, 20 + (rcvSpeed - openFieldDef) * 1.2))
 
-                            # YAC decay rate based on receiver vs defense
-                            yacOffense = receiverYACRating + receiverPressureMod
-                            yacDefense = catchDefCoverage
-                            yacDecayRate = max(0.10, 0.18 + 0.005 * (yacDefense - yacOffense))
-                            yacDecayRate *= decayMult
+                        # Apply throw-quality and sideline caps to the per-gate gains.
+                        def _capYac(gain):
+                            gain = int(gain * throwYacMult)
+                            return max(0, min(gain, sidelineCap, self.yardsToEndzone - passYards - yac))
 
-                            # Exponential decay curve for YAC
-                            yacCurve = np.exp(-yacDecayRate * yacYardages)
-                            yacCurve /= np.sum(yacCurve)
-
-                            yac = int(np.random.choice(yacYardages, p=yacCurve))
-
-                        # YAC breakaway — receiver beats last defender. Hits
-                        # ~25% of the time on qualifying YAC for elite receivers,
-                        # which makes short/medium passes occasionally turn into
-                        # 30+ yard scoring plays via the open field.
-                        if yac >= 5 and (passYards + yac) < self.yardsToEndzone:
-                            rcvSpeed = (self.receiver.gameAttributes.speed * 2 +
-                                       self.receiver.gameAttributes.agility +
-                                       self.receiver.gameAttributes.playMakingAbility) / 4
-                            # Execution bonus: good throw + open receiver = easier breakaway
-                            execBonus = 0
-                            if throwQuality >= 75:
-                                execBonus += 5
-                            if self.selectedTarget['openness'] >= 70:
-                                execBonus += 5
-                            breakChance = max(5, min(28, (rcvSpeed - 60) * 0.35 + 5 + execBonus))
-                            if batched_randint(1, 100) <= breakChance:
-                                remYards = self.yardsToEndzone - passYards - yac
-                                yac += min(remYards, int(np.random.exponential(13)))
+                        if batched_randint(1, 100) > gateAChance:
+                            # Tackled by covering defender — 1-4 YAC (avg 2.5)
+                            yac += _capYac(max(0, int(np.random.normal(2.5, 1.3))))
+                        else:
+                            # Slipped the tackle — 4-9 YAC (avg 6.5)
+                            yac += _capYac(max(3, int(np.random.normal(6.5, 1.8))))
+                            if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
+                                if batched_randint(1, 100) > gateBChance:
+                                    # Safety angles WR off — 6-18 more YAC (avg 11)
+                                    yac += _capYac(max(5, int(np.random.normal(11.0, 3.5))))
+                                else:
+                                    # Housecall — exponential tail
+                                    remYards = self.yardsToEndzone - passYards - yac
+                                    yac += min(remYards, max(10, int(np.random.exponential(17) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
@@ -8258,6 +8390,7 @@ class Play():
                         if hasattr(primaryTackler, 'attributes'):
                             defAttrs = primaryTackler.attributes.getDefensiveAttributes(primaryTackler.position)
                             defStripAbility = defAttrs.get('tackling', 70)
+                            defStripAbility += self._defenderMentalMod(primaryTackler)
                         if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
                             self.isFumble = True
                             self.receiver.updateInGameConfidence(-.02)

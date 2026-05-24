@@ -1100,38 +1100,44 @@ class PlayerManager:
     def computeRetirementRisk(self, player) -> str:
         """Classify a player's end-of-season retirement risk.
 
-        Mirrors the probability bands in seasonManager._processRosteredPlayerContracts
-        so the fan-facing 'retirement watch' matches what will actually happen. Returns:
-          - 'forced'      — hard cap, always retires regardless of contract
-          - 'very_likely' — age 15+ past longevity, expiring contract (90%)
-          - 'likely'      — age 10+ past longevity (65% contract-end / 25% mid-contract),
-                            OR age 15+ mid-contract (70%)
-          - 'possible'    — age 7+ past longevity (5-10% bands)
-          - 'safe'        — not yet eligible to retire
+        Retirements only fire for players whose contract expires this offseason
+        (termRemaining == 1) — mid-contract aging players are NOT eligible and
+        return 'safe'. Once Front Office opens and the retirement roll happens,
+        flagged players return 'retiring' (locked-in). Returns:
+          - 'retiring'    — decision is locked, player WILL retire this offseason
+          - 'very_likely' — age 15+ past longevity on walk year (90% to retire)
+          - 'likely'      — age 10+ past longevity on walk year (65%)
+          - 'possible'    — age 7+ past longevity on walk year (5%)
+          - 'safe'        — not yet eligible, or contract doesn't expire this offseason
         """
         from constants import (
-            RETIREMENT_FORCED_SEASONS, RETIREMENT_HIGH_AGE_SEASONS,
+            RETIREMENT_HIGH_AGE_SEASONS,
             RETIREMENT_MID_AGE_SEASONS, RETIREMENT_EARLY_AGE_SEASONS,
         )
+        # Locked-in retirement (set during _evaluateRetirementCandidates when
+        # the GM window opens) overrides any predictive tier.
+        if getattr(player, 'willRetire', False):
+            return 'retiring'
+
         seasons = getattr(player, 'seasonsPlayed', 0) or 0
         attrs = getattr(player, 'attributes', None)
         longevity = getattr(attrs, 'longevity', 99) if attrs else 99
         termRemaining = getattr(player, 'termRemaining', 1) or 0
 
-        # Hard cap: no one plays past this regardless of contract
-        if seasons >= RETIREMENT_FORCED_SEASONS:
-            return 'forced'
         # Must be past longevity before any retirement check fires
         if seasons <= longevity:
             return 'safe'
+        # Retirements only happen at end of contract — mid-contract aging vets
+        # are locked in for another year, so don't surface them as at-risk.
+        if termRemaining > 1:
+            return 'safe'
 
-        expiring = termRemaining <= 1  # walk year or already expired
         if seasons > RETIREMENT_HIGH_AGE_SEASONS:
-            return 'very_likely' if expiring else 'likely'  # 90% / 70%
+            return 'very_likely'   # 90%
         if seasons > RETIREMENT_MID_AGE_SEASONS:
-            return 'likely' if expiring else 'possible'     # 65% / 25%
+            return 'likely'        # 65%
         if seasons >= RETIREMENT_EARLY_AGE_SEASONS:
-            return 'possible'                                # 5% / 10%
+            return 'possible'      # 5%
         return 'safe'
 
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
@@ -1153,17 +1159,18 @@ class PlayerManager:
         """Sort players and assign tiers (replaces sortPlayers function)"""
         logger.debug("Sorting players and assigning tiers")
         
-        # Assign player tiers for realistic distribution:
-        # S (~2-3%): Superstar/Generational
-        # A (~8-10%): Great/Franchise  
-        # B (~25-30%): Good
-        # C (~40-45%): Average
-        # D (~15-20%): Bad
-        tierS = 93  # Top ~2-3%
-        tierA = 87  # Next ~8-10%
-        tierB = 77  # Next ~25-30%
-        tierC = 69  # Next ~40-45%
-        # Below 69 = Tier D (~15-20%)
+        # Tier thresholds aligned 1:1 with the UI star bands in
+        # frontend Components/Stars.tsx::calcStars so a "4-star player" in the
+        # UI is always TierA for contract / scouting / classification purposes.
+        # The old thresholds (S≥93, A≥87, B≥77, C≥69) created a gap where
+        # rating 84-86 showed as 4 stars but contracted as TierB — leading to
+        # 1-year deals for visually high-rated players.
+        # Star bands: 1★ 60-67 / 2★ 68-75 / 3★ 76-83 / 4★ 84-91 / 5★ 92-100
+        tierS = 92  # 5★
+        tierA = 84  # 4★
+        tierB = 76  # 3★
+        tierC = 68  # 2★
+        # Below 68 → TierD (1★)
         
         for player in self.activePlayers:
             if player.playerRating >= tierS:

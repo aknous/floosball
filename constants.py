@@ -281,13 +281,13 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 10, 'LARGE_MARKET': 5, 'MID_MARKET': 0,
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
 # ---- Retirement Risk Telegraphing ----
-# Surfaces during the season so fans can pre-vote replacements. Mirrors the actual
-# retirement chances used in seasonManager._processRosteredPlayerContracts.
-# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'forced'
-RETIREMENT_FORCED_SEASONS = 20      # Hard cap — no player plays past this
-RETIREMENT_HIGH_AGE_SEASONS = 15    # 70%+ chance band
-RETIREMENT_MID_AGE_SEASONS = 10     # 25-65% chance band
-RETIREMENT_EARLY_AGE_SEASONS = 7    # 5-10% chance band
+# Surfaces during the season so fans can pre-vote replacements. Mirrors the
+# actual retirement rolls in seasonManager._evaluateRetirementCandidates.
+# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'retiring' (locked)
+# Retirements only fire for players whose contract expires this offseason.
+RETIREMENT_HIGH_AGE_SEASONS = 15    # 90% chance on walk year
+RETIREMENT_MID_AGE_SEASONS = 10     # 65% chance on walk year
+RETIREMENT_EARLY_AGE_SEASONS = 7    # 5% chance on walk year
 
 # ---- Player Fatigue ----
 BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week

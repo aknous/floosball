@@ -67,8 +67,14 @@ def report(rows):
         ypa = total('totalPassYards') / passAtt
         ypc = total('totalPassYards') / max(1, total('passCompletions'))
         intRate = 100 * total('interceptions') / passAtt
+        # Net Yards Per Attempt: (pass yards - sack yards) / (attempts).
+        # Matches NFL's NY/A stat. Pass yards include only completions; sack
+        # losses subtract from team net.
+        sackYds = total('sackYards')
+        nya = (total('totalPassYards') - sackYds) / passAtt
         print(f'  Completion %:            {compPct:.1f}')
         print(f'  Yards per attempt:       {ypa:.2f}')
+        print(f'  Net yds/attempt (NYA):   {nya:.2f}  (NFL ~6.5)')
         print(f'  Yards per completion:    {ypc:.2f}')
         print(f'  INT rate per attempt:    {intRate:.2f}%')
     if total('runPlays') > 0:
@@ -76,9 +82,53 @@ def report(rows):
 
     print()
     print('PASS DISTRIBUTION BY TIER  (avg per game)')
+    compTier = bytier('compByTier')
+    dropTier = bytier('dropByTier')
+    intTier = bytier('intByTier')
+    sackTier = bytier('sackByTier')
+    throwAwayTier = bytier('throwAwayByTier')
+    incTier = bytier('incompleteByTier')
+    thrownTier = bytier('thrownByTier')
+    tqTier = bytier('tqSumByTier')
+    opTier = bytier('opennessSumByTier')
+    cpTier = bytier('catchProbSumByTier')
+    contactTier = bytier('contactProbSumByTier')
+    secureTier = bytier('secureProbSumByTier')
+    covTier = bytier('covDefSumByTier')
     for tier, count in bytier('passByTier').items():
         share = (100 * count / passAtt) if passAtt else 0
-        print(f'  {tier:10s}  {count/n:6.2f}/game   ({share:4.1f}% of attempts)')
+        compPct = (100 * compTier.get(tier, 0) / count) if count else 0
+        print(f'  {tier:10s}  {count/n:6.2f}/game   ({share:4.1f}% of att, {compPct:4.1f}% comp%)')
+
+    print()
+    print('PER-TIER OUTCOME BREAKDOWN  (% of attempts in that tier)')
+    print(f'  {"tier":10s} {"comp%":>7s} {"drop%":>7s} {"int%":>7s} {"sack%":>7s} {"TA%":>6s} {"inc%":>7s}')
+    for tier in ['short', 'medium', 'long', 'deep', 'hailMary']:
+        att = bytier('passByTier').get(tier, 0)
+        if att == 0:
+            continue
+        comp = compTier.get(tier, 0)
+        drop = dropTier.get(tier, 0)
+        intc = intTier.get(tier, 0)
+        sack = sackTier.get(tier, 0)
+        ta = throwAwayTier.get(tier, 0)
+        inc = incTier.get(tier, 0)
+        print(f'  {tier:10s} {100*comp/att:6.1f}% {100*drop/att:6.1f}% {100*intc/att:6.1f}% {100*sack/att:6.1f}% {100*ta/att:5.1f}% {100*inc/att:6.1f}%')
+
+    print()
+    print('PER-TIER MODEL DIAGNOSTICS  (avg over thrown balls — excludes sacks/throwaways)')
+    print(f'  {"tier":10s} {"thrown":>7s} {"TQ":>6s} {"open":>6s} {"contact":>8s} {"secure":>7s} {"catchP":>7s} {"defCov":>7s}')
+    for tier in ['short', 'medium', 'long', 'deep', 'hailMary']:
+        thrown = thrownTier.get(tier, 0)
+        if thrown == 0:
+            continue
+        avgTq = tqTier.get(tier, 0) / thrown
+        avgOp = opTier.get(tier, 0) / thrown
+        avgCp = cpTier.get(tier, 0) / thrown
+        avgContact = contactTier.get(tier, 0) / thrown
+        avgSecure = secureTier.get(tier, 0) / thrown
+        avgCov = covTier.get(tier, 0) / thrown
+        print(f'  {tier:10s} {thrown:>7d} {avgTq:6.1f} {avgOp:6.1f} {avgContact:8.1f} {avgSecure:7.1f} {avgCp:7.1f} {avgCov:7.1f}')
 
     print()
     print('TOUCHDOWNS  (per game avg)')

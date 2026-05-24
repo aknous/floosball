@@ -170,6 +170,71 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Drop legacy coaches.team_id column (single-source-of-truth refactor).
+        # The new code uses Team.coach_id exclusively. Important: do NOT
+        # overwrite a Team.coach_id that already points at a real Coach row —
+        # that FK has been the team's actual coach pointer all along, even
+        # when the legacy Coach.team_id back-reference got polluted with
+        # orphans from buggy code paths (e.g. _saveCoachToDatabase generating
+        # a new row alongside the team's original coach).
+        #
+        # Only fill Team.coach_id when it's NULL or points at a missing row,
+        # and even then pick the OLDEST matching Coach (lowest id) since the
+        # orphan pattern observed in prod is "real coach is original, newer
+        # rows are stray" — the opposite of what auto-increment-newest would
+        # imply. Idempotent: skipped once the column is gone.
+        try:
+            cols = conn.execute(text("PRAGMA table_info(coaches)")).fetchall()
+            colNames = {row[1] for row in cols}
+            if 'team_id' in colNames:
+                conn.execute(text("""
+                    UPDATE teams
+                    SET coach_id = (
+                        SELECT MIN(c.id) FROM coaches c WHERE c.team_id = teams.id
+                    )
+                    WHERE (
+                        coach_id IS NULL
+                        OR coach_id NOT IN (SELECT id FROM coaches)
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM coaches c WHERE c.team_id = teams.id
+                    )
+                """))
+                conn.execute(text("ALTER TABLE coaches DROP COLUMN team_id"))
+                conn.commit()
+                logger.info("  Migration: dropped coaches.team_id (existing Team.coach_id preserved)")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: coaches.team_id drop skipped: {e}")
+
+        # tier_locked_funding: snapshot of the funding value the row's
+        # current tier was computed from. Markets chart needs this to put
+        # the filled dot in the right tier band after the offseason recompute
+        # (which uses effective_funding instead of season-start funding).
+        try:
+            conn.execute(text("ALTER TABLE team_funding ADD COLUMN tier_locked_funding INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added team_funding.tier_locked_funding")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
+        # Schema-level guarantee: a Coach can be assigned to at most ONE Team.
+        # SQLite UNIQUE indexes treat NULLs as distinct, so multiple coachless
+        # teams (coach_id IS NULL) are allowed; a non-null coach_id has to be
+        # unique across teams. Replaces the application-layer "is this coach
+        # available" checks with a hard schema constraint. Idempotent via
+        # IF NOT EXISTS.
+        try:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_teams_coach_id "
+                "ON teams(coach_id) WHERE coach_id IS NOT NULL"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured uq_teams_coach_id (one coach per team)")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: uq_teams_coach_id index skipped: {e}")
+
         # Play reactions — users react to plays / sideline quotes during live games
         try:
             conn.execute(text("""
@@ -1618,23 +1683,21 @@ def _seedAchievements():
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week.
-            # Rescaled (next-season): a full week (4 game days) with an
-            # amplify or overdrive modifier can stack to 5-figure FP
-            # totals on optimized hands — and modifier draws cycle through
-            # the season, so most users see at least one favorable week.
-            # New top tier requires both a stacked hand AND a hot run
-            # across all 4 days, not just one big game.
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 600,
-             "description": "Earn 600+ fantasy points in a single week.",
+            # Rescaled for the Balatro pullback (FP outputs roughly halved
+            # via _BAL_FP_MULT = 0.5). Targets dropped ~50% so the tiers
+            # remain reachable on optimized hands during an amplify week
+            # without being trivial.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 300,
+             "description": "Earn 300+ fantasy points in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 2000,
-             "description": "Earn 2,000+ fantasy points in a single week.",
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 1000,
+             "description": "Earn 1,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 5000,
-             "description": "Earn 5,000+ fantasy points in a single week.",
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 2500,
+             "description": "Earn 2,500+ fantasy points in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 10000,
-             "description": "Earn 10,000+ fantasy points in a single week.",
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 5000,
+             "description": "Earn 5,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
             # (renamed from Windfall to avoid clashing with the card effect of
@@ -1651,21 +1714,21 @@ def _seedAchievements():
             {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 400,
              "description": "Earn 400+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Dynamo tiers — cumulative season fantasy points. Rescaled
-            # again (next-season): elite seasons under amplify-heavy
-            # rotations now bank 60k+ over 28 weeks, so the old 25k cap
-            # was a mid-season checkpoint.
-            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 5000,
-             "description": "Earn 5,000 total fantasy points this season.",
+            # Dynamo tiers — cumulative season fantasy points. Targets
+            # halved to match the Balatro pullback (_BAL_FP_MULT = 0.5).
+            # Tier IV is still a meaningful "great season" milestone given
+            # 28 game days of compounding output.
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 2500,
+             "description": "Earn 2,500 total fantasy points this season.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 14000,
-             "description": "Earn 14,000 total fantasy points this season.",
+            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 7000,
+             "description": "Earn 7,000 total fantasy points this season.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 30000,
-             "description": "Earn 30,000 total fantasy points this season.",
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 15000,
+             "description": "Earn 15,000 total fantasy points this season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 60000,
-             "description": "Earn 60,000 total fantasy points this season.",
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 30000,
+             "description": "Earn 30,000 total fantasy points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,

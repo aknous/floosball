@@ -632,8 +632,13 @@ def _computeCardPass(
 
     # Apply modifier effects to primary values
     if mod in ("amplify", "cascade"):
-        # Double FPx bonus portion
-        if matchedMult > 1:
+        # Double FPx bonus portion. Skip tradeoff effects (Lemons) — their
+        # multBonus is a structural marker the post-pass uses to multiply
+        # a single card's flat FP, not a global FPx that should stack with
+        # weekly amplifiers. Without this skip Lemons doubled from ×2.5 to
+        # ×4.0 under Amplify, then post-pass multiplied a flat-FP card by
+        # the inflated value.
+        if matchedMult > 1 and effectName not in _TRADEOFF_EFFECTS:
             matchedMult = 1 + (matchedMult - 1) * 2
     elif mod == "frenzy":
         matchedFP *= 2  # Double +FP
