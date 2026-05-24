@@ -7156,6 +7156,14 @@ class Play():
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
+
+        # Pre-snap defensive read — adjusts scheme effectiveness based on whether
+        # the coordinator + captains anticipated the call. Run plays only shift
+        # runDefMult; passDef/passRush are unaffected.
+        self.defenseRead = self._resolveDefensiveRead('run')
+        scheme['runDefMult'] = scheme['runDefMult'] * (1.0 + self.defenseRead['modifier'])
+        self._trackOffensiveTendency('run')
+
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
 
         # Track first-half run plays for halftime adjustment
@@ -7351,6 +7359,9 @@ class Play():
             'passRushMult': round(scheme['passRushMult'], 2),
             'coverageType': scheme.get('coverageType', {}).value if hasattr(scheme.get('coverageType', {}), 'value') else None,
             'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
+            'readResult': self.defenseRead.get('result'),
+            'readPCorrect': self.defenseRead.get('pCorrect'),
+            'readTendencyUsed': self.defenseRead.get('tendencyUsed'),
         }
 
         # Clamp yardage to endzone
@@ -7463,6 +7474,117 @@ class Play():
         except Exception:
             drift = 0.0
         return pressureMod + drift
+
+    def _getOffensiveTendency(self):
+        """Return run/pass tendency for the current offense this game.
+        Lazily initialises the tracker on the offense team. Returns rates
+        plus total plays so the caller can decide whether enough data exists.
+        """
+        if not hasattr(self.offense, 'gameOffensiveTendency'):
+            self.offense.gameOffensiveTendency = {'run': 0, 'pass': 0, 'totalPlays': 0}
+        t = self.offense.gameOffensiveTendency
+        total = t['totalPlays']
+        if total == 0:
+            return {'run': 0.5, 'pass': 0.5, 'totalPlays': 0}
+        return {'run': t['run'] / total, 'pass': t['pass'] / total, 'totalPlays': total}
+
+    def _trackOffensiveTendency(self, playType):
+        """Increment the per-game offensive tendency counter for next play's read."""
+        if not hasattr(self.offense, 'gameOffensiveTendency'):
+            self.offense.gameOffensiveTendency = {'run': 0, 'pass': 0, 'totalPlays': 0}
+        if playType in ('run', 'pass'):
+            self.offense.gameOffensiveTendency[playType] += 1
+            self.offense.gameOffensiveTendency['totalPlays'] += 1
+
+    def _resolveDefensiveRead(self, actualPlayType):
+        """Pre-snap defensive recognition roll. Returns the read result and the
+        scheme modifier to apply.
+
+        Three-tier outcome:
+          - 'correct'  → +0.20 modifier  (scheme mults boosted)
+          - 'neutral'  →  0
+          - 'wrong'    → -0.15 modifier  (scheme mults penalized)
+
+        Base 35/35/30. Shifted by:
+          - coach.defensiveMind  (the coordinator's preparation)
+          - defensive captain instinct (LB + S average — pre-snap recognition)
+          - offensive tendency (only matters when the coach is sharp enough to use it)
+
+        When offense has shown a clear tendency, a high-defensiveMind coach
+        amplifies it (predicts the predictable play). When offense breaks its
+        own tendency, the defense bites and the same coach gets burned harder.
+        """
+        coach = getattr(self.defense, 'coach', None)
+        defMind = getattr(coach, 'defensiveMind', 80) if coach else 80
+
+        # Defensive captain instinct — the LB and S are the pre-snap recognizers
+        captainInstinct = 80
+        lb = self.defense.rosterDict.get('rb') if hasattr(self.defense, 'rosterDict') else None
+        safety = self.defense.rosterDict.get('qb') if hasattr(self.defense, 'rosterDict') else None
+        try:
+            i1 = getattr(lb.attributes, 'instinct', 80) if lb else 80
+            i2 = getattr(safety.attributes, 'instinct', 80) if safety else 80
+            captainInstinct = (i1 + i2) / 2
+        except Exception:
+            captainInstinct = 80
+
+        pCorrect = 0.35
+        pWrong = 0.30
+
+        # Coach + captain shift (symmetric)
+        defShift = (defMind - 80) * 0.012 + (captainInstinct - 80) * 0.004
+        pCorrect += defShift
+        pWrong -= defShift
+
+        # Tendency bump — requires enough sample size to be meaningful
+        tendency = self._getOffensiveTendency()
+        tendencyUsed = False
+        if tendency['totalPlays'] >= 5:
+            rate = tendency.get(actualPlayType, 0.5)
+            # How well does the coordinator exploit tendency data?
+            # def-mind 70 → 0% usage, def-mind 100 → 100% usage
+            usage = max(0, min(1, (defMind - 70) / 30))
+            if usage > 0:
+                tendencyUsed = True
+                if rate >= 0.55:
+                    # Offense ran the predicted-tendency play → coach reads it
+                    bump = (rate - 0.5) * 0.4 * usage
+                    pCorrect += bump
+                    pWrong -= bump * 0.6
+                elif rate <= 0.45:
+                    # Offense broke its own tendency → coach gets caught biting
+                    counterRate = 1 - rate
+                    penalty = (counterRate - 0.5) * 0.3 * usage
+                    pCorrect -= penalty
+                    pWrong += penalty * 0.6
+
+        pCorrect = max(0.15, min(0.80, pCorrect))
+        pWrong = max(0.10, min(0.55, pWrong))
+        pNeutral = max(0.05, 1 - pCorrect - pWrong)
+        total = pCorrect + pNeutral + pWrong
+        if total > 0:
+            pCorrect /= total
+            pNeutral /= total
+            pWrong /= total
+
+        roll = batched_random()
+        if roll <= pCorrect:
+            result, modifier = 'correct', 0.20
+        elif roll <= pCorrect + pNeutral:
+            result, modifier = 'neutral', 0.0
+        else:
+            result, modifier = 'wrong', -0.15
+
+        return {
+            'result': result,
+            'modifier': modifier,
+            'pCorrect': round(pCorrect, 3),
+            'pNeutral': round(pNeutral, 3),
+            'pWrong': round(pWrong, 3),
+            'tendencyUsed': tendencyUsed,
+            'defMind': defMind,
+            'captainInstinct': round(captainInstinct, 1),
+        }
 
     def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
         """
@@ -7819,6 +7941,15 @@ class Play():
         # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         self._captureBlitzer(scheme, defGameplanObj)
+
+        # Pre-snap defensive read — shifts both pass-defense and pass-rush
+        # effectiveness based on coordinator/captain anticipation.
+        self.defenseRead = self._resolveDefensiveRead('pass')
+        readMod = 1.0 + self.defenseRead['modifier']
+        scheme['passDefMult'] = scheme['passDefMult'] * readMod
+        scheme['passRushMult'] = scheme['passRushMult'] * readMod
+        self._trackOffensiveTendency('pass')
+
         passRusher = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
         if passRusher:
             deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
@@ -7874,6 +8005,9 @@ class Play():
             'passRushMult': round(scheme['passRushMult'], 2),
             'coverageType': scheme.get('coverageType', {}).value if hasattr(scheme.get('coverageType', {}), 'value') else None,
             'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
+            'readResult': self.defenseRead.get('result'),
+            'readPCorrect': self.defenseRead.get('pCorrect'),
+            'readTendencyUsed': self.defenseRead.get('tendencyUsed'),
         }
 
         if sackRoll <= sackProbability:
