@@ -290,11 +290,11 @@ def _pickCoverage(defGameplan, down: int, yardsToGo: int, quarter: int,
         # LEADING — let the archetype pick the shell
         predator = aggr * defMind
         prevent  = (1 - aggr) * defMind
-        if prevent > 0.45:
+        if prevent > 0.32:
             # Bend-Don't-Break: zone shell to prevent big plays
             weights[CoverageType.ZONE] *= 1.8
             weights[CoverageType.MAN] *= 0.5
-        elif predator > 0.55:
+        elif predator > 0.42:
             # Predator: stay in man, force the bad throw
             weights[CoverageType.MAN] *= 1.4
             weights[CoverageType.ZONE] *= 0.8
@@ -304,11 +304,11 @@ def _pickCoverage(defGameplan, down: int, yardsToGo: int, quarter: int,
         # TRAILING — defense needs stops
         predator = aggr * defMind
         prevent  = (1 - aggr) * defMind
-        if predator > 0.55:
+        if predator > 0.42:
             # Sell out — man pressure, force the panic throw
-            weights[CoverageType.MAN] *= 1.7
-            weights[CoverageType.ZONE] *= 0.5
-        elif prevent > 0.45:
+            weights[CoverageType.MAN] *= 1.5
+            weights[CoverageType.ZONE] *= 0.6
+        elif prevent > 0.32:
             # Bend-don't-break still — accept underneath, deny big plays
             weights[CoverageType.ZONE] *= 1.3
             weights[CoverageType.MAN] *= 0.9
@@ -336,23 +336,25 @@ def _pickBlitz(defGameplan, down: int, yardsToGo: int, quarter: int,
 
     # Score/clock state with coach archetype
     if quarter >= 4 and scoreDiff < -7 and clockSeconds < 300:
-        # Trailing late — archetype matters most here
+        # Trailing late — archetype matters most here. Multipliers softened
+        # from earlier pass; previous values pushed league sack rate to 1.48
+        # (NFL ~1.0/team game), cascading into TQ drops and shutouts.
         predator = aggr * defMind  # smart-aggressive sells out
         reckless = aggr * (1 - defMind)  # dumb-aggressive overcommits
-        if predator > 0.45:
-            weights[BlitzPackage.ALL_OUT] *= 2.0
-            weights[BlitzPackage.SAFETY_BLITZ] *= 1.5
-        elif reckless > 0.45:
-            weights[BlitzPackage.ALL_OUT] *= 1.8
-            weights[BlitzPackage.LB_BLITZ] *= 0.7
-        else:
+        if predator > 0.42:
+            weights[BlitzPackage.ALL_OUT] *= 1.5
+            weights[BlitzPackage.SAFETY_BLITZ] *= 1.3
+        elif reckless > 0.42:
             weights[BlitzPackage.ALL_OUT] *= 1.4
-            weights[BlitzPackage.SAFETY_BLITZ] *= 1.2
+            weights[BlitzPackage.LB_BLITZ] *= 0.8
+        else:
+            weights[BlitzPackage.ALL_OUT] *= 1.2
+            weights[BlitzPackage.SAFETY_BLITZ] *= 1.1
 
     elif quarter >= 3 and scoreDiff > 7:
         # Leading — protect lead. Archetype splits between predator and prevent.
         predator = aggr * defMind
-        if predator > 0.55:
+        if predator > 0.42:
             # Smart-aggressive: still hunting sacks/INTs to seal
             weights[BlitzPackage.LB_BLITZ] *= 1.3
             weights[BlitzPackage.ALL_OUT] *= 0.7
@@ -398,22 +400,22 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
     if quarter >= 3 and scoreDiff > 7:
         predator = aggr * defMind
         prevent  = (1 - aggr) * defMind
-        if predator > 0.55:
+        if predator > 0.42:
             archetype = 'def_leading_predator'
-        elif prevent > 0.45:
+        elif prevent > 0.32:
             archetype = 'def_leading_prevent'
-        elif aggr > 0.6:
+        elif aggr > 0.5:
             archetype = 'def_leading_reckless'
         else:
             archetype = 'def_leading_vanilla'
     elif quarter >= 3 and scoreDiff < -7:
         predator = aggr * defMind
         prevent  = (1 - aggr) * defMind
-        if predator > 0.55:
+        if predator > 0.42:
             archetype = 'def_trailing_predator'
-        elif prevent > 0.45:
+        elif prevent > 0.32:
             archetype = 'def_trailing_prevent'
-        elif aggr > 0.6:
+        elif aggr > 0.5:
             archetype = 'def_trailing_reckless'
         else:
             archetype = 'def_trailing_vanilla'

@@ -2538,20 +2538,20 @@ class Game:
             killerMode = aggr * (0.5 + adapt * 0.5)
             clockKill  = (1 - aggr) * adapt
 
-            if killerMode > 0.6:
+            if killerMode > 0.45:
                 # Press the advantage — maintain attack, slight deep pullback
                 _flat('deep',   1 - leadTier * 0.3)
                 _flat('medium', 1 + leadTier * 0.1)
                 _flat('long',   1 + leadTier * 0.1)
                 self._tallyCoachArchetype('leading_killer')
-            elif clockKill > 0.5:
+            elif clockKill > 0.35:
                 # Drain the clock with runs and quick passes
                 _flat('run',    1 + leadTier * 0.6)
                 _flat('deep',   1 - leadTier * 0.8)
                 _flat('long',   1 - leadTier * 0.5)
                 _flat('medium', 1 - leadTier * 0.2)
                 self._tallyCoachArchetype('leading_clockkill')
-            elif aggr > 0.6:
+            elif aggr > 0.5:
                 # Reckless leader — keeps chucking, opens door for comeback
                 _flat('deep', 1 + leadTier * 0.3)
                 _flat('long', 1 + leadTier * 0.2)
