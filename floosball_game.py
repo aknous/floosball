@@ -8004,28 +8004,21 @@ class Play():
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
     
-    def calculatePassYardage(self, passType, throwQuality: float) -> int:
+    def calculatePassYardage(self, passType) -> int:
         """
-        Calculate air yards using Gaussian distribution based on pass type and
-        throw quality. Restored to main's parameters — the per-tier floor/divisor
-        rework cut mean air yards 40-50% per tier, contributing to shutouts and
-        stalled drives. Deep tier kept distinct with slightly higher mean than
-        long so it retains its identity in the playcaller.
+        Air yards follow the pass tier's Gaussian distribution. Throw quality
+        affects catch probability, not how far the ball travels — the QB throws
+        to a target at the route's depth, quality is only about placement.
         """
         passTypeParams = {
-            PassType.short:    {'mean': 3.5, 'stdDev': 1.5},
-            PassType.medium:   {'mean': 11,  'stdDev': 3.5},
-            PassType.long:     {'mean': 22,  'stdDev': 5},
-            PassType.deep:     {'mean': 26,  'stdDev': 5.5},
-            PassType.hailMary: {'mean': 50,  'stdDev': 10},
+            PassType.short:    {'mean': 3,   'stdDev': 1.0},
+            PassType.medium:   {'mean': 6.5, 'stdDev': 1.5},
+            PassType.long:     {'mean': 13,  'stdDev': 3.0},
+            PassType.deep:     {'mean': 22,  'stdDev': 4.5},
+            PassType.hailMary: {'mean': 45,  'stdDev': 8.0},
         }
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
-
-        # Adjust mean based on throw quality (better throws travel intended distance)
-        qualityFactor = max(0.7, throwQuality / 70)
-        adjustedMean = params['mean'] * qualityFactor
-
-        airYards = int(np.random.normal(adjustedMean, params['stdDev']))
+        airYards = int(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
 
     def passPlay(self, playKey):
@@ -8489,7 +8482,7 @@ class Play():
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     
                     # Calculate air yards based on throw quality
-                    passYards = self.calculatePassYardage(self.passType, throwQuality)
+                    passYards = self.calculatePassYardage(self.passType)
                     passYards = min(passYards, self.yardsToEndzone)
                     
                     # ── Three-gate YAC model ──
@@ -8552,19 +8545,19 @@ class Play():
                             return max(0, min(gain, sidelineCap, self.yardsToEndzone - passYards - yac))
 
                         if batched_randint(1, 100) > gateAChance:
-                            # Tackled by covering defender — 1-4 YAC (avg 2.5)
-                            yac += _capYac(max(0, int(np.random.normal(2.5, 1.3))))
+                            # Tackled by covering defender — 0-3 YAC (avg 1.5)
+                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))))
                         else:
-                            # Slipped the tackle — 4-9 YAC (avg 6.5)
-                            yac += _capYac(max(3, int(np.random.normal(6.5, 1.8))))
+                            # Slipped the tackle — 2-6 YAC (avg 4)
+                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))))
                             if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
                                 if batched_randint(1, 100) > gateBChance:
-                                    # Safety angles WR off — 6-18 more YAC (avg 11)
-                                    yac += _capYac(max(5, int(np.random.normal(11.0, 3.5))))
+                                    # Safety angles WR off — 4-10 more YAC (avg 7)
+                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))))
                                 else:
                                     # Housecall — exponential tail
                                     remYards = self.yardsToEndzone - passYards - yac
-                                    yac += min(remYards, max(10, int(np.random.exponential(17) * throwYacMult)))
+                                    yac += min(remYards, max(8, int(np.random.exponential(12) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
