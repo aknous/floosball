@@ -1834,6 +1834,51 @@ async def get_game_stats(id: int, response: Response):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/league-news/recent", response_model=List[Dict[str, Any]])
+async def get_league_news_recent(
+    response: Response,
+    limit: int = Query(default=30, ge=1, le=200),
+    season: Optional[int] = Query(default=None),
+):
+    """Recent persisted league-news items (Cores voice lines, anomaly state
+    transitions). Lets the highlight feed surface events that fired while
+    the user wasn't connected.
+    """
+    response.headers["Cache-Control"] = "public, max-age=15"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    try:
+        from database.models import LeagueNewsItem
+        with SessionLocal() as session:
+            q = session.query(LeagueNewsItem)
+            if season is not None:
+                q = q.filter(LeagueNewsItem.season == season)
+            else:
+                seasonMgr = floosball_app.seasonManager
+                cs = seasonMgr.currentSeason
+                if cs is not None and hasattr(cs, 'seasonNumber'):
+                    q = q.filter(LeagueNewsItem.season == cs.seasonNumber)
+            rows = q.order_by(LeagueNewsItem.created_at.desc()).limit(limit).all()
+            return [{
+                'id': r.id,
+                'season': r.season,
+                'week': r.week,
+                'category': r.category,
+                'eventType': r.event_type,
+                'text': r.text,
+                'core': r.core,
+                'coreDisplayName': r.core_display_name,
+                'playerId': r.player_id,
+                'playerName': r.player_name,
+                'anomalyState': r.anomaly_state,
+                'createdAt': r.created_at.isoformat() + 'Z' if r.created_at else None,
+            } for r in rows]
+    except Exception as e:
+        logger.exception(f"Failed to fetch league news: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch league news")
+
+
 @app.get("/api/highlights", response_model=List[Dict[str, Any]])
 async def get_highlights(response: Response, limit: int = Query(default=20, ge=1, le=100)):
     """

@@ -595,16 +595,36 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             if not playerName:
                 continue
             line = random.choice(STATE_TRANSITION_LINES[targetState]).format(player=playerName)
-            _broadcastStateTransition(playerId, playerName, targetState, line, week)
+            _broadcastStateTransition(playerId, playerName, targetState, line, week,
+                                       session=session, seasonNumber=seasonNumber)
 
 
 def _broadcastStateTransition(playerId: int, playerName: str, state: str,
-                              line: str, week: int) -> None:
-    """Push a state-transition flavor line through the league news channel.
+                              line: str, week: int, session: Optional[Session] = None,
+                              seasonNumber: Optional[int] = None) -> None:
+    """Push a state-transition flavor line through the league news channel
+    and persist it so users who weren't online still see it on next load.
 
     Carries metadata so the frontend can render it differently from
     standard league news (no ELIMINATED tag, no team-event color).
     """
+    # Persist first — if the broadcast fails the row still survives.
+    if session is not None and seasonNumber is not None:
+        try:
+            from database.models import LeagueNewsItem
+            session.add(LeagueNewsItem(
+                season=seasonNumber,
+                week=week,
+                category='anomaly_transition',
+                event_type=state,
+                text=line,
+                player_id=playerId,
+                player_name=playerName,
+                anomaly_state=state,
+            ))
+        except Exception as e:
+            logger.debug(f"State-transition persist skipped: {e}")
+
     try:
         from api.game_broadcaster import broadcaster
         from api.event_models import LeagueNewsEvent
@@ -667,7 +687,7 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
     # certain fractions of the threshold and fire flavor-only news
     # entries. Each milestone fires once per Cracking cycle — the audit
     # trail tracks which we've already broadcast.
-    _maybeFireWarning(state)
+    _maybeFireWarning(state, session=session, week=week)
 
     # Cracking trigger detection — if aggregate has crossed the hidden
     # threshold AND we're not already inside an active Cracking window
@@ -698,13 +718,15 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
                 # Cracking window has ended but Reset hasn't yet fired.
                 inActiveCracking = True
         if not inSuppression and not inActiveCracking:
-            _triggerCracking(state, week)
+            _triggerCracking(state, week, session=session)
 
 
 # ─── Pre-Cracking warnings ──────────────────────────────────────────────────
 
 
-def _maybeFireWarning(state: LeagueAnomalyState) -> None:
+def _maybeFireWarning(state: LeagueAnomalyState,
+                      session: Optional[Session] = None,
+                      week: Optional[int] = None) -> None:
     """Broadcast a Cores-attributed warning when aggregate crosses a
     milestone fraction of threshold. Each milestone fires once per
     Cracking cycle (audit trail tracks which we've already done)."""
@@ -763,7 +785,7 @@ def _maybeFireWarning(state: LeagueAnomalyState) -> None:
         f"Cores {milestone} fired (season={state.season}, "
         f"aggregate={state.aggregate_score:.1f}, ratio={ratio:.2f})"
     )
-    _broadcastCoreNews(news)
+    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=week)
 
 
 # ─── Reset + purge ──────────────────────────────────────────────────────────
@@ -805,7 +827,7 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
     )
     if not awakeneds:
         # No Awakened players to purge — just record the Reset event.
-        _recordResetEvent(state, week, purged=[], survivors=[])
+        _recordResetEvent(state, week, purged=[], survivors=[], session=session)
         return
 
     # Pull attention scores in one round trip.
@@ -855,7 +877,7 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
     state.last_reset_week = week
     state.suppression_window_ends_week = week + RESET_SUPPRESSION_WEEKS
 
-    _recordResetEvent(state, week, purged=purged, survivors=survivors)
+    _recordResetEvent(state, week, purged=purged, survivors=survivors, session=session)
 
     logger.warning(
         f"RESET FIRED (season={state.season}, week={week}): "
@@ -866,7 +888,8 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
 
 
 def _recordResetEvent(state: LeagueAnomalyState, week: int,
-                      purged: List[int], survivors: List[int]) -> None:
+                      purged: List[int], survivors: List[int],
+                      session: Optional[Session] = None) -> None:
     """Append a Reset record to the league audit trail and broadcast
     the Cores' attributed news entry."""
     news = None
@@ -886,7 +909,7 @@ def _recordResetEvent(state: LeagueAnomalyState, week: int,
         'news': news,
     })
     state.cores_patches_applied = patches
-    _broadcastCoreNews(news)
+    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=week)
 
 
 def _purgeDodgeFor(personality: Optional[str]) -> float:
@@ -913,7 +936,8 @@ def _getPlayerPersonality(session: Session, playerId: int) -> Optional[str]:
         return None
 
 
-def _triggerCracking(state: LeagueAnomalyState, currentWeek: int) -> None:
+def _triggerCracking(state: LeagueAnomalyState, currentWeek: int,
+                     session: Optional[Session] = None) -> None:
     """Fire a Cracking event for the upcoming round(s).
 
     Records the trigger event in cores_patches_applied (which doubles as
@@ -982,13 +1006,33 @@ def _triggerCracking(state: LeagueAnomalyState, currentWeek: int) -> None:
     )
 
     # Broadcast to the league news feed.
-    _broadcastCoreNews(news)
+    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=currentWeek)
 
 
-def _broadcastCoreNews(news: Optional[Dict]) -> None:
-    """Push a Cores news entry through the existing league-news channel."""
+def _broadcastCoreNews(news: Optional[Dict], session: Optional[Session] = None,
+                       seasonNumber: Optional[int] = None,
+                       week: Optional[int] = None) -> None:
+    """Push a Cores news entry through the existing league-news channel
+    and persist it so refresh / reconnect users still see it.
+    """
     if not news:
         return
+
+    if session is not None and seasonNumber is not None and week is not None:
+        try:
+            from database.models import LeagueNewsItem
+            session.add(LeagueNewsItem(
+                season=seasonNumber,
+                week=week,
+                category='cores',
+                event_type=news.get('eventType'),
+                text=news.get('text', ''),
+                core=news.get('core'),
+                core_display_name=news.get('coreDisplayName'),
+            ))
+        except Exception as e:
+            logger.debug(f"Cores news persist skipped: {e}")
+
     try:
         from api.game_broadcaster import broadcaster
         from api.event_models import LeagueNewsEvent
