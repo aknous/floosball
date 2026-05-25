@@ -76,13 +76,19 @@ def _isEdt(d):
 
 class Season:
     """Represents a single season"""
-    
+
     def __init__(self, seasonNumber: int):
         self.seasonNumber = seasonNumber
         self.currentSeason = seasonNumber  # Backward compatibility
         self.currentWeek = 0
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
+        # Rule book for this season. Defaults to the standard ruleset.
+        # Future Cores' rule patches mutate this object via
+        # ``gameRules.applyPatch(...)`` and the patch propagates to
+        # every game scheduled in this season from that point forward.
+        from game_rules import GameRules
+        self.gameRules = GameRules()
         self.activeGames = None
         self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []
@@ -551,6 +557,17 @@ class SeasonManager:
             except Exception as e:
                 logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
 
+            # Anomaly system weekly tick: applies attention decay,
+            # accumulates this week's engagement contributions, advances
+            # the state ladder, and recomputes the league-wide aggregate
+            # toward the Cracking threshold. Wrapped defensively so a
+            # failure in this layer never blocks the actual game loop.
+            try:
+                from managers.anomalyManager import weeklyTick as anomalyWeeklyTick
+                anomalyWeeklyTick(self.currentSeason.seasonNumber, nextWeek)
+            except Exception as e:
+                logger.warning(f"Anomaly weekly tick at week {nextWeek} failed: {e}")
+
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
                 self._cachedNextGameStart = weekStartTime
@@ -907,6 +924,14 @@ class SeasonManager:
                                         _ft.addPlayerQ4Points(_pid, pts)
                                 return cb
                             player.stat_tracker._on_fantasy_points = _makeFpCallback(
+                                pid, gameInstance, fantasyTracker
+                            )
+                            def _makeScoreCallback(_pid, _game, _ft):
+                                def cb(_kind):
+                                    if _game.currentQuarter >= 4:
+                                        _ft.addPlayerQ4Score(_pid)
+                                return cb
+                            player.stat_tracker._on_scoring_play = _makeScoreCallback(
                                 pid, gameInstance, fantasyTracker
                             )
 
@@ -1438,7 +1463,13 @@ class SeasonManager:
                         template = session.get(CardTemplate, userCard.card_template_id)
                         if not template or template.season_created != season:
                             continue
-                        prevStreak = getattr(prev, 'streak_count', 1) or 1
+                        # Preserve a streak_count of 0 across carry-forward —
+                        # an `or 1` fallback here would clobber the "just-
+                        # broken streak" signal that drives the restart
+                        # halving penalty in _processWeekCardEffects.
+                        prevStreak = getattr(prev, 'streak_count', 1)
+                        if prevStreak is None:
+                            prevStreak = 1
                         # Preserve the All-Pro swap-bonus flag so a card that
                         # granted an unused swap last week still shows as
                         # "swap available" this week. Without this, every
@@ -1727,9 +1758,22 @@ class SeasonManager:
                 except Exception:
                     pass
 
-                # Eminence: position pace data (same for all users)
+                # Eminence + Cornerstone: position pace + leaderboard data
+                # (same for all users this week). computeEminenceData returns 4
+                # values — top10/top1 sets feed Cornerstone too.
                 from managers.cardEffectCalculator import computeEminenceData
-                positionAvgFPs, playerSeasonFPPerGame = computeEminenceData(session, season, week)
+                (positionAvgFPs, playerSeasonFPPerGame,
+                 top10PerPosition, top1PerPosition) = computeEminenceData(session, season, week)
+
+                # Roster-trait context shared across users:
+                #   priorSeasonMissedPlayoffTeamIds — Comeback Kid
+                #   currentTop6TeamIds              — Domination
+                from managers.cardProjection import (
+                    _lookupPriorSeasonMissedPlayoffTeams,
+                    _lookupCurrentTop6Teams,
+                )
+                priorSeasonMissedPlayoffTeamIds = _lookupPriorSeasonMissedPlayoffTeams(session, season)
+                currentTop6TeamIds = _lookupCurrentTop6Teams(session, season)
 
                 # ─── Process each user ───────────────────────────────────────
                 for userId, userEquipped in byUser.items():
@@ -1805,6 +1849,7 @@ class SeasonManager:
                     # the card fires for the same players the UI labels as
                     # rookies, not just the strict first-year subset.
                     rosterRookieFlags = {}
+                    rosterSeasonsPlayed = {}  # Vanguard reads this for 5+ vets
                     if self.playerManager:
                         for pid in rosterPlayerIds:
                             player = self.playerManager.getPlayerById(pid)
@@ -1815,6 +1860,20 @@ class SeasonManager:
                                     isRookieSvc
                                     or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
                                 )
+                                rosterSeasonsPlayed[pid] = int(getattr(player, 'seasonsPlayed', 0) or 0)
+
+                    # Loyalty snapshot — original roster player IDs persisted
+                    # at first-save on the FantasyRoster row. Empty if the user
+                    # hasn't saved yet (shouldn't happen by week-end but guard).
+                    initialRosterPlayerIds: set = set()
+                    if roster and getattr(roster, 'initial_player_ids', None):
+                        try:
+                            import json as _json
+                            initialRosterPlayerIds = {
+                                int(pid) for pid in _json.loads(roster.initial_player_ids)
+                            }
+                        except Exception:
+                            initialRosterPlayerIds = set()
 
                     # Pick-em stats this user/week — drives Conviction (manual
                     # submit streak), Augur (accuracy bonus), Tipster (FPx
@@ -1843,6 +1902,15 @@ class SeasonManager:
                     # User's favorite team data
                     userRow = session.get(User, userId)
                     userFavoriteTeamId = userRow.favorite_team_id if userRow else None
+
+                    # Believe reads favorite team season wins
+                    favoriteTeamSeasonWins = 0
+                    if userFavoriteTeamId and teamManager:
+                        _favTeam = teamManager.getTeamById(userFavoriteTeamId)
+                        if _favTeam:
+                            favoriteTeamSeasonWins = int(
+                                (getattr(_favTeam, 'seasonTeamStats', {}) or {}).get('wins', 0) or 0
+                            )
 
                     favoriteTeamElo = 1500.0
                     favoriteTeamStreak = 0
@@ -2037,6 +2105,14 @@ class SeasonManager:
                         userFloobitsBalance=userFloobitsBalance,
                         positionAvgFPs=positionAvgFPs,
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
+                        top10PerPosition=top10PerPosition,
+                        top1PerPosition=top1PerPosition,
+                        # Roster-trait card data (next-season additions)
+                        priorSeasonMissedPlayoffTeamIds=priorSeasonMissedPlayoffTeamIds,
+                        currentTop6TeamIds=currentTop6TeamIds,
+                        _rosterSeasonsPlayed=rosterSeasonsPlayed,
+                        initialRosterPlayerIds=initialRosterPlayerIds,
+                        favoriteTeamSeasonWins=favoriteTeamSeasonWins,
                     )
 
                     # Populate streak conditions for breakdown display AND
@@ -2071,23 +2147,63 @@ class SeasonManager:
                         # bump path below at the streak-management block).
                         effectiveMet = condMet or (userModifier == "ironclad")
                         if effectiveMet:
-                            calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
+                            # Streak restart penalty (applied pre-calc so
+                            # THIS week's compute sees the halved peak): if
+                            # this is the first met week after a break and
+                            # a peak carries from a prior streak, halve the
+                            # peak in calcCtx so carriedBase = halved value.
+                            # Post-calc, the same halving is persisted to
+                            # eq.peak_output for future weeks.
+                            priorCount = eq.streak_count if eq.streak_count is not None else 1
+                            if priorCount == 0:
+                                priorPeak = calcCtx.streakPeakOutputs.get(eq.id)
+                                if priorPeak is not None:
+                                    primary = ec.get("primary", {}) or {}
+                                    baseReward = primary.get("baseReward", 0) or 0
+                                    halved = float(priorPeak) * 0.5
+                                    if halved <= baseReward:
+                                        calcCtx.streakPeakOutputs.pop(eq.id, None)
+                                    else:
+                                        calcCtx.streakPeakOutputs[eq.id] = halved
+                                # Skip the "1 = idle baseline" value on restart
+                                # so display (count - 1) shows 1 on first met
+                                # week instead of 0.
+                                calcCtx.streakCounts[eq.id] = 2
+                            else:
+                                calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
                     calcCtx.liveStreakConditionsMet = streakConditions
 
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Formula: (rosterFP + Σ flat FP) × (1 + Σ(FPxᵢ − 1))
-                    # Bonus-additive — stacked FPx grows linearly, not
-                    # geometrically. Single-FPx hands unchanged.
-                    from managers.cardEffectCalculator import aggregateMultFactors
-                    baseFP = weekRawFP + result.totalBonusFP
-                    multProduct = aggregateMultFactors(result.multFactors)
-                    totalFP = round(baseFP * multProduct, 2)
+                    # When the Cracking is active, the simulation's math is
+                    # the controlling Core's signature equation rather than
+                    # the baseline aggregator. Resolved once per week per
+                    # user against the persisted Cracking state. No
+                    # Cracking → computeFinalOutput uses the standard
+                    # bonus-additive formula (next-season's aggregator).
+                    try:
+                        from managers.anomalyManager import getActiveCrackingCore
+                        crackingCore = getActiveCrackingCore(season, week)
+                    except Exception:
+                        crackingCore = None
+
+                    from managers.coreEquations import computeFinalOutput, equationTemplate
+                    rawTotalFP, totalEquation = computeFinalOutput(
+                        weekRawFP, result.totalBonusFP, result.multFactors,
+                        coreKey=crackingCore,
+                    )
                     # Subtract raw FP so we store only the card bonus portion
-                    totalFP = round(totalFP - weekRawFP, 2)
+                    totalFP = round(rawTotalFP - weekRawFP, 2)
                     if totalFP < 0:
                         totalFP = 0.0
+                    # multProduct feeds the Compound achievement hook below.
+                    # Always use the bonus-additive aggregator — it's the
+                    # user-facing effective multiplier from the card breakdown
+                    # they see. During Cracking the totalFP is different but
+                    # the achievement signal still tracks card-stacking strength.
+                    from managers.cardEffectCalculator import aggregateMultFactors
+                    multProduct = aggregateMultFactors(result.multFactors)
 
                     # Achievement hook — Compound tiers (single-week FPx from cards only)
                     # Exclude the synergy weekly modifier's contribution so the achievement
@@ -2150,6 +2266,9 @@ class SeasonManager:
                                 "weekRawFP": round(weekRawFP, 1),
                                 "totalBonusFP": round(result.totalBonusFP, 2),
                                 "multFactors": [round(f, 2) for f in result.multFactors],
+                                "crackingCore": crackingCore,
+                                "crackingEquation": totalEquation if crackingCore else None,
+                                "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
                             },
                         })
                         weekBonus = WeeklyCardBonus(
@@ -2210,7 +2329,32 @@ class SeasonManager:
                             isNoReset = cfg.get("noReset", False)
                             isWeekly = cfg.get("isWeekly", False)
                             if conditionMet:
-                                eq.streak_count = getattr(eq, 'streak_count', 0) + 1
+                                priorCount = eq.streak_count if eq.streak_count is not None else 1
+                                # Streak restart penalty: when condition is
+                                # met again after a break (priorCount==0 but
+                                # peak_output carries from a prior streak),
+                                # halve the carried peak so the new streak
+                                # has to climb back up rather than instantly
+                                # paying the prior peak. Without this, a
+                                # quick on/off cycle on a deep streak (e.g.
+                                # Drought) sustained 500+ FP indefinitely.
+                                if (priorCount == 0
+                                        and getattr(eq, 'peak_output', None) is not None
+                                        and not isWeekly and not isNoReset):
+                                    halved = float(eq.peak_output) * 0.5
+                                    primary = effectConfig.get("primary", {})
+                                    baseReward = primary.get("baseReward", 0)
+                                    if halved <= baseReward:
+                                        eq.peak_output = None
+                                    else:
+                                        eq.peak_output = halved
+                                # On restart from 0, skip the "1 = idle"
+                                # baseline so display (count - 1) reads as 1
+                                # for the first active week.
+                                if priorCount == 0:
+                                    eq.streak_count = 2
+                                else:
+                                    eq.streak_count = priorCount + 1
                                 # peak_output stays LOCKED during an active
                                 # streak — it represents the carried base
                                 # the streak began at. Only break weeks and
@@ -2223,7 +2367,6 @@ class SeasonManager:
                                     baseReward = primary.get("baseReward", 0)
                                     growthPerTick = primary.get("growthPerTick", 0)
                                     rewardType = primary.get("rewardType", "fp")
-                                    decay = 0.85 if rewardType == "mult" else 0.7
                                     priorCount = eq.streak_count or 0
                                     currentPeak = eq.peak_output
                                     if currentPeak is not None and currentPeak > baseReward:
@@ -2242,12 +2385,24 @@ class SeasonManager:
                                             eq.peak_output = None
                                         eq.weeks_since_break = 0
                                     elif eq.peak_output is not None:
-                                        # Continuing cold week — decay one step.
-                                        decayed = eq.peak_output * decay
-                                        if decayed <= baseReward:
+                                        # Continuing cold week — decay one step
+                                        # of the streak's own growth amount. For
+                                        # mult cards we step down the bonus
+                                        # portion (peak − 1) by growthPerTick;
+                                        # for FP cards just subtract directly.
+                                        # Symmetric to build: a 10-week streak
+                                        # decays over ~10 cold weeks, matching
+                                        # the same pace as the climb.
+                                        if rewardType == "mult":
+                                            currentBonus = max(0.0, eq.peak_output - 1)
+                                            steppedBonus = max(0.0, currentBonus - growthPerTick)
+                                            stepped = 1.0 + steppedBonus
+                                        else:
+                                            stepped = eq.peak_output - growthPerTick
+                                        if stepped <= baseReward:
                                             eq.peak_output = None
                                         else:
-                                            eq.peak_output = decayed
+                                            eq.peak_output = stepped
                                         eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
                                 eq.streak_count = 0
                             # If noReset=True and condition not met, streak stays unchanged
@@ -2255,9 +2410,10 @@ class SeasonManager:
                 session.commit()
             except Exception as e:
                 session.rollback()
-                logger.error(f"Error processing week card effects: {e}")
                 import traceback
-                logger.debug(traceback.format_exc())
+                logger.error(
+                    f"Error processing week card effects: {e}\n{traceback.format_exc()}"
+                )
             finally:
                 session.close()
         except ImportError as e:
@@ -2783,13 +2939,15 @@ class SeasonManager:
                     gameFP = getattr(player, '_lastGameFantasyPoints', None)
                     if gameFP is None:
                         gameFP = gd.get('fantasyPoints', 0)
-                    # Get Q4 FP from fantasy tracker (in-memory accumulator)
+                    # Get Q4 FP + scoring play count from fantasy tracker
                     fantasyTracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
                     q4FP = fantasyTracker._weekQ4FP.get(player.id, 0) if fantasyTracker else 0
+                    q4Scores = fantasyTracker._weekQ4Scores.get(player.id, 0) if fantasyTracker else 0
                     playerStats[player.id] = {
                         'teamId': team.id,
                         'fantasyPoints': gameFP,
                         'q4FantasyPoints': q4FP,
+                        'q4ScoringPlays': q4Scores,
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -2809,6 +2967,7 @@ class SeasonManager:
                         team_id=stats.get('teamId', 0),
                         fantasy_points=stats.get('fantasyPoints', 0),
                         q4_fantasy_points=stats.get('q4FantasyPoints', 0),
+                        q4_scoring_plays=stats.get('q4ScoringPlays', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
                         receiving_stats=stats.get('receiving'),
@@ -2892,7 +3051,7 @@ class SeasonManager:
                     game = weekGames[x]
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
-                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'))
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'), gameRules=self.currentSeason.gameRules)
                     
                     # Assign unique integer ID and metadata
                     self._gameIdCounter += 1
@@ -2968,7 +3127,8 @@ class SeasonManager:
             self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
                                      timingManager=self.timingManager,
-                                     personalityManager=self.serviceContainer.getService('personality_manager'))
+                                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                                     gameRules=self.currentSeason.gameRules)
             newGame.id = self._gameIdCounter
             newGame.dbId = row.id
             newGame.seasonNumber = seasonNumber
@@ -3602,6 +3762,7 @@ class SeasonManager:
                             teamsInRound[hiSeed], teamsInRound[lowSeed],
                             timingManager=self.timingManager,
                             personalityManager=self.serviceContainer.getService('personality_manager'),
+                            gameRules=self.currentSeason.gameRules,
                         )
 
                         # Assign unique integer ID and metadata
@@ -3643,6 +3804,7 @@ class SeasonManager:
                     floosbowlTeams[0], floosbowlTeams[1],
                     timingManager=self.timingManager,
                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                    gameRules=self.currentSeason.gameRules,
                 )
 
                 # Assign unique integer ID and metadata
@@ -4035,11 +4197,57 @@ class SeasonManager:
 
         logger.info(f"Season {seasonNumber} completed. Champion: {self.currentSeason.champion.name if self.currentSeason.champion else 'None'}")
     
-    async def handleOffseason(self) -> None:
-        """Handle offseason activities"""
-        await self._handleOffseason()
-    
-    async def _handleOffseason(self) -> None:
+    async def restoreForOffseasonResume(self, seasonNumber: int) -> None:
+        """Rebuild minimal state needed to re-enter _handleOffseason after a
+        mid-offseason restart, WITHOUT re-running the regular season / playoffs
+        and WITHOUT _clearSeasonData (which would wipe standings + team stats).
+
+        Loads the season record from the DB, restores the startDate anchor,
+        re-loads the schedule so any inspection code works, rebuilds the
+        pending rookie pool (so a partial-rookie-draft resume sees the right
+        candidates), and lets _persistOffseasonFlow's loaded values (already
+        hydrated in __init__ via _loadOffseasonStateFromDb on construction)
+        drive the phase + completed-steps state.
+        """
+        self.currentSeason = Season(seasonNumber)
+        # Re-hydrate offseason flow phase + completed-steps from DB so
+        # _handleOffseason skips the right phases on resume.
+        self.loadOffseasonFlowFromDb()
+        # Restore startDate so any timing-anchored UI/logging stays consistent.
+        self._restoreSeasonStartDate(seasonNumber)
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+            try:
+                self._fillMissingScheduleWeeks(seasonNumber)
+                self._loadScheduleFromDatabase(seasonNumber)
+            except Exception as e:
+                logger.warning(f"restoreForOffseasonResume: schedule reload failed: {e}")
+        # Mark the season as in the offseason week.
+        self.currentSeason.currentWeek = 0
+        self.currentSeason.currentWeekText = 'Offseason'
+        # Restore the upcoming-rookie pool from DB-flagged players so the
+        # rookie_draft phase (if it hasn't completed) has its pool ready.
+        try:
+            self._pendingRookiePool = [
+                p for p in self.playerManager.activePlayers
+                if getattr(p, 'is_upcoming_rookie', False)
+            ]
+            logger.info(f"restoreForOffseasonResume: rebuilt rookie pool with "
+                        f"{len(self._pendingRookiePool)} players")
+        except Exception as e:
+            logger.warning(f"restoreForOffseasonResume: rookie pool rebuild failed: {e}")
+            self._pendingRookiePool = []
+
+    async def handleOffseason(self, resumeFromOffseason: bool = False) -> None:
+        """Handle offseason activities.
+
+        resumeFromOffseason=True is used by floosballApplication's restart
+        path when in_offseason=True was found in simulation_state. It tells
+        _handleOffseason to honor the persisted completed-steps set and
+        skip phases that already finished, instead of replaying from scratch.
+        """
+        await self._handleOffseason(resumeFromOffseason=resumeFromOffseason)
+
+    async def _handleOffseason(self, resumeFromOffseason: bool = False) -> None:
         """Handle offseason activities — phased flow.
 
         Phase model (set on self._offseasonFlowPhase, target on self._offseasonFlowTarget):
@@ -4049,13 +4257,23 @@ class SeasonManager:
           pre_fa      → wait until top of next hour.
           fa_draft    → live FA picks.
           training    → silent player development calculations.
-        """
-        logger.info("Processing offseason activities")
 
-        # Reset the per-phase completion tracker. Each non-idempotent step in
-        # this method calls _markOffseasonStepComplete; future phase-aware
-        # resume work will use the persisted set to skip already-done steps.
-        self._resetOffseasonCompletedSteps()
+        Each phase marks a corresponding step in _offseasonCompletedSteps when
+        it finishes. On resumeFromOffseason=True, the persisted set is loaded
+        instead of reset, and each phase guards itself on _isOffseasonStepComplete
+        so completed phases are skipped. For partial-draft state, the pre-init
+        snapshot-restore in run_api.py rolls the DB back to phase-start before
+        we ever reach this method, so the in-progress draft re-runs cleanly.
+        """
+        if resumeFromOffseason:
+            logger.info(
+                f"Resuming offseason: phase={self._offseasonFlowPhase}, "
+                f"completed_steps={sorted(self._offseasonCompletedSteps)}"
+            )
+        else:
+            logger.info("Processing offseason activities")
+            # Fresh offseason — reset the per-phase completion tracker.
+            self._resetOffseasonCompletedSteps()
 
         # OFFSEASON_TEST runs the season silently and only broadcasts during
         # the offseason. Enable the broadcaster as the very first step so
@@ -4080,29 +4298,41 @@ class SeasonManager:
         # ── PHASE: post_bowl ───────────────────────────────────
         # _completeSeasonSimulation sets the phase + target before this runs;
         # we just honor the configured wait. In SCHEDULED that's 1h.
-        await self.timingManager.waitPostChampionship()
+        # Skipped on resume if we've already moved past this phase — the
+        # waitPostChampionship clock check is itself idempotent (it polls
+        # until target time) so re-entering during the wait is also fine.
+        if not self._isOffseasonStepComplete('post_bowl'):
+            await self.timingManager.waitPostChampionship()
+            self._markOffseasonStepComplete('post_bowl')
 
-        # Clear stale state from previous season's offseason
-        self._offseasonTransactions = []
-        self._offseasonGmResults = []
-        self._offseasonFaVoteResults = {}
-        self.playerManager._gmFaDirectives = {}
+        # Clear stale state from previous season's offseason. Only safe
+        # on a fresh offseason — on resume these may already hold meaningful
+        # in-flight data that the FA / draft phases depend on.
+        if not resumeFromOffseason:
+            self._offseasonTransactions = []
+            self._offseasonGmResults = []
+            self._offseasonFaVoteResults = {}
+            self.playerManager._gmFaDirectives = {}
         # Reset freeAgencyComplete on every team — last season's FA draft
         # left it True, which would make this season's panel boot with every
         # team showing DONE + "FREE AGENCY COMPLETE" until the draft starts.
+        # Skip on resume so a completed FA draft mid-offseason isn't reverted.
         teamManager = self.serviceContainer.getService('team_manager')
-        if teamManager:
+        if teamManager and not resumeFromOffseason:
             for t in teamManager.teams:
                 t.freeAgencyComplete = False
 
-        # Set offseason status
+        # Set offseason status (always safe to re-apply)
         if self.currentSeason:
             self.currentSeason.currentWeek = 0
             self.currentSeason.currentWeekText = 'Offseason'
 
         # Season-end prizes already awarded at end of regular season (before playoffs).
-        # Process user season transitions (All-Pro grants, etc.)
-        self._processUserSeasonTransitions()
+        # Process user season transitions (All-Pro grants, etc.) — non-idempotent,
+        # gate on the existing frontoffice_decisions marker so we don't
+        # double-credit on resume.
+        if not self._isOffseasonStepComplete('frontoffice_decisions'):
+            self._processUserSeasonTransitions()
 
         # ── PHASE: frontoffice ─────────────────────────────────
         # Front-office decisions all resolve here, then we wait until the
@@ -4335,100 +4565,112 @@ class SeasonManager:
         await self.timingManager.waitUntilNoonEt()
 
         # ── PHASE: rookie_draft ─────────────────────────────
+        # Snapshot is taken on phase entry. On a partial-draft resume, the
+        # pre-init restore in run_api.py rolls the DB back to that snapshot
+        # so picks re-run from scratch without leaving half-drafted rookies.
         await self._setOffseasonFlow('rookie_draft', None)
 
         # STEP 4: rookie draft picks (rookies + retirements were prepared at
         # the end of the front-office phase so the pool was visible during
         # the wait). Ballots are collected NOW so any edits made during the
         # wait — fans were free to revise — get picked up.
-        logger.info("Step 4: Rookie draft picks streaming")
-        rookies = self._pendingRookiePool or []
-        leagueHighlights = []
-        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
-            leagueHighlights = self.currentSeason.leagueHighlights
+        if self._isOffseasonStepComplete('rookie_draft'):
+            logger.info("Step 4 skipped — rookie_draft already complete")
+            self._offseasonPhase = 'rookie_draft'
+            # Skip the pick streaming + post-pick pause; advance straight to
+            # the pre-FA integrity sweep + pre_fa wait below.
+            rookies = self._pendingRookiePool or []
+        else:
+            logger.info("Step 4: Rookie draft picks streaming")
+            rookies = self._pendingRookiePool or []
+            leagueHighlights = []
+            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+                leagueHighlights = self.currentSeason.leagueHighlights
 
-        fanPreferences = self._collectRookieDraftBallots(seasonNum)
-        self._offseasonRookieBallotResults = dict(fanPreferences)
-        freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+            fanPreferences = self._collectRookieDraftBallots(seasonNum)
+            self._offseasonRookieBallotResults = dict(fanPreferences)
+            freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
 
-        # Live pick-by-pick rookie draft — drives the same WS events the FA
-        # draft uses, so the OffseasonPanel can render the rookie phase too.
-        # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
-        # rookie draft from FA draft.
-        pickGen = self.playerManager.rookieDraftPickGenerator(
-            rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
-        )
+            # Live pick-by-pick rookie draft — drives the same WS events the FA
+            # draft uses, so the OffseasonPanel can render the rookie phase too.
+            # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
+            # rookie draft from FA draft.
+            pickGen = self.playerManager.rookieDraftPickGenerator(
+                rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
+            )
 
-        self._offseasonPhase = 'rookie_draft'
-        # rookie_draft_start was broadcast above (during front-office phase
-        # end) to populate the rookie pool during the wait — don't re-fire
-        # it here, that would reset state on the panel.
+            self._offseasonPhase = 'rookie_draft'
+            # rookie_draft_start was broadcast above (during front-office phase
+            # end) to populate the rookie pool during the wait — don't re-fire
+            # it here, that would reset state on the panel.
 
-        draftSummary = None
-        try:
-            for entry in pickGen:
-                kind = entry.get('type')
-                if kind == 'on_clock':
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_on_clock',
-                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                        })
-                        await self.timingManager.waitBetweenOffseasonPicks()
-                elif kind == 'pick':
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_pick',
+            draftSummary = None
+            try:
+                for entry in pickGen:
+                    kind = entry.get('type')
+                    if kind == 'on_clock':
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_on_clock',
+                                'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            })
+                            await self.timingManager.waitBetweenOffseasonPicks()
+                    elif kind == 'pick':
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_pick',
+                                'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                                'playerId': entry.get('playerId'),
+                                'player': entry['playerName'], 'position': entry['position'],
+                                'rating': entry['rating'], 'tier': entry['tier'],
+                                'source': entry.get('source', 'ai_best'),
+                            })
+                        # Persist so /api/offseason can replay the pick on refresh.
+                        self._offseasonTransactions.append({
+                            'type': 'rookie_pick',
                             'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
                             'playerId': entry.get('playerId'),
                             'player': entry['playerName'], 'position': entry['position'],
                             'rating': entry['rating'], 'tier': entry['tier'],
-                            'source': entry.get('source', 'ai_best'),
                         })
-                    # Persist so /api/offseason can replay the pick on refresh.
-                    self._offseasonTransactions.append({
-                        'type': 'rookie_pick',
-                        'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
-                        'playerId': entry.get('playerId'),
-                        'player': entry['playerName'], 'position': entry['position'],
-                        'rating': entry['rating'], 'tier': entry['tier'],
-                    })
-                elif kind == 'skip':
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_skip',
+                    elif kind == 'skip':
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_skip',
+                                'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                                'reason': entry.get('reason'),
+                            })
+                        # Persist so refresh shows skipped teams too.
+                        reason = entry.get('reason')
+                        skipLabel = '(pipeline full — forfeited pick)' if reason == 'pipeline_full' else '(no eligible rookies)'
+                        self._offseasonTransactions.append({
+                            'type': 'rookie_skip',
                             'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                            'reason': entry.get('reason'),
+                            'player': skipLabel, 'position': '—',
+                            'rating': 0,
                         })
-                    # Persist so refresh shows skipped teams too.
-                    reason = entry.get('reason')
-                    skipLabel = '(pipeline full — forfeited pick)' if reason == 'pipeline_full' else '(no eligible rookies)'
-                    self._offseasonTransactions.append({
-                        'type': 'rookie_skip',
-                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                        'player': skipLabel, 'position': '—',
-                        'rating': 0,
-                    })
-                elif kind == 'complete':
-                    draftSummary = entry
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_complete',
-                            'totalPicks': len(entry.get('picks', [])),
-                            'undraftedCount': len(entry.get('undrafted', [])),
-                        })
-        except Exception as e:
-            logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
-            # Drain the rest so mutations still complete
-            for _ in pickGen:
-                pass
+                    elif kind == 'complete':
+                        draftSummary = entry
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_complete',
+                                'totalPicks': len(entry.get('picks', [])),
+                                'undraftedCount': len(entry.get('undrafted', [])),
+                            })
+            except Exception as e:
+                logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
+                # Drain the rest so mutations still complete
+                for _ in pickGen:
+                    pass
 
-        # Brief pause so the frontend can show the rookie draft's final state
-        # before the FA phase takes over and shifts the panel's content. Skip
-        # when broadcasting is off (no human watching) or during fast-catchup.
-        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
-                and not getattr(self.timingManager, '_isFastCatchingUp', False):
-            await asyncio.sleep(3)
+            # Brief pause so the frontend can show the rookie draft's final state
+            # before the FA phase takes over and shifts the panel's content. Skip
+            # when broadcasting is off (no human watching) or during fast-catchup.
+            if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
+                    and not getattr(self.timingManager, '_isFastCatchingUp', False):
+                await asyncio.sleep(3)
+
+            self._markOffseasonStepComplete('rookie_draft')
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (rookie draft just promoted some
@@ -4480,29 +4722,37 @@ class SeasonManager:
                     await asyncio.sleep(halfWait)
 
         # ── PHASE: fa_draft ──────────────────────────────────
+        # Snapshot taken on phase entry. On partial-draft resume the pre-init
+        # restore in run_api.py rolls the DB back to that snapshot so FA picks
+        # re-run cleanly without leaving half-assigned free agents.
         await self._setOffseasonFlow('fa_draft', None)
 
-        # STEP 5.5: Final FA ballot resolution + window close.
-        # Re-runs RCV with whatever ballots have been submitted up to this
-        # exact moment, then officially closes the window. Users watching
-        # the post-rookie wait can revise ballots until this fires.
-        logger.info("Step 5.5: Final FA ballot resolution + window close")
-        await self._runFaVotingWindow(closeWindow=True)
+        if self._isOffseasonStepComplete('fa_draft'):
+            logger.info("Steps 5.5–6.5 skipped — fa_draft already complete")
+        else:
+            # STEP 5.5: Final FA ballot resolution + window close.
+            # Re-runs RCV with whatever ballots have been submitted up to this
+            # exact moment, then officially closes the window. Users watching
+            # the post-rookie wait can revise ballots until this fires.
+            logger.info("Step 5.5: Final FA ballot resolution + window close")
+            await self._runFaVotingWindow(closeWindow=True)
 
-        # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
-        # *final* ballot directives (just resolved above), so any post-cuts
-        # ballot revisions are honored. Runs before the round-robin so
-        # promoted prospects fill their slots first.
-        logger.info("Step 5.75: Apply fan-voted prospect promotions")
-        await self._applyFanVotedPromotions()
+            # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
+            # *final* ballot directives (just resolved above), so any post-cuts
+            # ballot revisions are honored. Runs before the round-robin so
+            # promoted prospects fill their slots first.
+            logger.info("Step 5.75: Apply fan-voted prospect promotions")
+            await self._applyFanVotedPromotions()
 
-        # STEP 6: FA Draft
-        logger.info("Step 6: Free agency draft")
-        await self._processFreeAgency()
+            # STEP 6: FA Draft
+            logger.info("Step 6: Free agency draft")
+            await self._processFreeAgency()
 
-        # STEP 6.5: Validate roster/FA integrity after draft too — defensive,
-        # in case new mismatches were introduced during picks.
-        self._validateRosterIntegrity()
+            # STEP 6.5: Validate roster/FA integrity after draft too — defensive,
+            # in case new mismatches were introduced during picks.
+            self._validateRosterIntegrity()
+
+            self._markOffseasonStepComplete('fa_draft')
 
         # ── PHASE: training ──────────────────────────────────
         # Players just signed by FA are now under their new team's coach +
@@ -5279,7 +5529,7 @@ class SeasonManager:
                 leagueHighlights = self.currentSeason.leagueHighlights
             for player, team in flagged:
                 leagueHighlights.insert(0, {
-                    'event': {'text': f'{player.name} ({team.name}) has announced he will retire at the end of the season'}
+                    'event': {'text': f'{player.name} ({team.name}) has announced retirement at the end of the season'}
                 })
                 logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
 
@@ -5728,6 +5978,41 @@ class SeasonManager:
             return None
         import json
         return json.dumps(sorted(steps))
+
+    def loadOffseasonFlowFromDb(self) -> None:
+        """Re-hydrate _offseasonFlowPhase + _offseasonFlowTarget +
+        _offseasonCompletedSteps from simulation_state. Called by the resume
+        path so a restart picks up exactly where the previous run left off.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import SimulationState
+            import json
+            sess = get_session()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                if not row:
+                    return
+                self._offseasonFlowPhase = getattr(row, 'offseason_phase', None)
+                self._offseasonFlowTarget = getattr(row, 'offseason_phase_target', None)
+                encoded = getattr(row, 'offseason_completed_steps', None)
+                if encoded:
+                    try:
+                        self._offseasonCompletedSteps = set(json.loads(encoded))
+                    except Exception:
+                        self._offseasonCompletedSteps = set()
+                else:
+                    self._offseasonCompletedSteps = set()
+                logger.info(
+                    f"loadOffseasonFlowFromDb: phase={self._offseasonFlowPhase}, "
+                    f"completed_steps={sorted(self._offseasonCompletedSteps)}"
+                )
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.warning(f"Could not load offseason flow state: {e}")
 
     def _isOffseasonStepComplete(self, step: str) -> bool:
         return step in getattr(self, '_offseasonCompletedSteps', set())
@@ -7871,6 +8156,11 @@ class SeasonManager:
             tierName, tierRank = tierFor(rec.effective_funding or 0)
             rec.funding_tier = tierName
             rec.tier_rank = tierRank
+            # Snapshot the funding value this tier was computed from so the
+            # markets chart can place the filled dot in the matching band
+            # even when post-recompute contributions push effective_funding
+            # higher than what locked the tier.
+            rec.tier_locked_funding = rec.effective_funding or 0
 
         session.flush()
 
@@ -7993,6 +8283,10 @@ class SeasonManager:
                         current_funding=currentFunding,
                         carried_funding=carriedFunding,
                         effective_funding=effectiveFunding,
+                        # Tier locked at season-start values — baseline + carried.
+                        # Will be overwritten by _assignFundingTiers at offseason
+                        # recompute (which uses full effective_funding instead).
+                        tier_locked_funding=effectiveFunding,
                     )
                     session.add(funding)
 
@@ -8051,24 +8345,39 @@ class SeasonManager:
             logger.info("First season — all teams default to MID_MARKET funding tier")
 
     def _applyDevTierOverride(self) -> None:
-        """Dev/testing only: when DEV_SPREAD_TIERS=1 is set, redistribute teams
-        across all four funding tiers (MEGA / LARGE / MID / SMALL) regardless
-        of actual fan contributions. Bypasses the funding-derived tier assignment
-        from `_assignFundingTiers` so single-user test runs produce a realistic
-        4-tier distribution for diagnostic.
+        """Dev/testing only: redistribute teams across all four funding tiers
+        regardless of actual fan contributions. Bypasses the funding-derived
+        tier assignment from `_assignFundingTiers` so single-user test runs
+        produce a realistic 4-tier distribution.
 
-        Bucketing is deterministic by team.id — chunks of 8 teams per tier in a
-        32-team league. Same team gets the same tier every season for clean
-        trajectory tracking in logs/pressure_diag.log.
+        Two modes:
+          - DEV_SPREAD_TIERS=1   → deterministic by team.id (same team gets
+            the same tier every season). Good for trajectory diagnostics.
+          - DEV_SHUFFLE_TIERS=1  → random per-season assignment seeded by the
+            current season number. Same season number reproduces the same
+            shuffle; consecutive seasons rotate teams through different tiers.
+            Use when the deterministic mode keeps your favorite team in the
+            same bucket every season.
         """
         import os
-        if os.environ.get("DEV_SPREAD_TIERS") != "1":
+        import random as _random
+        spread = os.environ.get("DEV_SPREAD_TIERS") == "1"
+        shuffle = os.environ.get("DEV_SHUFFLE_TIERS") == "1"
+        if not (spread or shuffle):
             return
         teamManager = self.serviceContainer.getService('team_manager')
         sortedTeams = sorted(teamManager.teams, key=lambda t: getattr(t, 'id', 0))
         n = len(sortedTeams)
         if n == 0:
             return
+        if shuffle:
+            seasonNum = getattr(self.currentSeason, 'seasonNumber', None) or 1
+            seed = seasonNum * 1009 + 7
+            rng = _random.Random(seed)
+            rng.shuffle(sortedTeams)
+            mode = f"shuffled (season={seasonNum}, seed={seed})"
+        else:
+            mode = "deterministic by team.id"
         chunk = max(1, n // 4)
         tiers = ["MEGA_MARKET", "LARGE_MARKET", "MID_MARKET", "SMALL_MARKET"]
         for idx, team in enumerate(sortedTeams):
@@ -8076,8 +8385,8 @@ class SeasonManager:
             team.fundingTier = tiers[tierIdx]
             team.fundingTierRank = tierIdx + 1
         logger.info(
-            "DEV_SPREAD_TIERS active — overrode fundingTier on "
-            f"{n} teams: 4 tiers × {chunk} teams each (deterministic by team.id)"
+            f"Dev tier override active ({mode}) — {n} teams × 4 tiers × "
+            f"{chunk} teams each"
         )
 
     def _getPickemWeek(self) -> int:
@@ -8263,11 +8572,15 @@ class SeasonManager:
             pass
 
     def _sweepExpiredAchievementRewards(self) -> None:
-        """Drop pending rewards the user didn't claim or stash-in-time.
+        """Drop pending rewards the user didn't claim or stash-in-time, then
+        convert any over-cap pack stash to Floobits.
 
         Passes the new season number so the sweep can also clear stashed
         rewards whose deferral target season has already come and gone
-        without the reward being claimed.
+        without the reward being claimed. After the sweep, over-cap packs
+        (held in violation of the soft cap due to legacy state or future
+        bugs) are converted to Floobits at shop cost — keeps the cap
+        consistent at the start of every new season.
         """
         try:
             from database.connection import get_session
@@ -8276,10 +8589,11 @@ class SeasonManager:
             session = get_session()
             try:
                 _am.sweepExpiredRewards(session, currentSeason=newSeason)
+                _am.convertOverCapPackStash(session)
                 session.commit()
             except Exception as e:
                 session.rollback()
-                logger.warning(f"Expired reward sweep failed: {e}")
+                logger.warning(f"Expired reward sweep / overcap conversion failed: {e}")
             finally:
                 session.close()
         except Exception:

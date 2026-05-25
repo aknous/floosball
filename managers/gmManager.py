@@ -241,7 +241,7 @@ class GmManager:
             winnerName = winnerCandidate.coach.name
 
             # Hire the winning candidate. `hireCoachFromPool` flips
-            # coach.team_id and builds the in-memory Coach on the team.
+            # Team.coach_id and builds the in-memory Coach on the team.
             hired = teamManager.hireCoachFromPool(team, winnerId, session=self.session)
             if not hired:
                 logger.warning(

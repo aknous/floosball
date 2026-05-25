@@ -55,6 +55,7 @@ class CardCalcContext:
     favoriteTeamPriorStreak: int = 0  # Streak value before this week's game result
     favoriteTeamPeakStreak: int = 0  # Longest win or loss streak this season (abs value)
     favoriteTeamSeasonLosses: int = 0
+    favoriteTeamSeasonWins: int = 0
     favoriteTeamInPlayoffs: bool = False
     favoriteTeamWonThisWeek: bool = False
     favoriteTeamOpponentElo: float = 1500.0
@@ -88,6 +89,12 @@ class CardCalcContext:
     favoriteTeamComebackWin: bool = False
     favoriteTeamLargestDeficit: int = 0
     favoriteTeamWalkOffWin: bool = False
+
+    # League-state lookups for roster-trait cards
+    # Comeback Kid: team_ids that missed playoffs last season
+    priorSeasonMissedPlayoffTeamIds: Set[int] = field(default_factory=set)
+    # Domination: team_ids currently in top-6 league standings
+    currentTop6TeamIds: Set[int] = field(default_factory=set)
 
     # Equipped hand composition (for card-to-card effects)
     equippedCardPositions: List[int] = field(default_factory=list)
@@ -138,6 +145,11 @@ class CardCalcContext:
     _teamRecords: Dict[int, float] = field(default_factory=dict)
     # _rosterRookieFlags: playerId → True if rookie. Used by Rookie Hype.
     _rosterRookieFlags: Dict[int, bool] = field(default_factory=dict)
+    # _rosterSeasonsPlayed: playerId → int. Used by Vanguard (5+ veterans).
+    _rosterSeasonsPlayed: Dict[int, int] = field(default_factory=dict)
+    # Snapshot of player IDs the user committed to on their first roster save.
+    # Used by Loyalty (rewards keeping originals).
+    initialRosterPlayerIds: Set[int] = field(default_factory=set)
 
     # Pick-em stats for the displayed week. Used by Conviction (streak on
     # manual submit), Augur (accuracy bonus), Tipster (FPx scaling with
@@ -149,6 +161,8 @@ class CardCalcContext:
 
     # Eminence: per-position league avg FP/game and per-player season FP/game
     positionAvgFPs: Dict[int, float] = field(default_factory=dict)  # pos → avg FP/game
+    top10PerPosition: Dict[int, Set[int]] = field(default_factory=dict)  # pos → set of top-10 player IDs by season FP/game
+    top1PerPosition: Dict[int, Set[int]] = field(default_factory=dict)   # pos → set with the #1 player at that position
     playerSeasonFPPerGame: Dict[int, float] = field(default_factory=dict)  # playerId → FP/game
 
     # Projection mode — when True, the calc is running against expected values
@@ -362,6 +376,7 @@ _SECOND_PASS_EFFECTS = frozenset({
     "double_down", "last_resort",
     "high_roller",
     "fortitude",
+    "charmed",  # FP per chance card trigger this week
 })
 
 # Tradeoff effects that modify the overall bonus aggregation
@@ -401,6 +416,8 @@ def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
         return any(b.totalFP > 0 and b.effectName != "double_down" for b in firstPassBreakdowns)
     if effectName == "high_roller":
         return any(b.chanceTriggered for b in firstPassBreakdowns)
+    if effectName == "charmed":
+        return any(b.chanceTriggered for b in firstPassBreakdowns)
     if effectName == "fortitude":
         # Heat Check fires whenever there's at least one active streak card.
         return getattr(ctx, 'activeStreakCount', 0) > 0
@@ -408,11 +425,14 @@ def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
 
 
 def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
-    """Compute per-position league average FP/game and per-player FP/game.
+    """Compute per-position league avg FP/game, per-player FP/game, top-10
+    set per position (Eminence), and top-1 set per position (Cornerstone).
 
-    Returns (positionAvgFPs, playerSeasonFPPerGame):
-        positionAvgFPs: {pos(1-5) → float}
+    Returns (positionAvgFPs, playerSeasonFPPerGame, top10PerPosition, top1PerPosition):
+        positionAvgFPs:        {pos(1-5) → float}
         playerSeasonFPPerGame: {playerId → float}
+        top10PerPosition:      {pos(1-5) → Set[playerId]}
+        top1PerPosition:       {pos(1-5) → Set[playerId]}  (1 player per position)
 
     Only uses completed games (final status) from weeks prior to currentWeek.
     Player.position is 1-based (QB=1, RB=2, WR=3, TE=4, K=5).
@@ -421,7 +441,7 @@ def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
     from collections import defaultdict
 
     if currentWeek < 3:
-        return {}, {}
+        return {}, {}, {}, {}
 
     # Get all player stats from completed games this season (prior weeks)
     rows = (
@@ -435,11 +455,13 @@ def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
     # Accumulate per-player and per-position
     playerTotals = defaultdict(lambda: [0.0, 0])  # playerId → [totalFP, gameCount]
     posTotals = defaultdict(lambda: [0.0, 0])  # pos(1-based) → [totalFP, playerGames]
+    playerPositions: Dict[int, int] = {}
     for playerId, fp, pos in rows:
         # Player.position is 1-based (QB=1, RB=2, WR=3, TE=4, K=5)
         playerTotals[playerId][0] += (fp or 0)
         playerTotals[playerId][1] += 1
         if pos:
+            playerPositions[playerId] = pos
             posTotals[pos][0] += (fp or 0)
             posTotals[pos][1] += 1
 
@@ -452,7 +474,20 @@ def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
         for pos, (total, count) in posTotals.items() if count > 0
     }
 
-    return positionAvgFPs, playerSeasonFPPerGame
+    # Top-10 + top-1 player IDs per position by season FP/game
+    byPosition: Dict[int, list] = defaultdict(list)
+    for pid, fpPerGame in playerSeasonFPPerGame.items():
+        pos = playerPositions.get(pid)
+        if pos:
+            byPosition[pos].append((pid, fpPerGame))
+    top10PerPosition: Dict[int, Set[int]] = {}
+    top1PerPosition: Dict[int, Set[int]] = {}
+    for pos, players in byPosition.items():
+        players.sort(key=lambda x: x[1], reverse=True)
+        top10PerPosition[pos] = {pid for pid, _ in players[:10]}
+        top1PerPosition[pos] = {pid for pid, _ in players[:1]}
+
+    return positionAvgFPs, playerSeasonFPPerGame, top10PerPosition, top1PerPosition
 
 
 class _AdvantageRNG:
@@ -597,8 +632,13 @@ def _computeCardPass(
 
     # Apply modifier effects to primary values
     if mod in ("amplify", "cascade"):
-        # Double FPx bonus portion
-        if matchedMult > 1:
+        # Double FPx bonus portion. Skip tradeoff effects (Lemons) — their
+        # multBonus is a structural marker the post-pass uses to multiply
+        # a single card's flat FP, not a global FPx that should stack with
+        # weekly amplifiers. Without this skip Lemons doubled from ×2.5 to
+        # ×4.0 under Amplify, then post-pass multiplied a flat-FP card by
+        # the inflated value.
+        if matchedMult > 1 and effectName not in _TRADEOFF_EFFECTS:
             matchedMult = 1 + (matchedMult - 1) * 2
     elif mod == "frenzy":
         matchedFP *= 2  # Double +FP
@@ -785,6 +825,54 @@ def calculateWeekCardBonuses(
             secondPassCards.append(eq)
         else:
             firstPassCards.append(eq)
+
+    # Diamond stat-amplifier pre-pass — Surveyor (yards 1.5x), Sharpshooter
+    # (FGs 2x), Doubler (TDs 2x). Must run before Alchemy so Alchemy reads
+    # already-doubled FG counts when converting to TDs.
+    equippedNames = {
+        (eq.user_card.card_template.effect_config or {}).get("effectName")
+        for eq in firstPassCards
+    }
+
+    if "surveyor" in equippedNames:
+        for ps in (ctx.weekPlayerStats or {}).values():
+            for catKey, fields in [
+                ("passing_stats", ("passYards",)),
+                ("rushing_stats", ("runYards",)),
+                ("receiving_stats", ("rcvYards", "yac")),
+                ("kicking_stats", ("fgYards",)),
+            ]:
+                stats = ps.get(catKey)
+                if not isinstance(stats, dict):
+                    continue
+                for f in fields:
+                    if f in stats and isinstance(stats[f], (int, float)):
+                        stats[f] = int(stats[f] * 1.5)
+
+    if "sharpshooter" in equippedNames:
+        for ps in (ctx.weekPlayerStats or {}).values():
+            kStats = ps.get("kicking_stats")
+            if not isinstance(kStats, dict):
+                continue
+            for f in ("fgs", "fgYards"):
+                if f in kStats and isinstance(kStats[f], (int, float)):
+                    kStats[f] = int(kStats[f] * 2)
+
+    if "doubler" in equippedNames:
+        ctx.rosterTotalTds = int((ctx.rosterTotalTds or 0) * 2)
+        for ps in (ctx.weekPlayerStats or {}).values():
+            for catKey, tdKey in [
+                ("passing_stats", "tds"),
+                ("rushing_stats", "runTds"),
+                ("receiving_stats", "rcvTds"),
+            ]:
+                stats = ps.get(catKey)
+                if isinstance(stats, dict) and tdKey in stats and isinstance(stats[tdKey], (int, float)):
+                    stats[tdKey] = int(stats[tdKey] * 2)
+        # Walk Off reads q4ScoringPlays — keep the amp consistent there too.
+        for ps in (ctx.weekPlayerStats or {}).values():
+            if "q4ScoringPlays" in ps and isinstance(ps["q4ScoringPlays"], (int, float)):
+                ps["q4ScoringPlays"] = int(ps["q4ScoringPlays"] * 2)
 
     # Pre-pass: Alchemy converts roster K FGs into TDs for other cards'
     # tallies (Cornucopia, Touchdown Piñata, etc.). Must run before any

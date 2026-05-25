@@ -1100,38 +1100,44 @@ class PlayerManager:
     def computeRetirementRisk(self, player) -> str:
         """Classify a player's end-of-season retirement risk.
 
-        Mirrors the probability bands in seasonManager._processRosteredPlayerContracts
-        so the fan-facing 'retirement watch' matches what will actually happen. Returns:
-          - 'forced'      — hard cap, always retires regardless of contract
-          - 'very_likely' — age 15+ past longevity, expiring contract (90%)
-          - 'likely'      — age 10+ past longevity (65% contract-end / 25% mid-contract),
-                            OR age 15+ mid-contract (70%)
-          - 'possible'    — age 7+ past longevity (5-10% bands)
-          - 'safe'        — not yet eligible to retire
+        Retirements only fire for players whose contract expires this offseason
+        (termRemaining == 1) — mid-contract aging players are NOT eligible and
+        return 'safe'. Once Front Office opens and the retirement roll happens,
+        flagged players return 'retiring' (locked-in). Returns:
+          - 'retiring'    — decision is locked, player WILL retire this offseason
+          - 'very_likely' — age 15+ past longevity on walk year (90% to retire)
+          - 'likely'      — age 10+ past longevity on walk year (65%)
+          - 'possible'    — age 7+ past longevity on walk year (5%)
+          - 'safe'        — not yet eligible, or contract doesn't expire this offseason
         """
         from constants import (
-            RETIREMENT_FORCED_SEASONS, RETIREMENT_HIGH_AGE_SEASONS,
+            RETIREMENT_HIGH_AGE_SEASONS,
             RETIREMENT_MID_AGE_SEASONS, RETIREMENT_EARLY_AGE_SEASONS,
         )
+        # Locked-in retirement (set during _evaluateRetirementCandidates when
+        # the GM window opens) overrides any predictive tier.
+        if getattr(player, 'willRetire', False):
+            return 'retiring'
+
         seasons = getattr(player, 'seasonsPlayed', 0) or 0
         attrs = getattr(player, 'attributes', None)
         longevity = getattr(attrs, 'longevity', 99) if attrs else 99
         termRemaining = getattr(player, 'termRemaining', 1) or 0
 
-        # Hard cap: no one plays past this regardless of contract
-        if seasons >= RETIREMENT_FORCED_SEASONS:
-            return 'forced'
         # Must be past longevity before any retirement check fires
         if seasons <= longevity:
             return 'safe'
+        # Retirements only happen at end of contract — mid-contract aging vets
+        # are locked in for another year, so don't surface them as at-risk.
+        if termRemaining > 1:
+            return 'safe'
 
-        expiring = termRemaining <= 1  # walk year or already expired
         if seasons > RETIREMENT_HIGH_AGE_SEASONS:
-            return 'very_likely' if expiring else 'likely'  # 90% / 70%
+            return 'very_likely'   # 90%
         if seasons > RETIREMENT_MID_AGE_SEASONS:
-            return 'likely' if expiring else 'possible'     # 65% / 25%
+            return 'likely'        # 65%
         if seasons >= RETIREMENT_EARLY_AGE_SEASONS:
-            return 'possible'                                # 5% / 10%
+            return 'possible'      # 5%
         return 'safe'
 
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
@@ -1153,17 +1159,18 @@ class PlayerManager:
         """Sort players and assign tiers (replaces sortPlayers function)"""
         logger.debug("Sorting players and assigning tiers")
         
-        # Assign player tiers for realistic distribution:
-        # S (~2-3%): Superstar/Generational
-        # A (~8-10%): Great/Franchise  
-        # B (~25-30%): Good
-        # C (~40-45%): Average
-        # D (~15-20%): Bad
-        tierS = 93  # Top ~2-3%
-        tierA = 87  # Next ~8-10%
-        tierB = 77  # Next ~25-30%
-        tierC = 69  # Next ~40-45%
-        # Below 69 = Tier D (~15-20%)
+        # Tier thresholds aligned 1:1 with the UI star bands in
+        # frontend Components/Stars.tsx::calcStars so a "4-star player" in the
+        # UI is always TierA for contract / scouting / classification purposes.
+        # The old thresholds (S≥93, A≥87, B≥77, C≥69) created a gap where
+        # rating 84-86 showed as 4 stars but contracted as TierB — leading to
+        # 1-year deals for visually high-rated players.
+        # Star bands: 1★ 60-67 / 2★ 68-75 / 3★ 76-83 / 4★ 84-91 / 5★ 92-100
+        tierS = 92  # 5★
+        tierA = 84  # 4★
+        tierB = 76  # 3★
+        tierC = 68  # 2★
+        # Below 68 → TierD (1★)
         
         for player in self.activePlayers:
             if player.playerRating >= tierS:
@@ -3364,77 +3371,6 @@ class PlayerManager:
             return 0
         logger.info(f"Rating history: snapshotted {snapshots} new entries for season {season}")
         return snapshots
-
-    def seedInitialProspects(self, prospectsPerTeam: int = 3) -> int:
-        """One-time: populate every team's prospect pipeline with a starter class.
-
-        Without this, a fresh league starts with every pipeline empty and it
-        takes 3+ seasons before prospects become gameplay-relevant. Seeding
-        a few prospects per team at league init means the rebuild/development
-        path is immediately usable — fans can scout, promote, and plan
-        from Week 1.
-
-        Idempotent guard: skips teams that already have any prospects, so
-        this can be called on resumes without duplicating pipelines.
-        """
-        import numpy as np
-        from random import randint
-        teamManager = self.serviceContainer.getService('team_manager')
-        if not teamManager:
-            return 0
-
-        # Roster-shape weighted distribution — WR twice since teams start with 2
-        positionWeights = {
-            FloosPlayer.Position.QB: 1,
-            FloosPlayer.Position.RB: 1,
-            FloosPlayer.Position.WR: 2,
-            FloosPlayer.Position.TE: 1,
-            FloosPlayer.Position.K: 1,
-        }
-        weightedPositions = []
-        for pos, weight in positionWeights.items():
-            weightedPositions.extend([pos] * weight)
-
-        # Ratings: mirror the rookie class distribution (mean 78, std 10, clipped 60-100)
-        meanSkill, stdDev = 78, 10
-
-        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
-        seeded = 0
-        for team in teamManager.teams:
-            # Idempotent: if team already has prospects, skip
-            if getattr(team, 'prospects', None):
-                continue
-            if not hasattr(team, 'prospects'):
-                team.prospects = []
-
-            for _ in range(prospectsPerTeam):
-                physicalSeed = int(np.clip(np.random.normal(meanSkill, stdDev), 60, 100))
-                mentalSeed = int(np.clip(np.random.normal(meanSkill, stdDev), 60, 100))
-                pos = weightedPositions[randint(0, len(weightedPositions) - 1)]
-                player = self.createPlayer(pos, physicalSeed, mentalSeed)
-                if not player:
-                    continue
-                player.id = nextPlayerId
-                nextPlayerId += 1
-                player.seasonsPlayed = 0
-                player.is_prospect = True
-                player.is_upcoming_rookie = False
-                player.is_undrafted = False
-                player.drafting_team_id = team.id
-                player.prospect_seasons = 0
-                player.team = 'Prospect'
-                team.prospects.append(player)
-                if player not in self.activePlayers:
-                    self.activePlayers.append(player)
-                self.addToPositionList(player)
-                # Assign jersey number now so promoted prospects don't show #0.
-                team.assignPlayerNumber(player)
-                seeded += 1
-
-        # Assign tiers now that ratings are settled
-        self.sortPlayersByPosition()
-        logger.info(f"Seeded {seeded} initial prospects across {len(teamManager.teams)} teams")
-        return seeded
 
     def _advanceProspectWindow(self) -> dict:
         """Increment prospect_seasons on every prospect; release washouts to the FA pool.

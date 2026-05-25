@@ -154,6 +154,110 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Q4 scoring plays count on game_player_stats — Walk Off card uses this
+        try:
+            conn.execute(text("ALTER TABLE game_player_stats ADD COLUMN q4_scoring_plays INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added game_player_stats.q4_scoring_plays")
+        except Exception:
+            conn.rollback()
+
+        # Initial-player snapshot on fantasy_rosters — Loyalty card reads this
+        try:
+            conn.execute(text("ALTER TABLE fantasy_rosters ADD COLUMN initial_player_ids TEXT"))
+            conn.commit()
+            logger.info("  Migration: added fantasy_rosters.initial_player_ids")
+        except Exception:
+            conn.rollback()
+
+        # Drop legacy coaches.team_id column (single-source-of-truth refactor).
+        # The new code uses Team.coach_id exclusively. Important: do NOT
+        # overwrite a Team.coach_id that already points at a real Coach row —
+        # that FK has been the team's actual coach pointer all along, even
+        # when the legacy Coach.team_id back-reference got polluted with
+        # orphans from buggy code paths (e.g. _saveCoachToDatabase generating
+        # a new row alongside the team's original coach).
+        #
+        # Only fill Team.coach_id when it's NULL or points at a missing row,
+        # and even then pick the OLDEST matching Coach (lowest id) since the
+        # orphan pattern observed in prod is "real coach is original, newer
+        # rows are stray" — the opposite of what auto-increment-newest would
+        # imply. Idempotent: skipped once the column is gone.
+        try:
+            cols = conn.execute(text("PRAGMA table_info(coaches)")).fetchall()
+            colNames = {row[1] for row in cols}
+            if 'team_id' in colNames:
+                conn.execute(text("""
+                    UPDATE teams
+                    SET coach_id = (
+                        SELECT MIN(c.id) FROM coaches c WHERE c.team_id = teams.id
+                    )
+                    WHERE (
+                        coach_id IS NULL
+                        OR coach_id NOT IN (SELECT id FROM coaches)
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM coaches c WHERE c.team_id = teams.id
+                    )
+                """))
+                conn.execute(text("ALTER TABLE coaches DROP COLUMN team_id"))
+                conn.commit()
+                logger.info("  Migration: dropped coaches.team_id (existing Team.coach_id preserved)")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: coaches.team_id drop skipped: {e}")
+
+        # tier_locked_funding: snapshot of the funding value the row's
+        # current tier was computed from. Markets chart needs this to put
+        # the filled dot in the right tier band after the offseason recompute
+        # (which uses effective_funding instead of season-start funding).
+        try:
+            conn.execute(text("ALTER TABLE team_funding ADD COLUMN tier_locked_funding INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added team_funding.tier_locked_funding")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
+        # Schema-level guarantee: a Coach can be assigned to at most ONE Team.
+        # SQLite UNIQUE indexes treat NULLs as distinct, so multiple coachless
+        # teams (coach_id IS NULL) are allowed; a non-null coach_id has to be
+        # unique across teams. Replaces the application-layer "is this coach
+        # available" checks with a hard schema constraint. Idempotent via
+        # IF NOT EXISTS.
+        try:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_teams_coach_id "
+                "ON teams(coach_id) WHERE coach_id IS NOT NULL"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured uq_teams_coach_id (one coach per team)")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: uq_teams_coach_id index skipped: {e}")
+
+        # Play reactions — users react to plays / sideline quotes during live games
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS play_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id INTEGER NOT NULL REFERENCES games(id),
+                    play_number INTEGER NOT NULL,
+                    target_type VARCHAR(20) NOT NULL DEFAULT 'play',
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    reaction_type VARCHAR(10) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(game_id, play_number, target_type, user_id)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_play_reaction_game_play "
+                "ON play_reactions(game_id, play_number)"
+            ))
+            conn.commit()
+            logger.info("  Migration: created play_reactions table")
+        except Exception:
+            conn.rollback()
+
         # Discord linking columns (v0.9)
         # Note: SQLite doesn't support UNIQUE in ALTER TABLE ADD COLUMN,
         # so we add the column first, then create a unique index separately.
@@ -880,9 +984,21 @@ def _refreshCardEffectText():
         # their tooltip/detail strings; re-render with the *Delta variants.
         "backfield_buddies", "all_in", "stacked_deck",
         # Full-roster-required tightening — drought/sandbagger/quiet_storm
-        # /hedge now refuse to pay on a gutted roster (<5 filled slots),
+        # /hedge now refuse to pay on a gutted roster (<6 filled slots),
         # so the description should surface that.
         "drought", "sandbagger", "quiet_storm", "hedge",
+        # Fav-team-event cards reworked into roster-trait mechanics +
+        # floobits bonus on the rare event. (Note: this refresh only
+        # rewrites text — existing dev-DB cards have old primary keys
+        # and will render with `?` placeholders until they're rebuilt
+        # via fresh start or pack re-open. Fine for next-season's clean
+        # slate.)
+        "comeback_kid", "domination", "walk_off",
+        # Reworked: Believe (per fav-team season win), Showoff (per 5★),
+        # Eminence (per top-10 roster player).
+        "believe", "showoff", "eminence",
+        # FP → FPx conversions for Base FPx variety. Param keys changed.
+        "homer", "honor_roll",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these
@@ -1567,21 +1683,21 @@ def _seedAchievements():
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
             # Banner Week tiers — FP earned in a single week.
-            # Rescaled (Balatro pass): post-rebalance cards individually push
-            # weekly totals well past the old 600 cap (Hedge alone guarantees
-            # 675, Anthem tier5 hits 459, etc.). Tier I now matches a typical
-            # casual week, IV becomes a flex goal for elite mixed hands.
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 250,
-             "description": "Earn 250+ fantasy points in a single week.",
+            # Rescaled for the Balatro pullback (FP outputs roughly halved
+            # via _BAL_FP_MULT = 0.5). Targets dropped ~50% so the tiers
+            # remain reachable on optimized hands during an amplify week
+            # without being trivial.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 300,
+             "description": "Earn 300+ fantasy points in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 500,
-             "description": "Earn 500+ fantasy points in a single week.",
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 1000,
+             "description": "Earn 1,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 900,
-             "description": "Earn 900+ fantasy points in a single week.",
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 2500,
+             "description": "Earn 2,500+ fantasy points in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 1500,
-             "description": "Earn 1,500+ fantasy points in a single week.",
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 5000,
+             "description": "Earn 5,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
             # (renamed from Windfall to avoid clashing with the card effect of
@@ -1598,20 +1714,21 @@ def _seedAchievements():
             {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 400,
              "description": "Earn 400+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Dynamo tiers — cumulative season fantasy points. Rescaled
-            # (Balatro pass): elite seasons routinely clear 25,000+ FP under
-            # new card outputs, so the old 9k cap became a casual checkpoint.
-            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 3000,
-             "description": "Earn 3,000 total fantasy points this season.",
+            # Dynamo tiers — cumulative season fantasy points. Targets
+            # halved to match the Balatro pullback (_BAL_FP_MULT = 0.5).
+            # Tier IV is still a meaningful "great season" milestone given
+            # 28 game days of compounding output.
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 2500,
+             "description": "Earn 2,500 total fantasy points this season.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
             {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 7000,
              "description": "Earn 7,000 total fantasy points this season.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 14000,
-             "description": "Earn 14,000 total fantasy points this season.",
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 15000,
+             "description": "Earn 15,000 total fantasy points this season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 25000,
-             "description": "Earn 25,000 total fantasy points this season.",
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 30000,
+             "description": "Earn 30,000 total fantasy points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
@@ -1686,17 +1803,21 @@ def _seedAchievements():
             # 5×+ on a hot week, the old 3.5× cap is hit by ONE card. Tiers
             # now require actual stacking — Tier IV needs a full FPx hand
             # with elite multipliers.
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 200,
-             "description": "Reach a 2.0x total FP multiplier in a single week.",
+            # Bumped (next-season): amplify modifier doubles the FPx
+            # bonus portion, so a hand of 4-5 modest FPx cards can hit
+            # 7x on a hot week. New top tier requires both a heavily
+            # stacked FPx hand AND a favorable modifier draw.
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 250,
+             "description": "Reach a 2.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 300,
-             "description": "Reach a 3.0x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 450,
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 450,
              "description": "Reach a 4.5x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 700,
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 700,
              "description": "Reach a 7.0x total FP multiplier in a single week.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1000,
+             "description": "Reach a 10.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard

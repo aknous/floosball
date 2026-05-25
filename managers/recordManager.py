@@ -938,6 +938,12 @@ class RecordManager:
                         })
             else:
                 winningTeam.seasonTeamStats['streak'] = 1
+            # Ratchet peakStreak so Gone Streaking sees the season-long high
+            # without depending on the startup backfill in connection.py.
+            winningTeam.seasonTeamStats['peakStreak'] = max(
+                winningTeam.seasonTeamStats.get('peakStreak', 0),
+                abs(winningTeam.seasonTeamStats['streak']),
+            )
 
             # Update losing streak (lines 1272-1279)
             if losingTeam.seasonTeamStats['streak'] >= 0:
@@ -951,6 +957,10 @@ class RecordManager:
                         })
             else:
                 losingTeam.seasonTeamStats['streak'] -= 1
+            losingTeam.seasonTeamStats['peakStreak'] = max(
+                losingTeam.seasonTeamStats.get('peakStreak', 0),
+                abs(losingTeam.seasonTeamStats['streak']),
+            )
 
             # Streak pressure: independent of seasonTeamStats['streak']
             # (which is regular-season-only). currentWinStreak counts every

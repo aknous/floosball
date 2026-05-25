@@ -1272,26 +1272,30 @@ class TeamManager:
         return coach
 
     def _saveCoachToDatabase(self, team: FloosTeam.Team, session=None) -> None:
-        """Persist team.coach to the coaches table and update team.coach_id FK.
+        """Persist team.coach to the coaches table and set Team.coach_id.
+
+        Single source of truth: Team.coach_id. We write Coach row attributes
+        (name, ratings, etc.) and point the team at the coach via coach_id.
+        No Coach.team_id back-reference — it doesn't exist anymore.
 
         Optional `session` lets callers (e.g. the GM hire-coach resolution
-        flow) write through their own session so this save shares one
-        connection with the surrounding resolution. Without that, two
-        connections fight for SQLite's write lock and the auto-pick
-        fallback path hits "database is locked" while gmManager still
-        holds its session.
+        flow) share their connection so this save lands in the same
+        transaction.
         """
         targetSession = session if session is not None else self.db_session
         if not (DATABASE_AVAILABLE and USE_DATABASE and targetSession and team.coach):
             return
         try:
             from database.models import Coach as DBCoach
+            from database.models import Team as DBTeam
             dbCoach = targetSession.get(DBCoach, team.coach.id) if team.coach.id else None
-            if dbCoach is None:
-                dbCoach = DBCoach(team_id=team.id)
-                targetSession.add(dbCoach)
+            isNew = dbCoach is None
+            if isNew:
+                # Populate required fields BEFORE add() so the implicit flush
+                # at .id access doesn't INSERT with NULL name (coaches.name
+                # is NOT NULL).
+                dbCoach = DBCoach(name=team.coach.name)
             dbCoach.name = team.coach.name
-            dbCoach.team_id = team.id
             dbCoach.seasons_coached = team.coach.seasonsCoached
             dbCoach.offensive_mind = team.coach.offensiveMind
             dbCoach.defensive_mind = team.coach.defensiveMind
@@ -1302,18 +1306,14 @@ class TeamManager:
             dbCoach.scouting = getattr(team.coach, 'scouting', 80)
             dbCoach.attitude = getattr(team.coach, 'attitude', 80)
             dbCoach.overall_rating = team.coach.overallRating
+            if isNew:
+                targetSession.add(dbCoach)
             targetSession.flush()
             team.coach.id = dbCoach.id
-            # Link team → coach via coach_id FK. Re-resolve via the same
-            # session as the rest of this write so the FK update lands on
-            # the same transaction.
-            from database.models import Team as DBTeam
+            # Single source of truth — point the team at this coach.
             dbTeam = targetSession.get(DBTeam, team.id)
             if dbTeam:
                 dbTeam.coach_id = dbCoach.id
-            # Only commit when we own the session. When a caller passes in
-            # their own session they're responsible for the commit/rollback
-            # lifecycle so we don't trip nested-transaction errors.
             if session is None:
                 targetSession.commit()
         except Exception as e:
@@ -1324,12 +1324,16 @@ class TeamManager:
                 raise
 
     def _loadCoachFromDatabase(self, team: FloosTeam.Team) -> bool:
-        """Try to load a coach from DB for this team. Returns True if found and loaded."""
+        """Load this team's coach from DB via Team.coach_id. Returns True if found."""
         if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
             return False
         try:
             from database.models import Coach as DBCoach
-            dbCoach = self.db_session.query(DBCoach).filter_by(team_id=team.id).first()
+            from database.models import Team as DBTeam
+            dbTeam = self.db_session.get(DBTeam, team.id)
+            if not dbTeam or not dbTeam.coach_id:
+                return False
+            dbCoach = self.db_session.get(DBCoach, dbTeam.coach_id)
             if dbCoach is None:
                 return False
             coach = FloosCoach.Coach()
@@ -1396,37 +1400,26 @@ class TeamManager:
         self._saveCoachToDatabase(team, session=session)
 
     def fireCoach(self, team: FloosTeam.Team, session=None) -> None:
-        """Remove a team's coach (leaves them coachless until next hire).
+        """Remove a team's coach. Single write: Team.coach_id = None.
 
-        Persists the change so a fired coach actually stays fired across
-        sessions: the Coach row's team_id is cleared, returning them to
-        the unassigned pool. Without this, _loadCoachFromDatabase would
-        re-link the same coach via team_id on the next boot and the GM
-        fire vote would silently undo itself.
-
-        Optional `session` lets callers (e.g. the GM resolution flow) write
-        through their own session so fire/hire DB updates and the GM
-        vote-result records share one connection. Without that, two
-        connections fight for SQLite's write lock and the resolution flow
-        hits "database is locked" and rolls back its result records —
-        leaving the coach fired but no records of which votes resolved.
+        With the dual-direction model gone, fire is a one-step operation —
+        we null out the team's pointer at the coach and the coach itself
+        becomes an unassigned row (no Team.coach_id references it).
         """
-        oldCoach = team.coach
         team.coach = None
         targetSession = session if session is not None else self.db_session
-        if (DATABASE_AVAILABLE and USE_DATABASE and targetSession is not None
-                and oldCoach is not None and getattr(oldCoach, 'id', None)):
-            try:
-                from database.models import Coach as DBCoach
-                dbCoach = targetSession.get(DBCoach, oldCoach.id)
-                if dbCoach is not None:
-                    dbCoach.team_id = None
-                    targetSession.flush()
-            except Exception as e:
-                self.logger.warning(
-                    f"fireCoach: failed to clear DB team_id for "
-                    f"{getattr(oldCoach, 'name', '?')}: {e}"
-                )
+        if not (DATABASE_AVAILABLE and USE_DATABASE and targetSession is not None):
+            return
+        try:
+            from database.models import Team as DBTeam
+            dbTeam = targetSession.get(DBTeam, team.id)
+            if dbTeam is not None:
+                dbTeam.coach_id = None
+                targetSession.flush()
+        except Exception as e:
+            self.logger.error(
+                f"fireCoach: failed to clear Team.coach_id for {team.name}: {e}"
+            )
 
     def handleCoachRetirement(self, season: int) -> None:
         """Increment seasonsCoached, then check each coach for retirement.
@@ -1478,9 +1471,15 @@ class TeamManager:
         """
         if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
             return
-        from database.models import Coach as DBCoach
+        from database.models import Coach as DBCoach, Team as DBTeam
         try:
-            existing = self.db_session.query(DBCoach).filter(DBCoach.team_id == None).count()
+            # Count unassigned coaches: those not referenced by any Team.coach_id.
+            assignedIds = (self.db_session.query(DBTeam.coach_id)
+                           .filter(DBTeam.coach_id != None)
+                           .subquery())
+            existing = (self.db_session.query(DBCoach)
+                        .filter(~DBCoach.id.in_(assignedIds))
+                        .count())
             needed = max(0, count - existing)
             if needed == 0:
                 return
@@ -1488,7 +1487,6 @@ class TeamManager:
                 coach = self.generateCoach()
                 dbCoach = DBCoach(
                     name=coach.name,
-                    team_id=None,
                     seasons_coached=0,
                     offensive_mind=coach.offensiveMind,
                     defensive_mind=coach.defensiveMind,
@@ -1510,11 +1508,16 @@ class TeamManager:
             self.db_session.rollback()
 
     def getAvailableCoaches(self):
-        """Return list of unassigned coaches from the DB pool."""
+        """Return list of unassigned coaches (no Team.coach_id pointing at them)."""
         if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
             return []
-        from database.models import Coach as DBCoach
-        return self.db_session.query(DBCoach).filter(DBCoach.team_id == None).all()
+        from database.models import Coach as DBCoach, Team as DBTeam
+        assignedIds = (self.db_session.query(DBTeam.coach_id)
+                       .filter(DBTeam.coach_id != None)
+                       .subquery())
+        return (self.db_session.query(DBCoach)
+                .filter(~DBCoach.id.in_(assignedIds))
+                .all())
 
     # ── Per-team Coach Candidates (new hire flow) ────────────────────────────
 
@@ -1679,8 +1682,16 @@ class TeamManager:
         if not (DATABASE_AVAILABLE and USE_DATABASE and targetSession is not None):
             return False
         from database.models import Coach as DBCoach
+        from database.models import Team as DBTeam
         dbCoach = targetSession.get(DBCoach, coachId)
-        if not dbCoach or dbCoach.team_id is not None:
+        if not dbCoach:
+            return False
+        # Check unassigned via Team.coach_id (single source of truth).
+        # A coach is "available" if no team has them as coach_id.
+        teamUsing = (targetSession.query(DBTeam)
+                     .filter(DBTeam.coach_id == coachId, DBTeam.id != team.id)
+                     .first())
+        if teamUsing is not None:
             return False
         # Build in-memory coach and assign
         coach = FloosCoach.Coach()
@@ -1695,7 +1706,10 @@ class TeamManager:
         coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
         coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
         team.coach = coach
-        dbCoach.team_id = team.id
+        # Single write — point the team at the new coach.
+        dbTeam = targetSession.get(DBTeam, team.id)
+        if dbTeam:
+            dbTeam.coach_id = dbCoach.id
         targetSession.flush()
         self.logger.info(f"{team.name} hired coach {coach.name} from pool")
         return True
