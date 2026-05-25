@@ -7975,11 +7975,20 @@ class Play():
             baseContact = 10 + throwQuality * 0.85         # 10-52
             reachFactor = (receiverReach - 60) * 0.7
 
-        # Openness-gated disruption: defenders interfere when receiver isn't open.
-        # The 18 multiplier was 25 — softened because at moderate openness (~55)
-        # the old value hammered every throw by ~9 contact points, dragging
-        # short-route completion well below NFL norms even on accurate throws.
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18
+        # Tier-scaled coverage disruption: short throws are quick-release, so
+        # defenders have little time to make a play; deep throws give DBs more
+        # window to converge. This is the lever that keeps trailing-team offenses
+        # viable — short passes should be reliable even against tight coverage,
+        # so teams can sustain drives in catch-up mode.
+        tierDisruptionMult = {
+            PassType.short:    0.55,
+            PassType.medium:   0.85,
+            PassType.long:     1.00,
+            PassType.deep:     1.15,
+            PassType.hailMary: 1.30,
+        } if passType is not None else None
+        tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18 * tierMult
         # Baseline coverage pressure: always applies, scales modestly with
         # defensive rating. Anchored at 70 (league-average) so elite defenses
         # cost ~4-5 contact points and weak defenses refund a couple. Defense
