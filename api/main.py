@@ -1849,8 +1849,10 @@ async def get_league_news_recent(
         raise HTTPException(status_code=503, detail="Application not initialized")
 
     try:
+        from database.connection import get_session
         from database.models import LeagueNewsItem
-        with SessionLocal() as session:
+        session = get_session()
+        try:
             q = session.query(LeagueNewsItem)
             if season is not None:
                 q = q.filter(LeagueNewsItem.season == season)
@@ -1874,6 +1876,8 @@ async def get_league_news_recent(
                 'anomalyState': r.anomaly_state,
                 'createdAt': r.created_at.isoformat() + 'Z' if r.created_at else None,
             } for r in rows]
+        finally:
+            session.close()
     except Exception as e:
         logger.exception(f"Failed to fetch league news: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch league news")
