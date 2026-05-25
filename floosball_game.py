@@ -2457,35 +2457,86 @@ class Game:
         def _flat(key, m):
             weights[key] = weights.get(key, 0) * m
 
-        if q == 4 and scoreDiff < 0:
-            if secs < 120:
-                _mul('run', 0.1)
-                _mul('short', 1.3)
-                _mul('medium', 1.8)
-                _mul('long', 2.5)
-                _mul('deep', 3.0)         # big shot plays late
-            elif secs < 300:
-                _mul('run', 0.3)
-                _mul('medium', 1.5)
-                _mul('long', 1.8)
-                _mul('deep', 2.2)
+        # Coach attributes (normalized 0-1, clamped). Drives the trailing /
+        # leading personality logic below.
+        if coach:
+            adapt = max(0.0, min(1.0, (coach.adaptability - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE))
+            aggr  = max(0.0, min(1.0, (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE))
+        else:
+            adapt = aggr = 0.5
+
+        # ── Q4 LAST 2 MIN trailing — universal desperation, no coach modulation ──
+        # When the clock is genuinely out, every coach throws downfield.
+        if q == 4 and scoreDiff < 0 and secs < 120:
+            _mul('run', 0.1)
+            _mul('short', 1.3)
+            _mul('medium', 1.8)
+            _mul('long', 2.5)
+            _mul('deep', 3.0)
+
+        # ── TRAILING (Q3+ with time, not desperation mode) — coach identity ──
+        # Disciplined coaches (high adapt, low aggr) sustain drives via short/
+        # medium. Aggressive-undisciplined coaches panic into deep shots — the
+        # shutout pattern: chuck deep, miss, drives die, deficit compounds.
+        # Same direction (more pass) but quality of pass selection differs.
+        elif scoreDiff < -7 and (q == 3 or (q == 4 and secs >= 120)):
+            deficit = abs(scoreDiff)
+            if deficit <= 14:
+                deficitTier = 0.4
+            elif deficit <= 21:
+                deficitTier = 0.7
             else:
-                _mul('run', 0.6)
-                _mul('medium', 1.2)
-                _mul('long', 1.3)
-                _mul('deep', 1.5)
+                deficitTier = 1.0
 
-        if q == 4 and scoreDiff > 0:
-            _mul('run', 1.6)
-            _mul('long', 0.3)
-            _mul('medium', 0.7)
-            _mul('deep', 0.2)            # don't risk shots when leading late
+            # Disciplined response — shift toward sustainable routes
+            discipline = adapt * (1 - aggr * 0.4)
+            shiftDisciplined = discipline * deficitTier
+            _flat('short',  1 + shiftDisciplined * 0.5)
+            _flat('medium', 1 + shiftDisciplined * 0.3)
+            _flat('long',   1 - shiftDisciplined * 0.3)
+            _flat('deep',   1 - shiftDisciplined * 0.5)
+            _flat('run',    1 - shiftDisciplined * 0.3)
 
-        if q == 3 and scoreDiff < -10:
-            _mul('run', 0.7)
-            _mul('medium', 1.2)
-            _mul('long', 1.4)
-            _mul('deep', 1.6)
+            # Panic response — additional deep/long bias for the un-adaptive
+            # aggressive coach. Drives die faster, deficit compounds.
+            panic = aggr * (1 - adapt) * deficitTier
+            _flat('deep', 1 + panic * 0.7)
+            _flat('long', 1 + panic * 0.4)
+            _flat('run',  1 - panic * 0.4)
+
+        # ── LEADING (Q3+ with significant lead) — coach archetype ──
+        # Killer (high aggr + high adapt) presses the throat. Clock-killer
+        # (low aggr + high adapt) drains the clock professionally. Reckless
+        # (high aggr + low adapt) keeps chucking deep, sets up the comeback.
+        # Cruise (low both) coasts on the default playbook.
+        elif scoreDiff > 7 and (q == 3 or q == 4):
+            if scoreDiff <= 14:
+                leadTier = 0.4
+            elif scoreDiff <= 21:
+                leadTier = 0.7
+            else:
+                leadTier = 1.0
+
+            killerMode = aggr * (0.5 + adapt * 0.5)
+            clockKill  = (1 - aggr) * adapt
+
+            if killerMode > 0.6:
+                # Press the advantage — maintain attack, slight deep pullback
+                _flat('deep',   1 - leadTier * 0.3)
+                _flat('medium', 1 + leadTier * 0.1)
+                _flat('long',   1 + leadTier * 0.1)
+            elif clockKill > 0.5:
+                # Drain the clock with runs and quick passes
+                _flat('run',    1 + leadTier * 0.6)
+                _flat('deep',   1 - leadTier * 0.8)
+                _flat('long',   1 - leadTier * 0.5)
+                _flat('medium', 1 - leadTier * 0.2)
+            elif aggr > 0.6:
+                # Reckless leader — keeps chucking, opens door for comeback
+                _flat('deep', 1 + leadTier * 0.3)
+                _flat('long', 1 + leadTier * 0.2)
+                _flat('run',  1 - leadTier * 0.2)
+            # else: cruise control — no adjustment, vulnerable to comeback
 
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:
