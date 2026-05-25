@@ -8037,9 +8037,9 @@ class Play():
         """
         passTypeParams = {
             PassType.short:    {'mean': 3,    'stdDev': 1.0},
-            PassType.medium:   {'mean': 7.5,  'stdDev': 2.5},
-            PassType.long:     {'mean': 16,   'stdDev': 4.0},
-            PassType.deep:     {'mean': 25,   'stdDev': 5.0},
+            PassType.medium:   {'mean': 6.5,  'stdDev': 2.0},
+            PassType.long:     {'mean': 15,   'stdDev': 3.5},
+            PassType.deep:     {'mean': 24,   'stdDev': 4.5},
             PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
