@@ -7981,8 +7981,8 @@ class Play():
         # viable — short passes should be reliable even against tight coverage,
         # so teams can sustain drives in catch-up mode.
         tierDisruptionMult = {
-            PassType.short:    0.55,
-            PassType.medium:   0.85,
+            PassType.short:    0.40,
+            PassType.medium:   0.75,
             PassType.long:     1.00,
             PassType.deep:     1.15,
             PassType.hailMary: 1.30,
@@ -7991,10 +7991,10 @@ class Play():
         coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18 * tierMult
         # Baseline coverage pressure: always applies, scales modestly with
         # defensive rating. Anchored at 70 (league-average) so elite defenses
-        # cost ~4-5 contact points and weak defenses refund a couple. Defense
-        # always gets a small bite even against open receivers.
-        coverageBaseline = (defensePassCoverage - 70) * 0.2
-        contactProb = min(95, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
+        # cost a couple contact points; weak defenses refund a bit. Light touch
+        # to keep the structural lever without crushing baseline completion.
+        coverageBaseline = (defensePassCoverage - 70) * 0.1
+        contactProb = min(96, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
         baseSecure = adjustedHands * 0.95 + 8
@@ -8024,7 +8024,7 @@ class Play():
         return {
             'contactProb': round(contactProb, 1),
             'secureProb': round(secureProb, 1),
-            'catchProb': round(min(93, max(3, catchProb)), 1),
+            'catchProb': round(min(95, max(3, catchProb)), 1),
             'intProb': round(min(25, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
@@ -8038,8 +8038,8 @@ class Play():
         passTypeParams = {
             PassType.short:    {'mean': 3,   'stdDev': 1.0},
             PassType.medium:   {'mean': 6.5, 'stdDev': 1.5},
-            PassType.long:     {'mean': 13,  'stdDev': 3.0},
-            PassType.deep:     {'mean': 22,  'stdDev': 4.5},
+            PassType.long:     {'mean': 16,  'stdDev': 3.5},
+            PassType.deep:     {'mean': 25,  'stdDev': 5.0},
             PassType.hailMary: {'mean': 45,  'stdDev': 8.0},
         }
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
