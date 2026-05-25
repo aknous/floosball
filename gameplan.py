@@ -265,50 +265,25 @@ def generateDefensiveGameplan(coach, defenseTeam, offenseTeam) -> DefensiveGamep
 
 def _pickCoverage(defGameplan, down: int, yardsToGo: int, quarter: int,
                    scoreDiff: int, clockSeconds: int) -> CoverageType:
-    """Choose coverage type for this play based on tendency + situation +
-    coach archetype.
-
-    Defensive archetypes (parallel to offensive playcalling):
-      - Predator (aggr × defMind): blitz-heavy man pressure when leading
-      - Bend-Don't-Break ((1-aggr) × defMind): zone shell, prevent big play
-      - Reckless Blitzer (aggr × (1-defMind)): predictable pressure
-      - Vanilla (low both): no situational shift
-    """
+    """Choose coverage type for this play based on tendency + situation."""
     weights = dict(defGameplan.coverageTendency)
-    aggr = getattr(defGameplan, 'aggressiveness', 0.5)
-    defMind = getattr(defGameplan, 'defensiveMind', 0.5)
 
-    # Down/distance overrides (universal — apply to every defense)
+    # Situational overrides
     if down == 3 and yardsToGo > 7:
+        # 3rd & long: zone to prevent big play, or match
         weights[CoverageType.ZONE] *= 1.5
         weights[CoverageType.MAN] *= 0.7
     elif down in (1, 2) and yardsToGo <= 3:
+        # Short yardage: man coverage is fine, keep it tight
         weights[CoverageType.MAN] *= 1.3
-
-    # Score/clock state with coach-archetype modulation (Q3+).
-    # Multipliers kept modest — the archetype adds variety, not dominance.
-    # Heavier defensive shifts cascaded into pressure/TQ collapse last pass.
-    if quarter >= 3 and scoreDiff > 7:
-        # LEADING — let the archetype pick the shell
-        predator = aggr * defMind
-        prevent  = (1 - aggr) * defMind
-        if prevent > 0.32:
-            weights[CoverageType.ZONE] *= 1.4
-            weights[CoverageType.MAN] *= 0.7
-        elif predator > 0.42:
-            weights[CoverageType.MAN] *= 1.2
-            weights[CoverageType.ZONE] *= 0.9
-
-    elif quarter >= 3 and scoreDiff < -7:
-        # TRAILING — defense needs stops
-        predator = aggr * defMind
-        prevent  = (1 - aggr) * defMind
-        if predator > 0.42:
-            weights[CoverageType.MAN] *= 1.25
-            weights[CoverageType.ZONE] *= 0.8
-        elif prevent > 0.32:
-            weights[CoverageType.ZONE] *= 1.2
-            weights[CoverageType.MAN] *= 0.95
+    elif quarter >= 4 and scoreDiff > 7 and clockSeconds < 480:
+        # Protecting lead: zone / prevent defense
+        weights[CoverageType.ZONE] *= 1.8
+        weights[CoverageType.MAN] *= 0.5
+    elif quarter >= 4 and scoreDiff < -7 and clockSeconds < 480:
+        # Trailing big: man up and blitz
+        weights[CoverageType.MAN] *= 1.6
+        weights[CoverageType.ZONE] *= 0.6
 
     choices = list(weights.keys())
     probs = np.array([weights[c] for c in choices], dtype=float)
@@ -318,42 +293,23 @@ def _pickCoverage(defGameplan, down: int, yardsToGo: int, quarter: int,
 
 def _pickBlitz(defGameplan, down: int, yardsToGo: int, quarter: int,
                scoreDiff: int, clockSeconds: int) -> BlitzPackage:
-    """Choose blitz package for this play (called only when blitz triggers).
-    Coach archetype shapes the call when score/time pressure is on.
-    """
+    """Choose blitz package for this play (called only when blitz triggers)."""
     weights = dict(defGameplan.blitzPackageWeights)
-    aggr = getattr(defGameplan, 'aggressiveness', 0.5)
-    defMind = getattr(defGameplan, 'defensiveMind', 0.5)
 
-    # Down/distance universal
+    # Situational adjustments
     if down == 3 and yardsToGo > 10:
+        # 3rd & very long: all-out is tempting but risky
         weights[BlitzPackage.ALL_OUT] *= 0.6
         weights[BlitzPackage.LB_BLITZ] *= 1.3
-
-    # Score/clock state with coach archetype. Multipliers kept modest —
-    # heavy blitz boosts cascade into TQ drops and shutout inflation.
-    if quarter >= 4 and scoreDiff < -7 and clockSeconds < 300:
-        predator = aggr * defMind
-        reckless = aggr * (1 - defMind)
-        if predator > 0.42:
-            weights[BlitzPackage.ALL_OUT] *= 1.25
-            weights[BlitzPackage.SAFETY_BLITZ] *= 1.15
-        elif reckless > 0.42:
-            weights[BlitzPackage.ALL_OUT] *= 1.20
-            weights[BlitzPackage.LB_BLITZ] *= 0.9
-        else:
-            weights[BlitzPackage.ALL_OUT] *= 1.1
-
-    elif quarter >= 3 and scoreDiff > 7:
-        predator = aggr * defMind
-        if predator > 0.42:
-            weights[BlitzPackage.LB_BLITZ] *= 1.15
-            weights[BlitzPackage.ALL_OUT] *= 0.8
-        else:
-            # Conservative leading — LB only, no all-out
-            weights[BlitzPackage.ALL_OUT] *= 0.4
-            weights[BlitzPackage.SAFETY_BLITZ] *= 0.6
-            weights[BlitzPackage.LB_BLITZ] *= 1.3
+    elif quarter >= 4 and scoreDiff < -7 and clockSeconds < 300:
+        # Desperate: all-out more likely
+        weights[BlitzPackage.ALL_OUT] *= 1.8
+        weights[BlitzPackage.SAFETY_BLITZ] *= 1.3
+    elif quarter >= 4 and scoreDiff > 7:
+        # Protecting lead: conservative blitz (LB only)
+        weights[BlitzPackage.ALL_OUT] *= 0.3
+        weights[BlitzPackage.SAFETY_BLITZ] *= 0.5
+        weights[BlitzPackage.LB_BLITZ] *= 1.5
 
     choices = list(weights.keys())
     probs = np.array([weights[c] for c in choices], dtype=float)
@@ -375,7 +331,6 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
     neutral = {
         'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0,
         'coverageType': CoverageType.MAN, 'blitzPackage': None,
-        'archetype': None,
     }
     if defGameplan is None:
         return neutral
@@ -383,33 +338,6 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
     blitz = defGameplan.blitzFrequency
     runFocus = defGameplan.runStopFocus
     aggr = defGameplan.aggressiveness
-    defMind = getattr(defGameplan, 'defensiveMind', 0.5)
-
-    # Classify the defensive archetype for this snap based on score/clock
-    # and coach attributes. Used downstream for observability.
-    archetype = None
-    if quarter >= 3 and scoreDiff > 7:
-        predator = aggr * defMind
-        prevent  = (1 - aggr) * defMind
-        if predator > 0.42:
-            archetype = 'def_leading_predator'
-        elif prevent > 0.32:
-            archetype = 'def_leading_prevent'
-        elif aggr > 0.5:
-            archetype = 'def_leading_reckless'
-        else:
-            archetype = 'def_leading_vanilla'
-    elif quarter >= 3 and scoreDiff < -7:
-        predator = aggr * defMind
-        prevent  = (1 - aggr) * defMind
-        if predator > 0.42:
-            archetype = 'def_trailing_predator'
-        elif prevent > 0.32:
-            archetype = 'def_trailing_prevent'
-        elif aggr > 0.5:
-            archetype = 'def_trailing_reckless'
-        else:
-            archetype = 'def_trailing_vanilla'
 
     runDefMult = 1.0
     passDefMult = 1.0
@@ -477,7 +405,6 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
         'passRushMult': max(0.5, passRushMult),
         'coverageType': coverageType,
         'blitzPackage': blitzPackage,
-        'archetype': archetype,
     }
 
 

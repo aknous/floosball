@@ -194,14 +194,6 @@ def report(rows):
         'leading_clockkill',
         'leading_reckless',
         'leading_cruise',
-        'def_leading_predator',
-        'def_leading_prevent',
-        'def_leading_reckless',
-        'def_leading_vanilla',
-        'def_trailing_predator',
-        'def_trailing_prevent',
-        'def_trailing_reckless',
-        'def_trailing_vanilla',
     ]
     archetypeTotals = {k: 0 for k in archetypeKeys}
     gamesWithAny = 0
