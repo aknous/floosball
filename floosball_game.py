@@ -2471,11 +2471,15 @@ class Game:
         def _flat(key, m):
             weights[key] = weights.get(key, 0) * m
 
-        # Coach attributes (normalized 0-1, clamped). Drives the trailing /
-        # leading personality logic below.
+        # Coach attributes normalized to [0, 1] for personality math.
+        # Raw normalization yields [-1, +1] around neutral (80); shift+scale
+        # to [0, 1] so median coaches land at 0.5 and the trailing/leading
+        # archetypes actually fire across the population (not just elites).
         if coach:
-            adapt = max(0.0, min(1.0, (coach.adaptability - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE))
-            aggr  = max(0.0, min(1.0, (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE))
+            adaptRaw = (coach.adaptability - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+            aggrRaw  = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+            adapt = max(0.0, min(1.0, (adaptRaw + 1.0) / 2.0))
+            aggr  = max(0.0, min(1.0, (aggrRaw + 1.0) / 2.0))
         else:
             adapt = aggr = 0.5
 
