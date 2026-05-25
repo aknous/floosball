@@ -1583,6 +1583,10 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'chokePerformers': list(getattr(play_data, 'chokePerformers', []) or []),
                                 'insights': getattr(play_data, 'insights', None),
                                 'personalityEvent': getattr(play_data, 'personalityEvent', None),
+                                'glitchText': getattr(play_data, 'glitchText', None),
+                                'glitchPlayerId': getattr(play_data, 'glitchPlayerId', None),
+                                'glitchPlayerName': getattr(play_data, 'glitchPlayerName', None),
+                                'glitchLayer': getattr(play_data, 'glitchLayer', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
