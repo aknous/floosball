@@ -7918,16 +7918,16 @@ class Play():
         mentalEffect = self._mentalDrift(self.passer) / 15
         baseAccuracy += mentalEffect
 
-        # Pass type difficulty multiplier — steeper than the previous curve so
-        # deep balls are meaningfully harder. Combined with the arm-strength
-        # weighting above, a weak-armed QB on a deep ball lands in the bad-throw
-        # bucket (TQ <50), which the catch model already penalizes.
+        # Pass type difficulty multiplier — modestly steeper than the old curve.
+        # Combined with the arm-strength weighting above, weak-armed QBs on
+        # deep balls land in the bad-throw bucket, but average QBs can still
+        # complete intermediate routes at NFL-realistic rates.
         passTypeDifficulty = {
             PassType.short:    1.00,
-            PassType.medium:   0.88,
-            PassType.long:     0.72,
-            PassType.deep:     0.55,
-            PassType.hailMary: 0.35,
+            PassType.medium:   0.92,
+            PassType.long:     0.80,
+            PassType.deep:     0.65,
+            PassType.hailMary: 0.42,
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
 
@@ -7964,24 +7964,28 @@ class Play():
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
-        # Top-end compressed so even great throws aren't automatic catches.
+        # Top-end lightly compressed so elite throws aren't quite automatic.
         if throwQuality >= 70:
-            baseContact = 80 + (throwQuality - 70) * 0.4   # 80-92
+            baseContact = 85 + (throwQuality - 70) * 0.45  # 85-99
             reachFactor = receiverReach * 0.05
         elif throwQuality >= 50:
-            baseContact = 50 + (throwQuality - 50) * 1.5   # 50-80
+            baseContact = 53 + (throwQuality - 50) * 1.6   # 53-85
             reachFactor = (receiverReach - 60) * 0.4
         else:
-            baseContact = 10 + throwQuality * 0.8          # 10-50
+            baseContact = 10 + throwQuality * 0.85         # 10-52
             reachFactor = (receiverReach - 60) * 0.7
 
         # Openness-gated disruption: defenders interfere when receiver isn't open.
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 25
-        # Baseline coverage pressure: applies even on open receivers. Anchored at
-        # 70 (league-average coverage) so elite defenses (90+) cost 6 contact
-        # points, weak defenses (60) refund 3. Prevents attribute lockout.
-        coverageBaseline = (defensePassCoverage - 70) * 0.3
-        contactProb = min(92, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
+        # The 18 multiplier was 25 — softened because at moderate openness (~55)
+        # the old value hammered every throw by ~9 contact points, dragging
+        # short-route completion well below NFL norms even on accurate throws.
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18
+        # Baseline coverage pressure: always applies, scales modestly with
+        # defensive rating. Anchored at 70 (league-average) so elite defenses
+        # cost ~4-5 contact points and weak defenses refund a couple. Defense
+        # always gets a small bite even against open receivers.
+        coverageBaseline = (defensePassCoverage - 70) * 0.2
+        contactProb = min(95, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
         baseSecure = adjustedHands * 0.95 + 8
@@ -7994,7 +7998,7 @@ class Play():
             throwDifficulty = (50 - throwQuality) * 0.35
             baseSecure -= throwDifficulty
 
-        secureProb = min(95, max(15, baseSecure))
+        secureProb = min(96, max(15, baseSecure))
 
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
@@ -8011,7 +8015,7 @@ class Play():
         return {
             'contactProb': round(contactProb, 1),
             'secureProb': round(secureProb, 1),
-            'catchProb': round(min(90, max(3, catchProb)), 1),
+            'catchProb': round(min(93, max(3, catchProb)), 1),
             'intProb': round(min(25, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
