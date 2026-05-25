@@ -2401,14 +2401,14 @@ class Game:
         """
         ytg = self.yardsToFirstDown
         if self.down == 1:
-            return {'run': 48.0, 'short': 22.0, 'medium': 18.0, 'long': 10.0, 'deep': 2.0}
+            return {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 13.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
                 return {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0, 'deep': 0.0}
             elif ytg <= 9:
-                return {'run': 40.0, 'short': 22.0, 'medium': 25.0, 'long': 12.0, 'deep': 1.0}
+                return {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 14.0, 'deep': 1.0}
             else:
-                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
+                return {'run': 20.0, 'short': 20.0, 'medium': 28.0, 'long': 28.0, 'deep': 4.0}
         else:
             if ytg <= 3:
                 return {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0, 'deep': 0.0}
