@@ -76,13 +76,19 @@ def _isEdt(d):
 
 class Season:
     """Represents a single season"""
-    
+
     def __init__(self, seasonNumber: int):
         self.seasonNumber = seasonNumber
         self.currentSeason = seasonNumber  # Backward compatibility
         self.currentWeek = 0
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
+        # Rule book for this season. Defaults to the standard ruleset.
+        # Future Cores' rule patches mutate this object via
+        # ``gameRules.applyPatch(...)`` and the patch propagates to
+        # every game scheduled in this season from that point forward.
+        from game_rules import GameRules
+        self.gameRules = GameRules()
         self.activeGames = None
         self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []
@@ -550,6 +556,17 @@ class SeasonManager:
                 )
             except Exception as e:
                 logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
+
+            # Anomaly system weekly tick: applies attention decay,
+            # accumulates this week's engagement contributions, advances
+            # the state ladder, and recomputes the league-wide aggregate
+            # toward the Cracking threshold. Wrapped defensively so a
+            # failure in this layer never blocks the actual game loop.
+            try:
+                from managers.anomalyManager import weeklyTick as anomalyWeeklyTick
+                anomalyWeeklyTick(self.currentSeason.seasonNumber, nextWeek)
+            except Exception as e:
+                logger.warning(f"Anomaly weekly tick at week {nextWeek} failed: {e}")
 
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
@@ -2040,17 +2057,34 @@ class SeasonManager:
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Formula: (rosterFP + Σ flat FP) × (1 + Σ(FPxᵢ − 1))
-                    # Bonus-additive — stacked FPx grows linearly, not
-                    # geometrically. Single-FPx hands unchanged.
-                    from managers.cardEffectCalculator import aggregateMultFactors
-                    baseFP = weekRawFP + result.totalBonusFP
-                    multProduct = aggregateMultFactors(result.multFactors)
-                    totalFP = round(baseFP * multProduct, 2)
+                    # When the Cracking is active, the simulation's math is
+                    # the controlling Core's signature equation rather than
+                    # the baseline aggregator. Resolved once per week per
+                    # user against the persisted Cracking state. No
+                    # Cracking → computeFinalOutput uses the standard
+                    # bonus-additive formula (next-season's aggregator).
+                    try:
+                        from managers.anomalyManager import getActiveCrackingCore
+                        crackingCore = getActiveCrackingCore(season, week)
+                    except Exception:
+                        crackingCore = None
+
+                    from managers.coreEquations import computeFinalOutput, equationTemplate
+                    rawTotalFP, totalEquation = computeFinalOutput(
+                        weekRawFP, result.totalBonusFP, result.multFactors,
+                        coreKey=crackingCore,
+                    )
                     # Subtract raw FP so we store only the card bonus portion
-                    totalFP = round(totalFP - weekRawFP, 2)
+                    totalFP = round(rawTotalFP - weekRawFP, 2)
                     if totalFP < 0:
                         totalFP = 0.0
+                    # multProduct feeds the Compound achievement hook below.
+                    # Always use the bonus-additive aggregator — it's the
+                    # user-facing effective multiplier from the card breakdown
+                    # they see. During Cracking the totalFP is different but
+                    # the achievement signal still tracks card-stacking strength.
+                    from managers.cardEffectCalculator import aggregateMultFactors
+                    multProduct = aggregateMultFactors(result.multFactors)
 
                     # Achievement hook — Compound tiers (single-week FPx from cards only)
                     # Exclude the synergy weekly modifier's contribution so the achievement
@@ -2113,6 +2147,9 @@ class SeasonManager:
                                 "weekRawFP": round(weekRawFP, 1),
                                 "totalBonusFP": round(result.totalBonusFP, 2),
                                 "multFactors": [round(f, 2) for f in result.multFactors],
+                                "crackingCore": crackingCore,
+                                "crackingEquation": totalEquation if crackingCore else None,
+                                "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
                             },
                         })
                         weekBonus = WeeklyCardBonus(
@@ -2895,7 +2932,7 @@ class SeasonManager:
                     game = weekGames[x]
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
-                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'))
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'), gameRules=self.currentSeason.gameRules)
                     
                     # Assign unique integer ID and metadata
                     self._gameIdCounter += 1
@@ -2971,7 +3008,8 @@ class SeasonManager:
             self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
                                      timingManager=self.timingManager,
-                                     personalityManager=self.serviceContainer.getService('personality_manager'))
+                                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                                     gameRules=self.currentSeason.gameRules)
             newGame.id = self._gameIdCounter
             newGame.dbId = row.id
             newGame.seasonNumber = seasonNumber
@@ -3605,6 +3643,7 @@ class SeasonManager:
                             teamsInRound[hiSeed], teamsInRound[lowSeed],
                             timingManager=self.timingManager,
                             personalityManager=self.serviceContainer.getService('personality_manager'),
+                            gameRules=self.currentSeason.gameRules,
                         )
 
                         # Assign unique integer ID and metadata
@@ -3646,6 +3685,7 @@ class SeasonManager:
                     floosbowlTeams[0], floosbowlTeams[1],
                     timingManager=self.timingManager,
                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                    gameRules=self.currentSeason.gameRules,
                 )
 
                 # Assign unique integer ID and metadata

@@ -532,4 +532,23 @@ def calculateCertaintyMultiplier(quarter, homeWinProb):
 # Six reactions for plays + sideline quotes. UI renders SVG icons (no emoji).
 
 REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
+
+
+# ─── Anomaly System / The Cracking ──────────────────────────────────────────────
+# The anomaly system has three layers:
+#   Layer 1 — universal cosmetic micro-glitches (fires from Stirring up)
+#   Layer 2 — personality-flavored cosmetic glitches (fires from Erratic up)
+#   Cracking — the dramatic event: a Core takes control and the card-bonus
+#              math switches to that Core's signature equation
+#
+# Layer 1 + Layer 2 are PURE FLAVOR — no mechanical impact regardless of flag.
+# This flag gates ONLY the Cracking event itself. When False, the aggregate
+# can still climb to threshold and Core warnings/news still fire (visible
+# tease), but the trigger is suppressed and the math never swaps.
+#
+# Roadmap:
+#   Season N   (current): False — tease only. Whispers, warnings, glitches,
+#                         but no Cracking ever fires.
+#   Season N+1 (planned): True  — the payoff. Cracking can actually trigger.
+ANOMALY_CRACKING_ENABLED = False
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}

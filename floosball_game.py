@@ -11,6 +11,7 @@ import math
 import statistics
 from random import choice
 from time import sleep
+from typing import Dict
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
@@ -30,10 +31,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from constants import (
     GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
-    RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER, FIELD_LENGTH,
+    RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
-    QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
-    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_MIN_ATTEMPT_PROB, YARDS_TO_FIRST_DOWN,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     RECEIVER_MATCHUP_SCALE,
@@ -77,6 +76,54 @@ class PlayType(enum.Enum):
     ExtraPoint = 'Extra Point'
     Spike = 'Spike'
     Kneel = 'Kneel'
+
+
+# Layer 1 universal micro-glitch pool. **PURE FLAVOR** — no mechanical
+# impact. Fires for any anomalous player from Stirring up. The user
+# reads these and thinks "huh, that's curious." Subtle. Generic.
+_LAYER_1_MICRO_GLITCHES = [
+    "{player}'s body did not occupy that space until the play resolved around them.",
+    "{player} arrived through a gap that should not have existed.",
+    "{player} acted on information the play hadn't produced yet.",
+    "{player}'s position skipped to the result.",
+    "{player} was somewhere else a half-second ago. The play does not reflect this.",
+    "{player} was in two positions at once. Only one of them mattered.",
+    "{player} reached the moment before the moment reached {player}.",
+    "Time did not behave around {player}.",
+    "{player} stepped through a gap in the geometry.",
+    "{player}'s shadow lags. The result does not.",
+    "{player} was already in position. {player} should not have been.",
+    "{player} occupied a space the rest of the field did not acknowledge.",
+    "{player}'s movement skipped a frame the rest of the play did not.",
+    "The simulation did not have {player} in this position. The simulation conceded.",
+    "{player} resolved the play through a path that did not exist a moment earlier.",
+]
+
+# Layer 2 personality-flavored glitch pool. **STILL PURE FLAVOR** — no
+# mechanical impact. Fires for players at Erratic state and above. The
+# user reads these and thinks "okay, something weird is happening here."
+# More pronounced than Layer 1: the simulation is visibly failing
+# around the player, not just nudging.
+_LAYER_2_GLITCHES = [
+    "{player} passed through the play. The defenders did not register {player} until after.",
+    "{player}'s outline doubles for a moment. The defenders fail to converge on either.",
+    "Something resists {player} and gives way at the same instant.",
+    "{player} occupies three positions. Two of them should not be possible.",
+    "The defenders forget where {player} is for the duration of the play.",
+    "{player} moves and the field corrects itself behind them.",
+    "{player}'s body arrives before {player}'s decision did.",
+    "{player} bends the play around themselves. No one objects.",
+    "{player} is wrong in a way the simulation has not seen before.",
+    "Time will not behave near {player} anymore.",
+    "{player} steps somewhere that did not exist a half-second prior.",
+    "The space around {player} stops resolving. The play continues regardless.",
+    "{player} performs the play with no path that leads to it.",
+    "{player} did not move. The result moved to {player}.",
+    "Something failed to lock down around {player}. The lock did not return.",
+    "{player} crosses the field in a way the simulation has stopped checking.",
+    "{player} is no longer following the field's geometry.",
+    "{player}'s motion stops resembling motion. The play credits {player} anyway.",
+]
     
 class PassType(enum.Enum):
     short = 1     # 0-4 air yards   (screen, quick hitch)
@@ -650,7 +697,7 @@ def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
 class Game:
-    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None):
+    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None, gameRules=None):
         self.id = None  # Integer ID assigned by SeasonManager
         self.seasonNumber = None  # Which season this game belongs to
         self.week = None  # Week number for regular season
@@ -663,7 +710,32 @@ class Game:
         self.awayTeam : FloosTeam.Team = awayTeam
         self.awayScore = 0
         self.homeScore = 0
-        
+
+        # Rule book. Every football-rule decision the sim makes reads
+        # from this object (field length, downs per series, score
+        # values, FG mechanics, clock, etc.). Defaults to the standard
+        # ruleset; the Season passes its own instance in so all games
+        # share a consistent set, and so future Cores' rule patches can
+        # propagate to subsequent games.
+        if gameRules is not None:
+            self.gameRules = gameRules
+        else:
+            from game_rules import GameRules
+            self.gameRules = GameRules()
+
+        # Anomaly system — per-player attention + state snapshot loaded
+        # lazily on first play. Empty dicts means "not loaded yet"; an
+        # entry of 0 / 'stable' means "loaded, this player has nothing
+        # going on." Refreshed at the start of each game so mid-game DB
+        # churn isn't required.
+        self._anomalyAttention: Dict[int, float] = {}
+        self._anomalyState: Dict[int, str] = {}
+        self._anomalyAttentionLoaded: bool = False
+        # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
+        # if this game is happening inside an active Cracking window.
+        # Set when attention is loaded.
+        self._crackingMultiplier: float = 1.0
+
         # Set up timing manager for game-level delays
         if timingManager is not None:
             self.timingManager = timingManager
@@ -685,7 +757,7 @@ class Game:
         self.currentQuarter = 0
         
         # Game clock system
-        self.gameClockSeconds = 900  # 15 minutes per quarter
+        self.gameClockSeconds = self.gameRules.quarterLengthSeconds  # 15 minutes per quarter
         self.clockRunning = False
         self.homeTimeoutsRemaining = 3
         self.awayTimeoutsRemaining = 3
@@ -1290,7 +1362,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         if kicker is None:
             return False
-        kickerMax = kicker.maxFgDistance - FG_SNAP_DISTANCE
+        kickerMax = kicker.maxFgDistance - self.gameRules.fgSnapDistance
         if self.yardsToEndzone > kickerMax:
             return False
         try:
@@ -1760,7 +1832,7 @@ class Game:
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
         # Urgency-based timeout probability
-        if isEndGame and secs <= TIMEOUT_CLOCK_THRESHOLD:
+        if isEndGame and secs <= self.gameRules.timeoutClockThreshold:
             # Under 2 min: high urgency (original behavior)
             toChance = 0.5 + 0.5 * defGameIQ
         elif isEndGame:
@@ -1799,7 +1871,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         if not kicker:
             return 0.0
-        fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
+        fgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
         baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
         normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
         fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
@@ -1815,7 +1887,7 @@ class Game:
         The kicker's in-game performance also shifts the threshold — recent misses
         make coaches more cautious, while a perfect day builds trust.
         """
-        baseThreshold = FG_MIN_ATTEMPT_PROB  # 0.20
+        baseThreshold = self.gameRules.fgMinAttemptProb  # 0.20
 
         # ── Coach aggressiveness ──
         # aggrNorm: -1 (conservative) to +1 (aggressive)
@@ -1849,7 +1921,7 @@ class Game:
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
         coach = getattr(self.offensiveTeam, 'coach', None)
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -1995,7 +2067,7 @@ class Game:
                     return
 
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxDistance = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
         inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold
@@ -2073,7 +2145,7 @@ class Game:
         elif scoreDiff < 0 and inFieldGoalRange:
             deficit = abs(scoreDiff)
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
-            if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD:
+            if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold:
                 gameIQ = self._coachClockIQ(coach)
                 if deficit <= 3:
                     # FG ties or wins — chip shots are automatic, longer FGs nearly so
@@ -2096,7 +2168,7 @@ class Game:
                     # As time dwindles, FG becomes pointless — below 45 sec, no one kicks
                     secs = self.gameClockSeconds
                     if secs >= 45:
-                        timeFactor = (secs - 45) / (TIMEOUT_CLOCK_THRESHOLD - 45)
+                        timeFactor = (secs - 45) / (self.gameRules.timeoutClockThreshold - 45)
                         # Bad coaches (low IQ) more likely to settle; good coaches go for TD
                         fgChance = timeFactor * max(0.0, 0.35 - 0.3 * gameIQ)
                         if _random.random() < fgChance:
@@ -2595,7 +2667,7 @@ class Game:
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
-                drainableSeconds = toadKneels * 4 + freeKneels * KNEEL_DRAIN_SECONDS
+                drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
                 if drainableSeconds >= self.gameClockSeconds:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'kneel',
@@ -2615,7 +2687,7 @@ class Game:
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 30):
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
                 if self.yardsToEndzone <= kickerMax:
                     despThreshold = self._coachFgThreshold(coach)
@@ -2672,7 +2744,7 @@ class Game:
                     and self.gameClockSeconds <= 30
                     and not self._isGarbageTime(scoreDiff)):
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 if self.yardsToEndzone <= kickerMax:
                     winFgProb = self._estimateFgProbability()
                     if winFgProb >= 0.75:
@@ -2714,7 +2786,7 @@ class Game:
             secs = self.gameClockSeconds
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
-                    and secs <= SPIKE_CLOCK_THRESHOLD
+                    and secs <= self.gameRules.spikeClockThreshold
                     and timeoutsLeft == 0 and scoreDiff <= 0
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
@@ -2737,9 +2809,9 @@ class Game:
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
             if (isLateGame and scoreDiff <= 0 and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
-                toWindow = 300 if self.currentQuarter >= 4 else TIMEOUT_CLOCK_THRESHOLD
+                toWindow = 300 if self.currentQuarter >= 4 else self.gameRules.timeoutClockThreshold
                 if secs <= toWindow:
-                    if secs <= TIMEOUT_CLOCK_THRESHOLD:
+                    if secs <= self.gameRules.timeoutClockThreshold:
                         # Under 2 min: high urgency (original behavior)
                         toChance = 0.5 + 0.5 * gameIQ
                     else:
@@ -2801,12 +2873,12 @@ class Game:
 
         # End-of-half / end-of-game FG attempts — compute kicker range once
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
 
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if self.currentQuarter == 2 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
+        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
             if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -2816,7 +2888,7 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
+        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
             if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 canAdvance = self.gameClockSeconds >= 30
                 if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -2930,9 +3002,9 @@ class Game:
         self.offensiveTeam = defense
         self.defensiveTeam = offense
         self.yardsToEndzone = yards
-        self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+        self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
-        self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+        self.yardsToFirstDown = self.gameRules.firstDownDistance
 
 
     def formatPlayText(self):
@@ -3652,7 +3724,7 @@ class Game:
 
         # Initialize clock for Q1
         self.currentQuarter = 1
-        self.gameClockSeconds = 900
+        self.gameClockSeconds = self.gameRules.quarterLengthSeconds
         self.clockRunning = False
         
         # Store ELO ratings for use in win probability calculations
@@ -3838,7 +3910,7 @@ class Game:
                 
                 # Defensive check: If still in OT and clock is still 0 after advanceQuarter, force reset
                 if self.currentQuarter >= 5 and self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
-                    self.gameClockSeconds = 600  # Force clock reset to prevent infinite loop
+                    self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Force clock reset to prevent infinite loop
                 
                 if oldQuarter == 2:
                     # Halftime
@@ -4048,7 +4120,7 @@ class Game:
             # Start new possession if needed
             if self.down == 0 or self.down > 4:
                 self.down = 1
-                self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+                self.yardsToFirstDown = self.gameRules.firstDownDistance
                 self.yardsToEndzone = 80
                 self.yardsToSafety = 20
 
@@ -4070,6 +4142,11 @@ class Game:
                         self.highlights.insert(0, {'play': self.play})
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
+
+                    # Anomaly roll — fires Layer 1 micro-glitches for
+                    # players who've accumulated enough attention. Pure
+                    # flavor for v1; stat outputs unchanged.
+                    self._maybeFireAnomalies()
 
                     # Broadcast comprehensive game state (replaces playComplete, scoreUpdate, gameStateUpdate)
                     self.broadcastGameState(includeLastPlay=True)
@@ -4126,7 +4203,7 @@ class Game:
                             else:
                                 # Receiving team keeps ball — move to their 40 instead of their 20
                                 self.yardsToEndzone = 60
-                                self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+                                self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
                                 onsideFailEvent = {
                                     'text': f'{receivingTeam.abbr} recovers at their own 40!',
                                     'quarter': self.currentQuarter,
@@ -4458,7 +4535,7 @@ class Game:
                         if self.yardsToEndzone < 10:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
-                            self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+                            self.yardsToFirstDown = self.gameRules.firstDownDistance
                         self.yardsToSafety += self.play.yardage
                         self.yardsToEndzone -= self.play.yardage
                         self.play.playResult = PlayResult.FirstDown
@@ -5756,6 +5833,24 @@ class Game:
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
                 'scoreChange': getattr(self.play, 'scoreChange', False),
+                # Anomaly attachments — null when no glitch fired on
+                # this play. When present, the frontend should render
+                # glitchText distinctly (italic, dim) below playText.
+                'glitchText': getattr(self.play, 'glitchText', None),
+                'glitchPlayerId': getattr(self.play, 'glitchPlayerId', None),
+                'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
+                'glitchLayer': getattr(self.play, 'glitchLayer', None),
+                # Participant IDs — used by the frontend highlights feed
+                # to filter "plays involving players the user cares
+                # about." Null when the role didn't apply to this play.
+                'passerId':   getattr(getattr(self.play, 'passer', None),   'id', None),
+                'receiverId': getattr(getattr(self.play, 'receiver', None), 'id', None),
+                'runnerId':   getattr(getattr(self.play, 'runner', None),   'id', None),
+                'kickerId':   getattr(getattr(self.play, 'kicker', None),   'id', None),
+                'tacklerId':       getattr(getattr(self.play, 'tackledBy', None),       'id', None),
+                'sackerId':        getattr(getattr(self.play, 'sackedBy', None),        'id', None),
+                'interceptorId':   getattr(getattr(self.play, 'interceptedBy', None),   'id', None),
+                'forcedFumblerId': getattr(getattr(self.play, 'forcedFumbleBy', None),  'id', None),
                 'homeTeamScore': getattr(self.play, 'homeTeamScore', None),
                 'awayTeamScore': getattr(self.play, 'awayTeamScore', None),
                 'offensiveTeam': self.play.offense.abbr if hasattr(self.play, 'offense') else self.offensiveTeam.abbr,
@@ -5909,9 +6004,9 @@ class Game:
             target = 7
             return ('setupFG', max(8, secs - target))
 
-        if (q >= 4) and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0 and not garbageTime:
+        if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
-        if q == 2 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0:
+        if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:
             return ('hurryUp', 15)  # End-of-half trailing or tied
         if q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
             return ('hurryUp', 15 if scoreDiff <= -8 else 25)  # Mid-late deficit
@@ -5922,7 +6017,7 @@ class Game:
             return ('burnClock', 40)  # Late Q3 with two-score lead
         if q >= 4 and scoreDiff > 8:
             return ('burnClock', 40)  # Q4/OT comfortable lead
-        if q >= 4 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:
+        if q >= 4 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff > 0:
             return ('burnClock', 38)  # Q4/OT any lead under 2:00
         return ('neutral', DEFAULT_BASE)
 
@@ -6098,7 +6193,7 @@ class Game:
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
         self.yardsToEndzone = 2
-        self.yardsToSafety = FIELD_LENGTH - 2
+        self.yardsToSafety = self.gameRules.fieldLength - 2
         self.down = 1
         self.yardsToFirstDown = 2
 
@@ -6175,7 +6270,7 @@ class Game:
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
         self.yardsToEndzone = 15
-        self.yardsToSafety = FIELD_LENGTH - 15
+        self.yardsToSafety = self.gameRules.fieldLength - 15
         self.down = 1
         self.yardsToFirstDown = 15
 
@@ -6271,7 +6366,7 @@ class Game:
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
-        if not self.twoMinuteWarningShown and self.gameClockSeconds <= TIMEOUT_CLOCK_THRESHOLD:
+        if not self.twoMinuteWarningShown and self.gameClockSeconds <= self.gameRules.timeoutClockThreshold:
             if self.currentQuarter == 2 or self.currentQuarter == 4:
                 self.twoMinuteWarningShown = True
                 self.clockRunning = False
@@ -6291,12 +6386,12 @@ class Game:
         """Transition to next quarter"""
         if self.currentQuarter == 1:
             self.currentQuarter = 2
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.isHalftime = False
             # Reset timeouts for second half
             self.homeTimeoutsRemaining = 3
@@ -6304,13 +6399,13 @@ class Game:
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 3:
             self.currentQuarter = 4
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:
                 self.currentQuarter = 5
-                self.gameClockSeconds = 600  # 10 minute OT
+                self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # 10 minute OT
                 self.isOvertime = True
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
@@ -6321,7 +6416,7 @@ class Game:
             # Additional OT periods - reset clock if game is still tied
             if self.homeScore == self.awayScore:
                 self.otPeriod += 1
-                self.gameClockSeconds = 600  # Another 10 minute OT period
+                self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Another 10 minute OT period
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
                 self.awayTimeoutsRemaining = 2
@@ -6687,6 +6782,216 @@ class Game:
             )
             broadcaster.broadcast_sync(self.id, event)
 
+    # ── Anomaly system hooks ───────────────────────────────────────────
+    # Per-play roll for the user-attention-driven simulation-cracking
+    # layer. v1 only fires Layer 1 universal micro-glitches (pure play-
+    # text injection, no stat-output changes). Personality-keyed and
+    # signature abilities land in follow-up commits.
+
+    def _loadAnomalyAttention(self) -> None:
+        """Snapshot every active player's attention score + state for
+        this season, plus this game's Cracking multiplier.
+
+        Called lazily on the first play of the game. The snapshot is
+        held in memory for the rest of the game — DB churn would be
+        prohibitive at per-play frequency.
+        """
+        try:
+            from database.connection import get_session
+            from database.models import PlayerAttention, AnomalyState
+            from managers.anomalyManager import getCrackingMultiplier
+            session = get_session()
+            try:
+                attnRows = session.query(PlayerAttention).filter_by(
+                    season=self.seasonNumber or 0,
+                ).all()
+                self._anomalyAttention = {
+                    r.player_id: float(r.score) for r in attnRows
+                }
+                stateRows = session.query(AnomalyState).filter_by(
+                    season=self.seasonNumber or 0,
+                ).all()
+                self._anomalyState = {
+                    r.player_id: r.state for r in stateRows
+                }
+            finally:
+                session.close()
+            self._crackingMultiplier = getCrackingMultiplier(
+                self.seasonNumber or 0, self.week or 0,
+            )
+        except Exception as e:
+            # Anomaly system is purely additive — if anything fails,
+            # play out the game as if no one had any attention.
+            self._anomalyAttention = {}
+            self._anomalyState = {}
+            self._crackingMultiplier = 1.0
+            try:
+                from logger_config import get_logger
+                get_logger("floosball.anomaly").debug(
+                    f"Anomaly attention load failed: {e}"
+                )
+            except Exception:
+                pass
+        self._anomalyAttentionLoaded = True
+
+    def _maybeFireAnomalies(self) -> None:
+        """Roll for Layer 1 / Layer 2 cosmetic glitches.
+
+        Pure flavor — no stat or field-state changes. Mechanical impact
+        lives in Layer 3 (signature abilities at Awakened state).
+
+        Layer 1 (subtle, generic) can fire on any play, including
+        incompletions and sacks — the line reads as "the player
+        glitched, and that's why the play resolved the way it did."
+        Layer 2 (more pronounced) is gated to plays where the
+        candidate's role succeeded — a receiver who actually caught
+        it, a tackler who actually tackled. On failed plays at
+        higher states, Layer 2 falls back to Layer 1 so the louder
+        flavor doesn't get attached to nothing happening.
+        """
+        if not self._anomalyAttentionLoaded:
+            self._loadAnomalyAttention()
+        if not self._anomalyAttention:
+            return
+        p = self.play
+        if p is None:
+            return
+        # Skip deliberate clock kills — nothing to glitch.
+        playType = getattr(p, 'playType', None)
+        playTypeName = getattr(playType, 'name', None) or str(playType or '')
+        if playTypeName in ('Kneel', 'Spike'):
+            return
+
+        # Gather every primary actor — offensive ball-mover plus the
+        # defenders who altered the play. Order doesn't matter; we
+        # shuffle so neither side has a structural firing advantage.
+        candidates = []
+        for attr in ('receiver', 'runner', 'passer',
+                     'tackledBy', 'sackedBy', 'interceptedBy', 'forcedFumbleBy'):
+            actor = getattr(p, attr, None)
+            if actor is not None and getattr(actor, 'id', None) is not None:
+                candidates.append(actor)
+        if not candidates:
+            return
+        _random.shuffle(candidates)
+
+        for player in candidates:
+            attention = self._anomalyAttention.get(player.id, 0.0)
+            if attention <= 0:
+                continue
+            prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
+            if _random.random() < prob:
+                # Pick the layer based on the player's state:
+                #   stable / stirring  -> Layer 1 (subtle, "huh")
+                #   erratic / rampant  -> 60% Layer 2, 40% Layer 1
+                #   awakened           -> 80% Layer 2, 20% Layer 1
+                #                         (Layer 3 ability fires separately,
+                #                         once per game, not per play)
+                #   cleansed           -> Layer 1 only (drained of weight)
+                state = self._anomalyState.get(player.id, 'stable')
+                if state in ('erratic', 'rampant'):
+                    layer = 'personality' if _random.random() < 0.6 else 'micro'
+                elif state == 'awakened':
+                    layer = 'personality' if _random.random() < 0.8 else 'micro'
+                else:
+                    layer = 'micro'
+
+                # Layer 2 only fires if the candidate's role succeeded
+                # on this play — otherwise the louder "the simulation
+                # is failing around them" framing reads dissonant on a
+                # failed catch / failed run. Fall back to Layer 1.
+                if layer == 'personality' and not self._candidateSucceeded(player, p):
+                    layer = 'micro'
+
+                self._injectAnomalyLine(player, layer=layer)
+                # One anomaly per play. Multiple Awakened players on
+                # the field don't stack glitch lines.
+                return
+
+    def _candidateSucceeded(self, player, play) -> bool:
+        """Did this candidate's role produce a positive outcome for
+        their side on this play?
+
+        Defensive actors are only populated when their action succeeded
+        (tackledBy / sackedBy / interceptedBy / forcedFumbleBy all
+        imply success by their presence).
+
+        Offensive actors succeeded if the play had positive yardage
+        and didn't end as a turnover.
+        """
+        for attr in ('tackledBy', 'sackedBy', 'interceptedBy', 'forcedFumbleBy'):
+            if player is getattr(play, attr, None):
+                return True
+        yardage = getattr(play, 'yardage', 0) or 0
+        if yardage <= 0:
+            return False
+        if (getattr(play, 'isInterception', False)
+                or getattr(play, 'isFumbleLost', False)
+                or getattr(play, 'isTurnover', False)):
+            return False
+        return True
+
+    def _injectAnomalyLine(self, player, layer: str = 'micro') -> None:
+        """Append a glitch line to the play's text + log the AnomalyEvent.
+
+        layer:
+          - 'micro'       — Layer 1 generic pool, subtle, "huh that's curious"
+          - 'personality' — Layer 2 pool, more pronounced, "something is wrong"
+
+        Mechanics:
+          - `play.glitchText` — the new field, holds the glitch line so
+            frontend renderers can style it distinctly from the main
+            play text (italic, dim, etc.).
+          - `play.glitchPlayerId` / `play.glitchPlayerName` — attribution
+            for hover or click-through.
+          - `play.glitchLayer` — 'micro' or 'personality' so the frontend
+            can style L2 louder than L1.
+          - `play.playText` — also gets the line appended with a newline,
+            so feeds that read playText alone still surface the glitch.
+        """
+        if self.play is None:
+            return
+        if layer == 'personality':
+            pool = _LAYER_2_GLITCHES
+        else:
+            pool = _LAYER_1_MICRO_GLITCHES
+        line = _random.choice(pool).format(player=player.name)
+        try:
+            self.play.glitchText = line
+            self.play.glitchPlayerId = player.id
+            self.play.glitchPlayerName = player.name
+            self.play.glitchLayer = layer
+            existing = getattr(self.play, 'playText', '') or ''
+            if existing:
+                self.play.playText = f"{existing}\n{line}"
+            else:
+                self.play.playText = line
+        except Exception:
+            pass
+        # Best-effort persistence — failure here doesn't affect the game.
+        try:
+            from database.connection import get_session
+            from database.models import AnomalyEvent
+            session = get_session()
+            try:
+                evt = AnomalyEvent(
+                    player_id=player.id,
+                    season=self.seasonNumber or 0,
+                    week=self.week or 0,
+                    game_id=self.id,
+                    play_number=getattr(self.play, 'playNumber', None),
+                    layer=layer,
+                    ability=None,
+                    play_text=line,
+                    during_thinning=(self._crackingMultiplier > 1.0),
+                )
+                session.add(evt)
+                session.commit()
+            finally:
+                session.close()
+        except Exception:
+            pass
+
 
 class Play():
     def __init__(self, game:Game):
@@ -6764,6 +7069,12 @@ class Play():
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
+        # Anomaly system attachments — populated when a Layer 1 glitch
+        # fires on this play. None / empty when no anomaly happened.
+        self.glitchText = None          # The glitch flavor line
+        self.glitchPlayerId = None      # Player whose anomaly triggered
+        self.glitchPlayerName = None
+        self.glitchLayer = None         # 'micro' for Layer 1 (Layers 2-3 land later)
         self.insights = {}              # Play insights dict — populated during execution
 
     def _captureBlitzer(self, scheme, defGameplanObj):
