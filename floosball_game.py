@@ -1476,6 +1476,18 @@ class Game:
         except Exception:
             pass
 
+    def _tallyCoachArchetype(self, key: str) -> None:
+        """Increment a per-game counter for which coach-personality branch
+        was taken in the situational mods. Surfaced in sim_analytics for
+        offline analysis. Never raises.
+        """
+        try:
+            if not hasattr(self, '_coachArchetypeCounts'):
+                self._coachArchetypeCounts = {}
+            self._coachArchetypeCounts[key] = self._coachArchetypeCounts.get(key, 0) + 1
+        except Exception:
+            pass
+
     def _logPlayAnalytics(self) -> None:
         """Append one JSONL entry per game to logs/sim_analytics.jsonl
         aggregating per-play data so an offline analyzer can answer:
@@ -1545,6 +1557,8 @@ class Game:
                 'passes20plus': 0,
                 'passes30plus': 0,
                 'passes40plus': 0,
+                # Coach archetype counters (per situational-mods entry)
+                'coachArchetypes': dict(getattr(self, '_coachArchetypeCounts', {}) or {}),
             }
 
             for item in self.gameFeed:
@@ -2504,6 +2518,10 @@ class Game:
             _flat('long', 1 + panic * 0.4)
             _flat('run',  1 - panic * 0.4)
 
+            self._tallyCoachArchetype(
+                'trailing_disciplined' if discipline > panic else 'trailing_panic'
+            )
+
         # ── LEADING (Q3+ with significant lead) — coach archetype ──
         # Killer (high aggr + high adapt) presses the throat. Clock-killer
         # (low aggr + high adapt) drains the clock professionally. Reckless
@@ -2525,18 +2543,23 @@ class Game:
                 _flat('deep',   1 - leadTier * 0.3)
                 _flat('medium', 1 + leadTier * 0.1)
                 _flat('long',   1 + leadTier * 0.1)
+                self._tallyCoachArchetype('leading_killer')
             elif clockKill > 0.5:
                 # Drain the clock with runs and quick passes
                 _flat('run',    1 + leadTier * 0.6)
                 _flat('deep',   1 - leadTier * 0.8)
                 _flat('long',   1 - leadTier * 0.5)
                 _flat('medium', 1 - leadTier * 0.2)
+                self._tallyCoachArchetype('leading_clockkill')
             elif aggr > 0.6:
                 # Reckless leader — keeps chucking, opens door for comeback
                 _flat('deep', 1 + leadTier * 0.3)
                 _flat('long', 1 + leadTier * 0.2)
                 _flat('run',  1 - leadTier * 0.2)
-            # else: cruise control — no adjustment, vulnerable to comeback
+                self._tallyCoachArchetype('leading_reckless')
+            else:
+                # Cruise control — no adjustment, vulnerable to comeback
+                self._tallyCoachArchetype('leading_cruise')
 
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:

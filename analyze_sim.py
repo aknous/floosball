@@ -184,6 +184,35 @@ def report(rows):
         rate = (100 * count / attempts) if attempts else 0
         print(f'    {tier:10s}            {count/n:6.3f}/game   ({rate:.2f}% sack rate on {tier})')
 
+    # Coach archetype usage. Counts how often each coach-personality branch
+    # was taken across all games. A balanced league should see all branches
+    # present; if one is zero, that archetype isn't actually firing.
+    archetypeKeys = [
+        'trailing_disciplined',
+        'trailing_panic',
+        'leading_killer',
+        'leading_clockkill',
+        'leading_reckless',
+        'leading_cruise',
+    ]
+    archetypeTotals = {k: 0 for k in archetypeKeys}
+    gamesWithAny = 0
+    for r in rows:
+        ca = r.get('coachArchetypes') or {}
+        if ca:
+            gamesWithAny += 1
+        for k in archetypeKeys:
+            archetypeTotals[k] += ca.get(k, 0)
+    if any(archetypeTotals.values()):
+        print()
+        print(f'COACH ARCHETYPE USAGE  ({gamesWithAny}/{n} games triggered at least one)')
+        grandTotal = sum(archetypeTotals.values())
+        for k in archetypeKeys:
+            count = archetypeTotals[k]
+            pct = 100 * count / grandTotal if grandTotal else 0
+            perGame = count / n
+            print(f'  {k:24s} {count:>7d}   {perGame:>5.2f}/game   ({pct:>5.1f}% of branches)')
+
     # ── Call-vs-call matchup table ─────────────────────────────────────────
     callMatchup = {}
     for r in rows:
