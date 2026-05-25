@@ -168,10 +168,17 @@ def parse_args():
         elif arg == '--spread-tiers':
             # Dev-only: spread teams across all 4 funding tiers each season
             # so single-user testing produces a realistic tier distribution
-            # for pressure diagnostic. Sets the env var that
-            # seasonManager._applyDevTierOverride reads.
+            # for pressure diagnostic. Deterministic by team.id — same team
+            # gets the same tier every season.
             os.environ['DEV_SPREAD_TIERS'] = '1'
-            logger.info("--spread-tiers active: teams will be assigned to all 4 tiers each season")
+            logger.info("--spread-tiers active: teams will be assigned to all 4 tiers each season (deterministic by team.id)")
+        elif arg == '--shuffle-tiers':
+            # Dev-only: like --spread-tiers but randomizes the tier assignment
+            # each season (seeded by season number). Use when the deterministic
+            # bucket keeps your favorite team in the same tier and you want to
+            # see how the team performs across different tier conditions.
+            os.environ['DEV_SHUFFLE_TIERS'] = '1'
+            logger.info("--shuffle-tiers active: teams will be reshuffled across all 4 tiers each season")
 
     return args
 

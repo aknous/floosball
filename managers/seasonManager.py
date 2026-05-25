@@ -8226,24 +8226,39 @@ class SeasonManager:
             logger.info("First season — all teams default to MID_MARKET funding tier")
 
     def _applyDevTierOverride(self) -> None:
-        """Dev/testing only: when DEV_SPREAD_TIERS=1 is set, redistribute teams
-        across all four funding tiers (MEGA / LARGE / MID / SMALL) regardless
-        of actual fan contributions. Bypasses the funding-derived tier assignment
-        from `_assignFundingTiers` so single-user test runs produce a realistic
-        4-tier distribution for diagnostic.
+        """Dev/testing only: redistribute teams across all four funding tiers
+        regardless of actual fan contributions. Bypasses the funding-derived
+        tier assignment from `_assignFundingTiers` so single-user test runs
+        produce a realistic 4-tier distribution.
 
-        Bucketing is deterministic by team.id — chunks of 8 teams per tier in a
-        32-team league. Same team gets the same tier every season for clean
-        trajectory tracking in logs/pressure_diag.log.
+        Two modes:
+          - DEV_SPREAD_TIERS=1   → deterministic by team.id (same team gets
+            the same tier every season). Good for trajectory diagnostics.
+          - DEV_SHUFFLE_TIERS=1  → random per-season assignment seeded by the
+            current season number. Same season number reproduces the same
+            shuffle; consecutive seasons rotate teams through different tiers.
+            Use when the deterministic mode keeps your favorite team in the
+            same bucket every season.
         """
         import os
-        if os.environ.get("DEV_SPREAD_TIERS") != "1":
+        import random as _random
+        spread = os.environ.get("DEV_SPREAD_TIERS") == "1"
+        shuffle = os.environ.get("DEV_SHUFFLE_TIERS") == "1"
+        if not (spread or shuffle):
             return
         teamManager = self.serviceContainer.getService('team_manager')
         sortedTeams = sorted(teamManager.teams, key=lambda t: getattr(t, 'id', 0))
         n = len(sortedTeams)
         if n == 0:
             return
+        if shuffle:
+            seasonNum = getattr(self.currentSeason, 'seasonNumber', None) or 1
+            seed = seasonNum * 1009 + 7
+            rng = _random.Random(seed)
+            rng.shuffle(sortedTeams)
+            mode = f"shuffled (season={seasonNum}, seed={seed})"
+        else:
+            mode = "deterministic by team.id"
         chunk = max(1, n // 4)
         tiers = ["MEGA_MARKET", "LARGE_MARKET", "MID_MARKET", "SMALL_MARKET"]
         for idx, team in enumerate(sortedTeams):
@@ -8251,8 +8266,8 @@ class SeasonManager:
             team.fundingTier = tiers[tierIdx]
             team.fundingTierRank = tierIdx + 1
         logger.info(
-            "DEV_SPREAD_TIERS active — overrode fundingTier on "
-            f"{n} teams: 4 tiers × {chunk} teams each (deterministic by team.id)"
+            f"Dev tier override active ({mode}) — {n} teams × 4 tiers × "
+            f"{chunk} teams each"
         )
 
     def _getPickemWeek(self) -> int:

@@ -1502,7 +1502,9 @@ class Game:
             import json as _json
             import os
 
+            import time as _time
             agg = {
+                'loggedAt': int(_time.time()),
                 'season': getattr(self, 'seasonNumber', None),
                 'week': getattr(self, 'week', None),
                 'gameId': getattr(self, 'id', None),
@@ -1557,6 +1559,27 @@ class Game:
                 'passes20plus': 0,
                 'passes30plus': 0,
                 'passes40plus': 0,
+                # Defensive read mechanic
+                'reads': 0,
+                'readsCorrect': 0,
+                'readsNeutral': 0,
+                'readsWrong': 0,
+                'readsByPlayType': {
+                    'run':  {'correct': 0, 'neutral': 0, 'wrong': 0, 'total': 0},
+                    'pass': {'correct': 0, 'neutral': 0, 'wrong': 0, 'total': 0},
+                },
+                'pCorrectSum': 0.0,
+                'readsWithTendency': 0,
+                # Per-defense breakdown — see which coaching staffs read calls best.
+                # Keyed by team abbr → {correct, neutral, wrong, total, pCorrectSum}.
+                'readsByDefense': {},
+                # Key-down defensive stand mechanic (3rd/4th & short, goal-line).
+                # Stop = play didn't reach the first-down marker AND didn't score.
+                'keyDownPlays': 0,
+                'keyDownStops': 0,
+                'keyDownYardsAllowed': 0,
+                # Per-defense key-down performance — leaderboard input
+                'keyDownByDefense': {},
             }
 
             for item in self.gameFeed:
@@ -1666,6 +1689,72 @@ class Game:
 
                 if getattr(play, 'isFumbleLost', False):
                     agg['fumblesLost'] += 1
+
+                # Defensive read aggregation — only Run/Pass plays carry a read
+                # (FGs, punts, kneels, spikes don't roll one).
+                if ptName in ('Run', 'Pass'):
+                    insightsD = getattr(play, 'insights', None) or {}
+                    dInsight = insightsD.get('defense', {}) if isinstance(insightsD, dict) else {}
+                    readRes = dInsight.get('readResult')
+                    if readRes in ('correct', 'neutral', 'wrong'):
+                        agg['reads'] += 1
+                        agg[f'reads{readRes.capitalize()}'] += 1
+                        playKey = 'run' if ptName == 'Run' else 'pass'
+                        agg['readsByPlayType'][playKey][readRes] += 1
+                        agg['readsByPlayType'][playKey]['total'] += 1
+                        agg['pCorrectSum'] += float(dInsight.get('readPCorrect') or 0)
+                        if dInsight.get('readTendencyUsed'):
+                            agg['readsWithTendency'] += 1
+                        defAbbr = dInsight.get('defenseAbbr') or 'UNK'
+                        bucket = agg['readsByDefense'].setdefault(
+                            defAbbr,
+                            {'correct': 0, 'neutral': 0, 'wrong': 0, 'total': 0, 'pCorrectSum': 0.0}
+                        )
+                        bucket[readRes] += 1
+                        bucket['total'] += 1
+                        bucket['pCorrectSum'] += float(dInsight.get('readPCorrect') or 0)
+
+                    # Call-vs-call counter aggregation — how each defensive
+                    # call performs against the actual offensive play type.
+                    # Keyed by "{coverage}|{blitz}|{playType}" with yards
+                    # allowed and TD count so the analyzer can show which
+                    # matchups win and which lose.
+                    cov = dInsight.get('coverageType') or 'NONE'
+                    blz = dInsight.get('blitzPackage') or 'NONE'
+                    callKey = f'{cov}|{blz}|{"run" if ptName == "Run" else "pass"}'
+                    cb = agg.setdefault('callMatchup', {}).setdefault(
+                        callKey, {'plays': 0, 'yards': 0, 'tds': 0}
+                    )
+                    cb['plays'] += 1
+                    cb['yards'] += int(getattr(play, 'yardage', 0) or 0)
+                    if getattr(play, 'isTd', False):
+                        cb['tds'] += 1
+
+                    # Key-down stand aggregation — measure how often defenses
+                    # actually hold up on the short-yardage / goal-line snaps
+                    # that trigger the step-up scheme bump + pressure boost.
+                    if dInsight.get('keyDown'):
+                        yardsToGo = dInsight.get('startYardsToGo') or 99
+                        yardsToEndzone = dInsight.get('startYardsToEndzone') or 99
+                        # Yards needed = whichever the offense crosses first
+                        # (goal line OR first-down marker).
+                        yardsNeeded = min(yardsToGo, yardsToEndzone)
+                        yardage = int(getattr(play, 'yardage', 0) or 0)
+                        isTdPlay = bool(getattr(play, 'isTd', False))
+                        stopped = (not isTdPlay) and (yardage < yardsNeeded)
+                        agg['keyDownPlays'] += 1
+                        agg['keyDownYardsAllowed'] += yardage
+                        if stopped:
+                            agg['keyDownStops'] += 1
+                        defAbbrKey = dInsight.get('defenseAbbr') or 'UNK'
+                        kdBucket = agg['keyDownByDefense'].setdefault(
+                            defAbbrKey,
+                            {'plays': 0, 'stops': 0, 'yardsAllowed': 0}
+                        )
+                        kdBucket['plays'] += 1
+                        kdBucket['yardsAllowed'] += yardage
+                        if stopped:
+                            kdBucket['stops'] += 1
 
             os.makedirs('logs', exist_ok=True)
             with open('logs/sim_analytics.jsonl', 'a') as f:
@@ -7434,7 +7523,7 @@ class Play():
             logging.error(f"Team {self.offense.name} has no TE - run play using no blocking bonus")
 
         # Apply pressure modifier to runner's performance
-        runnerPressureMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
+        runnerPressureMod = self.runner.attributes.getPressureModifier(self._offenseEffectivePressure(self.runner))
         self.gamePressure = self.game.gamePressure
         self.keyPressureMod = runnerPressureMod
         self.clutchPlayerName = self.runner.name
@@ -7462,19 +7551,11 @@ class Play():
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
                 100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds
+                self.game.currentQuarter, self.game.gameClockSeconds,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
-
-        # Pre-snap defensive read — adjusts scheme effectiveness based on whether
-        # the coordinator + captains anticipated the call. Run plays only shift
-        # runDefMult; passDef/passRush are unaffected.
-        self.defenseRead = self._resolveDefensiveRead('run')
-        scheme['runDefMult'] = scheme['runDefMult'] * (1.0 + self.defenseRead['modifier'])
-        self._trackOffensiveTendency('run')
-
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
 
         # Track first-half run plays for halftime adjustment
@@ -7604,7 +7685,7 @@ class Play():
 
         if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
             self.isFumble = True
-            runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
+            runnerRecoveryMod = self.runner.attributes.getPressureModifier(self._offenseEffectivePressure(self.runner))
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
                (self.runner.gameAttributes.overallRating + runnerRecoveryMod + batched_randint(-5, 5)):
                 self.runner.addFumble(self.game.isRegularSeasonGame)
@@ -7670,9 +7751,11 @@ class Play():
             'passRushMult': round(scheme['passRushMult'], 2),
             'coverageType': scheme.get('coverageType', {}).value if hasattr(scheme.get('coverageType', {}), 'value') else None,
             'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
-            'readResult': self.defenseRead.get('result'),
-            'readPCorrect': self.defenseRead.get('pCorrect'),
-            'readTendencyUsed': self.defenseRead.get('tendencyUsed'),
+            'defenseAbbr': getattr(self.defense, 'abbr', None),
+            'keyDown': self._isKeyDefensiveDown(),
+            'startYardsToGo': getattr(self.game, 'yardsToFirstDown', None),
+            'startYardsToEndzone': getattr(self.game, 'yardsToEndzone', None),
+            'startDown': getattr(self.game, 'down', None),
         }
 
         # Clamp yardage to endzone
@@ -7767,135 +7850,78 @@ class Play():
         detDrift = player.gameAttributes.determinationModifier - baseDet
         return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
 
-    def _defenderMentalMod(self, defender):
-        """Combined mental swing for a defender on a single resolution.
-        Mirrors the pressureMod + mentalDrift/15 pattern used on offense so
-        defenders are equally subject to clutch/choke and in-game flow state.
-        Returns a rating delta (typically ±0 to ±8) to add onto the defender's
-        effective rating for the gate being resolved.
+    def _offenseEffectivePressure(self, player=None):
+        """Effective gamePressure value to pass into a ball-handler's
+        getPressureModifier roll. Fires in two situations:
+
+          1. Key downs (3rd/4th & short, goal-line) — bump +20
+          2. Trailing-team comeback mode — bump +25 when this offense is
+             down by 10+ in late Q4. Helps trailing teams mount comebacks
+             via clutch ball-handlers without buffing the leading team.
+
+        Both gated to players with POSITIVE pressureHandling. Why the gate:
+        getPressureModifier has a choke-variance floor of 2.0 when pressure
+        >= 50, which means neutral players (pressureHandling=0) can produce
+        -2 modifiers when they underperform but can't overperform (their
+        overperform variance is 0 × pressure). Inflating pressure on
+        neutral/fragile players biases the league-average offense toward
+        slight underperformance. The gate preserves the "clutch QB rises"
+        feel without penalizing the average ball-handler.
         """
-        if defender is None or not hasattr(defender, 'attributes'):
-            return 0.0
+        base = getattr(self.game, 'gamePressure', 0) or 0
+        keyDown = self._isKeyDefensiveDown()
+        # Trailing-team comeback mode: this offense is down by 10+ in late Q4.
+        # "This offense" is self.offense — whoever currently has the ball.
+        comeback = False
         try:
-            pressureMod = defender.attributes.getPressureModifier(self.game.gamePressure)
+            game = self.game
+            isHomeOff = (self.offense is game.homeTeam)
+            scoreDiff = (game.homeScore - game.awayScore) if isHomeOff else (game.awayScore - game.homeScore)
+            inLateQ4 = (game.currentQuarter == 4 and game.gameClockSeconds < 600)
+            comeback = inLateQ4 and scoreDiff <= -10
         except Exception:
-            pressureMod = 0.0
-        try:
-            drift = self._mentalDrift(defender) / 15
-        except Exception:
-            drift = 0.0
-        return pressureMod + drift
+            comeback = False
+        if not (keyDown or comeback):
+            return base
+        if player is not None:
+            try:
+                ph = getattr(player.attributes, 'pressureHandling', 0) or 0
+            except Exception:
+                ph = 0
+            if ph <= 0:
+                return base
+        bump = 0
+        if keyDown:
+            bump += 20
+        if comeback:
+            bump += 25
+        return min(100, base + bump)
 
-    def _getOffensiveTendency(self):
-        """Return run/pass tendency for the current offense this game.
-        Lazily initialises the tracker on the offense team. Returns rates
-        plus total plays so the caller can decide whether enough data exists.
+    def _isKeyDefensiveDown(self):
+        """True for short-yardage stop-or-go-home moments and goal-line stands.
+
+        Defense raises its level on these snaps in real football — load the
+        box, fire off harder, dial up individual stakes. Used to:
+          1. Bump runDefMult / passRushMult in the scheme builder
+          2. Inflate effective gamePressure when defenders roll mental modifiers
+             (high-pressureHandling players overperform more often;
+             low-pressureHandling players get exposed more often)
+
+        Triggers:
+          - 3rd-and-≤3, 4th-and-≤3 (must-stop downs)
+          - Anywhere inside the 3-yard line (goal-line stand — no room behind)
         """
-        if not hasattr(self.offense, 'gameOffensiveTendency'):
-            self.offense.gameOffensiveTendency = {'run': 0, 'pass': 0, 'totalPlays': 0}
-        t = self.offense.gameOffensiveTendency
-        total = t['totalPlays']
-        if total == 0:
-            return {'run': 0.5, 'pass': 0.5, 'totalPlays': 0}
-        return {'run': t['run'] / total, 'pass': t['pass'] / total, 'totalPlays': total}
-
-    def _trackOffensiveTendency(self, playType):
-        """Increment the per-game offensive tendency counter for next play's read."""
-        if not hasattr(self.offense, 'gameOffensiveTendency'):
-            self.offense.gameOffensiveTendency = {'run': 0, 'pass': 0, 'totalPlays': 0}
-        if playType in ('run', 'pass'):
-            self.offense.gameOffensiveTendency[playType] += 1
-            self.offense.gameOffensiveTendency['totalPlays'] += 1
-
-    def _resolveDefensiveRead(self, actualPlayType):
-        """Pre-snap defensive recognition roll. Returns the read result and the
-        scheme modifier to apply.
-
-        Three-tier outcome:
-          - 'correct'  → +0.20 modifier  (scheme mults boosted)
-          - 'neutral'  →  0
-          - 'wrong'    → -0.15 modifier  (scheme mults penalized)
-
-        Base 35/35/30. Shifted by:
-          - coach.defensiveMind  (the coordinator's preparation)
-          - defensive captain instinct (LB + S average — pre-snap recognition)
-          - offensive tendency (only matters when the coach is sharp enough to use it)
-
-        When offense has shown a clear tendency, a high-defensiveMind coach
-        amplifies it (predicts the predictable play). When offense breaks its
-        own tendency, the defense bites and the same coach gets burned harder.
-        """
-        coach = getattr(self.defense, 'coach', None)
-        defMind = getattr(coach, 'defensiveMind', 80) if coach else 80
-
-        # Defensive captain instinct — the LB and S are the pre-snap recognizers
-        captainInstinct = 80
-        lb = self.defense.rosterDict.get('rb') if hasattr(self.defense, 'rosterDict') else None
-        safety = self.defense.rosterDict.get('qb') if hasattr(self.defense, 'rosterDict') else None
         try:
-            i1 = getattr(lb.attributes, 'instinct', 80) if lb else 80
-            i2 = getattr(safety.attributes, 'instinct', 80) if safety else 80
-            captainInstinct = (i1 + i2) / 2
-        except Exception:
-            captainInstinct = 80
-
-        pCorrect = 0.35
-        pWrong = 0.30
-
-        # Coach + captain shift (symmetric)
-        defShift = (defMind - 80) * 0.012 + (captainInstinct - 80) * 0.004
-        pCorrect += defShift
-        pWrong -= defShift
-
-        # Tendency bump — requires enough sample size to be meaningful
-        tendency = self._getOffensiveTendency()
-        tendencyUsed = False
-        if tendency['totalPlays'] >= 5:
-            rate = tendency.get(actualPlayType, 0.5)
-            # How well does the coordinator exploit tendency data?
-            # def-mind 70 → 0% usage, def-mind 100 → 100% usage
-            usage = max(0, min(1, (defMind - 70) / 30))
-            if usage > 0:
-                tendencyUsed = True
-                if rate >= 0.55:
-                    # Offense ran the predicted-tendency play → coach reads it
-                    bump = (rate - 0.5) * 0.4 * usage
-                    pCorrect += bump
-                    pWrong -= bump * 0.6
-                elif rate <= 0.45:
-                    # Offense broke its own tendency → coach gets caught biting
-                    counterRate = 1 - rate
-                    penalty = (counterRate - 0.5) * 0.3 * usage
-                    pCorrect -= penalty
-                    pWrong += penalty * 0.6
-
-        pCorrect = max(0.15, min(0.80, pCorrect))
-        pWrong = max(0.10, min(0.55, pWrong))
-        pNeutral = max(0.05, 1 - pCorrect - pWrong)
-        total = pCorrect + pNeutral + pWrong
-        if total > 0:
-            pCorrect /= total
-            pNeutral /= total
-            pWrong /= total
-
-        roll = batched_random()
-        if roll <= pCorrect:
-            result, modifier = 'correct', 0.20
-        elif roll <= pCorrect + pNeutral:
-            result, modifier = 'neutral', 0.0
-        else:
-            result, modifier = 'wrong', -0.15
-
-        return {
-            'result': result,
-            'modifier': modifier,
-            'pCorrect': round(pCorrect, 3),
-            'pNeutral': round(pNeutral, 3),
-            'pWrong': round(pWrong, 3),
-            'tendencyUsed': tendencyUsed,
-            'defMind': defMind,
-            'captainInstinct': round(captainInstinct, 1),
-        }
+            down = self.game.down
+            yardsToGo = self.game.yardsToFirstDown
+            yardsToEndzone = self.game.yardsToEndzone
+        except AttributeError:
+            return False
+        if down >= 3 and yardsToGo <= 3:
+            return True
+        if yardsToEndzone <= 3:
+            return True
+        return False
 
     def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
         """
@@ -7914,7 +7940,7 @@ class Play():
         # --- Dynamic route quality modifiers ---
 
         # 1. Game pressure: receiver's mental composure under pressure
-        pressureMod = receiver.attributes.getPressureModifier(self.game.gamePressure)
+        pressureMod = receiver.attributes.getPressureModifier(self._offenseEffectivePressure(receiver))
         pressureEffect = pressureMod * 5  # ±5 points
 
         # 2. Coverage disruption: elite defenses physically contest routes
@@ -8245,7 +8271,7 @@ class Play():
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
                 100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds
+                self.game.currentQuarter, self.game.gameClockSeconds,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
@@ -8253,19 +8279,10 @@ class Play():
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         self._captureBlitzer(scheme, defGameplanObj)
 
-        # Pre-snap defensive read — shifts both pass-defense and pass-rush
-        # effectiveness based on coordinator/captain anticipation.
-        self.defenseRead = self._resolveDefensiveRead('pass')
-        readMod = 1.0 + self.defenseRead['modifier']
-        scheme['passDefMult'] = scheme['passDefMult'] * readMod
-        scheme['passRushMult'] = scheme['passRushMult'] * readMod
-        self._trackOffensiveTendency('pass')
-
         passRusher = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
         if passRusher:
             deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
             basePassRush = deAttrs.get('passRush', self.defense.defensePassRushRating)
-            basePassRush += self._defenderMentalMod(passRusher)
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
@@ -8316,9 +8333,11 @@ class Play():
             'passRushMult': round(scheme['passRushMult'], 2),
             'coverageType': scheme.get('coverageType', {}).value if hasattr(scheme.get('coverageType', {}), 'value') else None,
             'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
-            'readResult': self.defenseRead.get('result'),
-            'readPCorrect': self.defenseRead.get('pCorrect'),
-            'readTendencyUsed': self.defenseRead.get('tendencyUsed'),
+            'defenseAbbr': getattr(self.defense, 'abbr', None),
+            'keyDown': self._isKeyDefensiveDown(),
+            'startYardsToGo': getattr(self.game, 'yardsToFirstDown', None),
+            'startYardsToEndzone': getattr(self.game, 'yardsToEndzone', None),
+            'startDown': getattr(self.game, 'down', None),
         }
 
         if sackRoll <= sackProbability:
@@ -8426,7 +8445,6 @@ class Play():
                     if assignedDefender:
                         defAttrs = assignedDefender.attributes.getDefensiveAttributes(assignedDefender.position)
                         individualCoverage = defAttrs.get('coverage', effectivePassDef)
-                        individualCoverage += self._defenderMentalMod(assignedDefender)
 
                         # Coverage type modifies how individual coverage applies
                         if GAMEPLAN_AVAILABLE and coverageType is not None:
@@ -8444,7 +8462,6 @@ class Play():
                                 if safetyPlayer:
                                     sAttrs = safetyPlayer.attributes.getDefensiveAttributes(safetyPlayer.position)
                                     safetyPlayReading = sAttrs.get('playReading', 70)
-                                    safetyPlayReading += self._defenderMentalMod(safetyPlayer)
                                 # Better safety play-reading → more man-like (stronger)
                                 manWeight = 0.4 + (safetyPlayReading - 60) / 100
                                 manWeight = max(0.3, min(0.7, manWeight))
@@ -8549,8 +8566,8 @@ class Play():
                 self.passer.addMissedPass(self.game.isRegularSeasonGame)
             else:
                 # Apply pressure modifiers
-                qbPressureMod = self.passer.attributes.getPressureModifier(self.game.gamePressure)
-                receiverPressureMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
+                qbPressureMod = self.passer.attributes.getPressureModifier(self._offenseEffectivePressure(self.passer))
+                receiverPressureMod = self.receiver.attributes.getPressureModifier(self._offenseEffectivePressure(self.receiver))
                 self.gamePressure = self.game.gamePressure
                 self.qbPressureMod = qbPressureMod
                 self.rcvPressureMod = receiverPressureMod
@@ -8598,7 +8615,6 @@ class Play():
                 if coveringDefender:
                     defAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
                     catchDefCoverage = defAttrs.get('coverage', self.defense.defensePassCoverageRating)
-                    catchDefCoverage += self._defenderMentalMod(coveringDefender)
                 else:
                     catchDefCoverage = self.defense.defensePassCoverageRating
                 self.insights['pass']['catchDefCoverage'] = round(catchDefCoverage)
@@ -8703,7 +8719,6 @@ class Play():
                         if coveringDefender:
                             covAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
                             slipDef = covAttrs.get('tackling', catchDefCoverage)
-                            slipDef += self._defenderMentalMod(coveringDefender)
                         else:
                             slipDef = catchDefCoverage
 
@@ -8835,7 +8850,6 @@ class Play():
                         if hasattr(primaryTackler, 'attributes'):
                             defAttrs = primaryTackler.attributes.getDefensiveAttributes(primaryTackler.position)
                             defStripAbility = defAttrs.get('tackling', 70)
-                            defStripAbility += self._defenderMentalMod(primaryTackler)
                         if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
                             self.isFumble = True
                             self.receiver.updateInGameConfidence(-.02)
