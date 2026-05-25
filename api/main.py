@@ -1839,10 +1839,12 @@ async def get_league_news_recent(
     response: Response,
     limit: int = Query(default=30, ge=1, le=200),
     season: Optional[int] = Query(default=None),
+    week: Optional[int] = Query(default=None),
 ):
     """Recent persisted league-news items (Cores voice lines, anomaly state
-    transitions). Lets the highlight feed surface events that fired while
-    the user wasn't connected.
+    transitions). Default scope is the *current* season+week so the
+    highlight feed naturally rolls over with the schedule. Pass ?week=0
+    to ignore the week filter and pull a longer history.
     """
     response.headers["Cache-Control"] = "public, max-age=15"
     if floosball_app is None:
@@ -1854,13 +1856,19 @@ async def get_league_news_recent(
         session = get_session()
         try:
             q = session.query(LeagueNewsItem)
+            seasonMgr = floosball_app.seasonManager
+            cs = seasonMgr.currentSeason
             if season is not None:
                 q = q.filter(LeagueNewsItem.season == season)
-            else:
-                seasonMgr = floosball_app.seasonManager
-                cs = seasonMgr.currentSeason
-                if cs is not None and hasattr(cs, 'seasonNumber'):
-                    q = q.filter(LeagueNewsItem.season == cs.seasonNumber)
+            elif cs is not None and hasattr(cs, 'seasonNumber'):
+                q = q.filter(LeagueNewsItem.season == cs.seasonNumber)
+            # Week filter: explicit param wins; otherwise default to the
+            # current sim week. Pass week=0 to opt out entirely.
+            if week is not None:
+                if week > 0:
+                    q = q.filter(LeagueNewsItem.week == week)
+            elif cs is not None and hasattr(cs, 'currentWeek'):
+                q = q.filter(LeagueNewsItem.week == cs.currentWeek)
             rows = q.order_by(LeagueNewsItem.created_at.desc()).limit(limit).all()
             return [{
                 'id': r.id,
