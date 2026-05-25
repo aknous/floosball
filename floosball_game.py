@@ -7526,6 +7526,9 @@ class Play():
                 100 - self.game.yardsToEndzone, offScoreDiff,
                 self.game.currentQuarter, self.game.gameClockSeconds,
             )
+            defArch = scheme.get('archetype') if isinstance(scheme, dict) else None
+            if defArch:
+                self.game._tallyCoachArchetype(defArch)
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
@@ -8175,6 +8178,9 @@ class Play():
                 100 - self.game.yardsToEndzone, offScoreDiff,
                 self.game.currentQuarter, self.game.gameClockSeconds,
             )
+            defArch = scheme.get('archetype') if isinstance(scheme, dict) else None
+            if defArch:
+                self.game._tallyCoachArchetype(defArch)
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
