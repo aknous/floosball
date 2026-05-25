@@ -293,9 +293,18 @@ class PlayerManager:
             if not loaded_players:
                 logger.warning("No valid players could be loaded from database")
                 return False
-            
-            # Set loaded players as active players
-            self.activePlayers = loaded_players
+
+            # Split by service_time. Retired players belong on retiredPlayers,
+            # not activePlayers — without this, the Retired tab is empty after
+            # a server restart until a runtime retirement re-populates it.
+            from floosball_player import PlayerServiceTime as _PST
+            self.activePlayers = []
+            self.retiredPlayers = []
+            for p in loaded_players:
+                if getattr(p, 'serviceTime', None) == _PST.Retired:
+                    self.retiredPlayers.append(p)
+                else:
+                    self.activePlayers.append(p)
 
             # Persist any backfilled seasonsPlayed/serviceTime values
             try:
