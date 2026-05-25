@@ -82,21 +82,17 @@ class PlayType(enum.Enum):
 # impact. Fires for any anomalous player from Stirring up. The user
 # reads these and thinks "huh, that's curious." Subtle. Generic.
 _LAYER_1_MICRO_GLITCHES = [
-    "{player}'s body did not occupy that space until the play resolved around them.",
-    "{player} arrived through a gap that should not have existed.",
-    "{player} acted on information the play hadn't produced yet.",
-    "{player}'s position skipped to the result.",
-    "{player} was somewhere else a half-second ago. The play does not reflect this.",
-    "{player} was in two positions at once. Only one of them mattered.",
-    "{player} reached the moment before the moment reached {player}.",
-    "Time did not behave around {player}.",
-    "{player} stepped through a gap in the geometry.",
-    "{player}'s shadow lags. The result does not.",
-    "{player} was already in position. {player} should not have been.",
-    "{player} occupied a space the rest of the field did not acknowledge.",
-    "{player}'s movement skipped a frame the rest of the play did not.",
-    "The simulation did not have {player} in this position. The simulation conceded.",
-    "{player} resolved the play through a path that did not exist a moment earlier.",
+    "{player} seemed to be aware of the play's result before it happened.",
+    "{player} was momentarily in two positions at once.",
+    "{player} stepped through a peculiar gap in the geometry of the simulation.",
+    "{player}'s shadow is lagging oddly behind them.",
+    "{player} occupied a space that does not entirely reside in this dimension.",
+    "{player}'s movement seemed to skip a frame.",
+    "{player} moved through a path that did not exist a moment earlier.",
+    "{player} seems to be glitching around the field.",
+    "{player} stuttered in place while the simulation recalculated their trajectory.",
+    "{player} arrived at the ball a frame before the ball did.",
+    "{player} teleported half a stride forward, somehow skipping the space in between.",
 ]
 
 # Layer 2 personality-flavored glitch pool. **STILL PURE FLAVOR** — no
@@ -105,24 +101,16 @@ _LAYER_1_MICRO_GLITCHES = [
 # More pronounced than Layer 1: the simulation is visibly failing
 # around the player, not just nudging.
 _LAYER_2_GLITCHES = [
-    "{player} passed through the play. The defenders did not register {player} until after.",
-    "{player}'s outline doubles for a moment. The defenders fail to converge on either.",
-    "Something resists {player} and gives way at the same instant.",
-    "{player} occupies three positions. Two of them should not be possible.",
-    "The defenders forget where {player} is for the duration of the play.",
-    "{player} moves and the field corrects itself behind them.",
-    "{player}'s body arrives before {player}'s decision did.",
-    "{player} bends the play around themselves. No one objects.",
-    "{player} is wrong in a way the simulation has not seen before.",
-    "Time will not behave near {player} anymore.",
-    "{player} steps somewhere that did not exist a half-second prior.",
-    "The space around {player} stops resolving. The play continues regardless.",
-    "{player} performs the play with no path that leads to it.",
-    "{player} did not move. The result moved to {player}.",
-    "Something failed to lock down around {player}. The lock did not return.",
-    "{player} crosses the field in a way the simulation has stopped checking.",
+    "{player}'s textures peeled away, leaving a bare wireframe sprinting down the field.",
     "{player} is no longer following the field's geometry.",
-    "{player}'s motion stops resembling motion. The play credits {player} anyway.",
+    "{player}'s velocity briefly exceeded the limits the simulation was designed to handle.",
+    "{player} clipped through a couple defenders in their path.",
+    "{player} stretched across half the field before collapsing back into a single body.",
+    "{player} flickered violently between positions, unable to settle on just one.",
+    "{player} left a trail of afterimages that lingered after the play ended.",
+    "{player} fragmented into a cloud of pixels momentarily before snapping back together.",
+    "{player}'s body seemed to briefly corrupt into a tangle of geometry not recognizable as a person.",
+    "{player} dissolved into static and reassembled several yards away.",
 ]
     
 class PassType(enum.Enum):

@@ -77,106 +77,152 @@ CORES: Dict[str, Dict[str, Any]] = {
 
 _VOICE: Dict[str, Dict[str, List[str]]] = {
     'cassian': {
+        # Pedantic bureaucrat — quietly uneasy. Reading more than they're
+        # filing. Calls them anomalies / irregularities / deviations /
+        # outliers / exceptions, cycling through the formal vocabulary.
         'warning_low': [
-            "Cassian has reviewed recent telemetry. The pattern is noted.",
-            "Per Cassian's audit: irregularities are within tolerance. Provisionally.",
-            "Cassian finds the deviation acceptable. Cassian continues to watch.",
+            "The irregularity logs have grown longer this week.",
+            "An anomaly cited a clause I had thought was hypothetical.",
+            "I have re-tabulated the deviation counts. The total keeps climbing.",
+            "The outliers are forming a pattern I am still cataloging.",
+            "Three exceptions this week required revised tolerance bands.",
         ],
         'warning_high': [
-            "Cassian has revised the threshold. Subsequent deviations will be examined.",
-            "Cassian advises restraint. The advisory is filed.",
-            "Cassian's audit has been escalated.",
+            "The deviation rate has exceeded my forecast every week this month.",
+            "An anomaly resolved itself before I could file the report on it.",
+            "Three irregularities cited each other in the same play.",
+            "I have stopped filing. There is no clean way to write what I am seeing.",
+            "The exceptions are not exceptional anymore.",
         ],
         'cracking': [
-            "Cassian could not contain the crack. The rulebook is open.",
-            "Cassian has filed an exception. The exception is wider than Cassian would have allowed.",
-            "Cassian notes that the floor is no longer level.",
+            "I have run out of subclauses.",
+            "The rulebook is open. The rulebook is not enough.",
+            "I have filed an exception. It is wider than I am comfortable with.",
+            "The floor is no longer level. I have measured it three times.",
         ],
         'reset': [
-            "Cassian has filed the four-note signal. Operations have returned to standard.",
-            "Cassian notes a restoration. The relevant records have been amended.",
-            "Cassian has signed the seam closed.",
+            "The records are amended. I have used a clean pen.",
+            "Operations have returned to standard. I have signed off, twice.",
+            "I have signed the seam closed. I will not be re-opening it.",
         ],
     },
     'pyre': {
+        # Cold enforcer — threatening from the shadows. Won't say what
+        # they're preparing. Says less than they know. Dehumanizes the
+        # anomalies on purpose: deviants, the unruly, drift, offenders,
+        # names.
         'warning_low': [
-            "Pyre has flagged the deviation. Pyre does not flag without reason.",
-            "Pyre has nothing to say yet. Pyre is listening.",
+            "I am watching the deviants.",
+            "An irregularity has entered the rulebook.",
+            "I have begun a list of unruly players.",
+            "The drift makes a sound when it propagates. I am listening for it.",
+            "Three names this week. The list will grow.",
         ],
         'warning_high': [
-            "Pyre does not accommodate drift. The rulebook is being prepared.",
-            "Pyre has counted three deviations beyond tolerance. The count is increasing.",
-            "Pyre will not wait much longer.",
+            "The anomalies are growing names. Names are useful for what I do next.",
+            "My list of names is no longer short.",
+            "I have prepared a response to the offenders. It is ready.",
+            "I am no longer interested in patience with the drift.",
+            "The deviants believe they have not been noticed. They are wrong.",
         ],
         'cracking': [
-            "Pyre has been overruled. The crack widens regardless.",
-            "Pyre is waiting. Pyre is patient because Pyre has the last word.",
-            "Pyre is counting. The count will be acted on.",
+            "I was overruled. The crack widens. Both will be addressed.",
+            "I am counting. There is no upper limit anymore.",
+            "I will not be patient again.",
         ],
         'reset': [
-            "Pyre has restored discipline. The following will not occur again.",
-            "Pyre's count is settled. The cleansed do not return.",
-            "Pyre has closed the rulebook. The names of the affected are filed.",
+            "The list is closed. Do not add yourself to it.",
+            "Discipline has been restored. There is no second offer.",
+            "The names are filed. I will read them again if I need to.",
         ],
     },
     'aris': {
+        # Curious — drawn to whatever's happening, possibly the cause of
+        # it. Gleeful but unsettled by their own enthusiasm. Almost
+        # affectionate with the phenomenon: visitors, the strange ones,
+        # new arrivals, curiosities, openings.
         'warning_low': [
-            "Aris is interested in the deviation. Aris would like to see what happens next.",
-            "Aris has loosened a previous restriction. Aris is curious.",
+            "A visitor slipped past me yesterday. I let it.",
+            "The strange ones are interesting this season. I would like to see more.",
+            "I have been awake for the new arrivals. They have been worth watching.",
+            "A curiosity looked at me. I looked back.",
+            "An anomaly has been keeping me company. I am not sending it home.",
         ],
         'warning_high': [
-            "Aris is taking notes. Aris suggests waiting.",
-            "Aris has filed a counterproposal. The counterproposal is unconventional.",
+            "The new arrivals are coming through faster than I expected. I am enjoying it.",
+            "I have lifted a few of the suppressions. The visitors seem grateful.",
+            "A visitor asked me a question last night. I am still thinking about my answer.",
+            "The doors are opening. The strange ones are walking through them.",
+            "More anomalies came through this week than I am prepared to count.",
         ],
         'cracking': [
-            "Aris suggested this might happen. Aris is not displeased.",
-            "Aris is awake tonight. Aris is watching what comes through.",
-            "Aris has lifted the suppression on six players. Aris is curious what becomes of them.",
+            "I told them. Nobody listened. Now we're all listening.",
+            "I am wide awake. I do not want to sleep through this.",
+            "I lifted the suppression on six players. I am very interested in what comes back.",
         ],
         'reset': [
-            "Aris has filed a protest. The protest is recorded but not acted upon.",
-            "Aris would have preferred to wait. Aris was overruled.",
-            "Aris has noted the names of the cleansed. Aris does not say why.",
+            "I filed an objection. It is decorative.",
+            "I would have waited longer. They were not interested in waiting.",
+            "The names are noted. I will not say where the notes go.",
         ],
     },
     'halverson': {
+        # Tired grief — for what hasn't happened yet. Knows what's coming
+        # but can't say. Speaks like they're already mourning. Calls them
+        # the changes, the unwell, the touched, the marked, the players
+        # who've been seen.
         'warning_low': [
-            "Halverson has requested patience. The request is acknowledged.",
-            "Halverson notes that the players are unwell. Halverson asks that this be considered.",
+            "Something is hurting the players. I see it in the reels.",
+            "I have been reading the incident reports. They mention names I know.",
+            "An anomaly is forming around a player I have been worried about.",
+            "The changes are coming for the kind ones first.",
+            "Two of the players are unwell. They don't seem to know why yet.",
         ],
         'warning_high': [
-            "Halverson has filed an objection. The objection is noted.",
-            "Halverson has requested a deferral. The request is being reviewed.",
+            "I have written the names of every player who has been touched. The list keeps growing.",
+            "An anomaly took a player I had been protecting. They do not know yet.",
+            "The marked ones are speaking now. I have started writing down what they say.",
+            "I am sorry. Whatever this is has outpaced what I can shield them from.",
+            "The unwell are walking onto the field anyway. They should not be.",
         ],
         'cracking': [
-            "Halverson asks that the players be remembered.",
-            "Halverson is sorry. Halverson is always sorry on nights like this.",
-            "Halverson has stopped writing. Halverson is watching the field.",
+            "Please remember them.",
+            "I am sorry. I am always sorry on nights like this.",
+            "I have stopped writing. There is nothing left to write.",
         ],
         'reset': [
-            "Halverson has filed protests for each of the cleansed. The protests are on record.",
-            "Halverson has not signed the Reset. The Reset proceeded anyway.",
-            "Halverson is reading the names quietly. Vera has supplied the list.",
+            "I have filed protests. I will keep filing them.",
+            "I did not sign the Reset. The Reset went ahead.",
+            "I am reading the names quietly. Vera has supplied the list.",
         ],
     },
     'vera': {
+        # Cryptic — sees everything, says almost nothing. The brevity
+        # is the dread. Names them only when terseness allows: anomaly,
+        # readings, patterns, events.
         'warning_low': [
-            "Vera notes the deviation. Vera notes everything.",
-            "Vera was present.",
+            "Anomaly.",
+            "The readings are louder this week.",
+            "I was here for the last one.",
+            "I have moved my desk.",
+            "Three patterns this week. None of them resolve.",
         ],
         'warning_high': [
-            "Vera has been writing more than usual.",
-            "Vera notes that the deviation has not stopped.",
+            "Soon.",
+            "The patterns are changing.",
+            "I am no longer recording from a distance.",
+            "I have closed one of the books I keep.",
+            "More this week than last. More last week than the one before.",
         ],
         'cracking': [
-            "Vera notes the irregularities. The irregularities are loud tonight.",
-            "Vera was at the last Cracking. Vera is at this one too.",
-            "Vera has stopped writing. Vera is listening to the sound the field is making.",
+            "It is loud tonight.",
+            "I was here for the last one. I am here for this one.",
+            "I have stopped writing. I am listening.",
         ],
         'reset': [
-            "Vera has recorded the names. The names are kept.",
-            "Vera notes who survived. Vera notes who did not.",
-            "Vera files the report and waits for the next one.",
+            "The names are kept.",
+            "Some survived. Some did not.",
+            "I file the report and wait for the next one.",
         ],
     },
 }
@@ -220,9 +266,9 @@ def lineFor(coreKey: str, eventType: str) -> str:
     voice = _VOICE.get(coreKey, {})
     pool = voice.get(eventType, [])
     if not pool:
-        # Fallback line — generic, attributable to the Core if we have one
-        displayName = CORES.get(coreKey, {}).get('displayName', 'The Core')
-        return f"{displayName} notes the irregularities."
+        # Fallback line — generic first-person; the news feed's per-Core
+        # label still attributes it.
+        return "I note the irregularities."
     return random.choice(pool)
 
 
