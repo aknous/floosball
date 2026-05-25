@@ -131,21 +131,10 @@ class FloosballApplication:
             logger.info("Conducting initial draft...")
             self.playerManager.conductInitialDraft()
 
-        # Seed each team with a starter prospect class. Runs on every boot,
-        # but seedInitialProspects is idempotent: skips any team that already
-        # has prospects. So this fires on:
-        #   - Fresh starts (all 24 teams seeded)
-        #   - First deploy of this feature to existing prod (teams have full
-        #     rosters but empty pipelines → all seeded)
-        #   - Subsequent boots (prospects exist → no-op per team)
-        logger.info("Seeding initial prospect pipelines (idempotent)...")
-        self.playerManager.seedInitialProspects(prospectsPerTeam=3)
-
-        # Assign personality + quirk + mood to the full player pool.
-        # Runs AFTER seedInitialProspects so prospects are included. Idempotent:
+        # Assign personality + quirk + mood to the full player pool. Idempotent:
         # players who already have a personality keep theirs. Catches any new
-        # players added by upstream steps (initial draft, prospect seeding,
-        # legacy DB rows with NULL personality).
+        # players added by upstream steps (initial draft, legacy DB rows with
+        # NULL personality).
         logger.info("Assigning personality traits...")
         allPlayers = (
             self.playerManager.activePlayers
@@ -299,34 +288,29 @@ class FloosballApplication:
             seasonsPlayed = savedState['current_season'] - 1  # We'll restart the current season
             resumeFromWeek = savedState['current_week']  # Skip completed weeks on resume
 
-            # If the process died mid-offseason, the season's regular play + playoffs
-            # already persisted to DB. Replaying would roll rosters back and nuke
-            # that work (this is the bug that wiped production before). Treat the
-            # offseason as complete: advance past it, then start the next season.
-            #
-            # The phase-aware resume work (feature/offseason-checkpoints) writes
-            # offseason_phase + offseason_phase_target + offseason_completed_steps
-            # so a future revision can do better than skip-and-advance. For now
-            # we surface those values + the rollback snapshot path in the warning
-            # so the operator knows what state the offseason was in and which
-            # /data/offseason_s{N}_{phase}.db snapshot to restore from if needed.
+            # Phase-aware offseason resume. Each offseason phase marks itself
+            # complete in offseason_completed_steps; on restart the season
+            # manager honors that set and re-enters _handleOffseason via
+            # handleOffseason(resumeFromOffseason=True), skipping phases that
+            # already finished. For partial-draft state (mid-rookie / mid-FA),
+            # initialize_application in run_api.py restores the appropriate
+            # /data/offseason_s{N}_{phase}.db snapshot BEFORE init_db so the
+            # interrupted draft re-runs from a clean phase-start state.
             if savedState.get('in_offseason'):
                 phase = savedState.get('offseason_phase')
                 target = savedState.get('offseason_phase_target')
                 steps = savedState.get('offseason_completed_steps')
                 seasonNum = savedState['current_season']
-                snapshotHint = (
-                    f"/data/offseason_s{seasonNum}_{phase}.db"
-                    if phase else "no snapshot recorded (pre-checkpoints offseason)"
+                logger.info(
+                    f"Resume mid-offseason: season {seasonNum} "
+                    f"(phase={phase}, target={target}, completed_steps={steps}). "
+                    f"Will call handleOffseason(resumeFromOffseason=True) to "
+                    f"pick up where the previous run left off."
                 )
-                logger.warning(
-                    f"Resume: simulation_state.in_offseason=True for season "
-                    f"{seasonNum} (phase={phase}, target={target}, "
-                    f"completed_steps={steps}) — treating offseason as complete "
-                    f"and advancing to the next season rather than replaying. "
-                    f"To roll back, restore the DB from: {snapshotHint}"
-                )
-                seasonsPlayed = savedState['current_season']  # advance past completed season
+                # seasonsPlayed already points at the in-progress season
+                # (current_season - 1). resumeFromWeek stays 0 — regular season
+                # + playoffs are done. We just need to re-enter the offseason
+                # flow with the resume flag set.
                 resumeFromWeek = 0
                 resumeMidOffseason = True
             else:
@@ -341,24 +325,9 @@ class FloosballApplication:
             resumeFromWeek = 0
             logger.info(f"Starting new simulation - {totalSeasons} seasons")
 
-        # If we recovered from a mid-offseason crash, persist the advance + clear
-        # the flag right away so another immediate restart won't repeat this.
-        # Also clear the phase + completed_steps fields so the next offseason
-        # starts from a clean checkpoint state.
-        if resumeMidOffseason:
-            self._saveSimulationState(
-                current_season=seasonsPlayed + 1,
-                current_week=0,
-                in_playoffs=False,
-                total_seasons=totalSeasons,
-                is_active=True,
-                in_offseason=False,
-                offseason_phase=None,
-                offseason_phase_target=None,
-                offseason_completed_steps=None,
-                update_phase_fields=True,
-            )
-            gameState.setState('seasonsPlayed', seasonsPlayed)
+        # NOTE: removed the legacy "advance past offseason and clear flags"
+        # block here — the loop below now branches on resumeMidOffseason and
+        # calls handleOffseason(resumeFromOffseason=True) instead of skipping.
         
         # Mark simulation as active (preserve resumeFromWeek so a second
         # restart before the week loop progresses doesn't lose the checkpoint)
@@ -386,27 +355,44 @@ class FloosballApplication:
                 is_active=True
             )
 
-            # Start new season — pass resumeFromWeek so a mid-season restart
-            # preserves accumulated fatigue / form instead of zeroing them.
-            await self.seasonManager.startNewSeason(resumeFromWeek=resumeFromWeek)
+            if resumeMidOffseason:
+                # We restarted mid-offseason. The regular season + playoffs
+                # are already done and persisted; re-running startNewSeason
+                # would call _clearSeasonData and wipe standings. Instead,
+                # restore minimal currentSeason state from DB and jump to
+                # the offseason flow with resumeFromOffseason=True so
+                # _handleOffseason honors persisted completed-steps.
+                logger.info(
+                    f"Mid-offseason resume: restoring season {currentSeason} "
+                    f"state and entering handleOffseason(resumeFromOffseason=True)"
+                )
+                await self.seasonManager.restoreForOffseasonResume(currentSeason)
+                resumeFromWeek = 0
+                # in_offseason flag is already True in DB from the previous run
+                await self.seasonManager.handleOffseason(resumeFromOffseason=True)
+                resumeMidOffseason = False  # only honor on first iteration
+            else:
+                # Start new season — pass resumeFromWeek so a mid-season restart
+                # preserves accumulated fatigue / form instead of zeroing them.
+                await self.seasonManager.startNewSeason(resumeFromWeek=resumeFromWeek)
 
-            # Run season simulation (this will update state as it progresses)
-            await self.seasonManager.runSeasonSimulation(resumeFromWeek=resumeFromWeek)
-            resumeFromWeek = 0  # Only skip weeks for the first (resumed) season
+                # Run season simulation (this will update state as it progresses)
+                await self.seasonManager.runSeasonSimulation(resumeFromWeek=resumeFromWeek)
+                resumeFromWeek = 0  # Only skip weeks for the first (resumed) season
 
-            # Mark offseason as in-progress BEFORE running it. If we crash mid-
-            # offseason (deploy, OOM, whatever), resume logic will skip replay.
-            self._saveSimulationState(
-                current_season=currentSeason,
-                current_week=self.seasonManager.currentSeason.currentWeek if self.seasonManager.currentSeason else 0,
-                in_playoffs=False,
-                total_seasons=totalSeasons,
-                is_active=True,
-                in_offseason=True,
-            )
+                # Mark offseason as in-progress BEFORE running it. If we crash mid-
+                # offseason (deploy, OOM, whatever), resume logic will skip replay.
+                self._saveSimulationState(
+                    current_season=currentSeason,
+                    current_week=self.seasonManager.currentSeason.currentWeek if self.seasonManager.currentSeason else 0,
+                    in_playoffs=False,
+                    total_seasons=totalSeasons,
+                    is_active=True,
+                    in_offseason=True,
+                )
 
-            # Handle offseason
-            await self.seasonManager.handleOffseason()
+                # Handle offseason
+                await self.seasonManager.handleOffseason()
 
             # Finalize season: increment counter, clear the offseason flag, and
             # save all state immediately so a restart during the between-seasons

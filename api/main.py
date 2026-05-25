@@ -30,7 +30,7 @@ import floosball_game as FloosGame
 # Auth deps used by handlers defined early in the file (e.g. /api/players
 # with the 'followed' status filter). Later sections re-import these
 # closer to their use; that's fine — module-level imports are idempotent.
-from api.auth import getOptionalUser as _getOptionalUser
+from api.auth import getOptionalUser as _getOptionalUser, getCurrentUser as _getCurrentUser
 from database.models import User as _User
 
 logger = get_logger("floosball.api")
@@ -1084,6 +1084,165 @@ async def get_player_quotes(player_id: int, limit: int = 10):
     return build_success_response(quotes)
 
 
+@app.get("/api/debug/anomaly-state", response_model=Dict[str, Any])
+async def debug_anomaly_state():
+    """Testing aid — dump current league anomaly state + top-attention
+    players. NOT for production users; intentionally not gated on admin
+    so local sims can poke at it freely. Includes the hidden Cracking
+    threshold — use only for testing."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import LeagueAnomalyState, PlayerAttention, AnomalyState, Player
+    from managers.anomalyManager import isCrackingWeek, getCrackingMultiplier
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        topAttn = (
+            session.query(PlayerAttention, Player.name)
+            .join(Player, Player.id == PlayerAttention.player_id)
+            .filter(PlayerAttention.season == seasonNumber)
+            .order_by(PlayerAttention.score.desc())
+            .limit(20)
+            .all()
+        )
+        awakeneds = (
+            session.query(AnomalyState, Player.name)
+            .join(Player, Player.id == AnomalyState.player_id)
+            .filter(AnomalyState.season == seasonNumber)
+            .filter(AnomalyState.state.in_(['rampant', 'awakened', 'cleansed']))
+            .all()
+        )
+        return build_success_response({
+            'season': seasonNumber,
+            'currentWeek': currentWeek,
+            'isCrackingWeek': isCrackingWeek(seasonNumber, currentWeek),
+            'crackingMultiplier': getCrackingMultiplier(seasonNumber, currentWeek),
+            'league': ({
+                'aggregateScore': float(state.aggregate_score),
+                'threshold': state.threshold,
+                'progressPct': round(float(state.aggregate_score) / max(1, state.threshold) * 100, 1),
+                'crackingsThisSeason': state.thinnings_this_season,
+                'lastCrackingWeek': state.last_thinning_week,
+                'lastResetWeek': state.last_reset_week,
+                'suppressionWindowEndsWeek': state.suppression_window_ends_week,
+                'recentPatches': (state.cores_patches_applied or [])[-5:],
+            } if state else None),
+            'topAttention': [
+                {
+                    'playerId': r[0].player_id,
+                    'playerName': r[1],
+                    'score': round(float(r[0].score), 1),
+                    'overCapCarry': round(float(r[0].over_cap_carry), 1),
+                    'peakScore': round(float(r[0].peak_score), 1),
+                }
+                for r in topAttn
+            ],
+            'elevatedPlayers': [
+                {
+                    'playerId': r[0].player_id,
+                    'playerName': r[1],
+                    'state': r[0].state,
+                    'ability': r[0].ability,
+                    'abilityTier': r[0].ability_tier,
+                    'awakenedAtWeek': r[0].awakened_at_week,
+                }
+                for r in awakeneds
+            ],
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/debug/anomaly-bump", response_model=Dict[str, Any])
+async def debug_anomaly_bump(player_id: int, amount: float = 50.0):
+    """Testing aid — force-add attention to a specific player. Skips
+    the weekly tick / engagement-source aggregation. Useful for jumping
+    a player past Awakening on demand. NOT gated on admin."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import PlayerAttention
+    session = get_session()
+    try:
+        row = session.query(PlayerAttention).filter_by(
+            player_id=player_id, season=seasonNumber,
+        ).first()
+        if row is None:
+            row = PlayerAttention(
+                player_id=player_id, season=seasonNumber,
+                score=0.0, over_cap_carry=0.0, peak_score=0.0,
+            )
+            session.add(row)
+        row.score = float(row.score) + amount
+        if row.score > float(row.peak_score):
+            row.peak_score = float(row.score)
+        session.commit()
+        return build_success_response({
+            'playerId': player_id,
+            'newScore': float(row.score),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/debug/anomaly-tick", response_model=Dict[str, Any])
+async def debug_anomaly_tick():
+    """Testing aid — fire the weekly anomaly aggregation NOW instead of
+    waiting for the next week_start. Useful in fast modes where the
+    week loop already finished by the time you want to poke at state."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    from managers.anomalyManager import weeklyTick
+    weeklyTick(seasonNumber, currentWeek)
+    return build_success_response({'fired': True, 'season': seasonNumber, 'week': currentWeek})
+
+
+@app.get("/api/players/{player_id}/anomaly", response_model=Dict[str, Any])
+async def get_player_anomaly(player_id: int):
+    """Anomaly state for a player in the current season.
+
+    Returns the state ladder label (stable / stirring / erratic /
+    rampant / awakened / cleansed) and, for awakened players, the
+    rolled ability + tier. Intentionally does NOT expose the raw
+    attention score — users see symptoms (the badge label, the
+    occasional glitch line in plays) but not the underlying cause.
+
+    Returns null if the player has no anomaly record this season
+    (i.e., still Stable — never crossed Stirring threshold).
+    """
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import AnomalyState
+    session = get_session()
+    try:
+        row = session.query(AnomalyState).filter_by(
+            player_id=player_id, season=seasonNumber,
+        ).first()
+        if row is None or row.state in (None, 'stable'):
+            return build_success_response(None)
+        return build_success_response({
+            'state': row.state,
+            'ability': row.ability,
+            'abilityTier': row.ability_tier,
+            'awakenedAtWeek': row.awakened_at_week,
+            'seasonsCarried': row.seasons_carried,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/recent-off-day", response_model=Dict[str, Any])
 async def get_recent_off_day(limit: int = 30):
     """Recent off-day broadcast events for the highlights feed backfill.
@@ -1444,14 +1603,186 @@ async def get_game_by_id(game_id: int, response: Response):
             game_dict['plays'] = []
             game_dict['matchupPreview'] = _buildMatchupPreview(game)
 
+        # Attach the reaction aggregate for this game so the modal renders
+        # the existing reactions when it first opens. Live updates flow over
+        # the play_reaction_update WS event after that.
+        game_dict['reactions'] = _loadGameReactions(game_id)
+
         return game_dict
-    
+
     except HTTPException:
         raise
     except Exception as e:
         import traceback
         logger.error(f"Error getting game {game_id}: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Play reactions ────────────────────────────────────────────────────────
+#
+# Users react to plays (and the sideline-quote personality events attached
+# to plays) within games in the current week. One reaction per user per
+# target — clicking the same icon removes; clicking a different icon swaps.
+# Aggregated counts are public, with usernames attributed.
+
+def _loadGameReactions(gameId: int) -> Dict[str, Any]:
+    """Return all reactions on a game, shaped as:
+        { "<playNumber>": { "<targetType>": { "<reactionType>": {count, users}, ... }, ... }, ... }
+    Only types with count > 0 are included. Used by GET /api/games/{id}.
+    """
+    from database.connection import get_session
+    from database.models import PlayReaction, User as _UserModel
+
+    out: Dict[str, Any] = {}
+    session = get_session()
+    try:
+        rows = (
+            session.query(PlayReaction, _UserModel.username)
+            .join(_UserModel, _UserModel.id == PlayReaction.user_id)
+            .filter(PlayReaction.game_id == gameId)
+            .all()
+        )
+        for r, username in rows:
+            playKey = str(r.play_number)
+            playBucket = out.setdefault(playKey, {})
+            targetBucket = playBucket.setdefault(r.target_type, {})
+            typeBucket = targetBucket.setdefault(r.reaction_type, {"count": 0, "users": []})
+            typeBucket["count"] += 1
+            typeBucket["users"].append({"id": r.user_id, "username": username})
+    finally:
+        session.close()
+    return out
+
+
+def _buildReactionAggregate(session, gameId: int, playNumber: int, targetType: str) -> Dict[str, Any]:
+    """Build the {reactionType: {count, users}} aggregate for a single
+    (play, targetType) pair. Used both by the API response and the WS
+    broadcast payload."""
+    from database.models import PlayReaction, User as _UserModel
+    rows = (
+        session.query(PlayReaction, _UserModel.username)
+        .join(_UserModel, _UserModel.id == PlayReaction.user_id)
+        .filter(PlayReaction.game_id == gameId,
+                PlayReaction.play_number == playNumber,
+                PlayReaction.target_type == targetType)
+        .all()
+    )
+    agg: Dict[str, Any] = {}
+    for r, username in rows:
+        bucket = agg.setdefault(r.reaction_type, {"count": 0, "users": []})
+        bucket["count"] += 1
+        bucket["users"].append({"id": r.user_id, "username": username})
+    return agg
+
+
+def _broadcastReactionUpdate(gameId: int, playNumber: int, targetType: str,
+                             aggregate: Dict[str, Any]) -> None:
+    """Fire a play_reaction_update event on the season channel so any open
+    game modal updates without a refetch."""
+    try:
+        from api.game_broadcaster import broadcaster as _broadcaster
+        if not _broadcaster.is_enabled():
+            return
+        event = GameEvent.playReactionUpdate(
+            gameId=gameId,
+            playNumber=playNumber,
+            targetType=targetType,
+            reactions=aggregate,
+        )
+        _broadcaster.broadcast_sync(gameId, event)
+    except Exception as e:
+        logger.warning(f"reaction broadcast failed: {e}")
+
+
+def _validateLiveGameForReaction(gameId: int):
+    """Reactions are allowed on games from the current week — both still-live
+    games and ones that just completed (users may still be viewing the modal
+    after the game ends). Once the week rolls over, completedWeekGames stays
+    populated until the next week's games kick off; we still honor reactions
+    on those. Older weeks return 409.
+    """
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason if sm else None
+    if currentSeason is None:
+        raise HTTPException(status_code=404, detail="No active season")
+    currentWeek = currentSeason.currentWeek
+    activeGames = getattr(currentSeason, 'activeGames', None) or []
+    completedThisWeek = getattr(currentSeason, 'completedWeekGames', None) or []
+    game = next(
+        (g for g in list(activeGames) + list(completedThisWeek) if g.id == gameId),
+        None,
+    )
+    if game is None:
+        raise HTTPException(status_code=409, detail="Reactions only on current-week games")
+    gameWeek = getattr(game, 'week', None) or getattr(game, 'weekNumber', None)
+    # Games from prior weeks fall through here (completedWeekGames is single-
+    # week; older games never re-enter the list). Defensive check anyway.
+    if gameWeek is not None and gameWeek != currentWeek and gameWeek != currentWeek - 1:
+        raise HTTPException(status_code=409, detail="Reactions only on current-week games")
+    return game
+
+
+class _ReactionRequest(BaseModel):
+    playNumber: int
+    targetType: str = 'play'
+    reactionType: str
+
+
+@app.post("/api/games/{game_id}/reactions")
+def post_play_reaction(game_id: int, req: _ReactionRequest, user: _User = Depends(_getCurrentUser)):
+    """Upsert a reaction. If the user already reacted to this target with
+    the SAME type, the reaction is removed (toggle off). If they reacted
+    with a DIFFERENT type, the type is swapped. Otherwise inserted fresh."""
+    from constants import REACTION_TYPES, REACTION_TARGET_TYPES
+    from database.connection import get_session
+    from database.models import PlayReaction
+
+    if req.reactionType not in REACTION_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid reactionType: {req.reactionType}")
+    if req.targetType not in REACTION_TARGET_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid targetType: {req.targetType}")
+    if req.playNumber < 1:
+        raise HTTPException(status_code=400, detail="playNumber must be >= 1")
+    # Cutaways use fractional playNumbers (X.5/X.9) to sort between real
+    # plays; the DB column is Integer and would truncate, causing the
+    # reaction to land on the wrong adjacent play. Reject fractional values.
+    if req.playNumber != int(req.playNumber):
+        raise HTTPException(status_code=400, detail="playNumber must be an integer (cutaways aren't reactable)")
+
+    _validateLiveGameForReaction(game_id)
+
+    session = get_session()
+    try:
+        existing = session.query(PlayReaction).filter(
+            PlayReaction.game_id == game_id,
+            PlayReaction.play_number == req.playNumber,
+            PlayReaction.target_type == req.targetType,
+            PlayReaction.user_id == user.id,
+        ).first()
+        if existing and existing.reaction_type == req.reactionType:
+            session.delete(existing)
+            action = 'removed'
+        elif existing:
+            existing.reaction_type = req.reactionType
+            action = 'swapped'
+        else:
+            session.add(PlayReaction(
+                game_id=game_id,
+                play_number=req.playNumber,
+                target_type=req.targetType,
+                user_id=user.id,
+                reaction_type=req.reactionType,
+            ))
+            action = 'added'
+        session.commit()
+        aggregate = _buildReactionAggregate(session, game_id, req.playNumber, req.targetType)
+    finally:
+        session.close()
+
+    _broadcastReactionUpdate(game_id, req.playNumber, req.targetType, aggregate)
+    return build_success_response({"action": action, "reactions": aggregate})
 
 
 @app.get("/api/gameStats", response_model=Dict[str, Any])
@@ -4449,6 +4780,13 @@ def get_league_markets():
                 "baselineFunding": fundingRec.baseline_funding if fundingRec else 0,
                 "fanContributions": fundingRec.fan_contributions if fundingRec else 0,
                 "carriedFunding": fundingRec.carried_funding if fundingRec else 0,
+                # Funding value the current tier was computed from — chart's
+                # filled "locked" dot lands here so it always sits inside the
+                # band the tier badge displays.
+                "tierLockedFunding": (
+                    getattr(fundingRec, 'tier_locked_funding', None)
+                    or (fundingRec.effective_funding if fundingRec else 0)
+                ),
                 "fanCount": fanCountByTeam.get(team.id, 0),
                 "totalFans": totalFansByTeam.get(team.id, 0),
                 "topPatrons": patronsByTeam.get(team.id, []),
@@ -4633,7 +4971,7 @@ def get_team_retirement_watch(team_id: int):
         })
 
     # Sort by risk severity (most at-risk first), then by rating (higher = more impactful loss)
-    riskOrder = {'forced': 0, 'very_likely': 1, 'likely': 2, 'possible': 3}
+    riskOrder = {'retiring': 0, 'very_likely': 1, 'likely': 2, 'possible': 3}
     watch.sort(key=lambda w: (riskOrder.get(w['risk'], 9), -w['rating']))
 
     return build_success_response({
@@ -5290,6 +5628,15 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 player_id=rp.playerId,
                 slot=rp.slot,
             ))
+
+        # Snapshot the initial roster on the FIRST save only. The Loyalty card
+        # pays per player still on roster from this snapshot, so we never
+        # overwrite it after the first commit.
+        if not roster.initial_player_ids:
+            import json as _json
+            roster.initial_player_ids = _json.dumps(
+                [int(rp.playerId) for rp in req.players]
+            )
         # Achievement hooks — first-time roster set + secrets (Shoestring, Homer)
         from managers import achievementManager as _am
         _am.onFantasyRosterSet(session, user.id)
@@ -5787,6 +6134,7 @@ def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
         },
         "kicking_stats": {
             "fgs": kicking.get("fgs", 0),
+            "fgYards": kicking.get("fgYards", 0),
             "longest": kicking.get("longest", 0),
         },
     }
@@ -6547,8 +6895,11 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 template = session.get(CardTemplate, userCard.card_template_id)
                 if not template or template.season_created != currentSeason:
                     continue
-                # Carry forward existing streak count — actual increment happens at week end
-                prevStreak = getattr(prev, 'streak_count', 1) or 1
+                # Carry forward existing streak count — actual increment happens at week end.
+                # Preserve a 0 (just-broken) — `or 1` would clobber the restart-penalty signal.
+                prevStreak = getattr(prev, 'streak_count', 1)
+                if prevStreak is None:
+                    prevStreak = 1
                 # Carry forward the All-Pro swap-bonus flag too. Without this,
                 # a card that granted a swap last week looks like a fresh equip
                 # this week, and unequipping it skips the refund — letting users
@@ -6807,21 +7158,55 @@ def setEquippedCards(
         # Track previously equipped cards before clearing
         previousEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
-        # Build streak count lookup so re-equipped cards keep their streak,
-        # plus peak-decay state so the cold-week decay tail survives an
-        # equip change.
-        prevStreakByCardId = {
-            prev.user_card_id: getattr(prev, 'streak_count', 1) or 1
-            for prev in previousEquipped
-        }
-        prevPeakByCardId = {
-            prev.user_card_id: getattr(prev, 'peak_output', None)
-            for prev in previousEquipped
-        }
-        prevWeeksSinceByCardId = {
-            prev.user_card_id: getattr(prev, 'weeks_since_break', 0) or 0
-            for prev in previousEquipped
-        }
+        # Streaks need to inherit from the LAST WEEK the card was equipped,
+        # not just the current week's prior row. Without this, every PUT to
+        # the equipped set on a new week resets streak_count to default 1,
+        # because previousEquipped (current week) is empty on a first-equip
+        # of the week. Build a lookup by user_card_id from the most recent
+        # week the card appeared, falling back to current-week prior row,
+        # then default 1.
+        priorWeekEquipped = []
+        try:
+            from database.models import EquippedCard as _EC
+            priorRows = (
+                session.query(_EC)
+                .filter(
+                    _EC.user_id == user.id,
+                    _EC.season == currentSeason,
+                    _EC.week < currentWeek,
+                )
+                .order_by(_EC.week.desc())
+                .all()
+            )
+            # First (most recent) row per user_card_id wins.
+            seen = set()
+            for r in priorRows:
+                if r.user_card_id in seen:
+                    continue
+                seen.add(r.user_card_id)
+                priorWeekEquipped.append(r)
+        except Exception:
+            pass
+
+        # Merge: current-week rows take precedence (already-active streaks
+        # on a re-PUT this same week), then fall back to prior-week.
+        def _buildLookup(field, default):
+            out: dict = {}
+            for prev in priorWeekEquipped:
+                v = getattr(prev, field, default)
+                out[prev.user_card_id] = v if v is not None else default
+            for prev in previousEquipped:
+                v = getattr(prev, field, default)
+                out[prev.user_card_id] = v if v is not None else default
+            return out
+
+        prevStreakByCardId = _buildLookup('streak_count', 1)
+        prevPeakByCardId = {}
+        for prev in priorWeekEquipped + list(previousEquipped):
+            v = getattr(prev, 'peak_output', None)
+            if v is not None:
+                prevPeakByCardId[prev.user_card_id] = v
+        prevWeeksSinceByCardId = _buildLookup('weeks_since_break', 0)
 
         # Clear existing and set new. Mark the roster so the GET auto-carry-forward
         # doesn't un-do an intentional empty equip set.
@@ -6968,7 +7353,10 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
     from database.connection import get_session
     from database.models import PackOpening, PendingPackOpening, User
     from database.repositories.card_repositories import PackTypeRepository
-    from managers.cardManager import DAILY_PACK_LIMITS, getActivePackNames, shopDayOfSeason
+    from managers.cardManager import (
+        DAILY_PACK_LIMITS, MAX_PACKS_PER_SHOP_CYCLE,
+        getActivePackNames, shopDayOfSeason, _countPacksThisCycle,
+    )
     from datetime import datetime
 
     sm = floosball_app.seasonManager if floosball_app else None
@@ -7047,6 +7435,8 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
                 base["themeValue"] = p.theme_value
             return base
 
+        cyclePacksOpened = _countPacksThisCycle(session, user.id, currentSeason, currentWeek) if user else 0
+        cycleRemaining = max(0, MAX_PACKS_PER_SHOP_CYCLE - cyclePacksOpened)
         return build_success_response({
             "packs": [_packDict(p) for p in rotated],
             "themedPacks": [_packDict(p) for p in themedPacks],
@@ -7056,6 +7446,9 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
             } if starterPack else None),
             "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
+            "cycleLimit": MAX_PACKS_PER_SHOP_CYCLE,
+            "cyclePacksOpened": cyclePacksOpened,
+            "cycleRemaining": cycleRemaining,
         })
     finally:
         session.close()
@@ -7147,7 +7540,7 @@ def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
-        result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay)
+        result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay, currentWeek=currentWeek)
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -8171,7 +8564,12 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             if not req.targetPlayerId:
                 raise HTTPException(400, "targetPlayerId (coach ID) required for hire_coach")
             coach = session.query(Coach).filter_by(id=req.targetPlayerId).first()
-            if not coach or coach.team_id is not None:
+            if not coach:
+                raise HTTPException(400, "Coach not available in the hiring pool")
+            # Coach is "available" if no team has them as coach_id.
+            from database.models import Team as DBTeam
+            assignedAt = session.query(DBTeam).filter_by(coach_id=coach.id).first()
+            if assignedAt is not None:
                 raise HTTPException(400, "Coach not available in the hiring pool")
 
         # Check limits
@@ -8567,7 +8965,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 # Retirement risk — an aging veteran projected to retire at
                 # season end creates an opening even with multi-year contract.
                 retireRisk = pm.computeRetirementRisk(rosterPlayer)
-                retireLikely = retireRisk in ('forced', 'very_likely', 'likely')
+                retireLikely = retireRisk in ('retiring', 'very_likely', 'likely')
 
                 # Slot opens if ANY of: cut-vote at quorum, walk-year without
                 # resign backing, or high retirement risk.

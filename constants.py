@@ -113,11 +113,11 @@ ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same
 # Minimum player count required to lock a roster. /remove also enforces
 # this floor — caps the "gut your roster to ride Drought/Hedge/Home Alone
 # unbounded" exploit without taking partial-roster flexibility off the
-# table. Auto-lock at game start picks up anyone meeting the floor. Two
-# is the lowest meaningful floor: forces the user to keep at least one
-# scoring threat alongside the kicker so the gutted-roster exploit
-# still has a real cost.
-ROSTER_MIN_PLAYERS = 2
+# table. Auto-lock at game start picks up anyone meeting the floor.
+# Next-season raises this to 3 — combined with the no-duplicate-effects
+# rule it forces real roster construction instead of letting players
+# coast on a kicker plus one scorer.
+ROSTER_MIN_PLAYERS = 3
 
 # Weekly FP → Floobits conversion (participation reward).
 # Tapering power curve: F = round(SCALE * FP^EXPONENT), no hard cap. Big
@@ -281,13 +281,13 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 10, 'LARGE_MARKET': 5, 'MID_MARKET': 0,
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
 # ---- Retirement Risk Telegraphing ----
-# Surfaces during the season so fans can pre-vote replacements. Mirrors the actual
-# retirement chances used in seasonManager._processRosteredPlayerContracts.
-# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'forced'
-RETIREMENT_FORCED_SEASONS = 20      # Hard cap — no player plays past this
-RETIREMENT_HIGH_AGE_SEASONS = 15    # 70%+ chance band
-RETIREMENT_MID_AGE_SEASONS = 10     # 25-65% chance band
-RETIREMENT_EARLY_AGE_SEASONS = 7    # 5-10% chance band
+# Surfaces during the season so fans can pre-vote replacements. Mirrors the
+# actual retirement rolls in seasonManager._evaluateRetirementCandidates.
+# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'retiring' (locked)
+# Retirements only fire for players whose contract expires this offseason.
+RETIREMENT_HIGH_AGE_SEASONS = 15    # 90% chance on walk year
+RETIREMENT_MID_AGE_SEASONS = 10     # 65% chance on walk year
+RETIREMENT_EARLY_AGE_SEASONS = 7    # 5% chance on walk year
 
 # ---- Player Fatigue ----
 BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
@@ -526,3 +526,29 @@ def calculateCertaintyMultiplier(quarter, homeWinProb):
     fullDecay = 1.0 - baseMult
     effectiveDecay = fullDecay * (PICKEM_MIN_DECAY_FRACTION + (1.0 - PICKEM_MIN_DECAY_FRACTION) * certainty)
     return round(1.0 - effectiveDecay, 2)
+
+
+# ─── Play Reactions ─────────────────────────────────────────────────────────────
+# Six reactions for plays + sideline quotes. UI renders SVG icons (no emoji).
+
+REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
+
+
+# ─── Anomaly System / The Cracking ──────────────────────────────────────────────
+# The anomaly system has three layers:
+#   Layer 1 — universal cosmetic micro-glitches (fires from Stirring up)
+#   Layer 2 — personality-flavored cosmetic glitches (fires from Erratic up)
+#   Cracking — the dramatic event: a Core takes control and the card-bonus
+#              math switches to that Core's signature equation
+#
+# Layer 1 + Layer 2 are PURE FLAVOR — no mechanical impact regardless of flag.
+# This flag gates ONLY the Cracking event itself. When False, the aggregate
+# can still climb to threshold and Core warnings/news still fire (visible
+# tease), but the trigger is suppressed and the math never swaps.
+#
+# Roadmap:
+#   Season N   (current): False — tease only. Whispers, warnings, glitches,
+#                         but no Cracking ever fires.
+#   Season N+1 (planned): True  — the payoff. Cracking can actually trigger.
+ANOMALY_CRACKING_ENABLED = False
+REACTION_TARGET_TYPES = {"play", "sideline_quote"}

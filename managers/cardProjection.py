@@ -53,6 +53,18 @@ _EXACT_EFFECTS = frozenset({
     # the value without an "est." prefix and dead states render as a
     # clean red "+0 FP" rather than a misleading "est. +X" placeholder.
     "patient", "wanderer", "castaway", "rookie_hype",
+    # Reworked roster-trait cards (read off prior-season standings and
+    # current top-6 — both deterministic at lock time).
+    "comeback_kid", "domination", "walk_off",
+    # Fav-team-wins accumulator + per-5★-roster-player — both visible at lock.
+    # Eminence reads the position leaderboard which is also visible at lock.
+    "believe", "showoff", "eminence",
+    # FPx-converted "per roster player" cards — counts known at lock (Homer)
+    # or known at week-end (Honor Roll).
+    "homer", "honor_roll",
+    # Roster-construction-driven new cards — counts determinable at lock
+    # (Synergy/Vanguard/Loyalty/Cornerstone) or from per-player weekly stats (Range).
+    "synergy", "vanguard", "range", "loyalty", "cornerstone",
     # Hand-composition effects (count of flat-FP cards in hand)
     "anthem",
     # Inverse-streak / streak effects with known streak counts
@@ -105,6 +117,12 @@ _AMPLIFIER_DEPENDS = {
     "catalyst":      lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "advantage":     lambda hand, self_eq: _hasOther(hand, self_eq, _isChanceEffect),
     "conductor":     lambda hand, self_eq: _hasOther(hand, self_eq, lambda e: _outputTypeOf(e) == "fp"),
+    # Diamond stat amplifiers — always "active" if any other card is equipped
+    # (the multiplier propagates through ctx mutation regardless of which
+    # other cards happen to read TDs/yards/FGs).
+    "doubler":       lambda hand, self_eq: len(hand) - (1 if self_eq in hand else 0) >= 1,
+    "surveyor":      lambda hand, self_eq: len(hand) - (1 if self_eq in hand else 0) >= 1,
+    "sharpshooter":  lambda hand, self_eq: len(hand) - (1 if self_eq in hand else 0) >= 1,
 }
 
 
@@ -162,6 +180,12 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
     if effectName == "conductor":
         boost = primary.get("boostPct", 20)
         return f"+{boost}% to flat-FP cards" if active else "Needs flat-FP card"
+    if effectName == "doubler":
+        return "TDs count 2x for other cards" if active else "Needs another card"
+    if effectName == "surveyor":
+        return "Yards count 1.5x for other cards" if active else "Needs another card"
+    if effectName == "sharpshooter":
+        return "FGs count 2x for other cards" if active else "Needs another card"
     return ""
 
 
@@ -207,6 +231,49 @@ def _perGameAverageStats(row) -> Optional[dict]:
     )
 
 
+def _lookupPriorSeasonMissedPlayoffTeams(session, season: int) -> set:
+    """Set of team_ids that missed playoffs in the previous season. Used by
+    Comeback Kid. Empty for season 1."""
+    if season <= 1:
+        return set()
+    try:
+        from database.models import TeamSeasonStats
+        rows = session.query(TeamSeasonStats.team_id).filter(
+            TeamSeasonStats.season == season - 1,
+            TeamSeasonStats.made_playoffs == False,  # noqa: E712
+        ).all()
+        return {r.team_id for r in rows}
+    except Exception:
+        return set()
+
+
+def _lookupCurrentTop6Teams(session, season: int) -> set:
+    """Set of team_ids currently top-6 by record *within their league*. Used
+    by Domination. Both leagues' top-6 are unioned together — the playoff
+    cut, basically."""
+    try:
+        from database.models import TeamSeasonStats, Team as _Team
+        from collections import defaultdict
+        rows = (
+            session.query(_Team.league_id, TeamSeasonStats.team_id,
+                          TeamSeasonStats.wins, TeamSeasonStats.win_percentage)
+            .join(_Team, _Team.id == TeamSeasonStats.team_id)
+            .filter(TeamSeasonStats.season == season)
+            .all()
+        )
+        byLeague = defaultdict(list)
+        for leagueId, teamId, wins, wp in rows:
+            byLeague[leagueId].append((wp or 0.0, wins or 0, teamId))
+        result = set()
+        for entries in byLeague.values():
+            entries.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            for _wp, _w, tid in entries[:6]:
+                result.add(tid)
+        return result
+    except Exception:
+        return set()
+
+
 def _winProbabilityFromElo(favElo: float, oppElo: float) -> float:
     try:
         return 1.0 / (1.0 + 10 ** ((oppElo - favElo) / 400.0))
@@ -248,6 +315,14 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     rosterPlayerIds = {rp.player_id for rp in roster.players}
     if not rosterPlayerIds:
         return None
+    # Loyalty snapshot — original roster from first save.
+    initialRosterPlayerIds = set()
+    if roster.initial_player_ids:
+        try:
+            import json as _json
+            initialRosterPlayerIds = {int(pid) for pid in _json.loads(roster.initial_player_ids)}
+        except Exception:
+            initialRosterPlayerIds = set()
 
     statRows = (session.query(PlayerSeasonStats)
                 .filter(PlayerSeasonStats.season == season,
@@ -284,7 +359,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
             "passing_stats": {"passYards": 0, "tds": 0},
             "rushing_stats": {"runYards": 0, "runTds": 0, "carries": 0},
             "receiving_stats": {"rcvYards": 0, "rcvTds": 0, "receptions": 0, "yac": 0, "longest": 0},
-            "kicking_stats": {"fgs": 0, "fgAtt": 0, "longest": 0, "fg40plus": 0},
+            "kicking_stats": {"fgs": 0, "fgAtt": 0, "fgYards": 0, "longest": 0, "fg40plus": 0},
         }
         weekPlayerStats[pid] = avg
         weekRawFP += avg.get("fantasyPoints", 0)
@@ -307,7 +382,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
 
     favElo = 1500.0
     favStreak = favPriorStreak = favPeakStreak = 0
-    favSeasonLosses = favSeasonUpsetWins = 0
+    favSeasonLosses = favSeasonUpsetWins = favSeasonWins = 0
     favAvgBigPlays = 0.0
     favInPlayoffs = False
     if favTeamId and teamManager:
@@ -319,6 +394,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
             favPriorStreak = favStats.get('priorStreak', favStreak)
             favPeakStreak = favStats.get('peakStreak', abs(favStreak))
             favSeasonLosses = favStats.get('losses', 0)
+            favSeasonWins = favStats.get('wins', 0)
             favSeasonUpsetWins = favStats.get('upsetWins', 0)
             gp = favStats.get('wins', 0) + favStats.get('losses', 0)
             if gp > 0:
@@ -400,6 +476,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                 wp = w / (w + l) if (w + l) > 0 else 0.5
             teamRecords[team.id] = float(wp)
     rosterRookieFlags = {}
+    rosterSeasonsPlayed = {}
     if playerManager:
         for pid in rosterPlayerIds:
             player = playerManager.getPlayerById(pid)
@@ -410,10 +487,9 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                 # users see as "Rookie".
                 svc = getattr(player, 'serviceTime', None)
                 isRookieSvc = bool(svc and getattr(svc, 'name', '') == 'Rookie')
-                rosterRookieFlags[pid] = bool(
-                    isRookieSvc
-                    or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
-                )
+                sp = getattr(player, 'seasonsPlayed', 0) or 0
+                rosterSeasonsPlayed[pid] = sp
+                rosterRookieFlags[pid] = bool(isRookieSvc or sp <= 1)
 
     # Pick-em stats — drives Nose Picker (Conviction), Medium (Augur),
     # Parlay (Tipster). Projection mode estimates forward:
@@ -511,9 +587,11 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                 playerPerfRatings[p.id] = pr
 
     try:
-        positionAvgFPs, _ = computeEminenceData(session, season, week)
+        positionAvgFPs, _, top10PerPosition, top1PerPosition = computeEminenceData(session, season, week)
     except Exception:
         positionAvgFPs = {}
+        top10PerPosition = {}
+        top1PerPosition = {}
 
     kickerSeasonFgMisses = 0
     for pid in rosterPlayerIds:
@@ -545,6 +623,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         streakWeeksSinceBreak=streakWeeksSinceBreak,
         _teamRecords=teamRecords,
         _rosterRookieFlags=rosterRookieFlags,
+        _rosterSeasonsPlayed=rosterSeasonsPlayed,
+        initialRosterPlayerIds=initialRosterPlayerIds,
         userManualPickSubmittedThisWeek=userManualPickSubmittedThisWeek,
         userWeeklyPickemCorrect=userWeeklyPickemCorrect,
         userWeeklyPickemTotal=userWeeklyPickemTotal,
@@ -556,6 +636,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         favoriteTeamPriorStreak=favPriorStreak,
         favoriteTeamPeakStreak=favPeakStreak,
         favoriteTeamSeasonLosses=favSeasonLosses,
+        favoriteTeamSeasonWins=favSeasonWins,
         favoriteTeamInPlayoffs=favInPlayoffs,
         favoriteTeamWonThisWeek=(winProb > 0.5),
         favoriteTeamOpponentElo=oppElo,
@@ -577,6 +658,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         favoriteTeamComebackWin=False,
         favoriteTeamLargestDeficit=0,
         favoriteTeamWalkOffWin=False,
+        priorSeasonMissedPlayoffTeamIds=_lookupPriorSeasonMissedPlayoffTeams(session, season),
+        currentTop6TeamIds=_lookupCurrentTop6Teams(session, season),
         activeModifier=activeModifier,
         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
         seasonSwapsUsed=seasonSwapsUsed,
@@ -585,6 +668,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         liveStreakConditionsMet={},
         positionAvgFPs=positionAvgFPs,
         playerSeasonFPPerGame=playerSeasonFPPerGame,
+        top10PerPosition=top10PerPosition,
+        top1PerPosition=top1PerPosition,
     )
 
 
@@ -845,16 +930,30 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
             peakBySlot.get(b.slotNumber),
         ))
 
-    from managers.cardEffectCalculator import aggregateMultFactors
-    multProduct = aggregateMultFactors(result.multFactors)
-    projectedTotalFP = (ctx.weekRawFP + result.totalBonusFP) * multProduct
+    # Projection uses the Core's signature equation when a Cracking is
+    # active so the projected total previews what the user will actually
+    # see on their breakdown that week. With no Cracking active,
+    # computeFinalOutput falls through to the standard bonus-additive
+    # aggregation (next-season's formula).
+    try:
+        from managers.anomalyManager import getActiveCrackingCore
+        crackingCore = getActiveCrackingCore(ctx.season, ctx.weekNumber)
+    except Exception:
+        crackingCore = None
+    from managers.coreEquations import computeFinalOutput, equationTemplate
+    projectedTotalFP, projectedEquation = computeFinalOutput(
+        ctx.weekRawFP, result.totalBonusFP, result.multFactors,
+        coreKey=crackingCore,
+    )
 
     # Ceiling total — same formula applied to the peak (hot-week) calc
     # with inflated stats. Gives a realistic "up to" number for the
     # Projected This Week block.
     peakCtx = _peakContext(ctx)
-    peakMultProduct = aggregateMultFactors(peakResult.multFactors)
-    bestCaseTotalFP = (peakCtx.weekRawFP + peakResult.totalBonusFP) * peakMultProduct
+    bestCaseTotalFP, _ = computeFinalOutput(
+        peakCtx.weekRawFP, peakResult.totalBonusFP, peakResult.multFactors,
+        coreKey=crackingCore,
+    )
 
     return {
         "cards": cards,
@@ -866,6 +965,9 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
         "bestCaseTotalFP": round(max(projectedTotalFP, bestCaseTotalFP), 2),
         "opponent": ctx.favoriteTeamOpponentName,
         "winProbability": round(ctx.favoriteTeamWinProb, 2),
+        "crackingCore": crackingCore,
+        "crackingEquation": projectedEquation if crackingCore else None,
+        "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
     }
 
 

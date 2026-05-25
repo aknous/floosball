@@ -168,12 +168,96 @@ def parse_args():
         elif arg == '--spread-tiers':
             # Dev-only: spread teams across all 4 funding tiers each season
             # so single-user testing produces a realistic tier distribution
-            # for pressure diagnostic. Sets the env var that
-            # seasonManager._applyDevTierOverride reads.
+            # for pressure diagnostic. Deterministic by team.id — same team
+            # gets the same tier every season.
             os.environ['DEV_SPREAD_TIERS'] = '1'
-            logger.info("--spread-tiers active: teams will be assigned to all 4 tiers each season")
+            logger.info("--spread-tiers active: teams will be assigned to all 4 tiers each season (deterministic by team.id)")
+        elif arg == '--shuffle-tiers':
+            # Dev-only: like --spread-tiers but randomizes the tier assignment
+            # each season (seeded by season number). Use when the deterministic
+            # bucket keeps your favorite team in the same tier and you want to
+            # see how the team performs across different tier conditions.
+            os.environ['DEV_SHUFFLE_TIERS'] = '1'
+            logger.info("--shuffle-tiers active: teams will be reshuffled across all 4 tiers each season")
 
     return args
+
+
+def _restorePartialPhaseSnapshotIfNeeded() -> None:
+    """If the previous run died inside a non-idempotent offseason phase
+    (rookie_draft, fa_draft, or training), roll the DB back to the snapshot
+    taken at that phase's entry so the resume re-runs the phase from a clean
+    starting state instead of compounding partial picks.
+
+    Reads simulation_state via a raw sqlite3 connection so this runs BEFORE
+    init_db() opens SQLAlchemy connections. Detection: in_offseason=True AND
+    offseason_phase ∈ {rookie_draft, fa_draft, training} AND that phase is
+    NOT present in offseason_completed_steps.
+    """
+    import os
+    import json
+    import shutil
+    import sqlite3
+
+    # Resolve DB path the same way as the rest of the app.
+    dbDir = os.environ.get('DATABASE_DIR', 'data')
+    if os.path.exists('/data') and os.path.isdir('/data'):
+        dbDir = '/data'
+    dbPath = os.path.join(dbDir, 'floosball.db')
+    if not os.path.exists(dbPath):
+        return  # No DB yet — nothing to restore.
+
+    PARTIAL_PHASES = {'rookie_draft', 'fa_draft', 'training'}
+
+    try:
+        conn = sqlite3.connect(dbPath)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT current_season, in_offseason, offseason_phase, "
+            "offseason_completed_steps FROM simulation_state WHERE id = 1"
+        )
+        row = cur.fetchone()
+        conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"snapshot-restore probe: simulation_state read failed: {e}")
+        return
+
+    if not row:
+        return
+    seasonNum, inOffseason, phase, stepsEncoded = row
+    if not inOffseason or phase not in PARTIAL_PHASES:
+        return
+    completedSteps = set()
+    if stepsEncoded:
+        try:
+            completedSteps = set(json.loads(stepsEncoded))
+        except Exception:
+            pass
+    if phase in completedSteps:
+        # Phase already finished — nothing to roll back.
+        return
+
+    snapshotPath = os.path.join(dbDir, f"offseason_s{seasonNum}_{phase}.db")
+    if not os.path.exists(snapshotPath):
+        logger.warning(
+            f"snapshot-restore: partial-phase resume detected "
+            f"(season={seasonNum}, phase={phase}) but snapshot not found at "
+            f"{snapshotPath} — proceeding without rollback. Drafts may "
+            f"contain partial picks from the interrupted run."
+        )
+        return
+
+    backupPath = dbPath + '.preresume'
+    try:
+        shutil.copy2(dbPath, backupPath)
+        shutil.copy2(snapshotPath, dbPath)
+        logger.warning(
+            f"snapshot-restore: rolled DB back to {snapshotPath} "
+            f"(phase={phase}, season={seasonNum}). "
+            f"Pre-rollback DB preserved at {backupPath}."
+        )
+    except OSError as e:
+        logger.error(f"snapshot-restore: file copy failed: {e}")
 
 
 async def initialize_application(timing_mode: TimingMode, fresh_start: bool, schedule_gap: int = 60, card_reset: bool = False, card_reset_current_season: bool = False):
@@ -185,6 +269,10 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
         logger.info("Fresh start requested - clearing database")
         clear_db()
     else:
+        # If a previous run died mid-draft / mid-training, restore the
+        # snapshot taken at phase entry so the resume re-runs the phase
+        # from a clean state. Must happen BEFORE init_db() opens connections.
+        _restorePartialPhaseSnapshotIfNeeded()
         init_db()
         # Card reset: wipe card data so templates regenerate with new rules
         if card_reset:

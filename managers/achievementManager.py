@@ -235,6 +235,65 @@ def processDeferredRewards(session: Session, userId: Optional[int] = None) -> in
     return count
 
 
+def convertOverCapPackStash(session: Session) -> int:
+    """At season start, find any user holding more than MAX_PENDING_PACK_REWARDS
+    unclaimed pack rewards and auto-convert the excess to Floobits at each
+    pack's shop cost. Keeps the oldest pack (created_at asc); converts the
+    rest. Mirrors the per-grant overflow logic in _applyReward — same cap,
+    same conversion math — but operates retroactively at season rollover.
+
+    Returns the number of pack rewards converted across all users.
+    """
+    from sqlalchemy import func as _sqlfunc
+    from database.models import PackType
+
+    # Find user_ids with > cap pending packs.
+    overCapUserIds = [
+        row[0] for row in
+        session.query(PendingReward.user_id)
+        .filter(PendingReward.kind == "pack",
+                PendingReward.claimed_at.is_(None))
+        .group_by(PendingReward.user_id)
+        .having(_sqlfunc.count(PendingReward.id) > MAX_PENDING_PACK_REWARDS)
+        .all()
+    ]
+    if not overCapUserIds:
+        return 0
+
+    currencyRepo = CurrencyRepository(session)
+    convertedTotal = 0
+    for userId in overCapUserIds:
+        rows = (
+            session.query(PendingReward)
+            .filter(PendingReward.user_id == userId,
+                    PendingReward.kind == "pack",
+                    PendingReward.claimed_at.is_(None))
+            .order_by(PendingReward.created_at.asc())
+            .all()
+        )
+        # Keep the oldest MAX_PENDING_PACK_REWARDS; convert the rest.
+        toConvert = rows[MAX_PENDING_PACK_REWARDS:]
+        for pr in toConvert:
+            packType = session.query(PackType).filter(PackType.name == pr.slug).first()
+            value = int(packType.cost) if packType and packType.cost else 0
+            if value > 0:
+                currencyRepo.addFunds(
+                    userId=userId, amount=value,
+                    transactionType="achievement",
+                    description=f"{pr.source} (season-start stash conversion: {pr.slug}→{value}F)",
+                )
+            session.delete(pr)
+            convertedTotal += 1
+        if toConvert:
+            logger.info(
+                f"convertOverCapPackStash user={userId}: "
+                f"converted {len(toConvert)} pack(s) to Floobits"
+            )
+    if convertedTotal:
+        session.flush()
+    return convertedTotal
+
+
 def sweepExpiredRewards(session: Session, currentSeason: int = 0) -> int:
     """Delete pending rewards the user never claimed or stashed-in-time.
 

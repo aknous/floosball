@@ -17,11 +17,14 @@ class StatTracker:
     """Base class for tracking player statistics across game, season, and career"""
     
     def __init__(self, game_stats_dict, season_stats_dict, career_stats_dict,
-                 on_fantasy_points=None):
+                 on_fantasy_points=None, on_scoring_play=None):
         self.game_stats_dict = game_stats_dict
         self.season_stats_dict = season_stats_dict
         self.career_stats_dict = career_stats_dict
         self._on_fantasy_points = on_fantasy_points
+        # Fires on TD or FG (not yards/catches). Walk Off card uses this to
+        # tally Q4/OT scoring plays per roster player.
+        self._on_scoring_play = on_scoring_play
     
     def add_stat(self, category: StatCategory, subcategory: str, value: int = 1, is_regular_season: bool = True):
         """Generic method to add stats across all stat dictionaries"""
@@ -58,6 +61,10 @@ class StatTracker:
         new_intervals = math.floor((current_yards + additional_yards) / interval_size)
         return (new_intervals - old_intervals) * points_per_interval
 
+    def _fire_scoring_play(self, kind: str):
+        if self._on_scoring_play:
+            self._on_scoring_play(kind)
+
     # Passing statistics methods
     def add_pass_td(self, yards: int, is_regular_season: bool = True):
         """Add passing touchdown"""
@@ -65,6 +72,7 @@ class StatTracker:
         self.add_fantasy_points(4)
         if yards >= 40:
             self.add_fantasy_points(2)
+        self._fire_scoring_play('pass_td')
     
     def add_completion(self, is_regular_season: bool = True):
         """Add completion"""
@@ -120,6 +128,7 @@ class StatTracker:
         self.add_fantasy_points(6)
         if yards >= 40:
             self.add_fantasy_points(2)
+        self._fire_scoring_play('receive_td')
     
     # Rushing statistics methods
     def add_carry(self, is_regular_season: bool = True):
@@ -132,6 +141,7 @@ class StatTracker:
         self.add_fantasy_points(6)
         if yards >= 40:
             self.add_fantasy_points(2)
+        self._fire_scoring_play('rush_td')
     
     def add_rush_yards(self, yards: int, is_regular_season: bool = True):
         """Add rushing yards"""
@@ -154,7 +164,7 @@ class StatTracker:
         """Add field goal"""
         self.add_stat(StatCategory.KICKING, 'fgs', 1, is_regular_season)
         self.add_stat(StatCategory.KICKING, 'fgYards', yards, is_regular_season)
-        
+
         # Fantasy points based on distance
         if yards >= 50:
             self.add_fantasy_points(5)
@@ -162,6 +172,7 @@ class StatTracker:
             self.add_fantasy_points(4)
         else:
             self.add_fantasy_points(3)
+        self._fire_scoring_play('fg')
 
     # Defensive statistics methods
     def add_defensive_sack(self, isRegularSeason: bool = True):
