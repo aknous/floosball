@@ -7697,33 +7697,31 @@ class Play():
 
     def calculateSackProbability(self, defensePassRush: int, qbMobility: int, blockingModifier: int, dropbackDepth: int) -> float:
         """
-        Calculate sack probability using logistic curve based on pass rush vs
-        protection. Returns probability (0-100) that QB gets sacked.
-
-        Dropback depth materially scales sack risk — longer routes need more
-        time to develop, so a sustained rush gets home more often. The depth
-        multiplier scales the curve's asymptote AND the cap.
+        Calculate sack probability using logistic curve based on pass rush vs protection.
+        Returns probability (0-100) that QB gets sacked.
         """
         # Calculate pass rush differential (defense rush vs offensive protection)
         # blockingModifier per player is 0-6; combined TE+RB typically 3-8
         qbProtection = qbMobility + (blockingModifier * 4)
         rushDifferential = defensePassRush - qbProtection
 
-        # Dropback depth adds to the rush differential — longer time exposed
+        # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
         rushDifferential += (dropbackDepth - 1) * 2
 
-        # Per-depth asymptote multiplier + cap. Without this the logistic curve
-        # tops out near 6% regardless of dropback. Long/extraLong dropbacks need
-        # a meaningfully higher ceiling so sustained pressure on deep routes
-        # actually gets home.
-        depthScale = {0: 1.5, 2: 2.0, 4: 3.0, 6: 4.5}.get(dropbackDepth, 2.0)
-        depthCap   = {0: 12,  2: 16,  4: 22,  6: 32}.get(dropbackDepth, 15)
-
-        baseSackRate = 4.5
+        # Base sack rate at even matchup (differential = 0) is ~3%
+        # Logistic function: probability increases smoothly with rush advantage
+        baseSackRate = 3.0
         steepness = 0.15
-        probability = (baseSackRate * depthScale) / (1 + np.exp(-steepness * rushDifferential))
 
-        return max(0.5, min(depthCap, probability))
+        # Shift the curve so 0 differential = baseSackRate
+        probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
+
+        # Extra-long dropbacks (Hail Mary) leave QB exposed in pocket much
+        # longer than normal — the standard 15% cap underestimates real risk.
+        # Lift cap to 28% so a strong rush against thin protection can wreck
+        # the play before it leaves the QB's hand.
+        capMax = 28 if dropbackDepth >= 6 else 15
+        return max(0.5, min(capMax, probability))
     
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
@@ -7974,34 +7972,10 @@ class Play():
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
 
-        # INT probability — bad throws to covered receivers get picked.
-        # Pass distance matters: deep/long balls give defenders more time
-        # to read the throw and break on it, and under-thrown deep balls
-        # become jump-ball gifts. Tier multipliers + relaxed thresholds for
-        # longer passes reflect that.
-        TIER_INT_MULT = {
-            PassType.short:    0.4,
-            PassType.medium:   1.0,
-            PassType.long:     1.6,
-            PassType.deep:     2.4,
-            PassType.hailMary: 3.0,
-        }
-        # Longer passes can be intercepted at moderate throw quality; short
-        # passes need to be genuinely bad. Same gate widens for openness.
-        if passType in (PassType.long, PassType.deep, PassType.hailMary):
-            qualityGate, opennessGate = 65, 60
-        else:
-            qualityGate, opennessGate = 50, 50
-
+        # INT probability — bad throws to covered receivers get picked
         intProb = 0
-        if throwQuality < qualityGate and receiverOpenness < opennessGate:
-            intProb = (
-                ((qualityGate - throwQuality) / 10)
-                * ((opennessGate - receiverOpenness) / opennessGate)
-                * (defensePassCoverage / 100)
-                * 12
-                * TIER_INT_MULT.get(passType, 1.0)
-            )
+        if throwQuality < 50 and receiverOpenness < 50:
+            intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
 
         # Drop probability — receiver gets hands on it but doesn't secure
         # Only a fraction of non-secured contacts are visible "drops" (rest are
@@ -8014,7 +7988,7 @@ class Play():
             'contactProb': round(min(98, max(5, contactProb)), 1),
             'secureProb': round(min(97, max(15, secureProb)), 1),
             'catchProb': round(min(95, max(3, catchProb)), 1),
-            'intProb': round(min(35, max(0, intProb)), 1),
+            'intProb': round(min(25, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
     
@@ -8491,7 +8465,7 @@ class Play():
                     # Determine who intercepts: covering CB, or Safety on deep overthrows
                     safetyPlayer = coverageAssignments.get('rb')
                     if (safetyPlayer and coveringDefender is not safetyPlayer
-                            and self.passType in (PassType.long, PassType.deep, PassType.hailMary)
+                            and self.passType in (PassType.long, PassType.hailMary)
                             and batched_randint(1, 100) <= 35):
                         # Safety reads the deep throw and jumps the route
                         self.interceptedBy = safetyPlayer
