@@ -7533,7 +7533,12 @@ class Play():
         linePower += rbMental + runnerPressureMod
         gapBonus = (gapQuality - 50) / 4
         lineMatchup = linePower - effectiveRunDef + gapBonus
-        gate1Chance = max(20, min(85, 40 + lineMatchup * 1.2))
+        # Gate-1 floor lifted from 20% → 35% so weak-blocking offenses
+        # against strong run defenses aren't pinned at an 80% stuff rate.
+        # That floor was killing trailing teams' drives and contributing
+        # to the bimodal score distribution. Big-play tails (gates 2/3)
+        # unaffected — housecall potential preserved.
+        gate1Chance = max(35, min(85, 40 + lineMatchup * 1.2))
 
         # GATE 2 — Second level (agility/vision vs box tackling)
         secondLevel = (self.runner.attributes.agility * 1.3 +
@@ -7753,6 +7758,25 @@ class Play():
         confDrift = player.gameAttributes.confidenceModifier - baseConf
         detDrift = player.gameAttributes.determinationModifier - baseDet
         return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
+
+    def _defenderMentalMod(self, defender):
+        """Combined mental swing for a defender on a single resolution.
+        Mirrors the pressureMod + mentalDrift/15 pattern used on offense so
+        defenders are equally subject to clutch/choke and in-game flow state.
+        Returns a rating delta (typically ±0 to ±8) to add onto the defender's
+        effective rating for the gate being resolved.
+        """
+        if defender is None or not hasattr(defender, 'attributes'):
+            return 0.0
+        try:
+            pressureMod = defender.attributes.getPressureModifier(self.game.gamePressure)
+        except Exception:
+            pressureMod = 0.0
+        try:
+            drift = self._mentalDrift(defender) / 15
+        except Exception:
+            drift = 0.0
+        return pressureMod + drift
 
     def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
         """
@@ -7994,32 +8018,23 @@ class Play():
     
     def calculatePassYardage(self, passType, throwQuality: float) -> int:
         """
-        Calculate air yards using a Gaussian distribution per pass tier.
-
-        Quality penalty scales with pass distance: a bad throw barely affects
-        a screen but heavily under-throws a deep ball. Each tier has its own
-        floor (worst-case retention of base distance) and divisor (the throw
-        quality the receiver needs to hit the base distance exactly).
-
-        Tiers (air-yards distribution):
-          short    0-4   (screen, quick hitch)
-          medium   5-8   (short crossing, hitch)
-          long     9-14  (over-the-middle, deep curl)
-          deep     15+   (go route, post, deep cross)
-          hailMary endzone / max QB throw
+        Calculate air yards using Gaussian distribution based on pass type and
+        throw quality. Restored to main's parameters — the per-tier floor/divisor
+        rework cut mean air yards 40-50% per tier, contributing to shutouts and
+        stalled drives. Deep tier kept distinct with slightly higher mean than
+        long so it retains its identity in the playcaller.
         """
         passTypeParams = {
-            PassType.short:    {'mean': 2.0,  'stdDev': 1.3,  'floor': 0.85, 'divisor': 70},
-            PassType.medium:   {'mean': 6.5,  'stdDev': 1.3,  'floor': 0.70, 'divisor': 65},
-            PassType.long:     {'mean': 11.0, 'stdDev': 1.8,  'floor': 0.55, 'divisor': 58},
-            PassType.deep:     {'mean': 20.0, 'stdDev': 4.5,  'floor': 0.40, 'divisor': 50},
-            PassType.hailMary: {'mean': 50.0, 'stdDev': 10.0, 'floor': 0.30, 'divisor': 40},
+            PassType.short:    {'mean': 3.5, 'stdDev': 1.5},
+            PassType.medium:   {'mean': 11,  'stdDev': 3.5},
+            PassType.long:     {'mean': 22,  'stdDev': 5},
+            PassType.deep:     {'mean': 26,  'stdDev': 5.5},
+            PassType.hailMary: {'mean': 50,  'stdDev': 10},
         }
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
 
-        # Cap at 1.2 so above-average throws can slightly overshoot, but a
-        # great throw doesn't turn a deep ball into a 30-yard moonshot.
-        qualityFactor = min(1.2, max(params['floor'], throwQuality / params['divisor']))
+        # Adjust mean based on throw quality (better throws travel intended distance)
+        qualityFactor = max(0.7, throwQuality / 70)
         adjustedMean = params['mean'] * qualityFactor
 
         airYards = int(np.random.normal(adjustedMean, params['stdDev']))
@@ -8090,6 +8105,7 @@ class Play():
         if passRusher:
             deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
             basePassRush = deAttrs.get('passRush', self.defense.defensePassRushRating)
+            basePassRush += self._defenderMentalMod(passRusher)
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
@@ -8247,6 +8263,7 @@ class Play():
                     if assignedDefender:
                         defAttrs = assignedDefender.attributes.getDefensiveAttributes(assignedDefender.position)
                         individualCoverage = defAttrs.get('coverage', effectivePassDef)
+                        individualCoverage += self._defenderMentalMod(assignedDefender)
 
                         # Coverage type modifies how individual coverage applies
                         if GAMEPLAN_AVAILABLE and coverageType is not None:
@@ -8264,6 +8281,7 @@ class Play():
                                 if safetyPlayer:
                                     sAttrs = safetyPlayer.attributes.getDefensiveAttributes(safetyPlayer.position)
                                     safetyPlayReading = sAttrs.get('playReading', 70)
+                                    safetyPlayReading += self._defenderMentalMod(safetyPlayer)
                                 # Better safety play-reading → more man-like (stronger)
                                 manWeight = 0.4 + (safetyPlayReading - 60) / 100
                                 manWeight = max(0.3, min(0.7, manWeight))
@@ -8417,6 +8435,7 @@ class Play():
                 if coveringDefender:
                     defAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
                     catchDefCoverage = defAttrs.get('coverage', self.defense.defensePassCoverageRating)
+                    catchDefCoverage += self._defenderMentalMod(coveringDefender)
                 else:
                     catchDefCoverage = self.defense.defensePassCoverageRating
                 self.insights['pass']['catchDefCoverage'] = round(catchDefCoverage)
@@ -8521,6 +8540,7 @@ class Play():
                         if coveringDefender:
                             covAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
                             slipDef = covAttrs.get('tackling', catchDefCoverage)
+                            slipDef += self._defenderMentalMod(coveringDefender)
                         else:
                             slipDef = catchDefCoverage
 
@@ -8652,6 +8672,7 @@ class Play():
                         if hasattr(primaryTackler, 'attributes'):
                             defAttrs = primaryTackler.attributes.getDefensiveAttributes(primaryTackler.position)
                             defStripAbility = defAttrs.get('tackling', 70)
+                            defStripAbility += self._defenderMentalMod(primaryTackler)
                         if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
                             self.isFumble = True
                             self.receiver.updateInGameConfidence(-.02)
