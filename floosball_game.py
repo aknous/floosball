@@ -7892,29 +7892,42 @@ class Play():
         # Otherwise force the throw to the most-open option.
         return (sortedTargets[0], False)
     
-    def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
+    def calculateThrowQuality(self, passType, qbAccuracy: int, qbArmStrength: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
         """
         Stage 3: Calculate throw quality (0-100) based on QB skill, pass type, and pressure.
-        Higher quality = easier to catch, less likely to be intercepted
-        Returns throw quality rating (0-100)
+
+        Short passes are accuracy-dominant; deep passes are arm-dominant. A
+        weak-armed QB can be surgical underneath but struggles to drive the
+        ball downfield — gunslingers are the inverse. Combined with the per-tier
+        difficulty multiplier, this creates real QB archetypes.
         """
-        # Base accuracy from QB
-        baseAccuracy = (qbAccuracy + qbXFactor) / 2 + qbPressureMod
+        # Per-tier weighted blend of accuracy and arm strength.
+        tierWeights = {
+            PassType.short:    {'acc': 0.95, 'arm': 0.05},
+            PassType.medium:   {'acc': 0.80, 'arm': 0.20},
+            PassType.long:     {'acc': 0.60, 'arm': 0.40},
+            PassType.deep:     {'acc': 0.40, 'arm': 0.60},
+            PassType.hailMary: {'acc': 0.20, 'arm': 0.80},
+        }
+        w = tierWeights.get(passType, tierWeights[PassType.medium])
+        skillBlend = qbAccuracy * w['acc'] + qbArmStrength * w['arm']
+        baseAccuracy = (skillBlend + qbXFactor) / 2 + qbPressureMod
 
         # Mental state: QB in rhythm throws sharper, rattled QB throws errant
         # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale
         mentalEffect = self._mentalDrift(self.passer) / 15
         baseAccuracy += mentalEffect
 
-        # Pass type difficulty modifier — eased so even deep balls land in the
-        # "decent throw" contact bucket on average. Real NFL deep completion %
-        # sits ~40%; without this the model nearly zeros out 15+ yard catches.
+        # Pass type difficulty multiplier — steeper than the previous curve so
+        # deep balls are meaningfully harder. Combined with the arm-strength
+        # weighting above, a weak-armed QB on a deep ball lands in the bad-throw
+        # bucket (TQ <50), which the catch model already penalizes.
         passTypeDifficulty = {
-            PassType.short:    1.00,   # Easiest
-            PassType.medium:   0.92,
-            PassType.long:     0.82,
-            PassType.deep:     0.72,
-            PassType.hailMary: 0.50,   # Last-ditch heave
+            PassType.short:    1.00,
+            PassType.medium:   0.88,
+            PassType.long:     0.72,
+            PassType.deep:     0.55,
+            PassType.hailMary: 0.35,
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
 
@@ -7931,55 +7944,57 @@ class Play():
     
     def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None) -> dict:
         """
-        Two-phase catch model:
+        Two-phase catch model with hard floors that prevent attribute compounding:
+
         Phase 1 (Contact): Can the receiver physically get their hands on the ball?
             - Good throws are easy to reach; bad throws require high reach
-            - Defenders in coverage can deflect/disrupt
+            - Coverage applies in two layers: openness-gated disruption AND a
+              baseline pressure that scales with defensive coverage rating, so
+              good defenses always cost completion percentage (mirrors the run
+              game's "stuff floor" — defense can never be locked out).
         Phase 2 (Secure): Given contact, does the receiver catch the ball?
             - Primarily hands-driven
             - Contested catches and bad throws are harder to secure
+
+        Compared to the prior version: tighter top-end caps (contact 92 / secure 95)
+        and a coverage baseline component that always applies — so mature defenses
+        actually slow mature offenses, instead of being zeroed out whenever the
+        receiver is open.
         """
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
+        # Top-end compressed so even great throws aren't automatic catches.
         if throwQuality >= 70:
-            # Good throw — hits the receiver, reach barely matters
-            baseContact = 90 + (throwQuality - 70) * 0.33  # 90-100
-            reachFactor = receiverReach * 0.05  # 3-5 bonus
+            baseContact = 80 + (throwQuality - 70) * 0.4   # 80-92
+            reachFactor = receiverReach * 0.05
         elif throwQuality >= 50:
-            # Decent throw — slightly off, reach helps
-            baseContact = 55 + (throwQuality - 50) * 1.75  # 55-90
-            reachFactor = (receiverReach - 60) * 0.4  # 0-16
+            baseContact = 50 + (throwQuality - 50) * 1.5   # 50-80
+            reachFactor = (receiverReach - 60) * 0.4
         else:
-            # Bad throw — way off target, reach is critical
-            baseContact = 10 + throwQuality * 0.9  # 10-55
-            reachFactor = (receiverReach - 60) * 0.7  # 0-28
+            baseContact = 10 + throwQuality * 0.8          # 10-50
+            reachFactor = (receiverReach - 60) * 0.7
 
-        # Defenders in coverage can deflect/disrupt before receiver reaches.
-        # The 25 multiplier is the "max coverage hit" when openness is 0 and
-        # defCov is 100. Raised from 20 because the throwaway-recovery change
-        # surfaced too many low-openness throws as catches; this keeps the
-        # defense relevant when receivers aren't actually open.
+        # Openness-gated disruption: defenders interfere when receiver isn't open.
         coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 25
-        contactProb = min(98, max(5, baseContact + reachFactor - coverageDisruption))
+        # Baseline coverage pressure: applies even on open receivers. Anchored at
+        # 70 (league-average coverage) so elite defenses (90+) cost 6 contact
+        # points, weak defenses (60) refund 3. Prevents attribute lockout.
+        coverageBaseline = (defensePassCoverage - 70) * 0.3
+        contactProb = min(92, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
-        # Coefficient and floor tuned to match NFL drop rate (~3-4% of catches).
-        # Old 0.85*hands + 10 produced ~12% drops on contacted catches; raised
-        # to 0.95*hands + 8 (hands=80 → secure 84, was 78).
         baseSecure = adjustedHands * 0.95 + 8
 
-        # Contested catches are harder to secure
         if receiverOpenness < 40:
             contestPenalty = (40 - receiverOpenness) * 0.35
             baseSecure -= contestPenalty
 
-        # Bad throws are harder to secure even when reached
         if throwQuality < 50:
             throwDifficulty = (50 - throwQuality) * 0.35
             baseSecure -= throwDifficulty
 
-        secureProb = min(97, max(15, baseSecure))
+        secureProb = min(95, max(15, baseSecure))
 
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
@@ -7990,16 +8005,13 @@ class Play():
             intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
 
         # Drop probability — receiver gets hands on it but doesn't secure
-        # Only a fraction of non-secured contacts are visible "drops" (rest are
-        # deflections from the defender). NFL drop rate is ~3-4% of catches;
-        # 0.3 multiplier lands closer to that than the previous 0.5.
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
         dropProb = nonsecuredContact * 0.3
 
         return {
-            'contactProb': round(min(98, max(5, contactProb)), 1),
-            'secureProb': round(min(97, max(15, secureProb)), 1),
-            'catchProb': round(min(95, max(3, catchProb)), 1),
+            'contactProb': round(contactProb, 1),
+            'secureProb': round(secureProb, 1),
+            'catchProb': round(min(90, max(3, catchProb)), 1),
             'intProb': round(min(25, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
@@ -8377,6 +8389,7 @@ class Play():
                 throwQuality = self.calculateThrowQuality(
                     self.passType,
                     self.passer.gameAttributes.accuracy,
+                    self.passer.gameAttributes.armStrength,
                     self.passer.gameAttributes.xFactor,
                     self.rushDifferential,
                     qbPressureMod
@@ -8525,39 +8538,54 @@ class Play():
                         else:
                             slipDef = catchDefCoverage
 
-                        # GATE A — slip the first tackler (agility)
+                        # Per-tier YAC ceilings. Short routes have the most open
+                        # field opportunity (screens, slants); deeper routes are
+                        # caught with defenders converging, so the chase-down
+                        # outcome caps tighter. Mirrors the run game's bounded
+                        # gate yardage — no stage can produce unbounded YAC.
+                        yacCaps = {
+                            PassType.short:    {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 8,  'housecallMean': 12},
+                            PassType.medium:   {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 10, 'housecallMean': 12},
+                            PassType.long:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 12, 'housecallMean': 14},
+                            PassType.deep:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 15, 'housecallMean': 14},
+                            PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
+                        }
+                        caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
+
+                        # GATE A — slip the first tackler (agility).
+                        # Coefficient softened from 1.3 to 0.9 to compress
+                        # attribute-delta amplification on mature rosters.
                         slipPower = (self.receiver.gameAttributes.agility * 1.3 +
                                      self.receiver.gameAttributes.playMakingAbility * 0.5 +
                                      self.receiver.gameAttributes.routeRunning * 0.2) / 2
                         slipPower += receiverPressureMod
                         slipExec = (4 if throwQuality >= 75 else 0) + (4 if self.selectedTarget['openness'] >= 70 else 0)
-                        gateAChance = max(6, min(55, 22 + (slipPower - slipDef) * 1.3 + slipExec))
+                        gateAChance = max(8, min(45, 22 + (slipPower - slipDef) * 0.9 + slipExec))
 
-                        # GATE B — open field (speed vs deep coverage)
+                        # GATE B — open field (speed vs deep coverage).
                         rcvSpeed = (self.receiver.gameAttributes.speed * 1.7 +
                                     self.receiver.gameAttributes.playMakingAbility * 0.3) / 2
                         openFieldDef = self.defense.defensePassCoverageRating * 0.95
-                        gateBChance = max(6, min(50, 20 + (rcvSpeed - openFieldDef) * 1.2))
+                        gateBChance = max(6, min(35, 20 + (rcvSpeed - openFieldDef) * 0.9))
 
-                        # Apply throw-quality and sideline caps to the per-gate gains.
-                        def _capYac(gain):
+                        def _capYac(gain, hardCap):
                             gain = int(gain * throwYacMult)
-                            return max(0, min(gain, sidelineCap, self.yardsToEndzone - passYards - yac))
+                            return max(0, min(gain, hardCap, sidelineCap, self.yardsToEndzone - passYards - yac))
 
                         if batched_randint(1, 100) > gateAChance:
-                            # Tackled by covering defender — 0-3 YAC (avg 1.5)
-                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))))
+                            # Tackled by covering defender — clamped 0-3 YAC
+                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))), caps['gateAFail'])
                         else:
-                            # Slipped the tackle — 2-6 YAC (avg 4)
-                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))))
+                            # Slipped the tackle — clamped 2-6 YAC
+                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))), caps['gateAPass'])
                             if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
                                 if batched_randint(1, 100) > gateBChance:
-                                    # Safety angles WR off — 4-10 more YAC (avg 7)
-                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))))
+                                    # Safety angles WR off — clamped per tier
+                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))), caps['gateBFail'])
                                 else:
-                                    # Housecall — exponential tail
+                                    # Housecall — exponential tail, bounded by remaining field
                                     remYards = self.yardsToEndzone - passYards - yac
-                                    yac += min(remYards, max(8, int(np.random.exponential(12) * throwYacMult)))
+                                    yac += min(remYards, max(8, int(np.random.exponential(caps['housecallMean']) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
