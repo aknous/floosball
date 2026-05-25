@@ -7526,7 +7526,7 @@ class Play():
         # That floor was killing trailing teams' drives and contributing
         # to the bimodal score distribution. Big-play tails (gates 2/3)
         # unaffected — housecall potential preserved.
-        gate1Chance = max(35, min(85, 40 + lineMatchup * 1.2))
+        gate1Chance = max(40, min(85, 45 + lineMatchup * 1.2))
 
         # GATE 2 — Second level (agility/vision vs box tackling)
         secondLevel = (self.runner.attributes.agility * 1.3 +
@@ -7535,7 +7535,7 @@ class Play():
         secondLevel += rbMental + runnerPressureMod
         # LB-S box: blend of run defense (LB) and coverage (S) ratings
         secondLevelDef = effectiveRunDef * 0.55 + self.defense.defensePassCoverageRating * 0.45
-        gate2Chance = max(4, min(40, 12 + (secondLevel - secondLevelDef) * 1.3))
+        gate2Chance = max(6, min(45, 15 + (secondLevel - secondLevelDef) * 1.3))
 
         # GATE 3 — Open field (speed vs safety angles)
         openField = (self.runner.attributes.speed * 1.7 +
@@ -7548,14 +7548,14 @@ class Play():
             # Stuffed at the line — -2 to 2 yards
             self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
         else:
-            # Through the line: 2-5 baseline yards (avg 3)
-            self.yardage = max(2, min(6, int(np.random.normal(3.0, 1.0))))
+            # Through the line: 2-6 baseline yards (avg 3.5)
+            self.yardage = max(2, min(7, int(np.random.normal(3.5, 1.0))))
             if batched_randint(1, 100) > gate2Chance:
-                # Wrapped up at second level: 1-4 more yards (avg 2.5)
-                self.yardage += max(1, min(5, int(np.random.normal(2.5, 1.2))))
+                # Wrapped up at second level: 1-5 more yards (avg 3)
+                self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
             else:
-                # Broke through: 5-10 more yards (avg 7)
-                self.yardage += max(4, min(11, int(np.random.normal(7.0, 1.8))))
+                # Broke through: 5-12 more yards (avg 8)
+                self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
                 if batched_randint(1, 100) > gate3Chance:
                     # Chased down by deep coverage: 6-20 more yards (avg 11)
                     self.yardage += max(4, min(22, int(np.random.normal(11.0, 4.0))))
