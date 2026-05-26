@@ -583,6 +583,19 @@ async def get_team(team_id: int, response: Response):
                 if currentSeasonNum and (not history or history[-1]["season"] != currentSeasonNum):
                     history.append({"season": currentSeasonNum, "rating": liveRating})
 
+                # Pull mood / personality / attitude — surfaced in the
+                # team-page roster dropdown so users can see why a high-rated
+                # player might underperform (form state, fatigue, mood). These
+                # fields already exist on player.attributes; just plumbing them
+                # to the roster response.
+                playerMood = None
+                playerMoodTier = None
+                try:
+                    if getattr(player.attributes, 'personality', None):
+                        playerMood, playerMoodTier = player.attributes.getMood()
+                except Exception:
+                    pass
+
                 roster[pos] = {
                     'id': player.id,
                     'name': player.name,
@@ -599,6 +612,10 @@ async def get_team(team_id: int, response: Response):
                     'serviceTime': player.serviceTime.value if hasattr(player.serviceTime, 'value') else str(player.serviceTime),
                     'fatigue': round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1),
                     'resilience': getattr(player.attributes, 'resilience', 80),
+                    'mood': playerMood,
+                    'moodTier': playerMoodTier,
+                    'personality': getattr(player.attributes, 'personality', None),
+                    'attitude': getattr(player.attributes, 'attitude', None),
                     'ratingHistory': history,
                 }
             else:
