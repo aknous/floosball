@@ -82,7 +82,6 @@ class PlayType(enum.Enum):
 # impact. Fires for any anomalous player from Stirring up. The user
 # reads these and thinks "huh, that's curious." Subtle. Generic.
 _LAYER_1_MICRO_GLITCHES = [
-    "{player} seemed to be aware of the play's result before it happened.",
     "{player} was momentarily in two positions at once.",
     "{player} stepped through a peculiar gap in the geometry of the simulation.",
     "{player}'s shadow is lagging oddly behind them.",
@@ -93,6 +92,9 @@ _LAYER_1_MICRO_GLITCHES = [
     "{player} stuttered in place while the simulation recalculated their trajectory.",
     "{player} arrived at the ball a frame before the ball did.",
     "{player} teleported half a stride forward, somehow skipping the space in between.",
+    "{player} briefly rendered at a slightly lower resolution than everyone around them.",
+    "{player}'s jersey shimmered faintly, like heat coming off asphalt.",
+    "{player} seemed to flicker in and out of existence during the play.",
 ]
 
 # Layer 2 personality-flavored glitch pool. **STILL PURE FLAVOR** — no
@@ -103,7 +105,7 @@ _LAYER_1_MICRO_GLITCHES = [
 _LAYER_2_GLITCHES = [
     "{player}'s textures peeled away, leaving a bare wireframe sprinting down the field.",
     "{player} is no longer following the field's geometry.",
-    "{player}'s velocity briefly exceeded the limits the simulation was designed to handle.",
+    "{player}'s velocity exceeded the limits the simulation was designed to handle.",
     "{player} clipped through a couple defenders in their path.",
     "{player} stretched across half the field before collapsing back into a single body.",
     "{player} flickered violently between positions, unable to settle on just one.",
@@ -111,6 +113,11 @@ _LAYER_2_GLITCHES = [
     "{player} fragmented into a cloud of pixels momentarily before snapping back together.",
     "{player}'s body seemed to briefly corrupt into a tangle of geometry not recognizable as a person.",
     "{player} dissolved into static and reassembled several yards away.",
+    "{player}'s limbs rotated in directions that should not be possible.",
+    "{player} legs clipped through the turf during the play and all you could see was their torso sliding around the field.",
+    "{player} inverted briefly and ran across the underside of the field.",
+    "{player} seemed to momentarily exist in multiple places at once.",
+    "{player} looked like they were running through the air.",
 ]
     
 class PassType(enum.Enum):
