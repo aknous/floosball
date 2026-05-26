@@ -182,6 +182,12 @@ class Player(Base):
     # hallOfFame list resets on every server restart and the HoF tab
     # goes empty until brand-new retirees are inducted.
     is_hof: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Career awards — same in-memory-only problem as is_hof. The player
+    # profile page reads these to render the awards section; without
+    # persistence they reset on every server restart.
+    mvp_awards: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    all_pro_seasons: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    league_championships: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
