@@ -4708,11 +4708,20 @@ class Game:
                             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
                             self.clockRunning = False  # Clock stops after turnover on downs
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
-                                self.highlights.insert(0, {'play': self.play})
-                                self.leagueHighlights.insert(0, {'play': self.play})
-                            self.gameFeed.insert(0, {'play': self.play})
-                            self.broadcastGameState(includeLastPlay=True)
+                            # Kneel and spike branches above (line ~4451) already
+                            # inserted and broadcast this play before falling
+                            # through to the down-advancement section. Skip the
+                            # re-insert here when that happened, otherwise the
+                            # same Play object lands in gameFeed twice — once
+                            # tagged "FourthDown" originally, once after this
+                            # branch mutated playResult to "TurnoverOnDowns".
+                            # Both render identically (same object reference).
+                            if not lastPlayFormatted:
+                                if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
+                                    self.highlights.insert(0, {'play': self.play})
+                                    self.leagueHighlights.insert(0, {'play': self.play})
+                                self.gameFeed.insert(0, {'play': self.play})
+                                self.broadcastGameState(includeLastPlay=True)
                             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                             self._pendingPossessionChange = True
                             lastPlayFormatted = True
