@@ -297,12 +297,18 @@ class PlayerManager:
             # Split by service_time. Retired players belong on retiredPlayers,
             # not activePlayers — without this, the Retired tab is empty after
             # a server restart until a runtime retirement re-populates it.
+            # Hall of Fame members are a subset of retired and also belong on
+            # the hallOfFame list (which the /api/players?status=hof endpoint
+            # reads). Without this routing the HoF tab is empty after restart.
             from floosball_player import PlayerServiceTime as _PST
             self.activePlayers = []
             self.retiredPlayers = []
+            self.hallOfFame = []
             for p in loaded_players:
                 if getattr(p, 'serviceTime', None) == _PST.Retired:
                     self.retiredPlayers.append(p)
+                    if getattr(p, 'is_hof', False):
+                        self.hallOfFame.append(p)
                 else:
                     self.activePlayers.append(p)
 
@@ -381,6 +387,7 @@ class PlayerManager:
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
+            player.is_hof = bool(getattr(db_player, 'is_hof', False))
             
             # Load tier if present
             if db_player.tier:
@@ -1150,19 +1157,18 @@ class PlayerManager:
         return 'safe'
 
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
-        """Promote retired player to Hall of Fame"""
+        """Promote retired player to Hall of Fame. HoFers stay on the
+        retiredPlayers list too — load-from-DB routes them into both lists
+        so this in-game path must mirror that to stay consistent."""
         if player not in self.retiredPlayers:
             logger.warning(f"Cannot promote {player.name} - not in retired players")
             return
-        
+        if player in self.hallOfFame:
+            return
+
         logger.info(f"Promoting {player.name} to Hall of Fame")
-        
-        # Move from retired to HoF
-        self.retiredPlayers.remove(player)
         self.hallOfFame.append(player)
-        
-        # Could publish event here for achievements/notifications
-        # self.serviceContainer.getService('eventManager').publish('playerHofInduction', player)
+        player.is_hof = True
     
     def sortPlayersByPosition(self) -> None:
         """Sort players and assign tiers (replaces sortPlayers function)"""
@@ -1433,6 +1439,7 @@ class PlayerManager:
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
+                    db_player.is_hof = bool(getattr(player, 'is_hof', False))
 
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
@@ -1947,6 +1954,7 @@ class PlayerManager:
                 continue
 
             self.hallOfFame.append(player)
+            player.is_hof = True
             logger.info(
                 f"HoF induction: {player.name} ({pts}pts) — {breakdown}"
             )

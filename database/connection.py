@@ -115,6 +115,17 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Hall of Fame flag (v0.17). Without this, the in-memory hallOfFame
+        # list resets on every restart and the HoF tab goes empty until brand-
+        # new retirees get inducted. Stored on the player row so the load path
+        # can route HoF members into the right list at boot.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN is_hof BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added players.is_hof")
+        except Exception:
+            conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist

@@ -177,6 +177,11 @@ class Player(Base):
     # to retire after this season. Surfaces in UI so users see retirements
     # coming and can vote on replacements via FA ballot.
     will_retire: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Persisted Hall of Fame induction flag. Set when inductHallOfFame()
+    # accepts a newly-retired player. Without this, the in-memory
+    # hallOfFame list resets on every server restart and the HoF tab
+    # goes empty until brand-new retirees are inducted.
+    is_hof: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
