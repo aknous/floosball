@@ -5609,10 +5609,13 @@ class Game:
                 }
                 # Per-player pre-game mental modifier breakdown — surfaced
                 # in the box score so users can see why a high-rated player
-                # underperformed (or overperformed). Omits the row entirely
-                # if no modifier moved the rating from baseline.
+                # underperformed (or overperformed). Include whenever any
+                # individual stage moved the rating, even if they cancelled
+                # out net-zero (users still want the receipts).
                 breakdown = self._buildMentalBreakdown(p)
-                if breakdown and breakdown.get('totalDelta', 0) != 0:
+                if breakdown and any(
+                    breakdown.get(k, 0) != 0 for k in ('fatigue', 'form', 'context', 'cap')
+                ):
                     result['mentalBreakdown'] = breakdown
                 # Include defense stats if any are non-zero
                 defStats = p.gameStatsDict.get('defense', {})
