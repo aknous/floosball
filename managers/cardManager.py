@@ -61,17 +61,21 @@ MAX_PACKS_PER_SHOP_CYCLE: int = 5
 
 
 def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
-    """Datetime when the current 7-week shop cycle began, computed from
+    """Datetime when the current shop cycle began, computed from
     Season.start_date. Returns None if the season's start date isn't set
     yet (caller should treat that as 'no cap enforced').
 
-    In scheduled mode the new season's start_date anchors to a future
-    Monday during the offseason. The first-cycle anchor (shopDay 1) would
-    land in the future, which silently filters out every pack open made
-    during the offseason — counter shows 0/5 even after a paid purchase.
-    Clamp cycleStart to never sit in the future: when start_date hasn't
-    arrived yet, use a generous past anchor so pre-start opens still
-    count toward this cycle's cap.
+    A shop cycle spans 7 sim-weeks (one game-day in the schedule). The
+    regular-season schedule packs 7 rounds into a single calendar day —
+    sim-weeks 1-7 are Monday, 8-14 are Tuesday, 15-21 Wednesday, 22-28
+    Thursday — so each shopDay rollover corresponds to a **one-day**
+    advance in real time, not a 7-week one. Using timedelta(weeks=...)
+    here would push cycleStart ~48 days into the future on day 2 and
+    silently zero the counter.
+
+    A late safety clamp guards against the start_date itself sitting in
+    the future (e.g. scheduled mode anchoring to next Monday during the
+    pre-start window).
     """
     import datetime as _dt
     from database.models import Season
@@ -79,8 +83,7 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
     if not season or not season.start_date:
         return None
     shopDay = shopDayOfSeason(currentWeek)
-    cycleStartWeek = (shopDay - 1) * 7 + 1  # 1, 8, 15, or 22
-    cycleStart = season.start_date + _dt.timedelta(weeks=cycleStartWeek - 1)
+    cycleStart = season.start_date + _dt.timedelta(days=shopDay - 1)
     now = _dt.datetime.utcnow()
     if cycleStart > now:
         # Pre-start window — anchor far enough back that every recent
