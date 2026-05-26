@@ -11,7 +11,7 @@ import math
 import statistics
 from random import choice
 from time import sleep
-from typing import Dict
+from typing import Dict, Optional
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
@@ -3886,6 +3886,8 @@ class Game:
         # Apply fatigue penalties (accumulated over the season)
         self._applyFatigue(self.homeTeam)
         self._applyFatigue(self.awayTeam)
+        self._snapshotMentalPhase(self.homeTeam, 'afterFatigue')
+        self._snapshotMentalPhase(self.awayTeam, 'afterFatigue')
 
         # Apply form-state rating modifier — the trap-game / Cinderella
         # mechanic. Hot-but-vulnerable teams play slightly worse, struggling
@@ -3893,6 +3895,8 @@ class Game:
         # multipliers compose cleanly.
         self._applyFormState(self.homeTeam)
         self._applyFormState(self.awayTeam)
+        self._snapshotMentalPhase(self.homeTeam, 'afterForm')
+        self._snapshotMentalPhase(self.awayTeam, 'afterForm')
 
         # Per-matchup contextual modifiers stacked on top of form state:
         #   - trap game (heavy favorite + low discipline)
@@ -3901,6 +3905,8 @@ class Game:
         # Lets a COMPLACENT team's trap-game game be a real upset, a
         # RESOLUTE team's late-season urgency be a real push, etc.
         self._applyContextModifiers()
+        self._snapshotMentalPhase(self.homeTeam, 'afterContext')
+        self._snapshotMentalPhase(self.awayTeam, 'afterContext')
 
         # Enforce the soft floor — scale a player's attributes back up if
         # the compounded modifiers dropped their overall rating more than
@@ -3908,6 +3914,8 @@ class Game:
         # so a power-back stays power-heavy, etc.
         self._enforceMentalSoftCap(self.homeTeam)
         self._enforceMentalSoftCap(self.awayTeam)
+        self._snapshotMentalPhase(self.homeTeam, 'afterCap')
+        self._snapshotMentalPhase(self.awayTeam, 'afterCap')
 
         x = batched_randint(0,1)
         if x == 0:
@@ -5205,12 +5213,72 @@ class Game:
 
     def _snapshotBaselineRatings(self, team):
         """Record each rostered player's pre-modifier overallRating so the
-        soft cap can enforce a floor relative to it. Stored as a transient
-        attribute on the player object; cleared at game end."""
+        soft cap can enforce a floor relative to it AND the per-game stats
+        snapshot can surface the modifier breakdown. Stored as a transient
+        attribute on the player object."""
         for player in team.rosterDict.values():
             if player is None or player.gameAttributes is None:
                 continue
+            # Refresh derived rating first so the baseline is current.
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+            try:
+                player.updateRating()
+            except Exception:
+                pass
             player._preGameBaselineRating = player.gameAttributes.overallRating
+            # Initialize the snapshot bucket. Subsequent _snapshotMentalPhase
+            # calls fill in intermediate values after each modifier stage so
+            # _buildMentalBreakdown can compute per-stage deltas.
+            player._mentalSnapshots = {
+                'baseline': player.gameAttributes.overallRating,
+                'afterFatigue': None,
+                'afterForm': None,
+                'afterContext': None,
+                'afterCap': None,
+            }
+
+    def _snapshotMentalPhase(self, team, key):
+        """Record the current overallRating under `key` on each player's
+        _mentalSnapshots dict. Called after every modifier stage so the
+        per-game breakdown can attribute rating drift back to each phase."""
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            snaps = getattr(player, '_mentalSnapshots', None)
+            if snaps is None:
+                continue
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+            try:
+                player.updateRating()
+            except Exception:
+                pass
+            snaps[key] = player.gameAttributes.overallRating
+
+    def _buildMentalBreakdown(self, player) -> Optional[dict]:
+        """Compute the per-stage modifier deltas for surfacing in the box
+        score. Returns None if no snapshots were captured (e.g., bench
+        player who never got mutated)."""
+        snaps = getattr(player, '_mentalSnapshots', None)
+        if not snaps:
+            return None
+        baseline = snaps.get('baseline')
+        if not baseline:
+            return None
+        afterFatigue = snaps.get('afterFatigue') or baseline
+        afterForm = snaps.get('afterForm') or afterFatigue
+        afterContext = snaps.get('afterContext') or afterForm
+        afterCap = snaps.get('afterCap') or afterContext
+        return {
+            'baseline': int(baseline),
+            'final': int(afterCap),
+            'totalDelta': int(afterCap - baseline),
+            'fatigue': int(afterFatigue - baseline),
+            'form': int(afterForm - afterFatigue),
+            'context': int(afterContext - afterForm),
+            'cap': int(afterCap - afterContext),
+        }
 
     def _enforceMentalSoftCap(self, team):
         """Scale a player's gameAttributes back up uniformly if the
@@ -5539,6 +5607,13 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
+                # Per-player pre-game mental modifier breakdown — surfaced
+                # in the box score so users can see why a high-rated player
+                # underperformed (or overperformed). Omits the row entirely
+                # if no modifier moved the rating from baseline.
+                breakdown = self._buildMentalBreakdown(p)
+                if breakdown and breakdown.get('totalDelta', 0) != 0:
+                    result['mentalBreakdown'] = breakdown
                 # Include defense stats if any are non-zero
                 defStats = p.gameStatsDict.get('defense', {})
                 if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
