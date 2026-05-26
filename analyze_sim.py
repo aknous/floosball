@@ -15,7 +15,8 @@ import os
 import sys
 
 
-def loadGames(path: str, season: int = None, week: int = None):
+def loadGames(path: str, season: int = None, week: int = None,
+              fromSeason: int = None, toSeason: int = None):
     if not os.path.exists(path):
         print(f'No log at {path}. Run a season first to populate it.')
         sys.exit(1)
@@ -26,7 +27,12 @@ def loadGames(path: str, season: int = None, week: int = None):
                 row = json.loads(line)
             except Exception:
                 continue
-            if season is not None and row.get('season') != season:
+            s = row.get('season')
+            if season is not None and s != season:
+                continue
+            if fromSeason is not None and (s is None or s < fromSeason):
+                continue
+            if toSeason is not None and (s is None or s > toSeason):
                 continue
             if week is not None and row.get('week') != week:
                 continue
@@ -177,6 +183,35 @@ def report(rows):
         attempts = bytier('passByTier').get(tier, 0)
         rate = (100 * count / attempts) if attempts else 0
         print(f'    {tier:10s}            {count/n:6.3f}/game   ({rate:.2f}% sack rate on {tier})')
+
+    # Coach archetype usage. Counts how often each coach-personality branch
+    # was taken across all games. A balanced league should see all branches
+    # present; if one is zero, that archetype isn't actually firing.
+    archetypeKeys = [
+        'trailing_disciplined',
+        'trailing_panic',
+        'leading_killer',
+        'leading_clockkill',
+        'leading_reckless',
+        'leading_cruise',
+    ]
+    archetypeTotals = {k: 0 for k in archetypeKeys}
+    gamesWithAny = 0
+    for r in rows:
+        ca = r.get('coachArchetypes') or {}
+        if ca:
+            gamesWithAny += 1
+        for k in archetypeKeys:
+            archetypeTotals[k] += ca.get(k, 0)
+    if any(archetypeTotals.values()):
+        print()
+        print(f'COACH ARCHETYPE USAGE  ({gamesWithAny}/{n} games triggered at least one)')
+        grandTotal = sum(archetypeTotals.values())
+        for k in archetypeKeys:
+            count = archetypeTotals[k]
+            pct = 100 * count / grandTotal if grandTotal else 0
+            perGame = count / n
+            print(f'  {k:24s} {count:>7d}   {perGame:>5.2f}/game   ({pct:>5.1f}% of branches)')
 
     # ── Call-vs-call matchup table ─────────────────────────────────────────
     callMatchup = {}
@@ -413,15 +448,21 @@ if __name__ == '__main__':
     ap.add_argument('path', nargs='?', default='logs/sim_analytics.jsonl')
     ap.add_argument('--season', type=int, default=None)
     ap.add_argument('--week', type=int, default=None)
+    ap.add_argument('--from-season', type=int, default=None,
+                    help='Include only games from this season onward (inclusive).')
+    ap.add_argument('--to-season', type=int, default=None,
+                    help='Include only games up to this season (inclusive).')
     ap.add_argument('--baseline', type=str, default=None,
                     help='Compare current log against a baseline log file. '
                          'Prints headline-metric deltas (completion%, YPA, NYA, '
                          'sack rate, INT rate, big plays) after the main report.')
     args = ap.parse_args()
-    rows = loadGames(args.path, season=args.season, week=args.week)
+    rows = loadGames(args.path, season=args.season, week=args.week,
+                     fromSeason=args.from_season, toSeason=args.to_season)
     report(rows)
     if args.baseline:
-        baselineRows = loadGames(args.baseline, season=args.season, week=args.week)
+        baselineRows = loadGames(args.baseline, season=args.season, week=args.week,
+                                 fromSeason=args.from_season, toSeason=args.to_season)
         # If the current log appended on top of the baseline (no truncation),
         # strip the baseline-length prefix off the current rows to isolate the
         # new games. gameId/season/week all collide on fresh starts so payload

@@ -1583,6 +1583,10 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'chokePerformers': list(getattr(play_data, 'chokePerformers', []) or []),
                                 'insights': getattr(play_data, 'insights', None),
                                 'personalityEvent': getattr(play_data, 'personalityEvent', None),
+                                'glitchText': getattr(play_data, 'glitchText', None),
+                                'glitchPlayerId': getattr(play_data, 'glitchPlayerId', None),
+                                'glitchPlayerName': getattr(play_data, 'glitchPlayerName', None),
+                                'glitchLayer': getattr(play_data, 'glitchLayer', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
@@ -1828,6 +1832,63 @@ async def get_game_stats(id: int, response: Response):
     except Exception as e:
         logger.error(f"Error getting game stats for game {id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/league-news/recent", response_model=List[Dict[str, Any]])
+async def get_league_news_recent(
+    response: Response,
+    limit: int = Query(default=30, ge=1, le=200),
+    season: Optional[int] = Query(default=None),
+    week: Optional[int] = Query(default=None),
+):
+    """Recent persisted league-news items (Cores voice lines, anomaly state
+    transitions). Default scope is the *current* season+week so the
+    highlight feed naturally rolls over with the schedule. Pass ?week=0
+    to ignore the week filter and pull a longer history.
+    """
+    response.headers["Cache-Control"] = "public, max-age=15"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    try:
+        from database.connection import get_session
+        from database.models import LeagueNewsItem
+        session = get_session()
+        try:
+            q = session.query(LeagueNewsItem)
+            seasonMgr = floosball_app.seasonManager
+            cs = seasonMgr.currentSeason
+            if season is not None:
+                q = q.filter(LeagueNewsItem.season == season)
+            elif cs is not None and hasattr(cs, 'seasonNumber'):
+                q = q.filter(LeagueNewsItem.season == cs.seasonNumber)
+            # Week filter: explicit param wins; otherwise default to the
+            # current sim week. Pass week=0 to opt out entirely.
+            if week is not None:
+                if week > 0:
+                    q = q.filter(LeagueNewsItem.week == week)
+            elif cs is not None and hasattr(cs, 'currentWeek'):
+                q = q.filter(LeagueNewsItem.week == cs.currentWeek)
+            rows = q.order_by(LeagueNewsItem.created_at.desc()).limit(limit).all()
+            return [{
+                'id': r.id,
+                'season': r.season,
+                'week': r.week,
+                'category': r.category,
+                'eventType': r.event_type,
+                'text': r.text,
+                'core': r.core,
+                'coreDisplayName': r.core_display_name,
+                'playerId': r.player_id,
+                'playerName': r.player_name,
+                'anomalyState': r.anomaly_state,
+                'createdAt': r.created_at.isoformat() + 'Z' if r.created_at else None,
+            } for r in rows]
+        finally:
+            session.close()
+    except Exception as e:
+        logger.exception(f"Failed to fetch league news: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch league news")
 
 
 @app.get("/api/highlights", response_model=List[Dict[str, Any]])

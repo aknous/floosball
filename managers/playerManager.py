@@ -3,7 +3,7 @@ PlayerManager - Manages player lifecycle, lists, and organization
 Replaces the scattered player-related global variables and functions in floosball.py
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 from logger_config import get_logger
@@ -293,9 +293,18 @@ class PlayerManager:
             if not loaded_players:
                 logger.warning("No valid players could be loaded from database")
                 return False
-            
-            # Set loaded players as active players
-            self.activePlayers = loaded_players
+
+            # Split by service_time. Retired players belong on retiredPlayers,
+            # not activePlayers — without this, the Retired tab is empty after
+            # a server restart until a runtime retirement re-populates it.
+            from floosball_player import PlayerServiceTime as _PST
+            self.activePlayers = []
+            self.retiredPlayers = []
+            for p in loaded_players:
+                if getattr(p, 'serviceTime', None) == _PST.Retired:
+                    self.retiredPlayers.append(p)
+                else:
+                    self.activePlayers.append(p)
 
             # Persist any backfilled seasonsPlayed/serviceTime values
             try:
@@ -1842,36 +1851,116 @@ class PlayerManager:
         for player in hofCandidates:
             self.promoteToHallOfFame(player)
     
+    # Hall of Fame scoring weights. Tuned so a single MVP alone falls short
+    # (player needs supporting accolades), and current record holders are
+    # the marquee criterion.
+    HOF_POINTS_MVP = 12
+    HOF_POINTS_CHAMPIONSHIP = 10
+    HOF_POINTS_ALL_PRO = 4
+    HOF_POINTS_CAREER_RECORD = 18
+    HOF_POINTS_SEASON_RECORD = 6
+    HOF_POINTS_GAME_RECORD = 2
+    HOF_POINTS_LONG_CAREER = 4       # 10+ seasons
+    HOF_POINTS_IRON_MAN = 4          # 14+ seasons (cumulative on top of LONG_CAREER)
+    HOF_INDUCT_THRESHOLD = 22
+
+    # Positive record keys per category — negative-stat records like
+    # 'ints' / 'fumbles' shouldn't earn HoF credit.
+    _HOF_POSITIVE_RECORD_KEYS = {
+        'passing':   {'yards', 'tds', 'comps'},
+        'rushing':   {'yards', 'tds'},
+        'receiving': {'yards', 'tds', 'receptions'},
+        'kicking':   {'fgs', 'fgYards'},
+        'fantasy':   {'qb', 'rb', 'wr', 'te', 'k'},
+    }
+
+    def _countCurrentRecordsHeld(self, playerId: int) -> Dict[str, int]:
+        """Return how many positive records this player currently holds at
+        each scope. Returns {'game': n, 'season': n, 'career': n}. Silently
+        zero'd if the records manager isn't available."""
+        out = {'game': 0, 'season': 0, 'career': 0}
+        try:
+            recordsManager = self.serviceContainer.getService('records_manager')
+            if recordsManager is None:
+                return out
+            records = recordsManager.getRecords() or {}
+            players = records.get('players', {}) or {}
+            for category, scopes in players.items():
+                positiveKeys = self._HOF_POSITIVE_RECORD_KEYS.get(category, set())
+                if not positiveKeys or not isinstance(scopes, dict):
+                    continue
+                for scope, entries in scopes.items():
+                    if scope not in out or not isinstance(entries, dict):
+                        continue
+                    for key, entry in entries.items():
+                        if key not in positiveKeys or not isinstance(entry, dict):
+                            continue
+                        if entry.get('id') == playerId and (entry.get('value') or 0) > 0:
+                            out[scope] += 1
+        except Exception as e:
+            logger.debug(f"HoF record-holder check failed for player {playerId}: {e}")
+        return out
+
+    def _computeHofPoints(self, player) -> Tuple[int, Dict[str, Any]]:
+        """Score a player against the HoF criteria. Returns (points, breakdown).
+        Breakdown is surfaced in the induction highlight so users see *why*."""
+        mvps = len(getattr(player, 'mvpAwards', None) or [])
+        rings = len(getattr(player, 'leagueChampionships', None) or [])
+        allPros = len(getattr(player, 'allProSeasons', None) or [])
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        records = self._countCurrentRecordsHeld(getattr(player, 'id', 0))
+
+        pts = 0
+        pts += mvps * self.HOF_POINTS_MVP
+        pts += rings * self.HOF_POINTS_CHAMPIONSHIP
+        pts += allPros * self.HOF_POINTS_ALL_PRO
+        pts += records['career'] * self.HOF_POINTS_CAREER_RECORD
+        pts += records['season'] * self.HOF_POINTS_SEASON_RECORD
+        pts += records['game']   * self.HOF_POINTS_GAME_RECORD
+        if seasons >= 10:
+            pts += self.HOF_POINTS_LONG_CAREER
+        if seasons >= 14:
+            pts += self.HOF_POINTS_IRON_MAN
+
+        return pts, {
+            'mvps': mvps, 'championships': rings, 'allPros': allPros,
+            'seasons': seasons,
+            'careerRecords': records['career'],
+            'seasonRecords': records['season'],
+            'gameRecords':   records['game'],
+        }
+
     def inductHallOfFame(self) -> None:
-        """Induct newly retired players into Hall of Fame (matches original inductHallOfFame function)"""
-        if len(self.newlyRetiredPlayers) > 0:
-            for player in self.newlyRetiredPlayers:
-                # HoF criteria from original: TierS players or TierA players with championships
-                if player.playerTier.value == 5:  # TierS
-                    self.hallOfFame.append(player)
-                    # Add highlight if season context is available
-                    seasonManager = self.serviceContainer.getService('season_manager')
-                    if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
-                        highlight = {
-                            'event': {
-                                'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
-                            }
-                        }
-                        seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
-                elif player.playerTier.value == 4 and hasattr(player, 'leagueChampionships') and len(player.leagueChampionships):  # TierA with championships
-                    self.hallOfFame.append(player)
-                    # Add highlight if season context is available  
-                    seasonManager = self.serviceContainer.getService('season_manager')
-                    if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
-                        highlight = {
-                            'event': {
-                                'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
-                            }
-                        }
-                        seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
-            
-            # Clear newly retired list
-            self.newlyRetiredPlayers.clear()
+        """Score each newly-retired player against the HoF criteria. Induct
+        anyone clearing HOF_INDUCT_THRESHOLD. The signature legacy criteria
+        (TierS auto / TierA with championship) are now subsumed by the
+        points system."""
+        if not self.newlyRetiredPlayers:
+            return
+
+        for player in self.newlyRetiredPlayers:
+            pts, breakdown = self._computeHofPoints(player)
+            if pts < self.HOF_INDUCT_THRESHOLD:
+                logger.debug(
+                    f"HoF: {player.name} retires with {pts}pts — below threshold ({breakdown})"
+                )
+                continue
+
+            self.hallOfFame.append(player)
+            logger.info(
+                f"HoF induction: {player.name} ({pts}pts) — {breakdown}"
+            )
+
+            seasonManager = self.serviceContainer.getService('season_manager')
+            if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
+                highlight = {
+                    'event': {
+                        'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
+                    }
+                }
+                seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
+
+        self.newlyRetiredPlayers.clear()
     
     def calculatePerformanceRatings(self, currentWeek: int) -> None:
         """
@@ -3218,8 +3307,14 @@ class PlayerManager:
         Current rating is always exact — it's what they are right now. Potential
         attributes are blurred into ±range based on effective scouting (coach
         scouting + funding tier bonus). Higher scouting = tighter range.
+
+        The range center is shifted by a deterministic-but-unguessable
+        per-attribute offset so the midpoint of [low, high] doesn't trivially
+        reveal the true potential. Offset is bounded to keep the true value
+        inside the displayed range.
         """
         from constants import SCOUTING_BANDS
+        import hashlib as _hashlib
         # Pick the range size from the band table
         rangeSize = 15
         for threshold, size in SCOUTING_BANDS:
@@ -3227,14 +3322,23 @@ class PlayerManager:
                 rangeSize = size
                 break
 
-        def blur(exact: int) -> dict:
+        def blur(exact: int, attrName: str) -> dict:
             if exact is None:
                 return {"low": None, "high": None, "exact": None}
             if rangeSize == 0:
                 return {"low": exact, "high": exact, "exact": exact}
-            # Center the range on exact, clip 60-100
-            low = max(60, exact - rangeSize)
-            high = min(100, exact + rangeSize)
+            # Deterministic per-(player, attribute) offset within ±rangeSize/2
+            # so the midpoint is shifted but the true value remains inside
+            # the range. Stable across refreshes — users can't average out
+            # the noise by polling.
+            seed = int(_hashlib.md5(
+                f"scout:{rookie.id}:{attrName}".encode()
+            ).hexdigest()[:8], 16)
+            half = rangeSize // 2
+            offset = (seed % (2 * half + 1)) - half if half > 0 else 0
+            center = exact + offset
+            low = max(60, center - rangeSize)
+            high = min(100, center + rangeSize)
             return {"low": low, "high": high, "exact": None}
 
         attrs = getattr(rookie, 'attributes', None)
@@ -3246,7 +3350,7 @@ class PlayerManager:
                         'potentialSkillRating'):
                 val = getattr(attrs, name, None)
                 if val:
-                    potentials[name] = blur(val)
+                    potentials[name] = blur(val, name)
 
         return {
             "playerId": rookie.id,

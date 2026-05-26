@@ -96,6 +96,7 @@ class DefensiveGameplan:
         self.blitzFrequency: float = 0.25         # base blitz rate
         self.runStopFocus: float = 0.5            # 0=pass-focused, 1=run-focused
         self.aggressiveness: float = 0.5          # affects turnover-forcing tendencies
+        self.defensiveMind: float = 0.5           # smart-coach factor (0-1 normalized)
         # Coverage assignments: opponent receiver slot → defending player
         # e.g. {'wr1': <PlayerWR acting as CB>, 'wr2': <PlayerWR>, 'te': <PlayerRB as LB>, 'rb': <PlayerQB as S>}
         self.coverageAssignments: dict = {}
@@ -226,6 +227,7 @@ def generateDefensiveGameplan(coach, defenseTeam, offenseTeam) -> DefensiveGamep
     ))
 
     plan.aggressiveness = aggrNorm
+    plan.defensiveMind = accuracy
 
     # --- Coverage tendency ---
     # Smart coaches (high defensiveMind) use more match coverage;

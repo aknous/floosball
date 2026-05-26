@@ -806,8 +806,16 @@ def calculateWeekCardBonuses(
         ec = eq.user_card.card_template.effect_config or {}
         effectName = ec.get("effectName", "")
         if effectName in STREAK_CONFIGS:
+            cfg = STREAK_CONFIGS[effectName]
             # Weekly accumulators don't participate in streak synergy
-            if STREAK_CONFIGS[effectName].get("isWeekly", False):
+            if cfg.get("isWeekly", False):
+                continue
+            # Growth/chance cards that borrow the streak-count machinery for
+            # their level storage (resetCondition='equipped' = always active)
+            # aren't true streak cards. Excluding them from the synergy count
+            # prevents Heat Check / Fortitude / etc. from double-counting
+            # cards like Bonsai alongside actual streaks.
+            if cfg.get("resetCondition") == "equipped":
                 continue
             streakCardCount += 1
             cardPlayerId = eq.user_card.card_template.player_id
@@ -1021,6 +1029,10 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
     flat-FP card's primary output is multiplied by (1 + boostPct/100).
     Conductor's own breakdown produces no output. Reads boostPct from
     Conductor's effectConfig.primary so seeded variance is honored.
+
+    Match bonus: when Conductor's card-player is on the user's roster,
+    the boost percentage scales up by DEFAULT_MATCH_MULTIPLIER (e.g. +20%
+    becomes +30%). Mirrors how FPx match bonuses scale their bonus portion.
     """
     conductorBreakdown = next(
         (b for b in breakdowns if b.effectName == "conductor"), None,
@@ -1033,6 +1045,9 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
         if ec.get("effectName") == "conductor":
             boostPct = (ec.get("primary", {}) or {}).get("boostPct", 20)
             break
+    matched = bool(conductorBreakdown.matchMultiplied)
+    if matched:
+        boostPct = int(round(boostPct * DEFAULT_MATCH_MULTIPLIER))
     factor = 1.0 + (boostPct / 100.0)
     boosted = 0
     for b in breakdowns:
@@ -1048,7 +1063,8 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
         b.equation = f"{b.equation} +{boostPct}% (Conductor)"
         boosted += 1
     if boosted > 0:
-        conductorBreakdown.equation = f"+{boostPct}% on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
+        matchTag = " (matched)" if matched else ""
+        conductorBreakdown.equation = f"+{boostPct}%{matchTag} on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
     else:
         conductorBreakdown.equation = "No flat-FP cards to amplify"
 

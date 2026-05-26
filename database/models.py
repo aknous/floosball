@@ -1788,6 +1788,41 @@ class LeagueAnomalyState(Base):
         return f"<LeagueAnomalyState(season={self.season}, agg={self.aggregate_score:.1f}/{self.threshold})>"
 
 
+class LeagueNewsItem(Base):
+    """Persisted league-news feed item — Cores voice lines and anomaly state
+    transitions. WebSocket events for these are ephemeral; this table is the
+    fetch-on-load source for users who weren't connected when they fired.
+
+    Categories:
+        'cores'              — voice line from one of the Cores
+        'anomaly_transition' — player crossed into stirring/erratic/rampant/awakened
+    """
+    __tablename__ = "league_news_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Attribution (Cores items)
+    core: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    core_display_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    # Attribution (anomaly transitions)
+    player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    player_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    anomaly_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_league_news_season_week', 'season', 'week'),
+        Index('idx_league_news_created', 'created_at'),
+    )
+
+    def __repr__(self):
+        return f"<LeagueNewsItem(s={self.season}w{self.week} {self.category}/{self.event_type})>"
+
+
 class AnomalyEvent(Base):
     """Every fired anomaly — universal micro-glitch, personality-keyed, or
     signature ability — logged for analytics, replay, and audit.

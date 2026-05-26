@@ -82,7 +82,6 @@ class PlayType(enum.Enum):
 # impact. Fires for any anomalous player from Stirring up. The user
 # reads these and thinks "huh, that's curious." Subtle. Generic.
 _LAYER_1_MICRO_GLITCHES = [
-    "{player} seemed to be aware of the play's result before it happened.",
     "{player} was momentarily in two positions at once.",
     "{player} stepped through a peculiar gap in the geometry of the simulation.",
     "{player}'s shadow is lagging oddly behind them.",
@@ -93,6 +92,9 @@ _LAYER_1_MICRO_GLITCHES = [
     "{player} stuttered in place while the simulation recalculated their trajectory.",
     "{player} arrived at the ball a frame before the ball did.",
     "{player} teleported half a stride forward, somehow skipping the space in between.",
+    "{player} briefly rendered at a slightly lower resolution than everyone around them.",
+    "{player}'s jersey shimmered faintly, like heat coming off asphalt.",
+    "{player} seemed to flicker in and out of existence during the play.",
 ]
 
 # Layer 2 personality-flavored glitch pool. **STILL PURE FLAVOR** — no
@@ -103,7 +105,7 @@ _LAYER_1_MICRO_GLITCHES = [
 _LAYER_2_GLITCHES = [
     "{player}'s textures peeled away, leaving a bare wireframe sprinting down the field.",
     "{player} is no longer following the field's geometry.",
-    "{player}'s velocity briefly exceeded the limits the simulation was designed to handle.",
+    "{player}'s velocity exceeded the limits the simulation was designed to handle.",
     "{player} clipped through a couple defenders in their path.",
     "{player} stretched across half the field before collapsing back into a single body.",
     "{player} flickered violently between positions, unable to settle on just one.",
@@ -111,6 +113,11 @@ _LAYER_2_GLITCHES = [
     "{player} fragmented into a cloud of pixels momentarily before snapping back together.",
     "{player}'s body seemed to briefly corrupt into a tangle of geometry not recognizable as a person.",
     "{player} dissolved into static and reassembled several yards away.",
+    "{player}'s limbs rotated in directions that should not be possible.",
+    "{player} legs clipped through the turf during the play and all you could see was their torso sliding around the field.",
+    "{player} inverted briefly and ran across the underside of the field.",
+    "{player} seemed to momentarily exist in multiple places at once.",
+    "{player} looked like they were running through the air.",
 ]
     
 class PassType(enum.Enum):
@@ -1476,6 +1483,18 @@ class Game:
         except Exception:
             pass
 
+    def _tallyCoachArchetype(self, key: str) -> None:
+        """Increment a per-game counter for which coach-personality branch
+        was taken in the situational mods. Surfaced in sim_analytics for
+        offline analysis. Never raises.
+        """
+        try:
+            if not hasattr(self, '_coachArchetypeCounts'):
+                self._coachArchetypeCounts = {}
+            self._coachArchetypeCounts[key] = self._coachArchetypeCounts.get(key, 0) + 1
+        except Exception:
+            pass
+
     def _logPlayAnalytics(self) -> None:
         """Append one JSONL entry per game to logs/sim_analytics.jsonl
         aggregating per-play data so an offline analyzer can answer:
@@ -1545,6 +1564,8 @@ class Game:
                 'passes20plus': 0,
                 'passes30plus': 0,
                 'passes40plus': 0,
+                # Coach archetype counters (per situational-mods entry)
+                'coachArchetypes': dict(getattr(self, '_coachArchetypeCounts', {}) or {}),
             }
 
             for item in self.gameFeed:
@@ -2457,35 +2478,99 @@ class Game:
         def _flat(key, m):
             weights[key] = weights.get(key, 0) * m
 
-        if q == 4 and scoreDiff < 0:
-            if secs < 120:
-                _mul('run', 0.1)
-                _mul('short', 1.3)
-                _mul('medium', 1.8)
-                _mul('long', 2.5)
-                _mul('deep', 3.0)         # big shot plays late
-            elif secs < 300:
-                _mul('run', 0.3)
-                _mul('medium', 1.5)
-                _mul('long', 1.8)
-                _mul('deep', 2.2)
+        # Coach attributes normalized to [0, 1] for personality math.
+        # Raw normalization yields [-1, +1] around neutral (80); shift+scale
+        # to [0, 1] so median coaches land at 0.5 and the trailing/leading
+        # archetypes actually fire across the population (not just elites).
+        if coach:
+            adaptRaw = (coach.adaptability - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+            aggrRaw  = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+            adapt = max(0.0, min(1.0, (adaptRaw + 1.0) / 2.0))
+            aggr  = max(0.0, min(1.0, (aggrRaw + 1.0) / 2.0))
+        else:
+            adapt = aggr = 0.5
+
+        # ── Q4 LAST 2 MIN trailing — universal desperation, no coach modulation ──
+        # When the clock is genuinely out, every coach throws downfield.
+        if q == 4 and scoreDiff < 0 and secs < 120:
+            _mul('run', 0.1)
+            _mul('short', 1.3)
+            _mul('medium', 1.8)
+            _mul('long', 2.5)
+            _mul('deep', 3.0)
+
+        # ── TRAILING (Q3+ with time, not desperation mode) — coach identity ──
+        # Disciplined coaches (high adapt, low aggr) sustain drives via short/
+        # medium. Aggressive-undisciplined coaches panic into deep shots — the
+        # shutout pattern: chuck deep, miss, drives die, deficit compounds.
+        # Same direction (more pass) but quality of pass selection differs.
+        elif scoreDiff < -7 and (q == 3 or (q == 4 and secs >= 120)):
+            deficit = abs(scoreDiff)
+            if deficit <= 14:
+                deficitTier = 0.4
+            elif deficit <= 21:
+                deficitTier = 0.7
             else:
-                _mul('run', 0.6)
-                _mul('medium', 1.2)
-                _mul('long', 1.3)
-                _mul('deep', 1.5)
+                deficitTier = 1.0
 
-        if q == 4 and scoreDiff > 0:
-            _mul('run', 1.6)
-            _mul('long', 0.3)
-            _mul('medium', 0.7)
-            _mul('deep', 0.2)            # don't risk shots when leading late
+            # Disciplined response — shift toward sustainable routes
+            discipline = adapt * (1 - aggr * 0.4)
+            shiftDisciplined = discipline * deficitTier
+            _flat('short',  1 + shiftDisciplined * 0.5)
+            _flat('medium', 1 + shiftDisciplined * 0.3)
+            _flat('long',   1 - shiftDisciplined * 0.3)
+            _flat('deep',   1 - shiftDisciplined * 0.5)
+            _flat('run',    1 - shiftDisciplined * 0.3)
 
-        if q == 3 and scoreDiff < -10:
-            _mul('run', 0.7)
-            _mul('medium', 1.2)
-            _mul('long', 1.4)
-            _mul('deep', 1.6)
+            # Panic response — additional deep/long bias for the un-adaptive
+            # aggressive coach. Drives die faster, deficit compounds.
+            panic = aggr * (1 - adapt) * deficitTier
+            _flat('deep', 1 + panic * 0.7)
+            _flat('long', 1 + panic * 0.4)
+            _flat('run',  1 - panic * 0.4)
+
+            self._tallyCoachArchetype(
+                'trailing_disciplined' if discipline > panic else 'trailing_panic'
+            )
+
+        # ── LEADING (Q3+ with significant lead) — coach archetype ──
+        # Killer (high aggr + high adapt) presses the throat. Clock-killer
+        # (low aggr + high adapt) drains the clock professionally. Reckless
+        # (high aggr + low adapt) keeps chucking deep, sets up the comeback.
+        # Cruise (low both) coasts on the default playbook.
+        elif scoreDiff > 7 and (q == 3 or q == 4):
+            if scoreDiff <= 14:
+                leadTier = 0.4
+            elif scoreDiff <= 21:
+                leadTier = 0.7
+            else:
+                leadTier = 1.0
+
+            killerMode = aggr * (0.5 + adapt * 0.5)
+            clockKill  = (1 - aggr) * adapt
+
+            if killerMode > 0.45:
+                # Press the advantage — maintain attack, slight deep pullback
+                _flat('deep',   1 - leadTier * 0.3)
+                _flat('medium', 1 + leadTier * 0.1)
+                _flat('long',   1 + leadTier * 0.1)
+                self._tallyCoachArchetype('leading_killer')
+            elif clockKill > 0.35:
+                # Drain the clock with runs and quick passes
+                _flat('run',    1 + leadTier * 0.6)
+                _flat('deep',   1 - leadTier * 0.8)
+                _flat('long',   1 - leadTier * 0.5)
+                _flat('medium', 1 - leadTier * 0.2)
+                self._tallyCoachArchetype('leading_clockkill')
+            elif aggr > 0.5:
+                # Reckless leader — keeps chucking, opens door for comeback
+                _flat('deep', 1 + leadTier * 0.3)
+                _flat('long', 1 + leadTier * 0.2)
+                _flat('run',  1 - leadTier * 0.2)
+                self._tallyCoachArchetype('leading_reckless')
+            else:
+                # Cruise control — no adjustment, vulnerable to comeback
+                self._tallyCoachArchetype('leading_cruise')
 
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:
@@ -4630,11 +4715,20 @@ class Game:
                             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
                             self.clockRunning = False  # Clock stops after turnover on downs
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
-                                self.highlights.insert(0, {'play': self.play})
-                                self.leagueHighlights.insert(0, {'play': self.play})
-                            self.gameFeed.insert(0, {'play': self.play})
-                            self.broadcastGameState(includeLastPlay=True)
+                            # Kneel and spike branches above (line ~4451) already
+                            # inserted and broadcast this play before falling
+                            # through to the down-advancement section. Skip the
+                            # re-insert here when that happened, otherwise the
+                            # same Play object lands in gameFeed twice — once
+                            # tagged "FourthDown" originally, once after this
+                            # branch mutated playResult to "TurnoverOnDowns".
+                            # Both render identically (same object reference).
+                            if not lastPlayFormatted:
+                                if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
+                                    self.highlights.insert(0, {'play': self.play})
+                                    self.leagueHighlights.insert(0, {'play': self.play})
+                                self.gameFeed.insert(0, {'play': self.play})
+                                self.broadcastGameState(includeLastPlay=True)
                             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                             self._pendingPossessionChange = True
                             lastPlayFormatted = True
@@ -7526,7 +7620,7 @@ class Play():
         # That floor was killing trailing teams' drives and contributing
         # to the bimodal score distribution. Big-play tails (gates 2/3)
         # unaffected — housecall potential preserved.
-        gate1Chance = max(35, min(85, 40 + lineMatchup * 1.2))
+        gate1Chance = max(40, min(85, 45 + lineMatchup * 1.2))
 
         # GATE 2 — Second level (agility/vision vs box tackling)
         secondLevel = (self.runner.attributes.agility * 1.3 +
@@ -7535,7 +7629,7 @@ class Play():
         secondLevel += rbMental + runnerPressureMod
         # LB-S box: blend of run defense (LB) and coverage (S) ratings
         secondLevelDef = effectiveRunDef * 0.55 + self.defense.defensePassCoverageRating * 0.45
-        gate2Chance = max(4, min(40, 12 + (secondLevel - secondLevelDef) * 1.3))
+        gate2Chance = max(6, min(45, 15 + (secondLevel - secondLevelDef) * 1.3))
 
         # GATE 3 — Open field (speed vs safety angles)
         openField = (self.runner.attributes.speed * 1.7 +
@@ -7548,14 +7642,14 @@ class Play():
             # Stuffed at the line — -2 to 2 yards
             self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
         else:
-            # Through the line: 2-5 baseline yards (avg 3)
-            self.yardage = max(2, min(6, int(np.random.normal(3.0, 1.0))))
+            # Through the line: 2-6 baseline yards (avg 3.5)
+            self.yardage = max(2, min(7, int(np.random.normal(3.5, 1.0))))
             if batched_randint(1, 100) > gate2Chance:
-                # Wrapped up at second level: 1-4 more yards (avg 2.5)
-                self.yardage += max(1, min(5, int(np.random.normal(2.5, 1.2))))
+                # Wrapped up at second level: 1-5 more yards (avg 3)
+                self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
             else:
-                # Broke through: 5-10 more yards (avg 7)
-                self.yardage += max(4, min(11, int(np.random.normal(7.0, 1.8))))
+                # Broke through: 5-12 more yards (avg 8)
+                self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
                 if batched_randint(1, 100) > gate3Chance:
                     # Chased down by deep coverage: 6-20 more yards (avg 11)
                     self.yardage += max(4, min(22, int(np.random.normal(11.0, 4.0))))
@@ -7892,29 +7986,42 @@ class Play():
         # Otherwise force the throw to the most-open option.
         return (sortedTargets[0], False)
     
-    def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
+    def calculateThrowQuality(self, passType, qbAccuracy: int, qbArmStrength: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
         """
         Stage 3: Calculate throw quality (0-100) based on QB skill, pass type, and pressure.
-        Higher quality = easier to catch, less likely to be intercepted
-        Returns throw quality rating (0-100)
+
+        Short passes are accuracy-dominant; deep passes are arm-dominant. A
+        weak-armed QB can be surgical underneath but struggles to drive the
+        ball downfield — gunslingers are the inverse. Combined with the per-tier
+        difficulty multiplier, this creates real QB archetypes.
         """
-        # Base accuracy from QB
-        baseAccuracy = (qbAccuracy + qbXFactor) / 2 + qbPressureMod
+        # Per-tier weighted blend of accuracy and arm strength.
+        tierWeights = {
+            PassType.short:    {'acc': 0.95, 'arm': 0.05},
+            PassType.medium:   {'acc': 0.80, 'arm': 0.20},
+            PassType.long:     {'acc': 0.60, 'arm': 0.40},
+            PassType.deep:     {'acc': 0.40, 'arm': 0.60},
+            PassType.hailMary: {'acc': 0.20, 'arm': 0.80},
+        }
+        w = tierWeights.get(passType, tierWeights[PassType.medium])
+        skillBlend = qbAccuracy * w['acc'] + qbArmStrength * w['arm']
+        baseAccuracy = (skillBlend + qbXFactor) / 2 + qbPressureMod
 
         # Mental state: QB in rhythm throws sharper, rattled QB throws errant
         # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale
         mentalEffect = self._mentalDrift(self.passer) / 15
         baseAccuracy += mentalEffect
 
-        # Pass type difficulty modifier — eased so even deep balls land in the
-        # "decent throw" contact bucket on average. Real NFL deep completion %
-        # sits ~40%; without this the model nearly zeros out 15+ yard catches.
+        # Pass type difficulty multiplier — modestly steeper than the old curve.
+        # Combined with the arm-strength weighting above, weak-armed QBs on
+        # deep balls land in the bad-throw bucket, but average QBs can still
+        # complete intermediate routes at NFL-realistic rates.
         passTypeDifficulty = {
-            PassType.short:    1.00,   # Easiest
+            PassType.short:    1.00,
             PassType.medium:   0.92,
-            PassType.long:     0.82,
-            PassType.deep:     0.72,
-            PassType.hailMary: 0.50,   # Last-ditch heave
+            PassType.long:     0.80,
+            PassType.deep:     0.65,
+            PassType.hailMary: 0.42,
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
 
@@ -7931,55 +8038,70 @@ class Play():
     
     def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None) -> dict:
         """
-        Two-phase catch model:
+        Two-phase catch model with hard floors that prevent attribute compounding:
+
         Phase 1 (Contact): Can the receiver physically get their hands on the ball?
             - Good throws are easy to reach; bad throws require high reach
-            - Defenders in coverage can deflect/disrupt
+            - Coverage applies in two layers: openness-gated disruption AND a
+              baseline pressure that scales with defensive coverage rating, so
+              good defenses always cost completion percentage (mirrors the run
+              game's "stuff floor" — defense can never be locked out).
         Phase 2 (Secure): Given contact, does the receiver catch the ball?
             - Primarily hands-driven
             - Contested catches and bad throws are harder to secure
+
+        Compared to the prior version: tighter top-end caps (contact 92 / secure 95)
+        and a coverage baseline component that always applies — so mature defenses
+        actually slow mature offenses, instead of being zeroed out whenever the
+        receiver is open.
         """
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
+        # Top-end lightly compressed so elite throws aren't quite automatic.
         if throwQuality >= 70:
-            # Good throw — hits the receiver, reach barely matters
-            baseContact = 90 + (throwQuality - 70) * 0.33  # 90-100
-            reachFactor = receiverReach * 0.05  # 3-5 bonus
+            baseContact = 85 + (throwQuality - 70) * 0.45  # 85-99
+            reachFactor = receiverReach * 0.05
         elif throwQuality >= 50:
-            # Decent throw — slightly off, reach helps
-            baseContact = 55 + (throwQuality - 50) * 1.75  # 55-90
-            reachFactor = (receiverReach - 60) * 0.4  # 0-16
+            baseContact = 53 + (throwQuality - 50) * 1.6   # 53-85
+            reachFactor = (receiverReach - 60) * 0.4
         else:
-            # Bad throw — way off target, reach is critical
-            baseContact = 10 + throwQuality * 0.9  # 10-55
-            reachFactor = (receiverReach - 60) * 0.7  # 0-28
+            baseContact = 10 + throwQuality * 0.85         # 10-52
+            reachFactor = (receiverReach - 60) * 0.7
 
-        # Defenders in coverage can deflect/disrupt before receiver reaches.
-        # The 25 multiplier is the "max coverage hit" when openness is 0 and
-        # defCov is 100. Raised from 20 because the throwaway-recovery change
-        # surfaced too many low-openness throws as catches; this keeps the
-        # defense relevant when receivers aren't actually open.
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 25
-        contactProb = min(98, max(5, baseContact + reachFactor - coverageDisruption))
+        # Tier-scaled coverage disruption: short throws are quick-release, so
+        # defenders have little time to make a play; deep throws give DBs more
+        # window to converge. This is the lever that keeps trailing-team offenses
+        # viable — short passes should be reliable even against tight coverage,
+        # so teams can sustain drives in catch-up mode.
+        tierDisruptionMult = {
+            PassType.short:    0.40,
+            PassType.medium:   0.75,
+            PassType.long:     1.00,
+            PassType.deep:     1.15,
+            PassType.hailMary: 1.30,
+        } if passType is not None else None
+        tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18 * tierMult
+        # Baseline coverage pressure: always applies, scales modestly with
+        # defensive rating. Anchored at 70 (league-average) so elite defenses
+        # cost a couple contact points; weak defenses refund a bit. Light touch
+        # to keep the structural lever without crushing baseline completion.
+        coverageBaseline = (defensePassCoverage - 70) * 0.1
+        contactProb = min(96, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
-        # Coefficient and floor tuned to match NFL drop rate (~3-4% of catches).
-        # Old 0.85*hands + 10 produced ~12% drops on contacted catches; raised
-        # to 0.95*hands + 8 (hands=80 → secure 84, was 78).
         baseSecure = adjustedHands * 0.95 + 8
 
-        # Contested catches are harder to secure
         if receiverOpenness < 40:
             contestPenalty = (40 - receiverOpenness) * 0.35
             baseSecure -= contestPenalty
 
-        # Bad throws are harder to secure even when reached
         if throwQuality < 50:
             throwDifficulty = (50 - throwQuality) * 0.35
             baseSecure -= throwDifficulty
 
-        secureProb = min(97, max(15, baseSecure))
+        secureProb = min(96, max(15, baseSecure))
 
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
@@ -7990,42 +8112,32 @@ class Play():
             intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
 
         # Drop probability — receiver gets hands on it but doesn't secure
-        # Only a fraction of non-secured contacts are visible "drops" (rest are
-        # deflections from the defender). NFL drop rate is ~3-4% of catches;
-        # 0.3 multiplier lands closer to that than the previous 0.5.
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
         dropProb = nonsecuredContact * 0.3
 
         return {
-            'contactProb': round(min(98, max(5, contactProb)), 1),
-            'secureProb': round(min(97, max(15, secureProb)), 1),
+            'contactProb': round(contactProb, 1),
+            'secureProb': round(secureProb, 1),
             'catchProb': round(min(95, max(3, catchProb)), 1),
             'intProb': round(min(25, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
     
-    def calculatePassYardage(self, passType, throwQuality: float) -> int:
+    def calculatePassYardage(self, passType) -> int:
         """
-        Calculate air yards using Gaussian distribution based on pass type and
-        throw quality. Restored to main's parameters — the per-tier floor/divisor
-        rework cut mean air yards 40-50% per tier, contributing to shutouts and
-        stalled drives. Deep tier kept distinct with slightly higher mean than
-        long so it retains its identity in the playcaller.
+        Air yards follow the pass tier's Gaussian distribution. Throw quality
+        affects catch probability, not how far the ball travels — the QB throws
+        to a target at the route's depth, quality is only about placement.
         """
         passTypeParams = {
-            PassType.short:    {'mean': 3.5, 'stdDev': 1.5},
-            PassType.medium:   {'mean': 11,  'stdDev': 3.5},
-            PassType.long:     {'mean': 22,  'stdDev': 5},
-            PassType.deep:     {'mean': 26,  'stdDev': 5.5},
-            PassType.hailMary: {'mean': 50,  'stdDev': 10},
+            PassType.short:    {'mean': 3,    'stdDev': 1.0},
+            PassType.medium:   {'mean': 6.5,  'stdDev': 2.0},
+            PassType.long:     {'mean': 15,   'stdDev': 3.5},
+            PassType.deep:     {'mean': 24,   'stdDev': 4.5},
+            PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
-
-        # Adjust mean based on throw quality (better throws travel intended distance)
-        qualityFactor = max(0.7, throwQuality / 70)
-        adjustedMean = params['mean'] * qualityFactor
-
-        airYards = int(np.random.normal(adjustedMean, params['stdDev']))
+        airYards = int(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
 
     def passPlay(self, playKey):
@@ -8384,6 +8496,7 @@ class Play():
                 throwQuality = self.calculateThrowQuality(
                     self.passType,
                     self.passer.gameAttributes.accuracy,
+                    self.passer.gameAttributes.armStrength,
                     self.passer.gameAttributes.xFactor,
                     self.rushDifferential,
                     qbPressureMod
@@ -8489,7 +8602,7 @@ class Play():
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     
                     # Calculate air yards based on throw quality
-                    passYards = self.calculatePassYardage(self.passType, throwQuality)
+                    passYards = self.calculatePassYardage(self.passType)
                     passYards = min(passYards, self.yardsToEndzone)
                     
                     # ── Three-gate YAC model ──
@@ -8532,39 +8645,54 @@ class Play():
                         else:
                             slipDef = catchDefCoverage
 
-                        # GATE A — slip the first tackler (agility)
+                        # Per-tier YAC ceilings. Short routes have the most open
+                        # field opportunity (screens, slants); deeper routes are
+                        # caught with defenders converging, so the chase-down
+                        # outcome caps tighter. Mirrors the run game's bounded
+                        # gate yardage — no stage can produce unbounded YAC.
+                        yacCaps = {
+                            PassType.short:    {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 8,  'housecallMean': 12},
+                            PassType.medium:   {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 10, 'housecallMean': 12},
+                            PassType.long:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 12, 'housecallMean': 14},
+                            PassType.deep:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 15, 'housecallMean': 14},
+                            PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
+                        }
+                        caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
+
+                        # GATE A — slip the first tackler (agility).
+                        # Coefficient softened from 1.3 to 0.9 to compress
+                        # attribute-delta amplification on mature rosters.
                         slipPower = (self.receiver.gameAttributes.agility * 1.3 +
                                      self.receiver.gameAttributes.playMakingAbility * 0.5 +
                                      self.receiver.gameAttributes.routeRunning * 0.2) / 2
                         slipPower += receiverPressureMod
                         slipExec = (4 if throwQuality >= 75 else 0) + (4 if self.selectedTarget['openness'] >= 70 else 0)
-                        gateAChance = max(6, min(55, 22 + (slipPower - slipDef) * 1.3 + slipExec))
+                        gateAChance = max(8, min(45, 22 + (slipPower - slipDef) * 0.9 + slipExec))
 
-                        # GATE B — open field (speed vs deep coverage)
+                        # GATE B — open field (speed vs deep coverage).
                         rcvSpeed = (self.receiver.gameAttributes.speed * 1.7 +
                                     self.receiver.gameAttributes.playMakingAbility * 0.3) / 2
                         openFieldDef = self.defense.defensePassCoverageRating * 0.95
-                        gateBChance = max(6, min(50, 20 + (rcvSpeed - openFieldDef) * 1.2))
+                        gateBChance = max(6, min(35, 20 + (rcvSpeed - openFieldDef) * 0.9))
 
-                        # Apply throw-quality and sideline caps to the per-gate gains.
-                        def _capYac(gain):
+                        def _capYac(gain, hardCap):
                             gain = int(gain * throwYacMult)
-                            return max(0, min(gain, sidelineCap, self.yardsToEndzone - passYards - yac))
+                            return max(0, min(gain, hardCap, sidelineCap, self.yardsToEndzone - passYards - yac))
 
                         if batched_randint(1, 100) > gateAChance:
-                            # Tackled by covering defender — 1-4 YAC (avg 2.5)
-                            yac += _capYac(max(0, int(np.random.normal(2.5, 1.3))))
+                            # Tackled by covering defender — clamped 0-3 YAC
+                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))), caps['gateAFail'])
                         else:
-                            # Slipped the tackle — 4-9 YAC (avg 6.5)
-                            yac += _capYac(max(3, int(np.random.normal(6.5, 1.8))))
+                            # Slipped the tackle — clamped 2-6 YAC
+                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))), caps['gateAPass'])
                             if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
                                 if batched_randint(1, 100) > gateBChance:
-                                    # Safety angles WR off — 6-18 more YAC (avg 11)
-                                    yac += _capYac(max(5, int(np.random.normal(11.0, 3.5))))
+                                    # Safety angles WR off — clamped per tier
+                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))), caps['gateBFail'])
                                 else:
-                                    # Housecall — exponential tail
+                                    # Housecall — exponential tail, bounded by remaining field
                                     remYards = self.yardsToEndzone - passYards - yac
-                                    yac += min(remYards, max(10, int(np.random.exponential(17) * throwYacMult)))
+                                    yac += min(remYards, max(8, int(np.random.exponential(caps['housecallMean']) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:

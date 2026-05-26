@@ -61,17 +61,36 @@ MAX_PACKS_PER_SHOP_CYCLE: int = 5
 
 
 def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
-    """Datetime when the current 7-week shop cycle began, computed from
+    """Datetime when the current shop cycle began, computed from
     Season.start_date. Returns None if the season's start date isn't set
-    yet (caller should treat that as 'no cap enforced')."""
+    yet (caller should treat that as 'no cap enforced').
+
+    A shop cycle spans 7 sim-weeks (one game-day in the schedule). The
+    regular-season schedule packs 7 rounds into a single calendar day —
+    sim-weeks 1-7 are Monday, 8-14 are Tuesday, 15-21 Wednesday, 22-28
+    Thursday — so each shopDay rollover corresponds to a **one-day**
+    advance in real time, not a 7-week one. Using timedelta(weeks=...)
+    here would push cycleStart ~48 days into the future on day 2 and
+    silently zero the counter.
+
+    A late safety clamp guards against the start_date itself sitting in
+    the future (e.g. scheduled mode anchoring to next Monday during the
+    pre-start window).
+    """
     import datetime as _dt
     from database.models import Season
     season = session.query(Season).filter(Season.season_number == currentSeason).first()
     if not season or not season.start_date:
         return None
     shopDay = shopDayOfSeason(currentWeek)
-    cycleStartWeek = (shopDay - 1) * 7 + 1  # 1, 8, 15, or 22
-    return season.start_date + _dt.timedelta(weeks=cycleStartWeek - 1)
+    cycleStart = season.start_date + _dt.timedelta(days=shopDay - 1)
+    now = _dt.datetime.utcnow()
+    if cycleStart > now:
+        # Pre-start window — anchor far enough back that every recent
+        # paid open still counts. A year is well beyond a single cycle's
+        # span so it can't accidentally pull in prior-cycle opens.
+        cycleStart = now - _dt.timedelta(days=365)
+    return cycleStart
 
 
 def _countPacksThisCycle(session, userId: int, currentSeason: int, currentWeek: int) -> int:
