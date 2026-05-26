@@ -7083,16 +7083,40 @@ class SeasonManager:
                 f"Cultivation no growth: eq={eq.id} roll={roll}>{growthChance}% "
                 f"triggers={triggerCount}"
             )
-        # Patch the stored breakdown with the roll result
+        # Patch the stored breakdown with the roll result. The stored
+        # primaryFP/totalFP have already been multiplied by match bonus +
+        # Conductor boost (run earlier in the calculator). When Bonsai grows
+        # we need to scale the new raw value by the same multiplier or we
+        # lose those bonuses; when it doesn't grow we leave the boosted
+        # totals in place but reattach any conductor suffix the existing
+        # equation carried.
         if weekBonus and weekBonus.breakdowns_json:
             try:
                 stored = _json.loads(weekBonus.breakdowns_json)
                 for bd in stored.get("breakdowns", []):
-                    if bd.get("effectName") == "bonsai":
-                        bd["equation"] = resultEq
-                        if grew:
-                            bd["primaryFP"] = round(currentFP + growthFP, 1)
-                            bd["totalFP"] = round(currentFP + growthFP, 1)
+                    if bd.get("effectName") != "bonsai":
+                        continue
+                    # Pull any "+X% (Conductor)" suffix off the existing
+                    # equation so we can re-append it to the result text.
+                    existingEq = bd.get("equation", "") or ""
+                    conductorSuffix = ""
+                    if " (Conductor)" in existingEq:
+                        idx = existingEq.rfind(" +")
+                        if idx >= 0 and "(Conductor)" in existingEq[idx:]:
+                            conductorSuffix = existingEq[idx:]
+
+                    if grew:
+                        # Scale the new raw value by the multiplier that was
+                        # applied to the old one — preserves match + conductor.
+                        oldRaw = currentFP
+                        oldFinal = bd.get("totalFP", oldRaw)
+                        multiplier = (oldFinal / oldRaw) if oldRaw > 0 else 1.0
+                        newRaw = round(currentFP + growthFP, 1)
+                        newFinal = round(newRaw * multiplier, 1)
+                        bd["primaryFP"] = newFinal
+                        bd["totalFP"] = newFinal
+
+                    bd["equation"] = resultEq + conductorSuffix
                 weekBonus.breakdowns_json = _json.dumps(stored)
             except Exception:
                 pass
