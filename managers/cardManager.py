@@ -63,7 +63,16 @@ MAX_PACKS_PER_SHOP_CYCLE: int = 5
 def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
     """Datetime when the current 7-week shop cycle began, computed from
     Season.start_date. Returns None if the season's start date isn't set
-    yet (caller should treat that as 'no cap enforced')."""
+    yet (caller should treat that as 'no cap enforced').
+
+    In scheduled mode the new season's start_date anchors to a future
+    Monday during the offseason. The first-cycle anchor (shopDay 1) would
+    land in the future, which silently filters out every pack open made
+    during the offseason — counter shows 0/5 even after a paid purchase.
+    Clamp cycleStart to never sit in the future: when start_date hasn't
+    arrived yet, use a generous past anchor so pre-start opens still
+    count toward this cycle's cap.
+    """
     import datetime as _dt
     from database.models import Season
     season = session.query(Season).filter(Season.season_number == currentSeason).first()
@@ -71,7 +80,14 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
         return None
     shopDay = shopDayOfSeason(currentWeek)
     cycleStartWeek = (shopDay - 1) * 7 + 1  # 1, 8, 15, or 22
-    return season.start_date + _dt.timedelta(weeks=cycleStartWeek - 1)
+    cycleStart = season.start_date + _dt.timedelta(weeks=cycleStartWeek - 1)
+    now = _dt.datetime.utcnow()
+    if cycleStart > now:
+        # Pre-start window — anchor far enough back that every recent
+        # paid open still counts. A year is well beyond a single cycle's
+        # span so it can't accidentally pull in prior-cycle opens.
+        cycleStart = now - _dt.timedelta(days=365)
+    return cycleStart
 
 
 def _countPacksThisCycle(session, userId: int, currentSeason: int, currentWeek: int) -> int:
