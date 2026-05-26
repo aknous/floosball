@@ -3307,8 +3307,14 @@ class PlayerManager:
         Current rating is always exact — it's what they are right now. Potential
         attributes are blurred into ±range based on effective scouting (coach
         scouting + funding tier bonus). Higher scouting = tighter range.
+
+        The range center is shifted by a deterministic-but-unguessable
+        per-attribute offset so the midpoint of [low, high] doesn't trivially
+        reveal the true potential. Offset is bounded to keep the true value
+        inside the displayed range.
         """
         from constants import SCOUTING_BANDS
+        import hashlib as _hashlib
         # Pick the range size from the band table
         rangeSize = 15
         for threshold, size in SCOUTING_BANDS:
@@ -3316,14 +3322,23 @@ class PlayerManager:
                 rangeSize = size
                 break
 
-        def blur(exact: int) -> dict:
+        def blur(exact: int, attrName: str) -> dict:
             if exact is None:
                 return {"low": None, "high": None, "exact": None}
             if rangeSize == 0:
                 return {"low": exact, "high": exact, "exact": exact}
-            # Center the range on exact, clip 60-100
-            low = max(60, exact - rangeSize)
-            high = min(100, exact + rangeSize)
+            # Deterministic per-(player, attribute) offset within ±rangeSize/2
+            # so the midpoint is shifted but the true value remains inside
+            # the range. Stable across refreshes — users can't average out
+            # the noise by polling.
+            seed = int(_hashlib.md5(
+                f"scout:{rookie.id}:{attrName}".encode()
+            ).hexdigest()[:8], 16)
+            half = rangeSize // 2
+            offset = (seed % (2 * half + 1)) - half if half > 0 else 0
+            center = exact + offset
+            low = max(60, center - rangeSize)
+            high = min(100, center + rangeSize)
             return {"low": low, "high": high, "exact": None}
 
         attrs = getattr(rookie, 'attributes', None)
@@ -3335,7 +3350,7 @@ class PlayerManager:
                         'potentialSkillRating'):
                 val = getattr(attrs, name, None)
                 if val:
-                    potentials[name] = blur(val)
+                    potentials[name] = blur(val, name)
 
         return {
             "playerId": rookie.id,
