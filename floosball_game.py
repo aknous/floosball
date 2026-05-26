@@ -3874,6 +3874,15 @@ class Game:
         except Exception:
             pass
 
+        # Snapshot each player's baseline overallRating BEFORE any pre-game
+        # modifiers fire so we can enforce a soft floor below. Without this,
+        # fatigue + form state + context multipliers compound into ~25%
+        # reductions on unlucky stacks and a 90-rated player can effectively
+        # play at 67, with no visible explanation to the user. The floor
+        # gives the worst-felt outcomes a hard limit.
+        self._snapshotBaselineRatings(self.homeTeam)
+        self._snapshotBaselineRatings(self.awayTeam)
+
         # Apply fatigue penalties (accumulated over the season)
         self._applyFatigue(self.homeTeam)
         self._applyFatigue(self.awayTeam)
@@ -3892,6 +3901,13 @@ class Game:
         # Lets a COMPLACENT team's trap-game game be a real upset, a
         # RESOLUTE team's late-season urgency be a real push, etc.
         self._applyContextModifiers()
+
+        # Enforce the soft floor — scale a player's attributes back up if
+        # the compounded modifiers dropped their overall rating more than
+        # MENTAL_FLOOR_RATIO permits. Preserves attribute *proportions*
+        # so a power-back stays power-heavy, etc.
+        self._enforceMentalSoftCap(self.homeTeam)
+        self._enforceMentalSoftCap(self.awayTeam)
 
         x = batched_randint(0,1)
         if x == 0:
@@ -5186,6 +5202,66 @@ class Game:
             if player is not None and player.gameAttributes is not None:
                 player.updateInGameConfidence(modifier * 0.6)
                 player.updateInGameDetermination(modifier * 0.4)
+
+    def _snapshotBaselineRatings(self, team):
+        """Record each rostered player's pre-modifier overallRating so the
+        soft cap can enforce a floor relative to it. Stored as a transient
+        attribute on the player object; cleared at game end."""
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            player._preGameBaselineRating = player.gameAttributes.overallRating
+
+    def _enforceMentalSoftCap(self, team):
+        """Scale a player's gameAttributes back up uniformly if the
+        compounded pre-game mental/form/context modifiers dropped their
+        overall rating below baseline × MENTAL_FLOOR_RATIO. Without this,
+        unlucky modifier stacks can drop a star ~25% in effective rating
+        with no surface signal, which reads as 'sim is broken' to users.
+
+        The scaling preserves attribute proportions — a power-back stays
+        power-heavy, a route-runner stays route-runner. The cap doesn't
+        remove the systems; it just bounds the worst-felt aggregate outcome.
+        """
+        from constants import MENTAL_FLOOR_RATIO
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            baseline = getattr(player, '_preGameBaselineRating', None)
+            if not baseline or baseline <= 0:
+                continue
+            # Refresh derived overall first so we compare apples to apples.
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+            try:
+                player.updateRating()
+            except Exception:
+                pass
+            current = player.gameAttributes.overallRating
+            floor = baseline * MENTAL_FLOOR_RATIO
+            if current >= floor or current <= 0:
+                continue
+            # Uniform scale on the leaf attributes so derived ratings rise
+            # proportionally on the next recompute.
+            scale = floor / current
+            for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                         'accuracy', 'legStrength', 'reach',
+                         'focus', 'discipline', 'instinct'):
+                val = getattr(player.gameAttributes, attr, 0)
+                if val:
+                    setattr(player.gameAttributes, attr,
+                            min(100, round(val * scale)))
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+            try:
+                player.updateRating()
+            except Exception:
+                pass
+            logger.debug(
+                f"Mental soft cap engaged: {player.name} "
+                f"baseline={baseline} pre-cap={current} "
+                f"post-cap={player.gameAttributes.overallRating}"
+            )
 
     def _applyTeamRatingMult(self, team, multiplier):
         """Apply a uniform attribute multiplier to all rostered players, then

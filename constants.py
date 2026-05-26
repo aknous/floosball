@@ -296,6 +296,14 @@ FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
 FATIGUE_PHYSICAL_IMPACT = 1.0       # Full fatigue applied to physical attributes
 FATIGUE_MENTAL_IMPACT = 0.3         # 30% of fatigue applied to mental attributes
 
+# Mental / form / fatigue modifiers can compound multiplicatively into a
+# heavy reduction on a high-rated player's effective rating. The soft floor
+# below caps that aggregate so a star never drops more than (1 - ratio) of
+# their baseline gameAttributes overall rating, even if every modifier
+# stacks negative. Trades off some narrative extremes for fewer
+# "great player had a nightmare game with no visible cause" outcomes.
+MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
+
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
