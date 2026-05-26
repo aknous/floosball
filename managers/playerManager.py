@@ -388,6 +388,9 @@ class PlayerManager:
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
             player.is_hof = bool(getattr(db_player, 'is_hof', False))
+            player.mvpAwards = list(getattr(db_player, 'mvp_awards', None) or [])
+            player.allProSeasons = list(getattr(db_player, 'all_pro_seasons', None) or [])
+            player.leagueChampionships = list(getattr(db_player, 'league_championships', None) or [])
             
             # Load tier if present
             if db_player.tier:
@@ -1440,6 +1443,9 @@ class PlayerManager:
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
                     db_player.is_hof = bool(getattr(player, 'is_hof', False))
+                    db_player.mvp_awards = list(getattr(player, 'mvpAwards', None) or [])
+                    db_player.all_pro_seasons = list(getattr(player, 'allProSeasons', None) or [])
+                    db_player.league_championships = list(getattr(player, 'leagueChampionships', None) or [])
 
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
