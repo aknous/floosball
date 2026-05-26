@@ -884,7 +884,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
     "surplus": "+{flatBonus}F added to weekly earnings while equipped",
-    "bonsai": "+{baseFP} FP guaranteed. Roster {triggerLabel} scales the chance to grow base by +{growthFP} FP. Every base growth increases the amount of {triggerLabel} needed to scale next growth chance.",
+    "bonsai": "+{baseFP} FP guaranteed. Roster {triggerLabel} scales the chance to grow base by +{growthFP} FP. Every base growth slows the rate at which {triggerLabel} scales growth chance.",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "+{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5",
     "conductor": "Boosts each other flat-FP card's output by +{boostPct}%",
