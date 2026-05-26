@@ -806,8 +806,16 @@ def calculateWeekCardBonuses(
         ec = eq.user_card.card_template.effect_config or {}
         effectName = ec.get("effectName", "")
         if effectName in STREAK_CONFIGS:
+            cfg = STREAK_CONFIGS[effectName]
             # Weekly accumulators don't participate in streak synergy
-            if STREAK_CONFIGS[effectName].get("isWeekly", False):
+            if cfg.get("isWeekly", False):
+                continue
+            # Growth/chance cards that borrow the streak-count machinery for
+            # their level storage (resetCondition='equipped' = always active)
+            # aren't true streak cards. Excluding them from the synergy count
+            # prevents Heat Check / Fortitude / etc. from double-counting
+            # cards like Bonsai alongside actual streaks.
+            if cfg.get("resetCondition") == "equipped":
                 continue
             streakCardCount += 1
             cardPlayerId = eq.user_card.card_template.player_id
