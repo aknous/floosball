@@ -162,11 +162,12 @@ class TeamResponseBuilder(ResponseBuilder):
         # Pedigree path keeps the early-season "defending champion" trap
         # open even before games play out.
         isPedigreed = TeamResponseBuilder._isPedigreed(team)
-        pedigreeFire = isPedigreed and games < 6 and avgVuln >= 0.06
-        # Record path: elite winPct AND streak no longer red-hot (streak <= 2).
-        # A team currently on a 3+ game streak goes to HOT_STREAK below;
-        # COMPLACENT catches the ones who built up wins and are now riding it.
-        recordFire = (winPct >= 0.75 and avgVuln >= 0.08 and streak <= 2)
+        # Loosened: pedigree path holds for 8 weeks (was 6), record path
+        # fires at 0.70 winPct (was 0.75) with vuln >= 0.06 (was 0.08).
+        # Rubber-band tilt — COMPLACENT catches more dominant teams more
+        # often so the drag bites the runaway leaders earlier.
+        pedigreeFire = isPedigreed and games < 8 and avgVuln >= 0.06
+        recordFire = (winPct >= 0.70 and avgVuln >= 0.06 and streak <= 2)
         if pedigreeFire or recordFire:
             return 'COMPLACENT'
 
@@ -179,13 +180,12 @@ class TeamResponseBuilder(ResponseBuilder):
         # match the locker-room tier ladder so RESOLUTE / COOLING_OFF /
         # COMPLACENT correspond to genuinely above-baseline composites.
 
-        # Crashing — extended losing streak. Resolve threshold of 0.22 is
-        # the Resilient tier boundary. Loosening to 0.18 over 10 seasons
-        # diluted the signal (per-season lift went random walk), so back
-        # to the tight gate where the Cinderella label actually means
-        # 'visibly above-average backbone'.
+        # Crashing — extended losing streak. Resolve threshold loosened
+        # from 0.22 to 0.18 so more bouncing-back stories get the
+        # RESOLUTE lift; SPIRALING magnitude has been softened in
+        # constants to compensate for the broader RESOLUTE catch.
         if streak <= -3:
-            return 'RESOLUTE' if avgResolve >= 0.22 else 'SPIRALING'
+            return 'RESOLUTE' if avgResolve >= 0.18 else 'SPIRALING'
 
         # True hot streak — winning AND the roster is playing well together
         if streak >= 3:
@@ -198,10 +198,10 @@ class TeamResponseBuilder(ResponseBuilder):
         if winPct >= 0.55 and streak < 0 and avgVuln >= 0.06:
             return 'COOLING_OFF'
 
-        # Losing team with mental backbone — Cinderella signal. Tighter
-        # gates (winPct ≤ 0.40, resolve ≥ 0.22) preserve a meaningful
-        # archetype rather than firing on every middling team.
-        if winPct <= 0.40 and avgResolve >= 0.22:
+        # Losing team with mental backbone — Cinderella signal. Loosened
+        # gates (winPct ≤ 0.45, resolve ≥ 0.18) so more struggling-but-
+        # resilient teams get the lift. Part of the rubber-band tilt.
+        if winPct <= 0.45 and avgResolve >= 0.18:
             return 'RESOLUTE'
 
         # Brief slip on a winning team (transient)
@@ -529,6 +529,18 @@ class PlayerResponseBuilder(ResponseBuilder):
             attr_dict['attitudeValue'] = attitudeVal
             attr_dict['attitudeLabel'] = attLabel
             attr_dict['attitudeTier'] = attTier
+
+        # Static mental + personality attributes. Surfaced on the hover
+        # card and player profile page as tier badges so users can read
+        # a player's mental profile at a glance without raw numbers.
+        # Attitude is included here under its plain key (in addition to
+        # the legacy attitudeValue/attitudeLabel/attitudeTier above) so
+        # the frontend tier-badge grid can consume it uniformly.
+        for attr in ('attitude', 'resilience', 'selfBelief', 'pressureHandling',
+                     'discipline', 'focus', 'instinct', 'creativity'):
+            v = getattr(player.attributes, attr, None)
+            if v is not None:
+                attr_dict[attr] = int(v)
 
         # Defensive attributes (position-specific)
         defAttrs = player.attributes.getDefensiveAttributes(player.position)

@@ -658,6 +658,40 @@ class GamePlayerStats(Base):
         return f"<GamePlayerStats(game_id={self.game_id}, player_id={self.player_id})>"
 
 
+class GameRally(Base):
+    """Live in-game fan rally — fans spend floobits during games to push
+    their team's collective confidence (and determination if trailing).
+
+    Records the individual rally action for audit + cumulative tracking.
+    The sim engine reads per-(game, team) totals to apply a real-time
+    bump on every per-play mental-drift calculation. Diminishing returns
+    on the cumulative rally count prevent unlimited stacking.
+    """
+    __tablename__ = "game_rallies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Tier: 'small' / 'medium' / 'large'
+    cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Bumps actually applied after diminishing returns + comeback weighting.
+    confidence_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    determination_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_game_rallies_game", "game_id"),
+        Index("idx_game_rallies_user", "user_id"),
+        Index("idx_game_rallies_game_team", "game_id", "team_id"),
+        Index("idx_game_rallies_game_user", "game_id", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<GameRally(game={self.game_id}, user={self.user_id}, team={self.team_id}, tier={self.tier})>"
+
+
 class Championship(Base):
     """Championship table - tracks team championships by season and type."""
     __tablename__ = "championships"

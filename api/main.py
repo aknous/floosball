@@ -583,6 +583,19 @@ async def get_team(team_id: int, response: Response):
                 if currentSeasonNum and (not history or history[-1]["season"] != currentSeasonNum):
                     history.append({"season": currentSeasonNum, "rating": liveRating})
 
+                # Pull mood / personality / attitude — surfaced in the
+                # team-page roster dropdown so users can see why a high-rated
+                # player might underperform (form state, fatigue, mood). These
+                # fields already exist on player.attributes; just plumbing them
+                # to the roster response.
+                playerMood = None
+                playerMoodTier = None
+                try:
+                    if getattr(player.attributes, 'personality', None):
+                        playerMood, playerMoodTier = player.attributes.getMood()
+                except Exception:
+                    pass
+
                 roster[pos] = {
                     'id': player.id,
                     'name': player.name,
@@ -599,6 +612,10 @@ async def get_team(team_id: int, response: Response):
                     'serviceTime': player.serviceTime.value if hasattr(player.serviceTime, 'value') else str(player.serviceTime),
                     'fatigue': round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1),
                     'resilience': getattr(player.attributes, 'resilience', 80),
+                    'mood': playerMood,
+                    'moodTier': playerMoodTier,
+                    'personality': getattr(player.attributes, 'personality', None),
+                    'attitude': getattr(player.attributes, 'attitude', None),
                     'ratingHistory': history,
                 }
             else:
@@ -1787,6 +1804,103 @@ def post_play_reaction(game_id: int, req: _ReactionRequest, user: _User = Depend
 
     _broadcastReactionUpdate(game_id, req.playNumber, req.targetType, aggregate)
     return build_success_response({"action": action, "reactions": aggregate})
+
+
+# ── Game rally ─────────────────────────────────────────────────────────
+class _RallyRequest(BaseModel):
+    teamId: int
+    tier: str   # 'small' | 'medium' | 'large'
+
+
+def _findLiveGame(gameId: int):
+    """Return the in-memory game object iff it's currently in progress
+    (status == Active). Rallies only fire on live games — Scheduled and
+    Final games are rejected."""
+    if floosball_app is None:
+        return None
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason if sm else None
+    if currentSeason is None:
+        return None
+    activeGames = getattr(currentSeason, 'activeGames', None) or []
+    return next((g for g in activeGames if g.id == gameId
+                 and getattr(g.status, 'name', '') == 'Active'), None)
+
+
+@app.post("/api/games/{game_id}/rally")
+def post_game_rally(game_id: int, req: _RallyRequest, user: _User = Depends(_getCurrentUser)):
+    """Cast a live in-game rally. Charges floobits, applies a confidence
+    (and determination if trailing) bump to the team's roster, and
+    broadcasts the rally to all viewers."""
+    from database.connection import get_session
+    from managers import rallyManager
+    from database.models import User as _DBUser
+
+    game = _findLiveGame(game_id)
+    if game is None:
+        raise HTTPException(status_code=409, detail="Rallies only on live games")
+
+    session = get_session()
+    try:
+        try:
+            result = rallyManager.castRally(
+                session=session,
+                userId=user.id,
+                game=game,
+                teamId=req.teamId,
+                tier=req.tier,
+            )
+        except rallyManager.RallyError as e:
+            session.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # Username for the broadcast payload (small flash on screen)
+        dbUser = session.query(_DBUser).get(user.id)
+        username = dbUser.username if dbUser else 'fan'
+        session.commit()
+    finally:
+        session.close()
+
+    # Broadcast to all viewers so meters tick live.
+    try:
+        from api.game_broadcaster import broadcaster as _broadcaster
+        if _broadcaster.is_enabled():
+            event = GameEvent.gameRally(
+                gameId=game_id,
+                teamId=req.teamId,
+                userId=user.id,
+                username=username,
+                tier=req.tier,
+                costPaid=result['costPaid'],
+                confidenceDelta=result['confidenceDelta'],
+                determinationDelta=result['determinationDelta'],
+                teamTotals=result['teamTotals'],
+                feedMessage=result.get('feedMessage'),
+            )
+            _broadcaster.broadcast_sync(game_id, event)
+    except Exception as e:
+        logger.warning(f"rally broadcast failed: {e}")
+
+    return build_success_response(result)
+
+
+@app.get("/api/games/{game_id}/rally")
+def get_game_rally_state(game_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """Snapshot of rally activity for a game — per-team totals, plus the
+    current user's cooldown / next-cost if authenticated."""
+    from database.connection import get_session
+    from managers import rallyManager
+
+    session = get_session()
+    try:
+        state = rallyManager.getRallyStateForGame(
+            session=session,
+            gameId=game_id,
+            userId=(user.id if user else None),
+        )
+    finally:
+        session.close()
+    return build_success_response(state)
 
 
 @app.get("/api/gameStats", response_model=Dict[str, Any])

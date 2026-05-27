@@ -84,6 +84,9 @@ class EventType(Enum):
     # Play reactions — user reactions to plays (and the sideline-quote personality events)
     PLAY_REACTION_UPDATE = "play_reaction_update"
 
+    # Live in-game rally — fans cheering for a team mid-game
+    GAME_RALLY = "game_rally"
+
     # Currency — passive grants (excludes user-initiated spends/refunds)
     FLOOBITS_RECEIVED = "floobits_received"
 
@@ -265,6 +268,33 @@ class GameEvent:
             'gameId': gameId,
             'timestamp': datetime.now().isoformat(),
             **gameState  # Spread all game state fields into the event
+        }
+
+    @staticmethod
+    def gameRally(gameId: int, teamId: int, userId: int, username: str, tier: str,
+                  costPaid: int, confidenceDelta: float, determinationDelta: float,
+                  teamTotals: Dict[str, Any],
+                  feedMessage: Optional[str] = None) -> Dict[str, Any]:
+        """Broadcast a live in-game rally so every viewer sees the meter
+        tick up and the most recent contributor flash on screen.
+
+        teamTotals: { 'rallies': int, 'confidence': float,
+                      'determination': float, 'floobitsSpent': int }
+        feedMessage: present only when this rally crossed the surge
+        threshold and a play-feed message should be emitted.
+        """
+        return {
+            'event': EventType.GAME_RALLY.value,
+            'gameId': gameId,
+            'teamId': teamId,
+            'userId': userId,
+            'username': username,
+            'tier': tier,
+            'costPaid': costPaid,
+            'confidenceDelta': confidenceDelta,
+            'determinationDelta': determinationDelta,
+            'teamTotals': teamTotals,
+            'feedMessage': feedMessage,
         }
 
     @staticmethod

@@ -70,10 +70,10 @@ MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
 MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
 MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
-MOMENTUM_NEUTRAL_ZONE = 10             # Abs momentum below this = no gameplay effect
+MOMENTUM_NEUTRAL_ZONE = 5              # Abs momentum below this = no gameplay effect
 MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
 MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight
-MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it
+MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it (matches NEUTRAL_ZONE so UI never lies about mechanical impact)
 
 # Momentum event deltas (raw, before dampening)
 MOMENTUM_TD = 20
@@ -126,22 +126,22 @@ ROSTER_MIN_PLAYERS = 3
 #   SCALE     — overall payout scale (raises floor + ceiling together)
 #   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
 # Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
-# which the prior (scale 0.30 / exponent 0.92) curve was paying out at
-# 175-475 F/week — enough to buy a Grand pack every week. New shape keeps
-# small weeks roughly the same but halves payouts at 1k+ and cuts ~65%
-# at 3k. Big weeks still pay more than small weeks, just not runaway.
-# Sample profile (default):
-#   100 FP →  12 F
-#   500 FP →  40 F
-#  1000 FP →  69 F
-#  3000 FP → 161 F
-WEEKLY_FP_FLOOBIT_SCALE = 0.32
+# then bumped ~33% across the board in v0.16.1 — payouts felt too thin
+# relative to pack prices. Shape (exponent) unchanged so the high-end
+# taper still prevents runaway whales while floors and middle play
+# benefit too. Sample profile (default):
+#   100 FP →  16 F
+#   500 FP →  54 F
+#  1000 FP →  93 F
+#  3000 FP → 217 F
+WEEKLY_FP_FLOOBIT_SCALE = 0.43
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 # Endowment (income_boost powerup) replaces the curve with a flatter one.
 # Less taper = monster weeks pay more; low weeks pay roughly the same.
 # Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
-# at heavy play, breaking even around 1k FP/week × 4 weeks.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.20
+# at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
+# proportionally with the standard curve.
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.27
 WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
@@ -163,9 +163,13 @@ FUNDING_TIER_THRESHOLDS = {
     'MID_MARKET':   0.85,  # within ±15% of average
     'SMALL_MARKET': 0.0,   # below 85% of average — genuinely fallen behind the pack
 }
-FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
-FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
-FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
+# Market-tier compression: keep the flavor (MEGA still feels prestigious,
+# SMALL still feels scrappy), but shrink the mechanical advantages so
+# tier doesn't compound into a runaway gap year over year. Dev / morale
+# / fatigue benefits roughly halved from the original spread.
+FUNDING_DEV_BONUS = {'MEGA_MARKET': 1, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
+FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.0075, 'LARGE_MARKET': 0.0025, 'MID_MARKET': -0.0025, 'SMALL_MARKET': -0.0075}
+FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.30, 'LARGE_MARKET': 0.15, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.10}
 
 # ---- Market Expectation Scaling ----
 # Bigger markets carry heavier "expectations to win" pressure on top of
@@ -242,17 +246,26 @@ STREAK_PRESSURE_CAP     = 0.80   # caps at streak 11+ to avoid runaway
 #   0.96 ≈ -4% on attrs ≈ -3-4 rating points (COMPLACENT trap-game risk)
 #   0.95 ≈ -5% on attrs ≈ -4-5 rating points (SPIRALING broken / can't get out
 #         of own way)
+# Rubber-band tilt: COMPLACENT bites the dominant teams harder,
+# RESOLUTE lifts the gritty losers a bit more, and SPIRALING is
+# softened so a struggling team isn't trapped in a doom-loop. Nudges
+# are 1-2 points each — subtle on any single game, additive over a
+# season. Surfaces through the existing form-state badge; no new UI.
 FORM_STATE_RATING_MULT = {
     'HOT_STREAK':  1.00,   # Already winning — no extra boost
     'GETTING_HOT': 1.00,   # Was 1.02 — selection effect already gives these
                            # teams +14pp lift over expected, so no extra mult
     'STEADY':      1.00,
     'SHAKY':       0.985,  # Mild slip
-    'COOLING_OFF': 0.97,   # Active fade
-    'COMPLACENT':  0.93,   # Was 0.96 — old value moved results 0pp; bumped
-                           # so the trap-game effect actually bites elite teams
-    'SPIRALING':   0.95,   # Broken
-    'RESOLUTE':    1.03,   # Cinderella backbone
+    'COOLING_OFF': 0.96,   # Was 0.97 — slightly stronger fade
+    'COMPLACENT':  0.92,   # Was 0.93 — slightly more bite on elite teams
+    'SPIRALING':   0.99,   # Was 0.97 — disposition-analyzer data showed 28x
+                           # higher SPIRALING incidence on underdogs vs
+                           # favorites (39% vs 1.4%), so the multiplier was
+                           # double-counting the ELO signal. Cut to -1% so
+                           # the form badge still surfaces a real condition
+                           # without compounding the pre-game skill gap.
+    'RESOLUTE':    1.04,   # Was 1.03 — slightly stronger Cinderella lift
     'UNKNOWN':     1.00,
 }
 
@@ -276,7 +289,7 @@ SCOUTING_BANDS = [
     (65, 10),   # 65-79: ±10
     (0, 15),    # <65: ±15
 ]
-FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 10, 'LARGE_MARKET': 5, 'MID_MARKET': 0, 'SMALL_MARKET': -5}
+FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
@@ -290,11 +303,32 @@ RETIREMENT_MID_AGE_SEASONS = 10     # 65% chance on walk year
 RETIREMENT_EARLY_AGE_SEASONS = 7    # 5% chance on walk year
 
 # ---- Player Fatigue ----
+# Accumulation rate is unchanged — fatigue gauge still climbs visibly
+# across the season for the fan UI. What changed: PHYSICAL_IMPACT is
+# softened so each fatigue point hits performance less hard. End-of-
+# season tired stars feel tired, not broken.
 BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
 FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
-FATIGUE_PHYSICAL_IMPACT = 1.0       # Full fatigue applied to physical attributes
-FATIGUE_MENTAL_IMPACT = 0.3         # 30% of fatigue applied to mental attributes
+FATIGUE_PHYSICAL_IMPACT = 0.6       # Was 1.0 — softened so fatigue is less punishing
+FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
+
+# Mental / form / fatigue modifiers can compound multiplicatively into a
+# heavy reduction on a high-rated player's effective rating. The soft floor
+# below caps that aggregate so a star never drops more than (1 - ratio) of
+# their baseline gameAttributes overall rating, even if every modifier
+# stacks negative. Trades off some narrative extremes for fewer
+# "great player had a nightmare game with no visible cause" outcomes.
+MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
+
+# League compression — at game start, every rostered player's in-game
+# attributes get pulled toward the league mean by this factor. A 95-rated
+# player effectively plays as ~90.5; a 65 plays as ~69.5. Closes the
+# auto-win gap without erasing skill order. Profile ratings stay
+# untouched; only `gameAttributes` is compressed. Set factor=1.0 to
+# disable.
+LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
+LEAGUE_COMPRESSION_MEAN = 80        # Center of the curve
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
@@ -466,7 +500,7 @@ GM_COACH_POOL_SIZE = 5
 
 PICKEM_CORRECT_REWARD = 5           # (Legacy) Floobits per correct pick
 PICKEM_CLAIRVOYANT_THRESHOLD = 96    # Points threshold for Clairvoyant bonus (e.g. 12 games × 8 pts = all correct by Q1)
-PICKEM_CLAIRVOYANT_BONUS = 25       # Bonus Floobits when threshold is met
+PICKEM_CLAIRVOYANT_BONUS = 35       # Bonus Floobits when threshold is met (was 25, bumped 40% in v0.16.1 economy pass)
 
 # Points-based system (v2)
 PICKEM_BASE_POINTS = 10              # Max points per correct pick (pre-game)
@@ -478,13 +512,13 @@ PICKEM_QUARTER_MULTIPLIERS = {       # Multiplier by game quarter at time of pic
     4: 0.2,   # Q4
     5: 0.1,   # OT
 }
-PICKEM_POINTS_TO_FLOOBITS = 0.5     # 1 point = 0.5 Floobits
-PICKEM_WEEKLY_PRIZES = {1: 15, 2: 10, 3: 5}
+PICKEM_POINTS_TO_FLOOBITS = 0.65    # 1 point = 0.65 Floobits (was 0.5, bumped 30% in v0.16.1 economy pass)
+PICKEM_WEEKLY_PRIZES = {1: 20, 2: 13, 3: 7}    # was {15, 10, 5}
 PICKEM_WEEKLY_TOP_PCT = 0.25
-PICKEM_WEEKLY_TOP_PCT_PRIZE = 3
-PICKEM_SEASON_PRIZES = {1: 75, 2: 50, 3: 25}
+PICKEM_WEEKLY_TOP_PCT_PRIZE = 4                 # was 3
+PICKEM_SEASON_PRIZES = {1: 100, 2: 65, 3: 33}  # was {75, 50, 25}
 PICKEM_SEASON_TOP_PCT = 0.25
-PICKEM_SEASON_TOP_PCT_PRIZE = 10
+PICKEM_SEASON_TOP_PCT_PRIZE = 13                # was 10
 
 # Win-probability multiplier (applies at any pick time)
 PICKEM_UNDERDOG_MAX = 3.0           # Max multiplier for extreme underdogs
