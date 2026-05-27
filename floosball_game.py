@@ -833,6 +833,9 @@ class Game:
         self.momentum = 0.0              # -100 to +100 (positive = home, negative = away)
         self.momentumStreak = 0          # consecutive events for same side, capped ±MAX_STREAK
         self.lastMomentumTeam = None     # team that last gained momentum
+        # Diagnostics (sampled in _applyMomentumEffect, dumped by _logPlayAnalytics)
+        self._peakAbsMomentum = 0.0
+        self._playsAbove30Mom = 0
 
         # Coaching gameplans (pre-game scouting, generated once per game)
         if GAMEPLAN_AVAILABLE:
@@ -1566,12 +1569,53 @@ class Game:
                 'passes40plus': 0,
                 # Coach archetype counters (per situational-mods entry)
                 'coachArchetypes': dict(getattr(self, '_coachArchetypeCounts', {}) or {}),
+                # Momentum analytics — read by analyze_momentum.py
+                'finalAbsMomentum': round(abs(self.momentum), 1),
+                'peakAbsMomentum': round(getattr(self, '_peakAbsMomentum', 0.0), 1),
+                'playsAbove30Mom': getattr(self, '_playsAbove30Mom', 0),
+                'bigPlays': 0,            # filled in feed scan
+                'momentumShifts': 0,      # filled in feed scan
+                'homeQ1': getattr(self, 'homeScoreQ1', 0),
+                'homeQ2': getattr(self, 'homeScoreQ2', 0),
+                'homeQ3': getattr(self, 'homeScoreQ3', 0),
+                'homeQ4': getattr(self, 'homeScoreQ4', 0),
+                'homeOT': getattr(self, 'homeScoreOT', 0),
+                'awayQ1': getattr(self, 'awayScoreQ1', 0),
+                'awayQ2': getattr(self, 'awayScoreQ2', 0),
+                'awayQ3': getattr(self, 'awayScoreQ3', 0),
+                'awayQ4': getattr(self, 'awayScoreQ4', 0),
+                'awayOT': getattr(self, 'awayScoreOT', 0),
+                'preGameHomeWinProb': round(getattr(self, 'preGameHomeWinProbability', 0.5), 3),
+                # Disposition / mental stack snapshots — read by
+                # analyze_disposition.py. Each phase is the avg starter
+                # overallRating after that modifier ran (baseline is
+                # post-league-compression but pre-fatigue).
+                'home_avgBaseline':         round(self._avgStarterSnapshot(self.homeTeam, 'baseline'), 2),
+                'home_avgAfterFatigue':     round(self._avgStarterSnapshot(self.homeTeam, 'afterFatigue'), 2),
+                'home_avgAfterDisposition': round(self._avgStarterSnapshot(self.homeTeam, 'afterDisposition'), 2),
+                'home_avgAfterCap':         round(self._avgStarterSnapshot(self.homeTeam, 'afterCap'), 2),
+                'home_avgEndGame':          round(self._avgStarterCurrentRating(self.homeTeam), 2),
+                'home_dispositionLabel':    getattr(self.homeTeam, '_dispositionLabel', None),
+                'home_dispositionMult':     round(getattr(self.homeTeam, '_dispositionMultiplier', 1.0), 4),
+                'home_formState':           getattr(self.homeTeam, '_dispositionFormState', None),
+                'away_avgBaseline':         round(self._avgStarterSnapshot(self.awayTeam, 'baseline'), 2),
+                'away_avgAfterFatigue':     round(self._avgStarterSnapshot(self.awayTeam, 'afterFatigue'), 2),
+                'away_avgAfterDisposition': round(self._avgStarterSnapshot(self.awayTeam, 'afterDisposition'), 2),
+                'away_avgAfterCap':         round(self._avgStarterSnapshot(self.awayTeam, 'afterCap'), 2),
+                'away_avgEndGame':          round(self._avgStarterCurrentRating(self.awayTeam), 2),
+                'away_dispositionLabel':    getattr(self.awayTeam, '_dispositionLabel', None),
+                'away_dispositionMult':     round(getattr(self.awayTeam, '_dispositionMultiplier', 1.0), 4),
+                'away_formState':           getattr(self.awayTeam, '_dispositionFormState', None),
             }
 
             for item in self.gameFeed:
                 play = item.get('play') if isinstance(item, dict) else None
                 if play is None or not hasattr(play, 'playType'):
                     continue
+                if getattr(play, 'isBigPlay', False):
+                    agg['bigPlays'] += 1
+                if getattr(play, 'isMomentumShift', False):
+                    agg['momentumShifts'] += 1
                 pt = getattr(play, 'playType', None)
                 ptName = pt.name if pt and hasattr(pt, 'name') else None
 
@@ -2417,28 +2461,40 @@ class Game:
 
     def _getBasePlayWeights(self) -> dict:
         """Return raw down/distance base weights before any modifier layers.
-        Deep gets a small base on 1st down and 3rd & 13+; coach aggressiveness
-        scales it up from there.
+        Tuned to land roughly 60/40 pass/run across a typical drive, which
+        is the NFL-realistic split. Previously was running 85/15 in games
+        with extended trailing — the base 1st-down and 2nd-and-medium
+        weights were too pass-heavy, compounding with situational pushes
+        to extinguish the run game.
         """
         ytg = self.yardsToFirstDown
         if self.down == 1:
-            return {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 13.0, 'deep': 2.0}
+            # 1st down: balanced 50/50 base. Most plays happen here, so
+            # this is the biggest lever on overall pass/run ratio.
+            return {'run': 50.0, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
-                return {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0, 'deep': 0.0}
+                # 2nd & short — run preferred (was already).
+                return {'run': 58.0, 'short': 28.0, 'medium': 10.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 9:
-                return {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 14.0, 'deep': 1.0}
+                # 2nd & medium — closer to balanced, was 35/65 too pass-heavy.
+                return {'run': 45.0, 'short': 20.0, 'medium': 25.0, 'long': 9.0, 'deep': 1.0}
             else:
-                return {'run': 20.0, 'short': 20.0, 'medium': 28.0, 'long': 28.0, 'deep': 4.0}
+                # 2nd & long — obvious passing situation.
+                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
         else:
             if ytg <= 3:
-                return {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0, 'deep': 0.0}
+                # 3rd & short — run is the percentage call.
+                return {'run': 60.0, 'short': 32.0, 'medium': 4.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 5:
-                return {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0, 'deep': 0.0}
+                # 3rd & medium-short — was 20% run, bump to 25%.
+                return {'run': 25.0, 'short': 45.0, 'medium': 21.0, 'long': 9.0, 'deep': 0.0}
             elif ytg <= 12:
-                return {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 23.0, 'deep': 2.0}
+                # 3rd & medium-long — still mostly pass but a draw is realistic.
+                return {'run': 12.0, 'short': 15.0, 'medium': 48.0, 'long': 23.0, 'deep': 2.0}
             else:
-                return {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 62.0, 'deep': 8.0}
+                # 3rd & extra long — almost always pass.
+                return {'run': 6.0, 'short': 10.0, 'medium': 15.0, 'long': 61.0, 'deep': 8.0}
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""
@@ -2629,8 +2685,12 @@ class Game:
         weights['deep']   = weights.get('deep', 0) * max(0.1, 1 + 1.8 * aggrNorm)
         weights['long']   *= max(0.2, 1 + 0.5 * aggrNorm)
         weights['medium'] *= max(0.5, 1 + 0.15 * aggrNorm)
-        weights['run']    *= max(0.5, 1 - 0.2 * aggrNorm)
-        weights['short']  *= max(0.5, 1 - 0.1 * aggrNorm)
+        # Run/short nerf softened: was 0.2/0.5 and 0.1/0.5 — combined with
+        # the pass-heavy base that produced 85/15 splits in games where a
+        # team was trailing and the coach was aggressive. New floors keep
+        # run viable even for max-aggressive coaches.
+        weights['run']    *= max(0.65, 1 - 0.12 * aggrNorm)
+        weights['short']  *= max(0.65, 1 - 0.08 * aggrNorm)
 
         weights['medium'] *= max(0.5, 1 + 0.3 * offMindNorm)
         weights['long']   *= max(0.5, 1 + 0.2 * offMindNorm)
@@ -3837,6 +3897,15 @@ class Game:
             player.gameAttributes = copy.deepcopy(player.attributes)
             player.reset_game_stats()
 
+        # League compression — pull every player's leaf attributes
+        # toward the league mean so the 95-vs-65 gap doesn't auto-win
+        # plays. Runs RIGHT AFTER the deepcopy so all downstream
+        # modifiers (funding morale, fatigue, disposition, soft cap)
+        # stack on the compressed baseline. Profile ratings stay
+        # untouched; only gameAttributes is compressed.
+        self._applyLeagueCompression(self.homeTeam)
+        self._applyLeagueCompression(self.awayTeam)
+
         # Apply funding morale modifiers (small pregame confidence/determination nudge)
         self._applyFundingMorale(self.homeTeam)
         self._applyFundingMorale(self.awayTeam)
@@ -3889,24 +3958,16 @@ class Game:
         self._snapshotMentalPhase(self.homeTeam, 'afterFatigue')
         self._snapshotMentalPhase(self.awayTeam, 'afterFatigue')
 
-        # Apply form-state rating modifier — the trap-game / Cinderella
-        # mechanic. Hot-but-vulnerable teams play slightly worse, struggling
-        # teams with backbone play slightly better. Runs after fatigue so the
-        # multipliers compose cleanly.
-        self._applyFormState(self.homeTeam)
-        self._applyFormState(self.awayTeam)
-        self._snapshotMentalPhase(self.homeTeam, 'afterForm')
-        self._snapshotMentalPhase(self.awayTeam, 'afterForm')
-
-        # Per-matchup contextual modifiers stacked on top of form state:
-        #   - trap game (heavy favorite + low discipline)
-        #   - playoff push (late-season bubble team + positive determination)
-        #   - clinched coast (clinched playoffs + low discipline)
-        # Lets a COMPLACENT team's trap-game game be a real upset, a
-        # RESOLUTE team's late-season urgency be a real push, etc.
-        self._applyContextModifiers()
-        self._snapshotMentalPhase(self.homeTeam, 'afterContext')
-        self._snapshotMentalPhase(self.awayTeam, 'afterContext')
+        # Single combined team-disposition modifier. Replaces the prior
+        # split between form state and matchup context, which both fired
+        # on overlapping inputs (discipline, attitude, ELO) and stacked
+        # to double-count the same underlying signal. Capped at ±10% so
+        # the aggregate stays in "this is football, not a debuff system"
+        # territory. Produces one narrative label per team
+        # ("Hot Streak" / "Trap-Game Risk" / "Cinderella Push" / etc.).
+        self._applyTeamDisposition()
+        self._snapshotMentalPhase(self.homeTeam, 'afterDisposition')
+        self._snapshotMentalPhase(self.awayTeam, 'afterDisposition')
 
         # Enforce the soft floor — scale a player's attributes back up if
         # the compounded modifiers dropped their overall rating more than
@@ -4045,9 +4106,12 @@ class Game:
                         adjustOffensiveGameplan(self.awayOffGameplan, awayCoach, awayOffStats)
                         adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats)
 
-                    # Halftime dampens momentum toward neutral
+                    # Halftime dampens momentum toward neutral. Streak is
+                    # halved (truncated toward zero) rather than wiped — a
+                    # team that genuinely owned the half keeps a tapered
+                    # cascade going into Q3 instead of starting flat.
                     self.momentum *= 0.5
-                    self.momentumStreak = 0
+                    self.momentumStreak = int(self.momentumStreak / 2)
                     if abs(self.momentum) < 0.5:
                         self.momentum = 0.0
 
@@ -5062,12 +5126,23 @@ class Game:
         if abs(self.momentum) < 0.5:
             self.momentum = 0.0
 
-    def _scoreGapDampener(self):
-        """Reduce momentum gains in blowouts. Returns 0.2-1.0."""
+    def _scoreGapDampener(self, benefitingTeam=None):
+        """Reduce momentum gains in blowouts — but only for the team that's
+        already ahead. The trailing team's comeback push generates momentum
+        at full value (in fact the narrative needs it to). Returns 0.2-1.0
+        when benefitingTeam is the leader, 1.0 when it's the trailing team
+        or the game is tied. Pass None for legacy callers that want the
+        symmetric blowout-decay behavior (used by _decayMomentum)."""
         scoreDiff = abs(self.homeScore - self.awayScore)
         if scoreDiff <= 14:
             return 1.0
-        elif scoreDiff <= 21:
+        if benefitingTeam is not None:
+            leadingTeam = self.homeTeam if self.homeScore > self.awayScore else (
+                self.awayTeam if self.awayScore > self.homeScore else None
+            )
+            if benefitingTeam is not leadingTeam:
+                return 1.0
+        if scoreDiff <= 21:
             return 0.7
         elif scoreDiff <= 28:
             return 0.4
@@ -5146,8 +5221,10 @@ class Game:
         else:
             streakInertia = 1.0
 
-        # Dampening
-        gapDamp = self._scoreGapDampener()
+        # Dampening — gap damp is asymmetric: only the leading team's
+        # piling-on is muted, the trailing team's comeback momentum hits
+        # at full value regardless of deficit.
+        gapDamp = self._scoreGapDampener(benefitingTeam)
         mentalResist = self._mentalResistance(resistingTeam)
 
         # Cascade multiplier — scale down in blowouts so piling-on streaks flatten out
@@ -5155,7 +5232,25 @@ class Game:
         streakBonus = MOMENTUM_CASCADE_STEP * (abs(self.momentumStreak) - 1) * gapDamp
         cascadeMultiplier = min(1.0 + streakBonus, MOMENTUM_MAX_CASCADE)
 
-        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia
+        # Late-game amplifier: events inside Q4 two-minute warning (or in any
+        # OT period) carry more narrative weight than the raw math gives them.
+        # A 1.3x bump small enough not to distort typical games, big enough
+        # that closing-minute swings feel as heavy as they read.
+        inTwoMinute = (self.currentQuarter == 4 and self.gameClockSeconds < 120)
+        inOvertime = self.currentQuarter >= 5
+        lateGameMultiplier = 1.3 if (inTwoMinute or inOvertime) else 1.0
+
+        # Comeback urgency: a team trailing by 10+ in Q3 or later plays
+        # with measurable desperation — momentum events for the trailing
+        # side hit 1.15x. Pairs with the asymmetric gap dampener to keep
+        # comeback narratives alive; underdogs were winning ~10pp below
+        # pre-game WP without this push.
+        benefitingScore = self.homeScore if benefitingTeam is self.homeTeam else self.awayScore
+        opposingScore = self.awayScore if benefitingTeam is self.homeTeam else self.homeScore
+        deficit = opposingScore - benefitingScore
+        comebackUrgency = 1.15 if (self.currentQuarter >= 3 and deficit >= 10) else 1.0
+
+        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier * comebackUrgency
 
         if benefitingTeam is self.homeTeam:
             self.momentum += finalDelta
@@ -5169,7 +5264,14 @@ class Game:
 
     def _applyMomentumEffect(self):
         """Apply small per-play confidence/determination nudges based on momentum."""
-        if abs(self.momentum) < MOMENTUM_NEUTRAL_ZONE:
+        # Diagnostic sampling — once per play call, regardless of neutral zone
+        absMom = abs(self.momentum)
+        if absMom > self._peakAbsMomentum:
+            self._peakAbsMomentum = absMom
+        if absMom >= 30.0:
+            self._playsAbove30Mom += 1
+
+        if absMom < MOMENTUM_NEUTRAL_ZONE:
             return
 
         effectMagnitude = MOMENTUM_EFFECT_BASE * (abs(self.momentum) / 50.0)
@@ -5188,8 +5290,12 @@ class Game:
                 player.updateInGameConfidence(effectMagnitude * 0.6)
                 player.updateInGameDetermination(effectMagnitude * 0.4)
 
-        # Slight drag on suffering team
-        dragMagnitude = effectMagnitude * 0.5
+        # Slight drag on suffering team. Was 0.5x the benefiting team's
+        # boost, but post-instrumentation showed favorites winning at
+        # +13pp over pre-game WP and underdogs at -10pp — the drag was
+        # compounding the favorite's advantage into a death spiral. 0.3x
+        # leaves the drag detectable without crushing the trailing team.
+        dragMagnitude = effectMagnitude * 0.3
         for player in suffering.rosterDict.values():
             if player is not None:
                 player.updateInGameConfidence(-dragMagnitude * 0.6)
@@ -5215,15 +5321,18 @@ class Game:
         """Record each rostered player's pre-modifier overallRating so the
         soft cap can enforce a floor relative to it AND the per-game stats
         snapshot can surface the modifier breakdown. Stored as a transient
-        attribute on the player object."""
+        attribute on the player object.
+
+        NOTE: must use updateInGameRating() — updateRating() writes to
+        attributes.overallRating (baseline), not gameAttributes.overallRating
+        (the in-game value the modifier stack mutates).
+        """
         for player in team.rosterDict.values():
             if player is None or player.gameAttributes is None:
                 continue
             # Refresh derived rating first so the baseline is current.
-            player.gameAttributes.calculateIntangibles()
-            player.gameAttributes.calculateSkills()
             try:
-                player.updateRating()
+                player.updateInGameRating()
             except Exception:
                 pass
             player._preGameBaselineRating = player.gameAttributes.overallRating
@@ -5233,33 +5342,37 @@ class Game:
             player._mentalSnapshots = {
                 'baseline': player.gameAttributes.overallRating,
                 'afterFatigue': None,
-                'afterForm': None,
-                'afterContext': None,
+                'afterDisposition': None,
                 'afterCap': None,
             }
 
     def _snapshotMentalPhase(self, team, key):
         """Record the current overallRating under `key` on each player's
         _mentalSnapshots dict. Called after every modifier stage so the
-        per-game breakdown can attribute rating drift back to each phase."""
+        per-game breakdown can attribute rating drift back to each phase.
+
+        NOTE: must use updateInGameRating() — updateRating() refreshes the
+        baseline attributes.overallRating, not gameAttributes.overallRating
+        (which is what the modifier stack mutates and what we want to read).
+        """
         for player in team.rosterDict.values():
             if player is None or player.gameAttributes is None:
                 continue
             snaps = getattr(player, '_mentalSnapshots', None)
             if snaps is None:
                 continue
-            player.gameAttributes.calculateIntangibles()
-            player.gameAttributes.calculateSkills()
             try:
-                player.updateRating()
+                player.updateInGameRating()
             except Exception:
                 pass
             snaps[key] = player.gameAttributes.overallRating
 
     def _buildMentalBreakdown(self, player) -> Optional[dict]:
         """Compute the per-stage modifier deltas for surfacing in the box
-        score. Returns None if no snapshots were captured (e.g., bench
-        player who never got mutated)."""
+        score. Two stages now: fatigue + disposition (the combined form +
+        context multiplier), then the soft cap. Returns None if no
+        snapshots were captured (e.g., bench player who never got mutated).
+        """
         snaps = getattr(player, '_mentalSnapshots', None)
         if not snaps:
             return None
@@ -5267,18 +5380,100 @@ class Game:
         if not baseline:
             return None
         afterFatigue = snaps.get('afterFatigue') or baseline
-        afterForm = snaps.get('afterForm') or afterFatigue
-        afterContext = snaps.get('afterContext') or afterForm
-        afterCap = snaps.get('afterCap') or afterContext
+        afterDisposition = snaps.get('afterDisposition') or afterFatigue
+        afterCap = snaps.get('afterCap') or afterDisposition
         return {
             'baseline': int(baseline),
             'final': int(afterCap),
             'totalDelta': int(afterCap - baseline),
             'fatigue': int(afterFatigue - baseline),
-            'form': int(afterForm - afterFatigue),
-            'context': int(afterContext - afterForm),
-            'cap': int(afterCap - afterContext),
+            'disposition': int(afterDisposition - afterFatigue),
+            'cap': int(afterCap - afterDisposition),
         }
+
+    def _avgStarterSnapshot(self, team, snapshotKey: str) -> float:
+        """Mean overallRating of starters at a given snapshot phase.
+        Used by analytics to see how each modifier stage shifted the
+        roster average. Returns 0.0 if no players carry the snapshot.
+        """
+        total = 0.0
+        n = 0
+        for player in team.rosterDict.values():
+            if player is None:
+                continue
+            snaps = getattr(player, '_mentalSnapshots', None)
+            if not snaps:
+                continue
+            val = snaps.get(snapshotKey)
+            if val is None:
+                continue
+            total += val
+            n += 1
+        return total / n if n else 0.0
+
+    def _avgStarterCurrentRating(self, team) -> float:
+        """Mean current overallRating of starters — sample at game end to
+        capture drift from momentum/clutch/choke/per-play fatigue."""
+        total = 0.0
+        n = 0
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            try:
+                player.updateInGameRating()
+            except Exception:
+                pass
+            total += player.gameAttributes.overallRating
+            n += 1
+        return total / n if n else 0.0
+
+    def _applyLeagueCompression(self, team):
+        """Pull every rostered player's in-game attributes toward the
+        league mean by LEAGUE_COMPRESSION_FACTOR. A 95-rated star
+        effectively plays as ~90.5; a 65-rated reserve plays as ~69.5.
+        Closes the auto-win gap between stars and scrubs without
+        erasing skill order.
+
+        Profile ratings (player.attributes) stay untouched — only the
+        live gameAttributes copy is compressed, so the player page
+        still reads 95. Downstream modifiers (fatigue, disposition,
+        soft cap) stack on the compressed baseline.
+
+        Set LEAGUE_COMPRESSION_FACTOR to 1.0 in constants to disable.
+        """
+        from constants import LEAGUE_COMPRESSION_FACTOR, LEAGUE_COMPRESSION_MEAN
+        factor = LEAGUE_COMPRESSION_FACTOR
+        if factor >= 0.999:
+            return  # disabled
+        mean = LEAGUE_COMPRESSION_MEAN
+        # Physical attrs that drive most on-field outcomes, plus the
+        # four game-formula intangibles. Locker-room attrs (attitude,
+        # resilience, selfBelief) are intentionally NOT compressed —
+        # their wide range is the source of personality variance.
+        attrs = (
+            'speed', 'power', 'agility', 'hands', 'reach',
+            'armStrength', 'accuracy', 'legStrength',
+            'focus', 'discipline', 'instinct', 'creativity',
+        )
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            for attr in attrs:
+                val = getattr(player.gameAttributes, attr, None)
+                if val is None:
+                    continue
+                compressed = mean + (val - mean) * factor
+                # Stay within the engine's expected 30-100 envelope.
+                compressed = max(30, min(100, round(compressed)))
+                setattr(player.gameAttributes, attr, compressed)
+            # Recompute derived ratings from the compressed leaves so
+            # skillRating, xFactor, overallRating all reflect the curve.
+            try:
+                player.gameAttributes.calculateIntangibles()
+                player.gameAttributes.calculateSkills()
+                player.updateInGameRating()
+            except Exception:
+                pass
 
     def _enforceMentalSoftCap(self, team):
         """Scale a player's gameAttributes back up uniformly if the
@@ -5299,10 +5494,8 @@ class Game:
             if not baseline or baseline <= 0:
                 continue
             # Refresh derived overall first so we compare apples to apples.
-            player.gameAttributes.calculateIntangibles()
-            player.gameAttributes.calculateSkills()
             try:
-                player.updateRating()
+                player.updateInGameRating()
             except Exception:
                 pass
             current = player.gameAttributes.overallRating
@@ -5319,10 +5512,8 @@ class Game:
                 if val:
                     setattr(player.gameAttributes, attr,
                             min(100, round(val * scale)))
-            player.gameAttributes.calculateIntangibles()
-            player.gameAttributes.calculateSkills()
             try:
-                player.updateRating()
+                player.updateInGameRating()
             except Exception:
                 pass
             logger.debug(
@@ -5353,14 +5544,107 @@ class Game:
             player.gameAttributes.calculateSkills()
 
     def _applyFormState(self, team):
-        """
-        Apply the team's current form state as a uniform multiplier on each
-        rostered player's in-game attributes. Drives the trap-game effect
-        for COMPLACENT teams, the Cinderella boost for RESOLUTE teams, and
-        in-between for the other states.
+        """Deprecated. Use _applyTeamDisposition (combines form + context
+        into one capped multiplier with a single narrative label).
+        Kept as a no-op so older call-sites don't break."""
+        return
 
-        Regression-to-mean: teams stuck in the same state for 3+ weeks have
-        an increasing chance per game to have their modifier halved.
+    # Narrative labels for the combined team disposition. Picked by
+    # _pickDispositionLabel based on form state + which context factors
+    # fired. Designed so a low-discipline favored team gets ONE explanation
+    # ("Trap-Game Risk") instead of stacked "Complacent" + "Trap game".
+    _DISPOSITION_FORM_LABELS = {
+        'HOT_STREAK':  'Hot Streak',
+        'GETTING_HOT': 'Building Momentum',
+        'STEADY':      'Steady',
+        'SHAKY':       'Shaky',
+        'COOLING_OFF': 'Cooling Off',
+        'COMPLACENT':  'Complacent',
+        'SPIRALING':   'Spiraling',
+        'RESOLUTE':    'Resolute',
+        'UNKNOWN':     'Steady',
+    }
+
+    # Friendly fallback label for each context factor, used when form is
+    # neutral (STEADY / UNKNOWN) but a context modifier still fired. The
+    # composite labels above (Trap-Game Risk, Cinderella Push) take
+    # precedence when form + context share a root signal.
+    #
+    # Naming philosophy: evoke the state, don't describe the mechanism.
+    # "Buy-In" / "Adrift" let users infer the coach connection from the
+    # supporting data (coach attitude, team mood, etc.) without the label
+    # spelling out the cause.
+    _DISPOSITION_CTX_LABELS = {
+        'Trap game':             'Trap-Game Risk',
+        'Underdog hunger':       'Underdog Push',
+        'Clinched coast':        'Coasting',
+        'Playoff push':          'Playoff Push',
+        'Playing for the coach': 'Buy-In',
+        'Disengaged from coach': 'Adrift',
+    }
+
+    def _pickDispositionLabel(self, formState, ctxReasons, multiplier):
+        """Choose the single narrative label that best explains the
+        combined disposition. Direction of the net delta drives the
+        choice — a Complacent team with a partial Playoff Push offset
+        is still net Complacent, so the label should say so.
+
+        Priority:
+          1. Compound labels for shared-root signals (Trap-Game Risk,
+             Cinderella Push).
+          2. Form-state label if its direction matches the net delta.
+          3. Dominant context factor whose direction matches the net.
+          4. Form-state label as a final fallback.
+        """
+        from constants import FORM_STATE_RATING_MULT
+        ctxLabels = [r['label'] for r in ctxReasons]
+
+        if formState == 'COMPLACENT' and 'Trap game' in ctxLabels:
+            return 'Trap-Game Risk'
+        if formState == 'RESOLUTE' and 'Underdog hunger' in ctxLabels:
+            return 'Cinderella Push'
+
+        formLabel = self._DISPOSITION_FORM_LABELS.get(formState, 'Steady')
+        netDelta = multiplier - 1.0
+
+        # Neutral net — use form's narrative identity (e.g. Hot Streak
+        # at multiplier 1.0 still wants a label) or 'Steady'.
+        if abs(netDelta) < 0.005:
+            return formLabel
+
+        isDrag = netDelta < 0
+        formMult = FORM_STATE_RATING_MULT.get(formState, 1.0)
+        formDrag = formMult < 1.0
+        formBoost = formMult > 1.0
+
+        # Form direction matches net direction — form is the dominant
+        # explanation, use its label.
+        if isDrag and formDrag:
+            return formLabel
+        if (not isDrag) and formBoost:
+            return formLabel
+
+        # Net direction is driven by context — pick the first context
+        # factor whose direction matches the net.
+        wantKind = 'drag' if isDrag else 'boost'
+        for r in ctxReasons:
+            if r.get('kind') == wantKind:
+                return self._DISPOSITION_CTX_LABELS.get(r['label'], formLabel)
+
+        return formLabel
+
+    def _applyTeamDisposition(self):
+        """Combined team-disposition modifier. Replaces the prior split
+        between _applyFormState (form-state multiplier) and
+        _applyContextModifiers (matchup-context multiplier) — both were
+        team-wide, both keyed on overlapping inputs (discipline, attitude,
+        ELO), and stacking them double-counted the same underlying signal.
+
+        Now: compute both, multiply them, cap aggregate at ±10%, pick one
+        narrative label, apply once. Each team carries _dispositionLabel
+        and _dispositionMultiplier afterward so the box-score breakdown
+        can explain *why* a player's rating moved without surfacing two
+        rows that share a root cause.
         """
         try:
             from api_response_builders import TeamResponseBuilder
@@ -5368,36 +5652,70 @@ class Game:
         except Exception:
             return
 
-        formState = TeamResponseBuilder.computeFormState(team)
-        multiplier = FORM_STATE_RATING_MULT.get(formState, 1.0)
-        if multiplier == 1.0:
-            return
+        def resolve(team, opponent):
+            formState = TeamResponseBuilder.computeFormState(team)
+            formMult = FORM_STATE_RATING_MULT.get(formState, 1.0)
+            # Regression-to-mean: teams stuck in the same form state for
+            # 3+ weeks have a rising chance per game to have their form
+            # contribution halved. Preserves the prior _applyFormState
+            # behaviour now that form is folded into disposition.
+            weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
+            if weeksHeld >= 3 and formMult != 1.0:
+                weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
+                if _random.random() < weakenChance:
+                    formMult = 1.0 + (formMult - 1.0) * 0.5
+                    logging.debug(
+                        f"_disposition: {team.abbr} {formState} held "
+                        f"{weeksHeld} weeks → form softened to {formMult:.3f}"
+                    )
 
-        weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
-        if weeksHeld >= 3:
-            weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
-            if _random.random() < weakenChance:
-                multiplier = 1.0 + (multiplier - 1.0) * 0.5
-                logging.debug(
-                    f"_applyFormState: {team.abbr} {formState} (held "
-                    f"{weeksHeld} weeks) weakened {weakenChance:.0%} → "
-                    f"multiplier {multiplier:.3f}"
-                )
+            ctxMult, ctxReasons = self._computeContextMultiplier(team, opponent)
 
-        self._applyTeamRatingMult(team, multiplier)
+            # No aggregate cap on disposition — the wider swings are the
+            # drama generator. A truly COMPLACENT team in a trap game
+            # needs enough mechanical weight to actually lose to an
+            # underdog with hunger; capping at ±10% flattens exactly the
+            # season variance the mental sim is meant to produce. The
+            # soft floor at MENTAL_FLOOR_RATIO × baseline (15%) still
+            # prevents the absolute worst aggregate outcomes downstream.
+            combined = formMult * ctxMult
+            label = self._pickDispositionLabel(formState, ctxReasons, combined)
+            return combined, label, formState, ctxReasons
 
-    def _computeContextMultiplier(self, team, opponent) -> float:
+        homeMult, homeLabel, homeForm, homeReasons = resolve(self.homeTeam, self.awayTeam)
+        awayMult, awayLabel, awayForm, awayReasons = resolve(self.awayTeam, self.homeTeam)
+
+        self.homeTeam._dispositionMultiplier = homeMult
+        self.homeTeam._dispositionLabel = homeLabel
+        self.homeTeam._dispositionFormState = homeForm
+        self.homeTeam._contextReasons = homeReasons
+
+        self.awayTeam._dispositionMultiplier = awayMult
+        self.awayTeam._dispositionLabel = awayLabel
+        self.awayTeam._dispositionFormState = awayForm
+        self.awayTeam._contextReasons = awayReasons
+
+        self._applyTeamRatingMult(self.homeTeam, homeMult)
+        self._applyTeamRatingMult(self.awayTeam, awayMult)
+
+    def _computeContextMultiplier(self, team, opponent):
         """Combined per-matchup contextual multiplier covering:
           - trap game: heavy favorite + low team discipline → coasts
           - playoff push: late season + on bubble + positive determination
                           → urgency boost (scales harder toward season end)
           - clinched coast: late season + clinched + low discipline → coasts
+          - play-hard-for-coach: leader/toxic coach colors game-day effort
+
+        Returns (multiplier, reasons) where reasons is a list of
+        {'label': str, 'kind': 'boost'|'drag'} for each factor that fired.
+        Surfaced in the per-player box-score breakdown so users can see
+        *why* matchup context moved a player off their baseline.
         """
         if not self.isRegularSeasonGame:
-            return 1.0
+            return 1.0, []
         starters = [p for p in team.rosterDict.values() if p is not None]
         if not starters:
-            return 1.0
+            return 1.0, []
         teamElo = getattr(team, 'elo', 1500) or 1500
         oppElo = getattr(opponent, 'elo', 1500) or 1500
         avgDiscipline = sum(p.attributes.discipline for p in starters) / len(starters)
@@ -5407,30 +5725,24 @@ class Game:
         ) / len(starters)
 
         multiplier = 1.0
+        reasons = []
 
-        # Trap game — heavy favorite (ELO advantage ≥ 100) with low discipline
-        # plays down to the underdog. Discipline 80+ = no trap; 60 = full trap.
-        # Magnitude bumped again (was 3-5.5%) — multi-season diagnostics still
-        # showed near-zero lift over 1,280 fires. Stronger now so the
-        # mechanic produces measurable upset pressure rather than washing
-        # out vs ELO advantage.
         if teamElo - oppElo >= 100:
             trapScale = max(0.0, min(1.0, (80 - avgDiscipline) / 20))
             if trapScale > 0:
-                trapMag = 0.05 + 0.03 * trapScale  # 5-8%
+                trapMag = 0.05 + 0.03 * trapScale
                 multiplier *= 1.0 - trapMag
+                reasons.append({'label': 'Trap game', 'kind': 'drag'})
                 logging.debug(
                     f"_context: {team.abbr} trap-game vs {opponent.abbr} "
                     f"(ELO+{teamElo-oppElo}, disc {avgDiscipline:.1f}) "
                     f"× {1.0 - trapMag:.3f}"
                 )
-        # Underdog hunger — heavy underdog (ELO deficit ≥ 100) with positive
-        # collective determination plays above their level. Magnitude
-        # bumped to match the strengthened trap-game.
         elif oppElo - teamElo >= 100 and avgDetMod > 0:
-            detFactor = min(1.0, avgDetMod / 3)  # +3 modifier = full effect
-            hungerMag = 0.05 + 0.02 * detFactor  # 5-7%
+            detFactor = min(1.0, avgDetMod / 3)
+            hungerMag = 0.05 + 0.02 * detFactor
             multiplier *= 1.0 + hungerMag
+            reasons.append({'label': 'Underdog hunger', 'kind': 'boost'})
             logging.debug(
                 f"_context: {team.abbr} underdog-hunger vs {opponent.abbr} "
                 f"(ELO-{oppElo-teamElo}, detMod {avgDetMod:+.2f}) "
@@ -5443,64 +5755,52 @@ class Game:
             eliminated = bool(getattr(team, 'eliminated', False))
 
             if clinched:
-                # Clinched coasters: low discipline → going through motions.
-                # Magnitude scales toward season end. Bumped again — multi-
-                # season data showed 3-6% wasn't enough to break out of
-                # the noise floor on a sample of 1,280 fires.
                 if avgDiscipline < 75:
-                    coastMag = 0.05 + (week - 24) * 0.01  # wk24: 5%, wk28: 9%
+                    coastMag = 0.05 + (week - 24) * 0.01
                     multiplier *= 1.0 - coastMag
+                    reasons.append({'label': 'Clinched coast', 'kind': 'drag'})
                     logging.debug(
                         f"_context: {team.abbr} clinched-coast wk{week} "
                         f"(disc {avgDiscipline:.1f}) × {1.0 - coastMag:.3f}"
                     )
             elif not eliminated:
-                # On bubble — playoff push if collective determination is
-                # positive (drive to win expressed). Urgency scales with how
-                # close to season end (week 24: 0.2x, week 28: 1.0x). Captures
-                # both 'cusp-push' (weeks 24-26) and 'win-and-in' (week 28).
                 if avgDetMod > 0:
                     urgencyFactor = min(1.0, (week - 23) / 5)
                     detFactor = min(1.0, avgDetMod / 3)
                     pushMag = 0.02 + 0.03 * urgencyFactor * detFactor
                     multiplier *= 1.0 + pushMag
+                    reasons.append({'label': 'Playoff push', 'kind': 'boost'})
                     logging.debug(
                         f"_context: {team.abbr} playoff-push wk{week} "
                         f"(detMod {avgDetMod:+.2f}, urgency {urgencyFactor:.1f}) "
                         f"× {1.0 + pushMag:.3f}"
                     )
 
-        # Play-hard-for-the-coach: leader-coaches (90+) get a small lift from
-        # players who buy in; toxic-coaches (≤70) get a small drag from a
-        # disengaged room. Effect is small (±2% at the extremes) — coach
-        # personality colors the whole season elsewhere via attitude
-        # contagion / drift; this is just the day-of expression.
         coach = getattr(team, 'coach', None)
         coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
         if coachAttitude >= 90:
-            coachMag = 0.01 + (coachAttitude - 90) / 1000  # 1.0% .. 2.0%
+            coachMag = 0.01 + (coachAttitude - 90) / 1000
             multiplier *= 1.0 + coachMag
+            reasons.append({'label': 'Playing for the coach', 'kind': 'boost'})
             logging.debug(
                 f"_context: {team.abbr} play-hard-for-coach (coach att "
                 f"{coachAttitude}) × {1.0 + coachMag:.3f}"
             )
         elif coachAttitude <= 70:
-            coachMag = 0.01 + (70 - coachAttitude) / 1000  # 1.0% .. 2.0%
+            coachMag = 0.01 + (70 - coachAttitude) / 1000
             multiplier *= 1.0 - coachMag
+            reasons.append({'label': 'Disengaged from coach', 'kind': 'drag'})
             logging.debug(
                 f"_context: {team.abbr} disengaged-from-coach (coach att "
                 f"{coachAttitude}) × {1.0 - coachMag:.3f}"
             )
 
-        return multiplier
+        return multiplier, reasons
 
     def _applyContextModifiers(self):
-        """Stack per-matchup contextual modifiers (trap game, playoff push,
-        clinched coast) on top of the form-state modifier."""
-        homeMult = self._computeContextMultiplier(self.homeTeam, self.awayTeam)
-        awayMult = self._computeContextMultiplier(self.awayTeam, self.homeTeam)
-        self._applyTeamRatingMult(self.homeTeam, homeMult)
-        self._applyTeamRatingMult(self.awayTeam, awayMult)
+        """Deprecated. Folded into _applyTeamDisposition. Kept as a no-op
+        so older call-sites don't break during the transition."""
+        return
 
     def _applyFatigue(self, team):
         """Reduce in-game attributes based on accumulated player fatigue."""
@@ -5607,16 +5907,86 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
-                # Per-player pre-game mental modifier breakdown — surfaced
-                # in the box score so users can see why a high-rated player
-                # underperformed (or overperformed). Include whenever any
-                # individual stage moved the rating, even if they cancelled
-                # out net-zero (users still want the receipts).
+                # Per-player pre-game mental modifier breakdown — always
+                # included when snapshots exist, even if every stage netted
+                # zero. "Nothing is dragging this player" is itself useful
+                # context for users trying to understand a stat line.
                 breakdown = self._buildMentalBreakdown(p)
-                if breakdown and any(
-                    breakdown.get(k, 0) != 0 for k in ('fatigue', 'form', 'context', 'cap')
-                ):
+                if breakdown:
                     result['mentalBreakdown'] = breakdown
+                # Mindset numbers — both pre-game baseline and the live
+                # in-game value. The drift between them is the LARGEST
+                # invisible driver of "my star had a bad game": every
+                # play applies _mentalDrift which amplifies drift 25×,
+                # so a -3 confidence drop is ~-4.5 effective rating per
+                # play. Surfacing pre-game and current together lets
+                # users see whether the bad performance came from a
+                # pre-game state or a mid-game collapse.
+                try:
+                    cnfBase = round(getattr(p.attributes, 'confidenceModifier', 0) or 0, 2)
+                    detBase = round(getattr(p.attributes, 'determinationModifier', 0) or 0, 2)
+                    cnfNow = round(getattr(p.gameAttributes, 'confidenceModifier', 0) or 0, 2)
+                    detNow = round(getattr(p.gameAttributes, 'determinationModifier', 0) or 0, 2)
+                    result['confidenceModifier'] = cnfBase
+                    result['determinationModifier'] = detBase
+                    result['confidenceInGame'] = cnfNow
+                    result['determinationInGame'] = detNow
+                    result['confidenceDrift'] = round(cnfNow - cnfBase, 2)
+                    result['determinationDrift'] = round(detNow - detBase, 2)
+                except Exception:
+                    pass
+                # Season-average FP coming into this game — the reference
+                # users actually care about when judging "performed like
+                # they should". Per-game stats hold this game; season
+                # totals hold prior games only.
+                try:
+                    gp = max(0, getattr(p, 'gamesPlayed', 0) or 0)
+                    seasonFp = p.seasonStatsDict.get('fantasyPoints', 0) or 0
+                    if gp > 0:
+                        result['seasonAvgFP'] = round(seasonFp / gp, 1)
+                        result['seasonGP'] = gp
+                except Exception:
+                    pass
+                # Pressure exposure — biggest invisible driver of
+                # "good player choked in a big moment". pressureHandling
+                # is the player's per-play stochastic over/underperform
+                # disposition; team.pressureModifier is the game-day
+                # stakes multiplier (market expectations + in-season
+                # urgency, championship games hit 2.5).
+                try:
+                    result['pressureHandling'] = int(getattr(
+                        p.attributes, 'pressureHandling', 0) or 0)
+                    pTeam = getattr(p, 'team', None)
+                    if pTeam is not None:
+                        result['teamPressureModifier'] = round(
+                            getattr(pTeam, 'pressureModifier', 1.0) or 1.0, 2)
+                except Exception:
+                    pass
+                # Static mental/personality attributes — surfaced as
+                # status badges in the breakdown panel so users can
+                # read a player's profile at a glance. Each badge maps
+                # to a tier label on the frontend.
+                try:
+                    for attr in ('attitude', 'resilience', 'selfBelief',
+                                 'discipline', 'focus', 'instinct', 'creativity'):
+                        val = getattr(p.attributes, attr, None)
+                        if val is not None:
+                            result[attr] = int(val)
+                except Exception:
+                    pass
+                # Single narrative label for the team's combined disposition
+                # ("Hot Streak", "Trap-Game Risk", "Cinderella Push", etc.).
+                # Replaces the prior split between formStateLabel +
+                # contextReasons — those two fields stacked separately in
+                # the UI and double-explained the same effect.
+                try:
+                    pTeam = getattr(p, 'team', None)
+                    if pTeam is not None:
+                        label = getattr(pTeam, '_dispositionLabel', None)
+                        if label:
+                            result['dispositionLabel'] = label
+                except Exception:
+                    pass
                 # Include defense stats if any are non-zero
                 defStats = p.gameStatsDict.get('defense', {})
                 if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
@@ -6039,7 +6409,7 @@ class Game:
             self.play.awayWinProbability = newAwayWp
             self.play.homeWpa = round(homeWpa, 2)
             self.play.awayWpa = round(awayWpa, 2)
-            self.play.isBigPlay = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+            self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
 
             # Momentum: big play bonus (team that benefited from WPA swing)
             if self.play.isBigPlay:
@@ -6204,7 +6574,7 @@ class Game:
             if 'homeWpa' not in self.gameFeed[0]:
                 self.gameFeed[0]['homeWpa'] = round(homeWpa, 2)
                 self.gameFeed[0]['awayWpa'] = round(awayWpa, 2)
-                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
                 self.gameFeed[0]['isClutchPlay'] = getattr(self.play, 'isClutchPlay', False)
                 self.gameFeed[0]['isChokePlay'] = getattr(self.play, 'isChokePlay', False)
                 self.gameFeed[0]['isMomentumShift'] = getattr(self.play, 'isMomentumShift', False)
@@ -7282,7 +7652,11 @@ class Play():
         # a clock indicator next to each play in the feed.
         self.clockStopped = False
         self.targetSideline = False  # True when play caller targets sideline routes
-        self.down = 0                    # Pre-play down (for clutch/choke 4th down checks)
+        # NOTE: do NOT initialize self.down here — line 7488 above already
+        # captures the pre-play down from game.down at construction time.
+        # An earlier `self.down = 0` here was overwriting that and shipping
+        # every play to the frontend with down=0, breaking down/distance
+        # rendering across the play feed (most visibly on punts).
         self.gamePressure = 0            # Snapshot of game pressure at play time
         self.keyPressureMod = 0.0        # The key player's pressure modifier
         self.qbPressureMod = 0.0         # QB-specific pressure modifier (pass plays)

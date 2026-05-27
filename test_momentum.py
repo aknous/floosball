@@ -54,8 +54,10 @@ def makeTeam(isHome=True, mentalStats=80):
     return team
 
 
-def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, mentalStats=80):
-    """Create a minimal game-like object with momentum methods attached."""
+def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, mentalStats=80, quarter=2, gameClockSeconds=600):
+    """Create a minimal game-like object with momentum methods attached.
+    Defaults: Q2 with 10:00 left — comfortably outside the late-game
+    amplifier window so existing tests reflect raw event math."""
     # Import the methods from the Game class
     import floosball_game as fg
 
@@ -65,6 +67,8 @@ def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, 
     game.momentum = momentum
     game.momentumStreak = streak
     game.lastMomentumTeam = lastTeam
+    game.currentQuarter = quarter
+    game.gameClockSeconds = gameClockSeconds
     game.homeTeam = makeTeam(isHome=True, mentalStats=mentalStats)
     game.awayTeam = makeTeam(isHome=False, mentalStats=mentalStats)
 
@@ -117,20 +121,58 @@ def testDecayRates():
 
 
 def testScoreGapDampener():
-    """Verify dampening returns correct multipliers by score gap."""
-    print("  Score gap dampener...")
+    """Verify dampening returns correct multipliers by score gap.
+    Legacy symmetric path (no benefitingTeam) preserved for decay code."""
+    print("  Score gap dampener (symmetric / legacy)...")
 
     game = makeGame(homeScore=10, awayScore=7)  # diff 3
     assert game._scoreGapDampener() == 1.0
 
-    game = makeGame(homeScore=17, awayScore=7)  # diff 10
+    game = makeGame(homeScore=22, awayScore=7)  # diff 15
     assert game._scoreGapDampener() == 0.7
 
-    game = makeGame(homeScore=24, awayScore=7)  # diff 17
+    game = makeGame(homeScore=28, awayScore=7)  # diff 21
+    assert game._scoreGapDampener() == 0.7
+
+    game = makeGame(homeScore=29, awayScore=7)  # diff 22
     assert game._scoreGapDampener() == 0.4
 
-    game = makeGame(homeScore=35, awayScore=7)  # diff 28
-    assert game._scoreGapDampener() == 0.1
+    game = makeGame(homeScore=38, awayScore=7)  # diff 31
+    assert game._scoreGapDampener() == 0.2
+
+    print("    PASSED")
+
+
+def testScoreGapDampenerAsymmetric():
+    """Verify the leading-team-only blowout dampener.
+
+    The dampener exists to prevent runaway momentum on the team that's
+    already pulling away. The trailing team's comeback push should
+    generate momentum at full value, regardless of deficit — that's the
+    narrative the system needs to support."""
+    print("  Score gap dampener (asymmetric / leading vs trailing)...")
+
+    # Leader benefits at 22-point gap → dampened to 0.4
+    game = makeGame(homeScore=29, awayScore=7)
+    assert game._scoreGapDampener(benefitingTeam=game.homeTeam) == 0.4
+
+    # Trailing team benefits at same gap → no dampen
+    assert game._scoreGapDampener(benefitingTeam=game.awayTeam) == 1.0
+
+    # Leader benefits at 31-point gap → max dampen
+    game = makeGame(homeScore=38, awayScore=7)
+    assert game._scoreGapDampener(benefitingTeam=game.homeTeam) == 0.2
+    assert game._scoreGapDampener(benefitingTeam=game.awayTeam) == 1.0
+
+    # Tied game → no dampen for either side
+    game = makeGame(homeScore=21, awayScore=21)
+    assert game._scoreGapDampener(benefitingTeam=game.homeTeam) == 1.0
+    assert game._scoreGapDampener(benefitingTeam=game.awayTeam) == 1.0
+
+    # Close game (under 14 gap) → no dampen for either side
+    game = makeGame(homeScore=14, awayScore=10)
+    assert game._scoreGapDampener(benefitingTeam=game.homeTeam) == 1.0
+    assert game._scoreGapDampener(benefitingTeam=game.awayTeam) == 1.0
 
     print("    PASSED")
 
@@ -285,16 +327,27 @@ def testCascadeMultiplier():
 
 
 def testBlowoutDampening():
-    """Verify events are dampened in blowout scenarios."""
-    print("  Blowout dampening (28-pt diff)...")
+    """Verify the leading team is dampened in blowout scenarios but the
+    trailing team's comeback momentum hits at full value."""
+    print("  Blowout dampening (28-pt diff, asymmetric)...")
 
+    resist = 0.85  # mentalStats=80 → 1.0 - 0.3 * (80-60)/40
+
+    # Leading team (home up 28) → gap damp 0.4 applies
     game = makeGame(homeScore=35, awayScore=7, mentalStats=80)
-    resist = 0.85
-
     game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
-    expectedDelta = 20.0 * 1.0 * 0.1 * resist  # 0.1 dampening for 28-pt diff
-    assert abs(game.momentum - expectedDelta) < 0.1, f"Expected ~{expectedDelta}, got {game.momentum}"
-    print(f"    TD in blowout: momentum={game.momentum:.2f} (expected ~{expectedDelta:.2f})")
+    expectedLeader = 20.0 * 1.0 * 0.4 * resist  # 0.4 dampening for 28-pt gap, cascade=1.0 (first event)
+    assert abs(game.momentum - expectedLeader) < 0.1, f"Leader: expected ~{expectedLeader}, got {game.momentum}"
+    print(f"    Leader TD in blowout: momentum={game.momentum:.2f} (expected ~{expectedLeader:.2f})")
+
+    # Trailing team in the same blowout → no gap dampener, full value
+    game = makeGame(homeScore=35, awayScore=7, mentalStats=80)
+    game._applyMomentumEvent(MOMENTUM_TD, game.awayTeam)
+    expectedTrailer = 20.0 * 1.0 * 1.0 * resist  # 1.0 gap damp (comeback), cascade=1.0
+    assert abs(abs(game.momentum) - expectedTrailer) < 0.1, f"Trailer: expected ~{expectedTrailer}, got {abs(game.momentum)}"
+    # Momentum should be negative (away team benefits)
+    assert game.momentum < 0, f"Expected negative momentum for away team, got {game.momentum}"
+    print(f"    Trailer TD in blowout: momentum={game.momentum:.2f} (expected ~-{expectedTrailer:.2f})")
     print("    PASSED")
 
 
@@ -318,11 +371,88 @@ def testMomentumClamping():
     print("    PASSED")
 
 
+def testComebackUrgency():
+    """Verify the trailing team gets a 1.15x bump on momentum events when
+    down 10+ in Q3 or later. Leading team is unaffected; tied games and
+    early-quarter deficits are unaffected."""
+    print("  Comeback urgency (Q3+, trailing 10+)...")
+
+    resist = 0.85  # mentalStats=80
+
+    # Trailing team down 14 in Q3 — comeback urgency fires (1.15x)
+    game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=3, gameClockSeconds=600)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)  # home trailing benefits
+    expected = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.15
+    assert abs(game.momentum - expected) < 0.1, f"Trailing in Q3: expected ~{expected}, got {game.momentum}"
+    print(f"    Trailing TD in Q3: momentum={game.momentum:.2f} (expected ~{expected:.2f})")
+
+    # Leading team in same situation — NO comeback urgency
+    game = makeGame(homeScore=21, awayScore=7, mentalStats=80, quarter=3, gameClockSeconds=600)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)  # home leading benefits
+    expectedLead = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.0
+    assert abs(game.momentum - expectedLead) < 0.1, f"Leading in Q3: expected ~{expectedLead}, got {game.momentum}"
+
+    # Q2 with same deficit — too early, no urgency
+    game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=2, gameClockSeconds=600)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    expectedQ2 = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.0
+    assert abs(game.momentum - expectedQ2) < 0.1, f"Q2 trailing: expected ~{expectedQ2}, got {game.momentum}"
+
+    # Down only 7 in Q3 — below threshold, no urgency
+    game = makeGame(homeScore=14, awayScore=21, mentalStats=80, quarter=3, gameClockSeconds=600)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    expectedSmallDef = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.0
+    assert abs(game.momentum - expectedSmallDef) < 0.1, f"Down 7 Q3: expected ~{expectedSmallDef}, got {game.momentum}"
+
+    # Q4 trailing 14+ — urgency stacks with late-game amplifier inside 2:00
+    game = makeGame(homeScore=7, awayScore=21, mentalStats=80, quarter=4, gameClockSeconds=90)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    expectedStack = 20.0 * 1.0 * 1.0 * resist * 1.0 * 1.3 * 1.15
+    assert abs(game.momentum - expectedStack) < 0.1, f"Q4<2:00 trailing: expected ~{expectedStack}, got {game.momentum}"
+    print(f"    Q4 <2:00 trailing TD (stack): momentum={game.momentum:.2f} (expected ~{expectedStack:.2f})")
+
+    print("    PASSED")
+
+
+def testLateGameAmplifier():
+    """Verify Q4 inside two-minute warning and any OT play applies the
+    1.3x late-game multiplier to momentum events."""
+    print("  Late-game amplifier (Q4 inside 2:00 / OT)...")
+
+    resist = 0.85  # mentalStats=80
+
+    # Baseline: Q2 mid-game — no amplifier
+    game = makeGame(homeScore=14, awayScore=10, mentalStats=80, quarter=2, gameClockSeconds=600)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    baseline = 20.0 * 1.0 * 1.0 * resist * 1.0  # no late-game mult
+    assert abs(game.momentum - baseline) < 0.1, f"Baseline: expected ~{baseline}, got {game.momentum}"
+
+    # Q4 inside 2:00 — 1.3x amplifier kicks in
+    game = makeGame(homeScore=14, awayScore=10, mentalStats=80, quarter=4, gameClockSeconds=90)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    expected = 20.0 * 1.0 * 1.0 * resist * 1.3
+    assert abs(game.momentum - expected) < 0.1, f"Q4<2:00: expected ~{expected}, got {game.momentum}"
+    print(f"    Q4 <2:00 TD: momentum={game.momentum:.2f} (expected ~{expected:.2f}, baseline {baseline:.2f})")
+
+    # Q4 at 5:00 — outside the window, no amplifier
+    game = makeGame(homeScore=14, awayScore=10, mentalStats=80, quarter=4, gameClockSeconds=300)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    assert abs(game.momentum - baseline) < 0.1, f"Q4 5:00: expected ~{baseline} (no amp), got {game.momentum}"
+
+    # OT — amplifier applies regardless of clock
+    game = makeGame(homeScore=21, awayScore=21, mentalStats=80, quarter=5, gameClockSeconds=500)
+    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    expected_ot = 20.0 * 1.0 * 1.0 * resist * 1.3
+    assert abs(game.momentum - expected_ot) < 0.1, f"OT: expected ~{expected_ot}, got {game.momentum}"
+
+    print("    PASSED")
+
+
 def testMomentumEffectNeutralZone():
-    """Verify no gameplay effect when momentum is in the neutral zone."""
+    """Verify no gameplay effect when momentum is in the neutral zone (5)."""
     print("  Momentum effect - neutral zone...")
 
-    game = makeGame(momentum=5.0)  # Below MOMENTUM_NEUTRAL_ZONE (10)
+    game = makeGame(momentum=3.0)  # Below MOMENTUM_NEUTRAL_ZONE (5)
 
     game._applyMomentumEffect()
 
@@ -635,14 +765,15 @@ def main():
     assert MOMENTUM_BLOWOUT_DECAY_RATE == 0.08
     assert MOMENTUM_MIDGAP_DECAY_RATE == 0.05
     assert MOMENTUM_NEUTRAL_ZONE == 10
-    assert MOMENTUM_SHIFT_THRESHOLD == 15
-    assert MOMENTUM_CROSS_ZERO_THRESHOLD == 10
+    assert MOMENTUM_SHIFT_THRESHOLD == 14
+    assert MOMENTUM_CROSS_ZERO_THRESHOLD == 8
     assert MOMENTUM_DISPLAY_THRESHOLD == 5
     print("  All constants verified ✓\n")
 
     print("[Unit Tests]")
     testDecayRates()
     testScoreGapDampener()
+    testScoreGapDampenerAsymmetric()
     testMentalResistance()
     testStreakTracking()
     testMomentumShiftDetection()
@@ -650,6 +781,8 @@ def main():
     testApplyMomentumEventAway()
     testCascadeMultiplier()
     testBlowoutDampening()
+    testLateGameAmplifier()
+    testComebackUrgency()
     testMomentumClamping()
     testMomentumEffectNeutralZone()
     testMomentumEffectActive()

@@ -791,17 +791,20 @@ class PlayerManager:
     def createPlayer(self, position: FloosPlayer.Position, physicalSeed: int = None, mentalSeed: int = None) -> Optional[FloosPlayer.Player]:
         """Create a single player of specified position"""
         from random import randint
+        import numpy as np
 
         name = self.popUniqueName()
         if name is None:
             logger.warning("No usable unused names available")
             return None
         
-        # Generate default seeds if not provided
+        # Generate default seeds if not provided. Uses the same Gaussian
+        # distribution as the league-balanced rookie class so one-off
+        # player creations match the compressed talent curve.
         if physicalSeed is None:
-            physicalSeed = randint(60, 100)
+            physicalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
         if mentalSeed is None:
-            mentalSeed = randint(60, 100)
+            mentalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
         
         # Create player based on position with dual seeds
         player = None
@@ -3047,8 +3050,13 @@ class PlayerManager:
         
         # Generate physical and mental seeds separately for variety
         # Using mean 78 and higher stdDev for more realistic distribution
+        # Tighter distribution so the league has fewer extreme stars
+        # and fewer scrubs — compresses the rating gap that drives the
+        # "dominant team" problem. stdDev was 10 → 7. Most seeds now
+        # fall in 71-85 (one stdDev band) instead of 68-88, so the
+        # league talent ceiling drops without erasing top players.
         meanPlayerSkill = 78
-        stdDevPlayerSkill = 10
+        stdDevPlayerSkill = 7
         physicalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
         physicalSeeds = np.clip(physicalSeeds, 60, 100).tolist()
         mentalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
