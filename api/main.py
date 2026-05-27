@@ -9217,6 +9217,35 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 base.update({"fgMade": ks.get('fgs', 0), "fgAttempted": ks.get('fgAtt', 0), "fgPct": round(ks.get('fgPerc', 0), 1)})
             return base
 
+        # Mental snapshot helper — attitude + mood + key intangibles for
+        # the ballot row. Users care about toxicity (attitude) and
+        # current state (mood) when deciding who to sign; resilience and
+        # pressure-handling matter on the margin. Skips missing fields
+        # so generated rookies/prospects without personalities don't break.
+        def _mental(pl):
+            attrs = getattr(pl, 'attributes', None)
+            if attrs is None:
+                return {}
+            out = {}
+            att = getattr(attrs, 'attitude', None)
+            if att is not None:
+                out['attitude'] = int(att)
+            personality = getattr(attrs, 'personality', None)
+            if personality and hasattr(attrs, 'getMood'):
+                try:
+                    moodLabel, moodTier = attrs.getMood()
+                    out['mood'] = moodLabel
+                    out['moodTier'] = moodTier
+                except Exception:
+                    pass
+            res = getattr(attrs, 'resilience', None)
+            if res is not None:
+                out['resilience'] = int(res)
+            ph = getattr(attrs, 'pressureHandling', None)
+            if ph is not None:
+                out['pressureHandling'] = int(ph)
+            return out
+
         players = []
         # Track emitted player IDs so the same player doesn't appear in
         # multiple categories (FA + projected FA, or rostered + prospects)
@@ -9243,6 +9272,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "isRookie": p.id in rookieIds,
                 "isProspect": False,
                 "isProjected": False,
+                **_mental(p),
             })
 
         # Projected FAs: rostered players on OTHER teams whose contracts are
@@ -9305,6 +9335,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isProjected": True,
                     "projectedReason": reason,  # 'walk_year' or 'cut_vote'
                     "currentTeam": team.abbr,
+                    **_mental(rp),
                 })
 
         # Include the favorite team's prospects as ballot candidates too, so fans
@@ -9330,6 +9361,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "stats": None,  # prospects haven't played — no season stats
                     "isRookie": False,
                     "isProspect": True,
+                    **_mental(p),
                 })
 
         # Live ballot tally — runs the same instant-runoff (IRV) tally the
