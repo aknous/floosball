@@ -9444,15 +9444,22 @@ class Play():
                             defStripAbility = defAttrs.get('tackling', 70)
                             defStripAbility += self._defenderMentalMod(primaryTackler)
                         if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
+                            # Ball is out. Credit the forced fumble regardless of
+                            # who recovers, then run a recovery contest so the
+                            # offense can fall on it — same as a run fumble,
+                            # instead of every strip being an automatic turnover.
                             self.isFumble = True
-                            self.receiver.updateInGameConfidence(-.02)
-                            self.defense.updateInGameConfidence(.02)
-                            self.defense.gameDefenseStats['fumRec'] += 1
-                            self.isFumbleLost = True
                             self.forcedFumbleBy = primaryTackler
                             if hasattr(primaryTackler, 'stat_tracker'):
                                 primaryTackler.stat_tracker.add_forced_fumble(isReg)
-                            self.playResult = PlayResult.Fumble
+                            rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
+                            if (self.defense.defensePassCoverageRating + batched_randint(-5, 5)) >= \
+                               (self.receiver.gameAttributes.overallRating + rcvRecoveryMod + batched_randint(-5, 5)):
+                                self.receiver.updateInGameConfidence(-.02)
+                                self.defense.updateInGameConfidence(.02)
+                                self.defense.gameDefenseStats['fumRec'] += 1
+                                self.isFumbleLost = True
+                                self.playResult = PlayResult.Fumble
 
                     # Track long completions
                     if self.yardage >= 20:
