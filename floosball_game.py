@@ -808,7 +808,11 @@ class Game:
         self.homeTimeoutsRemaining = 3
         self.awayTimeoutsRemaining = 3
         self.twoMinuteWarningShown = False
-        
+        # True from the instant the two-minute warning stops the clock until the
+        # next snap. Blocks teams from burning a timeout on the dead clock right
+        # after the warning (the warning already gave a free stop).
+        self._clockStoppedByWarning = False
+
         self.homePlaysTotal = 0
         self.awayPlaysTotal = 0
         self.home1stDownsTotal = 0
@@ -1913,6 +1917,10 @@ class Game:
             return
         if not self.clockRunning:
             return
+        # The two-minute warning already stopped the clock for free — don't
+        # waste a timeout on the dead clock before a snap runs.
+        if self._clockStoppedByWarning:
+            return
         secs = self.gameClockSeconds
         # Determine if the defensive team is trailing
         defIsHome = (self.defensiveTeam == self.homeTeam)
@@ -1928,25 +1936,33 @@ class Game:
         defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
         if defTimeouts <= 0:
             return
-        # Time window: Q4/OT up to 5 min; Q2 up to 60 sec
+        # Time window: a defense burns timeouts to get the ball back, which only
+        # pays off close to the end. Inside 2:00 for a one-score game; extended
+        # to 3:00 only when down multiple scores (genuinely needs the clock).
+        # Calling them at 4-5 min in a tight game is the "no coach does that" case.
         isEndGame = self.currentQuarter == 4 or self.currentQuarter >= 5
-        threshold = 300 if isEndGame else 60
+        multiScore = deficit >= 9
+        if isEndGame:
+            threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
+        else:
+            threshold = 60  # Q2 end-of-half
         if secs > threshold:
+            return
+        # Don't waste a timeout right before the free two-minute-warning stop.
+        if (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                and self.gameRules.timeoutClockThreshold < secs
+                <= self.gameRules.timeoutClockThreshold + 15):
             return
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
         # Urgency-based timeout probability
-        if isEndGame and secs <= self.gameRules.timeoutClockThreshold:
-            # Under 2 min: high urgency (original behavior)
-            toChance = 0.5 + 0.5 * defGameIQ
-        elif isEndGame:
-            # 2-5 min: scale by time urgency and deficit size
-            urgency = (300 - secs) / 180  # 0→1 as time decreases toward 2 min
-            deficitScale = min(1.0, deficit / 14)
-            toChance = urgency * deficitScale * (0.3 + 0.5 * defGameIQ)
+        if secs <= self.gameRules.timeoutClockThreshold:
+            # Inside 2:00 — high urgency to get the ball back
+            toChance = (0.5 + 0.5 * defGameIQ) if isEndGame else (0.4 + 0.4 * defGameIQ)
         else:
-            # Q2: moderate urgency
-            toChance = 0.4 + 0.4 * defGameIQ
+            # 2-3 min, multi-score only — urgency builds toward the 2-min mark
+            urgency = max(0.0, (180 - secs) / 60)
+            toChance = (0.25 + 0.45 * defGameIQ) * urgency
         if _random.random() >= toChance:
             return
         # Call timeout
@@ -2679,6 +2695,26 @@ class Game:
                 # Cruise control — no adjustment, vulnerable to comeback
                 self._tallyCoachArchetype('leading_cruise')
 
+        # ── PROTECTING A ONE-SCORE LEAD late in Q4/OT ──
+        # The big-lead branch above only fires at 8+. A 1-7 point lead in the
+        # final minutes is exactly when a real coach runs the ball in-bounds to
+        # bleed clock and force the opponent to spend timeouts — incompletions
+        # would stop your own clock. Ramps as the clock winds down; coach-scaled
+        # via _mul so poor clock managers protect less.
+        elif 0 < scoreDiff <= 7 and q >= 4:
+            if secs <= 120:
+                protectUrgency = 1.0
+            elif secs <= 300:
+                protectUrgency = 0.6
+            else:
+                protectUrgency = 0.0
+            if protectUrgency > 0:
+                _mul('run',    1 + 0.7 * protectUrgency)
+                _mul('short',  1 + 0.2 * protectUrgency)
+                _mul('medium', 1 - 0.1 * protectUrgency)
+                _mul('long',   1 - 0.5 * protectUrgency)
+                _mul('deep',   1 - 0.7 * protectUrgency)
+
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:
             _mul('run', 0.3)
@@ -2968,10 +3004,23 @@ class Game:
             # Urgency scales with remaining time — almost always spike under 30s,
             # less likely at 90s+ (sometimes better to just run a play)
             secs = self.gameClockSeconds
+            # Down gate: spiking forfeits a down, so it's a 1st/2nd-down tool.
+            # On 3rd down it's only defensible to stop the clock for a tying/
+            # winning FG that's in range AND would be the last play (no time
+            # left for another snap) — spike on 3rd, kick on 4th. Never when a
+            # TD is still needed or a play still fits (that just burns the down
+            # into a 4th-down must-score).
+            spikeKicker = self.offensiveTeam.rosterDict.get('k')
+            spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
+            spikeFgException = (self.down == 3 and -3 <= scoreDiff <= 0
+                                and self.yardsToEndzone <= spikeKickerMax
+                                and secs <= 20)
+            spikeDownOK = self.down <= 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
                     and timeoutsLeft == 0 and scoreDiff <= 0
+                    and spikeDownOK
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
@@ -2987,31 +3036,38 @@ class Game:
                     }
                     self.play.spike()
                     return
-            # Call timeout (offense): trailing/tied, clock running, timeouts available
-            # Q4/OT: expanded window to 5 min — urgency scales with deficit and time
-            # Q2: standard 2-min window
+            # Call timeout (offense): trailing/tied, clock running, timeouts left.
+            # The offense controls its own tempo with hurry-up, so spending a
+            # timeout to stop the clock only matters inside the final two minutes
+            # — extended to 3:00 only when down multiple scores. Calling them at
+            # 4-5 min is the "no coach does that" case the window used to allow.
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
+            multiScore = scoreDiff <= -9
+            toWindow = (180 if (self.currentQuarter >= 4 and multiScore)
+                        else self.gameRules.timeoutClockThreshold)
+            twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                              and self.gameRules.timeoutClockThreshold < secs
+                              <= self.gameRules.timeoutClockThreshold + 15)
             if (isLateGame and scoreDiff <= 0 and self.clockRunning
-                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
-                toWindow = 300 if self.currentQuarter >= 4 else self.gameRules.timeoutClockThreshold
-                if secs <= toWindow:
-                    if secs <= self.gameRules.timeoutClockThreshold:
-                        # Under 2 min: high urgency (original behavior)
-                        toChance = 0.5 + 0.5 * gameIQ
-                    else:
-                        # 2-5 min (Q4/OT): scale by deficit — bigger hole = more urgent
-                        # Tied games get 0.5 floor — still urgent enough to manage clock
-                        deficitScale = max(0.5, min(1.0, abs(scoreDiff) / 16))
-                        toChance = (0.2 + 0.5 * gameIQ) * deficitScale
-                    if _random.random() < toChance:
-                        self.play.insights['clockMgmt'] = {
-                            'decision': 'timeout',
-                            'reason': 'Stop clock while trailing/tied',
-                            'clockRemaining': secs,
-                            'timeoutsLeft': timeoutsLeft,
-                            'coachClockIQ': round(gameIQ, 2),
-                        }
-                        self._callTimeout(isHome)
+                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
+                    and not twoMinImminent and not self._clockStoppedByWarning
+                    and secs <= toWindow):
+                if secs <= self.gameRules.timeoutClockThreshold:
+                    # Inside 2:00 — high urgency
+                    toChance = 0.5 + 0.5 * gameIQ
+                else:
+                    # 2-3 min, multi-score only — urgency builds toward 2:00
+                    urgency = max(0.0, (180 - secs) / 60)
+                    toChance = (0.2 + 0.45 * gameIQ) * urgency
+                if _random.random() < toChance:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'timeout',
+                        'reason': 'Stop clock while trailing/tied',
+                        'clockRemaining': secs,
+                        'timeoutsLeft': timeoutsLeft,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self._callTimeout(isHome)
                 # fall through — still need to call a play
 
         # Overtime
@@ -4509,6 +4565,10 @@ class Game:
                 self.playCaller()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
+
+                # A snap has now been committed — the post-warning dead-clock
+                # window is over (timeouts allowed again on the next stoppage).
+                self._clockStoppedByWarning = False
 
                 # Tempo intent is captured on every play so the play insights
                 # always show the offense's intent (hurry-up / burn / neutral),
@@ -6705,8 +6765,8 @@ class Game:
             return ('burnClock', 40)  # Late Q3 with two-score lead
         if q >= 4 and scoreDiff > 8:
             return ('burnClock', 40)  # Q4/OT comfortable lead
-        if q >= 4 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff > 0:
-            return ('burnClock', 38)  # Q4/OT any lead under 2:00
+        if q >= 4 and scoreDiff > 0 and secs <= 300:
+            return ('burnClock', 38)  # Q4/OT any lead inside 5:00 — protect it
         return ('neutral', DEFAULT_BASE)
 
     def recordTempoIntent(self) -> None:
@@ -7058,6 +7118,7 @@ class Game:
             if self.currentQuarter == 2 or self.currentQuarter == 4:
                 self.twoMinuteWarningShown = True
                 self.clockRunning = False
+                self._clockStoppedByWarning = True
                 # Two-minute warning is like a free timeout
                 self.gameFeed.insert(0, {'event': {
                     'text': 'Two-Minute Warning',
