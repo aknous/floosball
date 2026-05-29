@@ -54,6 +54,13 @@ FG_MIN_ATTEMPT_PROB = 0.20      # Coaches attempt FG if estimated make probabili
 YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 
+# Interception model — three independent pick paths in calculateCatchProbability.
+# Each K scales one path's contribution before they combine as independent
+# risks. Tuned so league INT rate lands near the NFL ~2.3% per attempt.
+INT_BAD_READ_K = 0.22    # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.26   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.08    # above-average DB jumps a contested throw
+
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
 CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch

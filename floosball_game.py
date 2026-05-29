@@ -35,6 +35,7 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
+    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
@@ -8564,7 +8565,7 @@ class Play():
 
         return max(5, min(100, throwQuality))
     
-    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None) -> dict:
+    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None, receiverActualOpenness: float = None) -> dict:
         """
         Two-phase catch model with hard floors that prevent attribute compounding:
 
@@ -8634,10 +8635,48 @@ class Play():
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
 
-        # INT probability — bad throws to covered receivers get picked
-        intProb = 0
-        if throwQuality < 50 and receiverOpenness < 50:
-            intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
+        # INT probability — three independent paths, any of which can pick a
+        # pass (they don't have to co-occur the way the old single-gate model
+        # required):
+        #   1. Bad read — QB throws into coverage. Scales with how covered the
+        #      receiver ACTUALLY is (not how open the QB thought they were), so
+        #      low-vision QBs who target covered receivers get punished here.
+        #   2. Bad throw — an errant ball sails into traffic. The trigger is
+        #      throw quality (independent of the read), but a defender still has
+        #      to be near the target to capitalize: a bad throw to a wide-open
+        #      receiver falls incomplete (and reach may still bail it out), it
+        #      doesn't get picked out of empty space.
+        #   3. Defender's play — an above-average DB jumps a contested throw on
+        #      his own, even when the read and throw were fine.
+        # Combined as independent risks (probabilistic OR) so they stack but
+        # stay bounded. No per-tier multiplier: deep throws already pick more
+        # because their throw quality runs lower.
+        intOpenness = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
+        cov = defensePassCoverage
+        covFactor = cov / 100
+        openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
+        throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
+        # Proximity: how reachable the ball is for a defender. Full effect when
+        # the receiver is blanketed, fades toward zero once he's wide open
+        # (≥75). The floor is tier-dependent: a short throw can be genuinely
+        # uncontested, but a deep ball always has a safety in the area, so even
+        # an "open" deep receiver leaves a pickable window. This restores the
+        # deep > short INT gradient without a blanket per-tier multiplier.
+        proximityFloor = {
+            PassType.short:    0.00,
+            PassType.medium:   0.05,
+            PassType.long:     0.20,
+            PassType.deep:     0.35,
+            PassType.hailMary: 0.50,
+        }.get(passType, 0.10) if passType is not None else 0.0
+        proximity = max(proximityFloor, min(1.0, (75 - intOpenness) / 55))
+
+        pBadRead = openGap * covFactor * INT_BAD_READ_K
+        pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
+        pDefPlay = max(0.0, (cov - 70) / 30) * openGap * INT_DEF_PLAY_K
+
+        intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
+        intProb = intFrac * 100
 
         # Drop probability — receiver gets hands on it but doesn't secure
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
@@ -9076,6 +9115,7 @@ class Play():
                     catchDefCoverage,
                     receiverPressureMod,
                     passType=self.passType,
+                    receiverActualOpenness=self.selectedTarget.get('actualOpenness', self.selectedTarget['openness']),
                 )
 
                 # Choke boosts only in high-pressure situations (Q4 close games, etc.)
