@@ -461,6 +461,56 @@ throwAwayCoverageList = [
                     '{} finds no one open, throws it away',
                 ]
 
+# ── Context-aware incompletes — args: (passer.name, receiver.name) ──
+# Bad throw to a wide-open receiver: the QB simply missed an open target.
+overthrowOpenList = [
+                    '{} misses a wide-open {}, incomplete',
+                    '{} sails it past a wide-open {}, incomplete',
+                    '{} had {} open and missed the throw, incomplete',
+                    '{} leaves an open {} waiting, throw is off the mark',
+                    '{} airmails it to {} with nobody near, incomplete',
+                ]
+# Bad throw forced into coverage: errant ball into a tight window.
+forcedCoverageList = [
+                    '{} forces it into coverage for {}, incomplete',
+                    '{} tries to squeeze it to a blanketed {}, broken up',
+                    '{} throws into traffic for {}, knocked away',
+                    '{} forces it to {} in a tight window, no good',
+                    '{} airs it into coverage for {}, incomplete',
+                ]
+# Accurate throw to a covered receiver, broken up at the catch point.
+coverageBreakupList = [
+                    '{} on target to {}, broken up in coverage',
+                    '{} hits {} in stride, knocked loose by the defender',
+                    '{} puts it on {}, but the defender knocks it away',
+                    '{} and {} nearly connect, broken up at the catch point',
+                ]
+
+# ── Context-aware interceptions — args: (passer.name, defender.name) ──
+# Picked off after forcing it into coverage (bad read / covered receiver).
+intoCoverageList = [
+                    '{} throws into coverage, {} steps in front for the pick',
+                    '{} forces it into traffic, picked off by {}',
+                    '{} never saw the defender, {} jumps the route',
+                    '{} throws into double coverage, {} comes down with it',
+                    '{} telegraphs it into coverage, {} with the interception',
+                ]
+# Picked off on an errant throw the QB sailed; the defender takes it.
+errantPickList = [
+                    '{} sails it, {} reels in the errant throw',
+                    '{} airmails it right to {}, intercepted',
+                    '{} loses it on the throw, picked off by {}',
+                    '{} floats one up for grabs, {} brings it in',
+                ]
+# Picked off on an on-target throw — the receiver was covered and the
+# defender stepped in. Stated by action, not judged.
+defPlayPickList = [
+                    '{} on target, but {} steps in front for the interception',
+                    '{} throws on target, {} jumps the route for the pick',
+                    '{} hits the window, but {} undercuts it for the pick',
+                    '{} puts it on the target, {} cuts in front for the interception',
+                ]
+
 passPlayBook = {
                     'Play1': {
                         'dropback': QbDropback.long,
@@ -3331,25 +3381,56 @@ class Game:
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
                 interceptorName = interceptor.name if interceptor else self.play.defense.abbr
-                text = choice(interceptionList).format(self.play.passer.name, interceptorName)
+                # Pick the flavor from how the throw came about: forced into
+                # coverage, a sailed errant ball, or a good throw a DB jumped.
+                passI = self.play.insights.get('pass', {}) if isinstance(self.play.insights, dict) else {}
+                tq = passI.get('throwQuality')
+                actOpen = passI.get('rcvActualOpenness', passI.get('rcvOpenness'))
+                badThrow = tq is not None and tq < 50
+                covered = actOpen is not None and actOpen < 45
+                if covered and badThrow:
+                    intList = intoCoverageList      # forced it into traffic
+                elif covered:
+                    intList = defPlayPickList        # good throw, DB made the play
+                elif badThrow:
+                    intList = errantPickList         # sailed it to the defender
+                else:
+                    intList = interceptionList       # generic
+                text = choice(intList).format(self.play.passer.name, interceptorName)
             else:
-                if self.play.passType is PassType.short:
-                    if self.play.passIsDropped:
-                        text = choice(shortDropList).format(self.play.passer.name, self.play.receiver.name)
-                    else:
-                        text = choice(shortIncompleteList).format(self.play.passer.name, self.play.receiver.name)
-                elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
-                    if self.play.passIsDropped:
-                        text = choice(deepDropList).format(self.play.passer.name, self.play.receiver.name)
-                    else:
-                        text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
-                elif self.play.passType is PassType.throwAway:
-                    protDiff = self.play.insights.get('pass', {}).get('protectionDiff', 0)
+                # Classify the incompletion: did the QB miss an open man, force
+                # it into coverage, or did the defense break up an on-target ball?
+                passI = self.play.insights.get('pass', {}) if isinstance(self.play.insights, dict) else {}
+                tq = passI.get('throwQuality')
+                actOpen = passI.get('rcvActualOpenness', passI.get('rcvOpenness'))
+                badThrow = tq is not None and tq < 50
+                covered = actOpen is not None and actOpen < 45
+                wideOpen = actOpen is not None and actOpen >= 60
+
+                if self.play.passType is PassType.throwAway:
+                    protDiff = passI.get('protectionDiff', 0)
                     taList = throwAwayPressureList if protDiff < -5 else throwAwayCoverageList
                     text = choice(taList).format(self.play.passer.name)
-                else:
-                    if self.play.passIsDropped:
+                elif self.play.passIsDropped:
+                    # Drops keep their tier-specific flavor.
+                    if self.play.passType is PassType.short:
+                        text = choice(shortDropList).format(self.play.passer.name, self.play.receiver.name)
+                    elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
+                        text = choice(deepDropList).format(self.play.passer.name, self.play.receiver.name)
+                    else:
                         text = choice(midDropList).format(self.play.passer.name, self.play.receiver.name)
+                elif badThrow and wideOpen:
+                    text = choice(overthrowOpenList).format(self.play.passer.name, self.play.receiver.name)
+                elif badThrow and covered:
+                    text = choice(forcedCoverageList).format(self.play.passer.name, self.play.receiver.name)
+                elif covered:
+                    text = choice(coverageBreakupList).format(self.play.passer.name, self.play.receiver.name)
+                else:
+                    # Generic tier incomplete — good throw, open-ish, just didn't connect.
+                    if self.play.passType is PassType.short:
+                        text = choice(shortIncompleteList).format(self.play.passer.name, self.play.receiver.name)
+                    elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
+                        text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
                     else:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
@@ -9096,6 +9177,11 @@ class Play():
                 self.insights['pass']['rcvReach'] = getattr(self.receiver.gameAttributes, 'reach', 0)
                 self.insights['pass']['rcvRouteRunning'] = self.selectedTarget.get('routeQuality', self.receiver.gameAttributes.routeRunning)
                 self.insights['pass']['rcvOpenness'] = round(self.selectedTarget.get('openness', 0))
+                # Actual (not QB-perceived) openness — drives the context-aware
+                # incomplete/INT narration the same way the INT model judges it.
+                self.insights['pass']['rcvActualOpenness'] = round(
+                    self.selectedTarget.get('actualOpenness', self.selectedTarget.get('openness', 0))
+                )
 
                 # STAGE 4: Calculate catch probability and outcome
                 # Use individual defender coverage if available
