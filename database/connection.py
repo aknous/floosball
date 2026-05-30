@@ -833,6 +833,14 @@ def _runPendingMigrations():
             logger.info("  Migration: added gm_vote_results.votes_against")
         except Exception:
             conn.rollback()
+        # Playoff bracket challenge: frozen seed field on seasons (the
+        # playoff_brackets table itself is created by create_all).
+        try:
+            conn.execute(text("ALTER TABLE seasons ADD COLUMN playoff_seeds TEXT"))
+            conn.commit()
+            logger.info("  Migration: added seasons.playoff_seeds")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
