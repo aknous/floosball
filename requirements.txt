@@ -31,3 +31,6 @@ resend>=2.0.0
 
 # Environment variable management
 python-dotenv>=1.0.0
+
+# Error tracking (no-op unless SENTRY_DSN is set)
+sentry-sdk[fastapi]>=2.0.0
