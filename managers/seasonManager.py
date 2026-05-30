@@ -3615,7 +3615,98 @@ class SeasonManager:
             weeks.append(week)
         
         return weeks
-    
+
+    # ── Playoff bracket challenge hooks ──────────────────────────────────
+    def _freezePlayoffSeeds(self, playoffTeamsByConf) -> None:
+        """Freeze the bracket field when seeding locks so the challenge can
+        project matchups. playoffTeamsByConf: {confName: [Team,...] best-first};
+        top 2 per conference are byes."""
+        try:
+            seeds = {"conferences": {}}
+            for confName, teams in playoffTeamsByConf.items():
+                seeds["conferences"][confName] = [
+                    {
+                        "teamId": t.id,
+                        "seed": i + 1,
+                        "bye": i < 2,
+                        "winPct": round(t.seasonTeamStats.get('winPerc', 0), 4),
+                        "scoreDiff": t.seasonTeamStats.get('scoreDiff', 0),
+                        "teamName": t.name,
+                        "city": getattr(t, 'city', ''),
+                        "abbreviation": getattr(t, 'abbreviation', None) or t.name[:3].upper(),
+                    }
+                    for i, t in enumerate(teams)
+                ]
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            s = _gs()
+            try:
+                PlayoffBracketRepository(s).freezeSeeds(self.currentSeason.seasonNumber, seeds)
+                s.commit()
+            finally:
+                s.close()
+            logger.info(
+                f"Playoff bracket field frozen "
+                f"({sum(len(v) for v in seeds['conferences'].values())} teams)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to freeze playoff seeds: {e}")
+
+    def _scorePlayoffBrackets(self) -> None:
+        """Recompute all bracket scores from results so far (idempotent).
+        Called after each playoff round resolves."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            s = _gs()
+            try:
+                PlayoffBracketRepository(s).scoreAllBrackets(self.currentSeason.seasonNumber)
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to score playoff brackets: {e}")
+
+    def _awardPlayoffBracketPrizes(self) -> None:
+        """After the Floos Bowl: final scoring + floobit prizes to the top
+        brackets. Guarded against double-payment by a per-season tx check."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.models import CurrencyTransaction
+            from constants import (PLAYOFF_BRACKET_PRIZES, PLAYOFF_BRACKET_TOP_PCT,
+                                   PLAYOFF_BRACKET_TOP_PCT_PRIZE)
+            season = self.currentSeason.seasonNumber
+            txType = 'playoff_bracket_prize'
+            s = _gs()
+            try:
+                if s.query(CurrencyTransaction.id).filter(
+                        CurrencyTransaction.transaction_type == txType,
+                        CurrencyTransaction.season == season).first():
+                    logger.info("Playoff bracket prizes already awarded — skipping")
+                    return
+                repo = PlayoffBracketRepository(s)
+                repo.scoreAllBrackets(season)
+                board = [b for b in repo.getLeaderboard(season) if b.points > 0]
+                cur = CurrencyRepository(s)
+                topPctCount = int(len(board) * PLAYOFF_BRACKET_TOP_PCT)
+                paid = 0
+                for rank, b in enumerate(board, start=1):
+                    prize = PLAYOFF_BRACKET_PRIZES.get(rank, 0)
+                    if prize == 0 and rank <= topPctCount:
+                        prize = PLAYOFF_BRACKET_TOP_PCT_PRIZE
+                    if prize > 0:
+                        cur.addFunds(b.user_id, prize, txType,
+                                     f"Playoff bracket #{rank} ({b.points} pts)", season)
+                        paid += 1
+                s.commit()
+                logger.info(f"Playoff bracket prizes awarded to {paid} brackets")
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to award playoff bracket prizes: {e}")
+
     async def _simulatePlayoffRounds(self) -> None:
         """Simulate all playoff rounds"""
 
@@ -3719,6 +3810,10 @@ class SeasonManager:
             self._testPlayoffAnchor = datetime.datetime.utcnow()
             self.timingManager.playoffPhase = True
             logger.info(f"PLAYOFF_TEST: playoff anchor set, gap={self.timingManager.scheduleGap}s between rounds")
+
+        # Seeding is locked — freeze the bracket-challenge field (opens it for
+        # submission until Round 1 kicks off).
+        self._freezePlayoffSeeds(playoffTeams)
 
         for x in range(numOfRounds):
 
@@ -3934,6 +4029,9 @@ class SeasonManager:
             # Resolve pick-em weekly prizes for this playoff round
             self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
+            # Re-score playoff brackets now this round's results are final.
+            self._scorePlayoffBrackets()
+
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
                 playoffTeamsList.clear()
@@ -3964,6 +4062,10 @@ class SeasonManager:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _champText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_champText))
+
+                # Bracket challenge: final scoring + floobit prizes to top brackets.
+                self._awardPlayoffBracketPrizes()
+
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)
                 self.currentSeason.freeAgencyOrder.append(self.currentSeason.champion)

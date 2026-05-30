@@ -526,6 +526,11 @@ PICKEM_SEASON_PRIZES = {1: 100, 2: 65, 3: 33}  # was {75, 50, 25}
 PICKEM_SEASON_TOP_PCT = 0.25
 PICKEM_SEASON_TOP_PCT_PRIZE = 13                # was 10
 
+# Playoff bracket challenge — floobit prizes by final rank (one-time/season).
+PLAYOFF_BRACKET_PRIZES = {1: 120, 2: 75, 3: 40}
+PLAYOFF_BRACKET_TOP_PCT = 0.25
+PLAYOFF_BRACKET_TOP_PCT_PRIZE = 15
+
 # Win-probability multiplier (applies at any pick time)
 PICKEM_UNDERDOG_MAX = 3.0           # Max multiplier for extreme underdogs
 PICKEM_FAVORITE_MIN = 0.4           # Floor multiplier for heavy favorites
