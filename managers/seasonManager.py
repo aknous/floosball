@@ -4476,6 +4476,7 @@ class SeasonManager:
                             outcome=r.get('outcome', ''),
                             targetPlayerName=r.get('targetPlayerName'),
                             totalVotes=r.get('totalVotes', 0),
+                            votesAgainst=r.get('votesAgainst', 0),
                             threshold=r.get('threshold', 0),
                             probability=r.get('probability', 0.0),
                         )

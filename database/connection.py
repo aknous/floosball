@@ -819,6 +819,20 @@ def _runPendingMigrations():
             logger.info("  Migration: added featured_pack_rotation.purchased")
         except Exception:
             conn.rollback()
+        # Yea/nay GM votes: direction on each vote, against-count on results.
+        # Existing rows default to 'yea' / 0 so old data reads as all-support.
+        try:
+            conn.execute(text("ALTER TABLE gm_votes ADD COLUMN direction VARCHAR(8) DEFAULT 'yea' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added gm_votes.direction")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE gm_vote_results ADD COLUMN votes_against INTEGER DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added gm_vote_results.votes_against")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 

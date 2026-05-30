@@ -103,11 +103,28 @@ class GmManager:
         """
         if threshold <= 0:
             return 1.0 if votes > 0 else 0.0
-        return min(1.0, votes / threshold)
+        # votes is the NET tally (for - against) and can be negative when
+        # opposition outweighs support; clamp so the meter floors at empty.
+        return max(0.0, min(1.0, votes / threshold))
 
     @staticmethod
     def _rollSuccess(probability: float) -> bool:
         return random.random() < probability
+
+    @staticmethod
+    def _tallyByTargetDirection(votes) -> Tuple[Dict[int, int], Dict[int, int]]:
+        """Split a vote list into (votesFor, votesAgainst) dicts keyed by
+        target_player_id, for the per-target net threshold directives."""
+        votesFor: Dict[int, int] = {}
+        votesAgainst: Dict[int, int] = {}
+        for v in votes:
+            if not v.target_player_id:
+                continue
+            if (getattr(v, 'direction', 'yea') or 'yea') == 'nay':
+                votesAgainst[v.target_player_id] = votesAgainst.get(v.target_player_id, 0) + 1
+            else:
+                votesFor[v.target_player_id] = votesFor.get(v.target_player_id, 0) + 1
+        return votesFor, votesAgainst
 
     # ── Fire Coach ──────────────────────────────────────────────────────
 
@@ -123,15 +140,17 @@ class GmManager:
         firedTeamIds = set()
         for team in teams:
             votes = self.voteRepo.getVotesForTeam(team.id, season, "fire_coach")
-            totalVotes = len(votes)
-            if totalVotes == 0:
+            if not votes:
                 continue
+            yeaVotes = sum(1 for v in votes if (getattr(v, 'direction', 'yea') or 'yea') != 'nay')
+            nayVotes = len(votes) - yeaVotes
+            netVotes = yeaVotes - nayVotes
 
             fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
             threshold = self.calculateThreshold(fanCount)
-            probability = self.calculateProbability(totalVotes, threshold)
+            probability = self.calculateProbability(netVotes, threshold)
 
-            if totalVotes < threshold:
+            if netVotes < threshold:
                 outcome = "below_threshold"
             else:
                 outcome = "success"
@@ -143,19 +162,19 @@ class GmManager:
                 firedTeamIds.add(team.id)
                 logger.info(
                     f"GM: {team.name} fired coach {oldCoachName} "
-                    f"({totalVotes} of {threshold} required)"
+                    f"({yeaVotes} for / {nayVotes} against, net {netVotes} of {threshold} required)"
                 )
 
             self.voteRepo.recordResult(
                 teamId=team.id, season=season, voteType="fire_coach",
-                totalVotes=totalVotes, threshold=threshold,
+                totalVotes=yeaVotes, votesAgainst=nayVotes, threshold=threshold,
                 probability=probability, outcome=outcome,
             )
             results.append({
                 "teamId": team.id, "teamName": team.name,
-                "voteType": "fire_coach", "totalVotes": totalVotes,
-                "threshold": threshold, "probability": probability,
-                "outcome": outcome,
+                "voteType": "fire_coach", "totalVotes": yeaVotes,
+                "votesAgainst": nayVotes, "threshold": threshold,
+                "probability": probability, "outcome": outcome,
             })
         return results, firedTeamIds
 
@@ -310,19 +329,17 @@ class GmManager:
             if not votes:
                 continue
 
-            # Group votes by target player
-            votesByTarget: Dict[int, int] = {}
-            for v in votes:
-                if v.target_player_id:
-                    votesByTarget[v.target_player_id] = (
-                        votesByTarget.get(v.target_player_id, 0) + 1
-                    )
+            # Group votes by target player, split by direction.
+            votesFor, votesAgainst = self._tallyByTargetDirection(votes)
 
             fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
             threshold = self.calculateThreshold(fanCount)
 
-            for playerId, count in votesByTarget.items():
-                probability = self.calculateProbability(count, threshold)
+            for playerId in set(votesFor) | set(votesAgainst):
+                yea = votesFor.get(playerId, 0)
+                nay = votesAgainst.get(playerId, 0)
+                net = yea - nay
+                probability = self.calculateProbability(net, threshold)
                 player = self._findPlayerOnTeam(team, playerId)
 
                 if player is None:
@@ -332,27 +349,27 @@ class GmManager:
                 elif getattr(player, 'willRetire', False):
                     # Player has already announced retirement — no resign possible.
                     outcome = "retiring"
-                elif count < threshold:
+                elif net < threshold:
                     outcome = "below_threshold"
                 else:
                     outcome = "success"
                     player._gmResigned = True
                     logger.info(
                         f"GM: {team.name} re-signing {player.name} "
-                        f"({count} of {threshold} required)"
+                        f"({yea} for / {nay} against, net {net} of {threshold} required)"
                     )
 
                 playerName = player.name if player else f"Player#{playerId}"
                 self.voteRepo.recordResult(
                     teamId=team.id, season=season, voteType="resign_player",
-                    targetPlayerId=playerId, totalVotes=count,
+                    targetPlayerId=playerId, totalVotes=yea, votesAgainst=nay,
                     threshold=threshold, probability=probability,
                     outcome=outcome,
                 )
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "resign_player", "targetPlayerName": playerName,
-                    "totalVotes": count, "threshold": threshold,
+                    "totalVotes": yea, "votesAgainst": nay, "threshold": threshold,
                     "probability": probability, "outcome": outcome,
                 })
         return results
@@ -372,23 +389,21 @@ class GmManager:
             if not votes:
                 continue
 
-            votesByTarget: Dict[int, int] = {}
-            for v in votes:
-                if v.target_player_id:
-                    votesByTarget[v.target_player_id] = (
-                        votesByTarget.get(v.target_player_id, 0) + 1
-                    )
+            votesFor, votesAgainst = self._tallyByTargetDirection(votes)
 
             fanCount = self.voteRepo.getTeamFanCount(team.id, season=season)
             threshold = self.calculateThreshold(fanCount)
 
-            for playerId, count in votesByTarget.items():
-                probability = self.calculateProbability(count, threshold)
+            for playerId in set(votesFor) | set(votesAgainst):
+                yea = votesFor.get(playerId, 0)
+                nay = votesAgainst.get(playerId, 0)
+                net = yea - nay
+                probability = self.calculateProbability(net, threshold)
                 player = self._findPlayerOnTeam(team, playerId)
 
                 if player is None:
                     outcome = "ineligible"
-                elif count < threshold:
+                elif net < threshold:
                     outcome = "below_threshold"
                 else:
                     outcome = "success"
@@ -396,20 +411,20 @@ class GmManager:
                     playerManager.releasePlayerToFreeAgency(player, team, freeAgentLists)
                     logger.info(
                         f"GM: {team.name} cut {player.name} "
-                        f"({count} of {threshold} required)"
+                        f"({yea} for / {nay} against, net {net} of {threshold} required)"
                     )
 
                 playerName = player.name if player else f"Player#{playerId}"
                 self.voteRepo.recordResult(
                     teamId=team.id, season=season, voteType="cut_player",
-                    targetPlayerId=playerId, totalVotes=count,
+                    targetPlayerId=playerId, totalVotes=yea, votesAgainst=nay,
                     threshold=threshold, probability=probability,
                     outcome=outcome,
                 )
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "cut_player", "targetPlayerName": playerName,
-                    "totalVotes": count, "threshold": threshold,
+                    "totalVotes": yea, "votesAgainst": nay, "threshold": threshold,
                     "probability": probability, "outcome": outcome,
                 })
         return results

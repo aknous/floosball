@@ -8692,6 +8692,12 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
 class GmVoteRequest(BaseModel):
     voteType: str
     targetPlayerId: Optional[int] = None
+    direction: str = "yea"  # 'yea' (support) or 'nay' (oppose)
+
+
+class GmVoteUndoRequest(BaseModel):
+    voteType: str
+    targetPlayerId: Optional[int] = None
 
 
 class GmFaBallotRequest(BaseModel):
@@ -8716,6 +8722,12 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
 
     if req.voteType == "sign_fa":
         raise HTTPException(400, "Use POST /api/gm/fa-ballot for free agent votes")
+
+    # Yea/nay only applies to the binary threshold directives; hire_coach is a
+    # selection (oppose by backing someone else) and ranked ballots are support.
+    direction = "nay" if req.direction == "nay" else "yea"
+    if direction == "nay" and req.voteType not in ("fire_coach", "resign_player", "cut_player"):
+        raise HTTPException(400, "Only fire, cut, and re-sign votes can be opposed")
 
     # Block votes during offseason
     sm = floosball_app.seasonManager if floosball_app else None
@@ -8768,24 +8780,17 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
             raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
 
-        # If a threshold-based directive (fire/resign/cut) has already cleared
-        # its bar, it's guaranteed to pass at resolution — no need to keep
-        # spending floobits on it. Hire_coach is plurality so additional
-        # votes always matter (they can shift the leader).
-        if req.voteType in ("fire_coach", "resign_player", "cut_player"):
-            existingTallies = voteRepo.getVoteTallies(teamId, currentSeason)
-            existingCount = next(
-                (t["votes"] for t in existingTallies
-                 if t["voteType"] == req.voteType
-                 and t["targetPlayerId"] == req.targetPlayerId),
-                0,
+        # A user holds a single stance per target — to switch sides, withdraw
+        # first. (No threshold short-circuit anymore: under yea/nay a directive
+        # that's currently passing can be pulled back below the line by nays.)
+        existingDir = voteRepo.getUserDirectionOnTarget(
+            user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
+        )
+        if existingDir and existingDir != direction:
+            raise HTTPException(
+                400,
+                "You've already voted the other way on this — withdraw that vote first to switch sides",
             )
-            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
-            if existingCount >= max(1, teamFanCount):
-                raise HTTPException(
-                    400,
-                    "Directive already meets the threshold to pass — no further votes needed",
-                )
 
         # Escalating cost: base * 2^(votes already cast for this specific target)
         baseCost = GM_VOTE_COST[req.voteType]
@@ -8803,7 +8808,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         vote = voteRepo.castVote(
             userId=user.id, teamId=teamId, season=currentSeason,
             voteType=req.voteType, costPaid=cost,
-            targetPlayerId=req.targetPlayerId,
+            targetPlayerId=req.targetPlayerId, direction=direction,
         )
 
         # Secret hooks — Mutineer (max fire_coach votes allowed against the
@@ -8832,7 +8837,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             (t for t in tallies
              if t["voteType"] == req.voteType
              and t["targetPlayerId"] == req.targetPlayerId),
-            {"votes": 1}
+            {"votes": 0, "votesFor": 0, "votesAgainst": 0}
         )
         gm = GmManager(session)
         if req.voteType == "hire_coach":
@@ -8859,9 +8864,12 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         return build_success_response({
             "voteId": vote.id,
             "voteType": req.voteType,
+            "direction": direction,
             "targetPlayerId": req.targetPlayerId,
             "costPaid": cost,
             "currentVotes": targetTally["votes"],
+            "votesFor": targetTally.get("votesFor", 0),
+            "votesAgainst": targetTally.get("votesAgainst", 0),
             "threshold": threshold,
             "probability": round(probability, 3),
             "remainingBalance": result.balance,
@@ -8872,6 +8880,81 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         session.rollback()
         logger.error(f"GM vote error: {e}")
         raise HTTPException(500, "Failed to cast vote")
+    finally:
+        session.close()
+
+
+@app.post("/api/gm/vote/undo")
+def undo_gm_vote(req: GmVoteUndoRequest, user: _User = Depends(_getCurrentUser)):
+    """Withdraw the user's most-recent vote on a target and refund its cost.
+
+    Lets a fan flip sides (withdraw, then cast the other way) or simply take
+    back a misclick — the affordance the UI already exposed but had no backend
+    for. Refund reverses the spend cleanly (no lifetime-earned inflation)."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmVoteRepository
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.models import User
+    from managers.gmManager import GmManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    if sm and sm.currentSeason and sm.currentSeason.currentWeek == 'Offseason':
+        raise HTTPException(400, "The Board has adjourned for the offseason")
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            raise HTTPException(400, "You must have a favorite team to vote")
+        teamId = dbUser.favorite_team_id
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        voteRepo = GmVoteRepository(session)
+        vote = voteRepo.withdrawMostRecentVote(
+            user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
+        )
+        if vote is None:
+            raise HTTPException(400, "You have no vote to withdraw on this")
+        refund = vote.cost_paid  # read before commit — the row is now deleted
+
+        currencyRepo = CurrencyRepository(session)
+        currency = currencyRepo.refundFunds(
+            user.id, refund, "gm_vote_refund",
+            f"GM vote withdrawn: {req.voteType}", currentSeason,
+        )
+        session.commit()
+
+        # Updated net tally for the response. The frontend also refetches the
+        # team summary, which carries the authoritative per-type thresholds.
+        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
+        targetTally = next(
+            (t for t in tallies
+             if t["voteType"] == req.voteType
+             and t["targetPlayerId"] == req.targetPlayerId),
+            {"votes": 0, "votesFor": 0, "votesAgainst": 0}
+        )
+        gm = GmManager(session)
+        teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
+        threshold = gm.calculateThreshold(teamFanCount)
+        probability = gm.calculateProbability(targetTally["votes"], threshold)
+
+        return build_success_response({
+            "voteType": req.voteType,
+            "targetPlayerId": req.targetPlayerId,
+            "refunded": refund,
+            "currentVotes": targetTally["votes"],
+            "votesFor": targetTally.get("votesFor", 0),
+            "votesAgainst": targetTally.get("votesAgainst", 0),
+            "threshold": threshold,
+            "probability": round(probability, 3),
+            "remainingBalance": currency.balance,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"GM vote undo error: {e}")
+        raise HTTPException(500, "Failed to withdraw vote")
     finally:
         session.close()
 
@@ -9794,6 +9877,7 @@ def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
                     "id": v.id,
                     "voteType": v.vote_type,
                     "targetPlayerId": v.target_player_id,
+                    "direction": getattr(v, 'direction', 'yea') or 'yea',
                     "costPaid": v.cost_paid,
                     "createdAt": v.created_at.isoformat() + 'Z' if v.created_at else None,
                 }
