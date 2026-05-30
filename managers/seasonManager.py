@@ -6032,22 +6032,40 @@ class SeasonManager:
         self._persistOffseasonFlow()
 
     def _snapshotDbForPhase(self, phase: str) -> None:
-        """Copy floosball.db to /data/offseason_${season}_${phase}.db using
-        SQLite's online backup API so a corrupted resume can be rolled back
-        manually. Skipped on non-prod paths (no /data) and silently noops
-        on any error — snapshots are belt-and-suspenders, not load-bearing.
+        """Snapshot the offseason-mutable tables to
+        /data/offseason_${season}_${phase}.db so a mid-phase restart can roll the
+        DB back and re-run the phase cleanly (drafts compound picks, so they
+        aren't safe to replay). Skipped on non-prod paths (no /data) and silently
+        noops on any error — snapshots are belt-and-suspenders, not load-bearing.
 
-        Old snapshots from previous seasons are pruned before writing the
-        new one. Each season produces 6 checkpoints at ~90MB each, so
-        accumulating them across seasons would burn ~500MB/year of disk.
+        Two things keep this cheap and flat across seasons:
+          1. Only the non-idempotent phases (OFFSEASON_PARTIAL_PHASES) are
+             snapshotted — the restore path never rolls back any other phase.
+          2. Only the offseason-mutable tables are copied; the large in-season
+             append-only tables (OFFSEASON_SNAPSHOT_EXCLUDE_TABLES) are skipped
+             since drafts never touch them. That drops each snapshot from a full
+             ~57MB copy to ~15MB, and — since the excluded tables are exactly the
+             ones that grow every season — keeps it from ballooning over time.
+
+        Restore (run_api._restorePartialPhaseSnapshotIfNeeded) replaces only the
+        snapshotted tables, leaving the excluded ones (which never changed during
+        the phase) untouched. Old snapshots from prior seasons are pruned first.
         """
+        from constants import OFFSEASON_PARTIAL_PHASES, OFFSEASON_SNAPSHOT_EXCLUDE_TABLES
+        # Only the non-idempotent phases need a rollback point.
+        if phase not in OFFSEASON_PARTIAL_PHASES:
+            return
         try:
             import os
             import glob
             import sqlite3
-            dbPath = os.path.join('data', 'floosball.db')
+            # Resolve the DB path the same way run_api._restorePartialPhaseSnapshotIfNeeded
+            # does, so the writer and reader always agree (prod → /data; local →
+            # DATABASE_DIR or ./data).
+            dbDir = os.environ.get('DATABASE_DIR', 'data')
             if os.path.exists('/data') and os.path.isdir('/data'):
-                dbPath = '/data/floosball.db'
+                dbDir = '/data'
+            dbPath = os.path.join(dbDir, 'floosball.db')
             if not os.path.exists(dbPath):
                 return
             seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
@@ -6070,16 +6088,41 @@ class SeasonManager:
                         pass
 
             outPath = os.path.join(outDir, f"offseason_s{seasonNum}_{phase}.db")
+            # Start fresh — a stale same-season/phase file would collide with the
+            # CREATE TABLE statements below.
+            if os.path.exists(outPath):
+                try:
+                    os.remove(outPath)
+                except OSError:
+                    pass
+
             src = sqlite3.connect(dbPath)
             try:
-                dst = sqlite3.connect(outPath)
+                tables = [r[0] for r in src.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()]
+                included = [t for t in tables
+                            if t not in OFFSEASON_SNAPSHOT_EXCLUDE_TABLES]
+                src.execute("ATTACH DATABASE ? AS snap", (outPath,))
                 try:
-                    src.backup(dst)
+                    # CREATE TABLE AS SELECT copies columns (in declared order) +
+                    # rows. Constraints/indexes are intentionally omitted: restore
+                    # inserts positionally back into the real (constrained) tables,
+                    # so the snapshot is just a data carrier.
+                    for t in included:
+                        src.execute(
+                            f'CREATE TABLE snap."{t}" AS SELECT * FROM main."{t}"'
+                        )
                 finally:
-                    dst.close()
+                    src.execute("DETACH DATABASE snap")
             finally:
                 src.close()
-            logger.info(f"  Offseason checkpoint snapshot: {outPath}")
+            sizeMb = os.path.getsize(outPath) / 1e6 if os.path.exists(outPath) else 0
+            logger.info(
+                f"  Offseason checkpoint snapshot: {outPath} "
+                f"({len(included)} tables, {sizeMb:.1f}MB)"
+            )
         except Exception as e:
             logger.debug(f"Could not snapshot DB for phase {phase}: {e}")
 
