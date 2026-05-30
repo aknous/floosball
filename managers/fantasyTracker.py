@@ -347,11 +347,17 @@ class FantasyTracker:
                     "modifier": preLockModifier,
                 }
 
-            # ── 2. Collect all roster player IDs ──
+            # ── 2. Collect all roster player IDs + batch-load roster users ──
             allRosterPlayerIds = set()
             for roster in rosters:
                 for rp in roster.players:
                     allRosterPlayerIds.add(rp.player_id)
+            # One IN query instead of session.get(User) per roster (N+1) below.
+            rosterUserIds = {r.user_id for r in rosters}
+            usersById = {
+                u.id: u for u in
+                session.query(User).filter(User.id.in_(rosterUserIds)).all()
+            } if rosterUserIds else {}
 
             # ── 3. Per-player per-week FP from WeeklyPlayerFP (banked) + _weekFP (live) ──
             weekPlayerFPMap = self._getWeekPlayerFPFromDB(
@@ -499,7 +505,7 @@ class FantasyTracker:
             entries = []
             for roster in rosters:
                 userId = roster.user_id
-                rosterUser = session.get(User, userId)
+                rosterUser = usersById.get(userId)
                 rosterPlayerIds = {rp.player_id for rp in roster.players}
 
                 # Per-player weekly FP (banked + live from _weekFP overlay)

@@ -1248,28 +1248,35 @@ class PlayerManager:
         return [p for p in self.freeAgents if p.position == position]
     
     def getPlayerById(self, playerId: int) -> Optional[FloosPlayer.Player]:
-        """Find player by ID across all lists"""
-        # Search active players
-        for player in self.activePlayers:
-            if player.id == playerId:
-                return player
-        
-        # Search retired players
-        for player in self.retiredPlayers:
-            if player.id == playerId:
-                return player
-        
-        # Search hall of fame
-        for player in self.hallOfFame:
-            if player.id == playerId:
-                return player
-        
-        # Search free agents
-        for player in self.freeAgents:
-            if player.id == playerId:
-                return player
-        
-        return None
+        """Find a player by ID via an O(1) id→player index.
+
+        Previously this linear-scanned four lists on every call; the fantasy
+        snapshot calls it per-user × per-roster-player, which made building the
+        leaderboard O(users × roster × allPlayers). The index is rebuilt only
+        when the total player population changes (stable within a snapshot, and
+        only shifts on draft/retirement/FA churn between weeks)."""
+        return self._ensurePlayerIndex().get(playerId)
+
+    def _ensurePlayerIndex(self) -> Dict[int, "FloosPlayer.Player"]:
+        """Return the id→player map, rebuilding it if the population changed.
+
+        Last-list-wins ordering matches the old linear-scan precedence
+        (active → retired → HoF → free agents)."""
+        total = (len(self.activePlayers) + len(self.retiredPlayers)
+                 + len(self.hallOfFame) + len(self.freeAgents))
+        if getattr(self, '_playerByIdCount', None) != total or not hasattr(self, '_playerById'):
+            idx: Dict[int, "FloosPlayer.Player"] = {}
+            for player in self.freeAgents:
+                idx[player.id] = player
+            for player in self.hallOfFame:
+                idx[player.id] = player
+            for player in self.retiredPlayers:
+                idx[player.id] = player
+            for player in self.activePlayers:  # active wins on id collision
+                idx[player.id] = player
+            self._playerById = idx
+            self._playerByIdCount = total
+        return self._playerById
     
     def getStatistics(self) -> Dict[str, int]:
         """Get player statistics for monitoring"""
