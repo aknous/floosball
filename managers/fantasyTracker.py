@@ -276,7 +276,34 @@ class FantasyTracker:
     def _seasonManager(self):
         return self.serviceContainer.getService('season_manager')
 
+    _SNAPSHOT_TTL_SECONDS = 8.0  # leaderboard staleness budget (broadcast cadence is 10s)
+
     def getSnapshot(self, seasonNum: int = None) -> dict:
+        """Short-TTL cache around the (read-only) snapshot computation.
+
+        The snapshot aggregates every roster/leaderboard entry and is recomputed
+        by the 10s broadcast loop AND by every /api/fantasy/{snapshot,leaderboard}
+        request. The TTL dedupes the frequent overlapping calls (broadcast +
+        concurrent page loads) without noticeably staling live points: the TTL is
+        shorter than the broadcast interval, so the broadcast still recomputes
+        fresh each cycle. Consumers read the result (never mutate in place), so
+        sharing the cached dict is safe."""
+        import time
+        sm = self._seasonManager
+        resolved = seasonNum
+        if resolved is None:
+            resolved = sm.currentSeason.seasonNumber if (sm and sm.currentSeason) else None
+        if resolved is not None:
+            cache = getattr(self, '_snapshotCache', None)
+            if (cache is not None and cache[0] == resolved
+                    and (time.monotonic() - cache[1]) < self._SNAPSHOT_TTL_SECONDS):
+                return cache[2]
+        result = self._computeSnapshot(seasonNum)
+        if resolved is not None:
+            self._snapshotCache = (resolved, time.monotonic(), result)
+        return result
+
+    def _computeSnapshot(self, seasonNum: int = None) -> dict:
         """Build a complete fantasy snapshot for all users.
 
         Returns a dict with season, week, gamesActive flag, and ranked entries.
