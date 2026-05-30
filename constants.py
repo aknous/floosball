@@ -499,7 +499,7 @@ GM_COACH_POOL_SIZE = 5
 # ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
 
 PICKEM_CORRECT_REWARD = 5           # (Legacy) Floobits per correct pick
-PICKEM_CLAIRVOYANT_THRESHOLD = 96    # Points threshold for Clairvoyant bonus (e.g. 12 games × 8 pts = all correct by Q1)
+PICKEM_CLAIRVOYANT_THRESHOLD = 80    # Points threshold for Clairvoyant bonus. Favorites pay <1.0x (0.5/winProb), so a perfect 12-game week scores ~83-103 and most great weeks land 70-90. Was 96 — unreachable, since even a flawless week often fell short. 80 makes a perfect week always clear it and lands ~top 8-13% of strong weeks.
 PICKEM_CLAIRVOYANT_BONUS = 35       # Bonus Floobits when threshold is met (was 25, bumped 40% in v0.16.1 economy pass)
 
 # Points-based system (v2)
