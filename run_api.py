@@ -185,9 +185,11 @@ def parse_args():
 
 def _restorePartialPhaseSnapshotIfNeeded() -> None:
     """If the previous run died inside a non-idempotent offseason phase
-    (rookie_draft, fa_draft, or training), roll the DB back to the snapshot
-    taken at that phase's entry so the resume re-runs the phase from a clean
-    starting state instead of compounding partial picks.
+    (rookie_draft, fa_draft, or training), roll the offseason-mutable tables
+    back to the phase-entry snapshot so the resume re-runs the phase from a
+    clean state instead of compounding partial picks. The snapshot holds only
+    those tables (see seasonManager._snapshotDbForPhase); the large in-season
+    history tables are left untouched since the phase never wrote them.
 
     Reads simulation_state via a raw sqlite3 connection so this runs BEFORE
     init_db() opens SQLAlchemy connections. Detection: in_offseason=True AND
@@ -207,7 +209,7 @@ def _restorePartialPhaseSnapshotIfNeeded() -> None:
     if not os.path.exists(dbPath):
         return  # No DB yet — nothing to restore.
 
-    PARTIAL_PHASES = {'rookie_draft', 'fa_draft', 'training'}
+    from constants import OFFSEASON_PARTIAL_PHASES as PARTIAL_PHASES
 
     try:
         conn = sqlite3.connect(dbPath)
@@ -250,14 +252,41 @@ def _restorePartialPhaseSnapshotIfNeeded() -> None:
     backupPath = dbPath + '.preresume'
     try:
         shutil.copy2(dbPath, backupPath)
-        shutil.copy2(snapshotPath, dbPath)
-        logger.warning(
-            f"snapshot-restore: rolled DB back to {snapshotPath} "
-            f"(phase={phase}, season={seasonNum}). "
-            f"Pre-rollback DB preserved at {backupPath}."
-        )
     except OSError as e:
-        logger.error(f"snapshot-restore: file copy failed: {e}")
+        logger.error(f"snapshot-restore: could not preserve pre-rollback DB: {e}")
+        return
+
+    # Replace only the snapshotted (offseason-mutable) tables from the snapshot;
+    # the excluded in-season history tables in the live DB are left as-is, since
+    # the interrupted phase never wrote them. Going through sqlite3 (rather than a
+    # raw file swap) also recovers any post-crash WAL correctly.
+    try:
+        conn = sqlite3.connect(dbPath)
+        try:
+            conn.execute("ATTACH DATABASE ? AS snap", (snapshotPath,))
+            snapTables = [r[0] for r in conn.execute(
+                "SELECT name FROM snap.sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()]
+            try:
+                conn.execute("BEGIN")
+                for t in snapTables:
+                    conn.execute(f'DELETE FROM main."{t}"')
+                    conn.execute(f'INSERT INTO main."{t}" SELECT * FROM snap."{t}"')
+                conn.execute("COMMIT")
+            except sqlite3.Error:
+                conn.rollback()
+                raise
+            conn.execute("DETACH DATABASE snap")
+            logger.warning(
+                f"snapshot-restore: rolled back {len(snapTables)} tables "
+                f"(phase={phase}, season={seasonNum}) from {snapshotPath}. "
+                f"Pre-rollback DB preserved at {backupPath}."
+            )
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.error(f"snapshot-restore: table rollback failed: {e}")
 
 
 async def initialize_application(timing_mode: TimingMode, fresh_start: bool, schedule_gap: int = 60, card_reset: bool = False, card_reset_current_season: bool = False):

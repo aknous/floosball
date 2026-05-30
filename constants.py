@@ -586,3 +586,24 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 #   Season N+1 (planned): True  — the payoff. Cracking can actually trigger.
 ANOMALY_CRACKING_ENABLED = False
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}
+
+# ── Offseason phase-rollback snapshots ────────────────────────────────────────
+# Only these phases make non-idempotent mutations (drafts compound picks), so a
+# mid-phase restart must roll the DB back to the phase-entry snapshot and re-run
+# the phase cleanly. Other phases resume via offseason_completed_steps alone.
+# Shared by seasonManager._snapshotDbForPhase (writer) and
+# run_api._restorePartialPhaseSnapshotIfNeeded (reader) — keep them in sync here.
+OFFSEASON_PARTIAL_PHASES = {'rookie_draft', 'fa_draft', 'training'}
+
+# Large, in-season, append-only tables that offseason phases provably never
+# write (no games/weeks/pick-ems happen during a draft). Excluded from the
+# phase-rollback snapshot so it stays small AND flat across seasons — these are
+# exactly the tables that grow every season. Everything not listed IS snapshotted
+# (safe direction: a missed table is merely copied, never silently un-rolled-back).
+OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
+    'game_player_stats',    # ~20MB at S14 — per-game per-player box scores
+    'weekly_card_bonuses',  # ~16MB — weekly fantasy card settlement
+    'weekly_player_fp',     # weekly fantasy points
+    'pick_em_picks',        # weekly pick-em selections
+    'games',                # game records
+}
