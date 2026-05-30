@@ -6,7 +6,7 @@ Uses refactored manager system with clean separation of concerns
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Header, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
@@ -67,7 +67,13 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    # Report simulation liveness, not just "the HTTP server is up", so the
+    # platform health check and uptime monitors can catch a dead/crashed sim
+    # task. During startup floosball_app / simTask may be unset — treat as OK.
+    task = getattr(floosball_app, 'simTask', None) if floosball_app is not None else None
+    if task is not None and task.done() and not task.cancelled():
+        return JSONResponse(status_code=503, content={"status": "degraded", "simRunning": False})
+    return {"status": "ok", "simRunning": bool(task is not None and not task.done())}
 
 # Global reference to FloosballApplication (set during startup)
 floosball_app = None
@@ -10978,14 +10984,7 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
 
 # ============================================================================
 
-@app.get("/health")
-async def health_check():
-    """API health check endpoint"""
-    return {
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'app_initialized': floosball_app is not None
-    }
+# /health is defined near the top of this file (with sim-liveness reporting).
 
 
 # ============================================================================
