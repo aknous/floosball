@@ -443,12 +443,12 @@ GM_VOTE_BASE_MIN = {
     "hire_coach": 2,
 }
 
-# Per-user limits.
-# GM_VOTES_PER_TYPE caps how many votes a single fan can spend on one vote
-# type per season. Coach votes (fire/hire) cap at 4 — there's only one
-# coach to deal with, so more budget there is wasted. Player votes
-# (resign/cut) cap at 8 because a team often has multiple candidates worth
-# voting on, and fans need to spread their support.
+# Per-user GM limits.
+#
+# LEGACY: the per-season / per-type / per-target caps below are retired. The
+# single-vote model (one vote per fan per target, withdraw to change, flat
+# per-vote cost) replaced hard caps entirely, so nothing in the live vote path
+# reads these anymore. Kept defined only so any stray importer doesn't break.
 GM_VOTES_PER_SEASON = 20
 GM_VOTES_PER_TYPE = {
     "fire_coach":     4,
@@ -459,6 +459,12 @@ GM_VOTES_PER_TYPE = {
 }
 GM_VOTES_PER_TYPE_DEFAULT = 4
 GM_VOTES_PER_TARGET = 4
+
+# Tribune secret achievement: cast this many GM votes in a single season. Under
+# single-vote a fan votes at most once per decision, so a season's ceiling is
+# roughly their team's slate (~6 roster calls plus the coach). 6 reads as
+# "voted on basically everything" while staying reachable across seasons.
+GM_TRIBUNE_VOTE_THRESHOLD = 6
 
 # Front Office voting window opens at this week. Before this, GM vote UIs show
 # a "convening..." state. Mirrors the frontend const GM_ACTIVE_WEEK in

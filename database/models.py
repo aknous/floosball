@@ -1503,6 +1503,10 @@ class GmVote(Base):
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'yea' (support) or 'nay' (oppose). Only the threshold directives
+    # (fire_coach / cut_player / resign_player) carry 'nay'; hire_coach and the
+    # ranked ballots are always 'yea'. Existing rows default to 'yea'.
+    direction: Mapped[str] = mapped_column(String(8), nullable=False, default="yea")
     # Optional JSON payload for vote types that need structured data beyond a
     # single target_player_id — e.g. draft_rookie carries the ranked ballot here.
     details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1531,7 +1535,8 @@ class GmVoteResult(Base):
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
-    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)  # 'yea' (for) count
+    votes_against: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 'nay' count; net = total_votes - votes_against
     threshold: Mapped[int] = mapped_column(Integer, nullable=False)
     success_probability: Mapped[float] = mapped_column(Float, nullable=False)
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)

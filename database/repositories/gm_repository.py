@@ -18,7 +18,7 @@ class GmVoteRepository:
 
     def castVote(self, userId: int, teamId: int, season: int,
                  voteType: str, costPaid: int,
-                 targetPlayerId: int = None) -> GmVote:
+                 targetPlayerId: int = None, direction: str = "yea") -> GmVote:
         vote = GmVote(
             user_id=userId,
             team_id=teamId,
@@ -26,8 +26,38 @@ class GmVoteRepository:
             vote_type=voteType,
             target_player_id=targetPlayerId,
             cost_paid=costPaid,
+            direction=direction,
         )
         self.session.add(vote)
+        self.session.flush()
+        return vote
+
+    def getUserDirectionOnTarget(self, userId: int, teamId: int, season: int,
+                                 voteType: str, targetPlayerId: int = None) -> Optional[str]:
+        """The direction ('yea'/'nay') of this user's existing vote(s) on a
+        target, or None if they have none — enforces single-direction per target."""
+        row = (
+            self.session.query(GmVote.direction)
+            .filter_by(user_id=userId, team_id=teamId, season=season,
+                       vote_type=voteType, target_player_id=targetPlayerId)
+            .first()
+        )
+        return row[0] if row else None
+
+    def withdrawMostRecentVote(self, userId: int, teamId: int, season: int,
+                               voteType: str, targetPlayerId: int = None) -> Optional[GmVote]:
+        """Delete the user's most-recent vote on a target and return it so the
+        caller can refund cost_paid (read it BEFORE commit). None if no match."""
+        vote = (
+            self.session.query(GmVote)
+            .filter_by(user_id=userId, team_id=teamId, season=season,
+                       vote_type=voteType, target_player_id=targetPlayerId)
+            .order_by(GmVote.created_at.desc(), GmVote.id.desc())
+            .first()
+        )
+        if vote is None:
+            return None
+        self.session.delete(vote)
         self.session.flush()
         return vote
 
@@ -75,36 +105,53 @@ class GmVoteRepository:
         )
 
     def getVoteTallies(self, teamId: int, season: int) -> List[Dict]:
-        """Aggregate votes by (vote_type, target_player_id) for a team."""
+        """Aggregate votes by (vote_type, target_player_id), split by direction.
+
+        `votes` is the NET tally (votesFor - votesAgainst) so existing
+        threshold / probability consumers stay correct under yea/nay; the raw
+        sides are also returned as votesFor / votesAgainst.
+        """
         rows = (
             self.session.query(
                 GmVote.vote_type,
                 GmVote.target_player_id,
+                GmVote.direction,
                 func.count(GmVote.id).label("vote_count"),
             )
             .filter_by(team_id=teamId, season=season)
-            .group_by(GmVote.vote_type, GmVote.target_player_id)
+            .group_by(GmVote.vote_type, GmVote.target_player_id, GmVote.direction)
             .all()
         )
-        return [
-            {
+        agg: Dict = {}
+        for r in rows:
+            key = (r.vote_type, r.target_player_id)
+            entry = agg.setdefault(key, {
                 "voteType": r.vote_type,
                 "targetPlayerId": r.target_player_id,
-                "votes": r.vote_count,
-            }
-            for r in rows
-        ]
+                "votesFor": 0,
+                "votesAgainst": 0,
+            })
+            if (r.direction or "yea") == "nay":
+                entry["votesAgainst"] += r.vote_count
+            else:
+                entry["votesFor"] += r.vote_count
+        out = []
+        for entry in agg.values():
+            entry["votes"] = entry["votesFor"] - entry["votesAgainst"]
+            out.append(entry)
+        return out
 
     def recordResult(self, teamId: int, season: int, voteType: str,
                      totalVotes: int, threshold: int, probability: float,
                      outcome: str, targetPlayerId: int = None,
-                     details: str = None) -> GmVoteResult:
+                     details: str = None, votesAgainst: int = 0) -> GmVoteResult:
         result = GmVoteResult(
             team_id=teamId,
             season=season,
             vote_type=voteType,
             target_player_id=targetPlayerId,
             total_votes=totalVotes,
+            votes_against=votesAgainst,
             threshold=threshold,
             success_probability=probability,
             outcome=outcome,

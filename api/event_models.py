@@ -670,7 +670,8 @@ class GmEvent:
     def voteResolved(teamId: int, teamName: str, voteType: str,
                      outcome: str, targetPlayerName: str = None,
                      totalVotes: int = 0, threshold: int = 0,
-                     probability: float = 0.0, details: str = None) -> Dict[str, Any]:
+                     probability: float = 0.0, details: str = None,
+                     votesAgainst: int = 0) -> Dict[str, Any]:
         return {
             'event': EventType.GM_VOTE_RESOLVED.value,
             'timestamp': datetime.now().isoformat(),
@@ -679,7 +680,8 @@ class GmEvent:
             'voteType': voteType,
             'outcome': outcome,
             'targetPlayerName': targetPlayerName,
-            'totalVotes': totalVotes,
+            'totalVotes': totalVotes,   # 'yea' (for) count
+            'votesAgainst': votesAgainst,
             'threshold': threshold,
             'probability': probability,
             'details': details,

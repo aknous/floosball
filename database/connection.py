@@ -819,6 +819,20 @@ def _runPendingMigrations():
             logger.info("  Migration: added featured_pack_rotation.purchased")
         except Exception:
             conn.rollback()
+        # Yea/nay GM votes: direction on each vote, against-count on results.
+        # Existing rows default to 'yea' / 0 so old data reads as all-support.
+        try:
+            conn.execute(text("ALTER TABLE gm_votes ADD COLUMN direction VARCHAR(8) DEFAULT 'yea' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added gm_votes.direction")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE gm_vote_results ADD COLUMN votes_against INTEGER DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added gm_vote_results.votes_against")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -1893,11 +1907,11 @@ def _seedAchievements():
             {"key": "sweep", "name": "Sweep", "category": "secret", "scope": "once", "sort_order": 650, "target": 1,
              "description": "Buy every card featured in your shop in a single day.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "mutineer", "name": "Mutineer", "category": "secret", "scope": "once", "sort_order": 660, "target": 1,
-             "description": "Cast the maximum number of fire-coach votes in a single season.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "mutineer", "name": "Scorched Earth", "category": "secret", "scope": "once", "sort_order": 660, "target": 1,
+             "description": "Vote to fire your coach and release every player on the roster in a single offseason.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "tribune", "name": "Tribune", "category": "secret", "scope": "once", "sort_order": 665, "target": 1,
-             "description": "Cast every one of your 20 GM votes in a single season.",
+             "description": "Cast 6 GM votes in a single season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "monk", "name": "Monk", "category": "secret", "scope": "once", "sort_order": 670, "target": 1,
              "description": "Go an entire season without opening a card pack.",
