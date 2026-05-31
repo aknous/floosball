@@ -8711,10 +8711,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
     from database.repositories.gm_repository import GmVoteRepository
     from database.repositories.card_repositories import CurrencyRepository
     from database.models import User, Player, Coach
-    from constants import (
-        GM_VOTE_TYPES, GM_VOTE_COST, GM_VOTES_PER_SEASON,
-        GM_VOTES_PER_TYPE, GM_VOTES_PER_TYPE_DEFAULT, GM_VOTES_PER_TARGET,
-    )
+    from constants import GM_VOTE_TYPES, GM_VOTE_COST, GM_TRIBUNE_VOTE_THRESHOLD
     from managers.gmManager import GmManager
 
     if req.voteType not in GM_VOTE_TYPES:
@@ -8765,37 +8762,22 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             if assignedAt is not None:
                 raise HTTPException(400, "Coach not available in the hiring pool")
 
-        # Check limits
         voteRepo = GmVoteRepository(session)
         sm = floosball_app.seasonManager if floosball_app else None
         currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-        counts = voteRepo.getUserVoteCounts(user.id, currentSeason)
 
-        if counts["total"] >= GM_VOTES_PER_SEASON:
-            raise HTTPException(400, f"Season vote limit reached ({GM_VOTES_PER_SEASON})")
-        perTypeCap = GM_VOTES_PER_TYPE.get(req.voteType, GM_VOTES_PER_TYPE_DEFAULT)
-        if counts["perType"].get(req.voteType, 0) >= perTypeCap:
-            raise HTTPException(400, f"Vote type limit reached ({perTypeCap} per type)")
-        targetKey = f"{req.voteType}:{req.targetPlayerId or 'none'}"
-        if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
-            raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
-
-        # A user holds a single stance per target — to switch sides, withdraw
-        # first. (No threshold short-circuit anymore: under yea/nay a directive
-        # that's currently passing can be pulled back below the line by nays.)
+        # One vote per fan per target. To change your mind (or switch sides),
+        # withdraw first — no stacking, so the cost is flat (no escalation).
         existingDir = voteRepo.getUserDirectionOnTarget(
             user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
         )
-        if existingDir and existingDir != direction:
+        if existingDir:
             raise HTTPException(
                 400,
-                "You've already voted the other way on this — withdraw that vote first to switch sides",
+                "You've already voted on this. Withdraw your vote to change it.",
             )
 
-        # Escalating cost: base * 2^(votes already cast for this specific target)
-        baseCost = GM_VOTE_COST[req.voteType]
-        targetCount = counts["perTarget"].get(targetKey, 0)
-        cost = baseCost * (2 ** targetCount)
+        cost = GM_VOTE_COST[req.voteType]
         currencyRepo = CurrencyRepository(session)
         result = currencyRepo.spendFunds(
             user.id, cost, "gm_vote",
@@ -8811,22 +8793,17 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             targetPlayerId=req.targetPlayerId, direction=direction,
         )
 
-        # Secret hooks — Mutineer (max fire_coach votes allowed against the
-        # single coach target = GM_VOTES_PER_TARGET) and Tribune (spend the
-        # entire season vote budget, any mix of types). Fire coach is capped
-        # per-target, not per-type, since there's only one coach to fire —
-        # so the per-target cap is the real ceiling for this achievement.
+        # Tribune — cast GM_TRIBUNE_VOTE_THRESHOLD votes in a season (any mix of
+        # targets). The other GM secret, Scorched Earth (key "mutineer"), now
+        # fires at offseason resolution on a full team teardown — see
+        # seasonManager._awardCleanHouseAchievements — not on vote cast.
         try:
             updatedCounts = voteRepo.getUserVoteCounts(user.id, currentSeason)
-            totalVotes = updatedCounts.get("total", 0)
-            fireVotes = (updatedCounts.get("perType") or {}).get("fire_coach", 0)
-            from managers import achievementManager as _am
-            if fireVotes >= GM_VOTES_PER_TARGET:
-                _am.unlockSecret(session, user.id, "mutineer")
-            if totalVotes >= GM_VOTES_PER_SEASON:
+            if updatedCounts.get("total", 0) >= GM_TRIBUNE_VOTE_THRESHOLD:
+                from managers import achievementManager as _am
                 _am.unlockSecret(session, user.id, "tribune")
         except Exception as _e:
-            logger.warning(f"Mutineer/Tribune hook failed: {_e}")
+            logger.warning(f"Tribune hook failed: {_e}")
 
         session.commit()
 

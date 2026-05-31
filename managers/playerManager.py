@@ -2623,6 +2623,11 @@ class PlayerManager:
                         break
                 if not targetPlayer:
                     continue
+                # Don't re-sign a player this team just released this offseason
+                # (cut by fan vote, or expired and not kept) even if fans ranked
+                # them on the FA ballot.
+                if self._leftThisTeamThisOffseason(targetPlayer, team):
+                    continue
                 # Find open roster slot matching player's position
                 openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
                 if not openSlot:
@@ -2893,6 +2898,10 @@ class PlayerManager:
                         if targetPlayer:
                             break
                     if not targetPlayer:
+                        continue
+                    # Skip a player this team just released this offseason (cut
+                    # or let walk) even if fans ranked them on the FA ballot.
+                    if self._leftThisTeamThisOffseason(targetPlayer, team):
                         continue
                     openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
                     if not openSlot:
@@ -3544,6 +3553,23 @@ class PlayerManager:
             logger.info(f"Prospect window: released {len(released)} washouts, {retained} prospects retained")
         return {"released": released, "retained": retained}
 
+    def _leftThisTeamThisOffseason(self, player, team) -> bool:
+        """True if this player was just released by THIS team this offseason —
+        cut by fan vote, or expired and not re-signed.
+
+        Both exits stamp the player identically: previousTeam = the team's name
+        and freeAgentYears = 0. So a year-0 free agent whose previous team is
+        this one walked out the door this offseason, and the team shouldn't
+        auto-re-sign them right back in the same FA draft (the fans either voted
+        them out or chose not to keep them). Other teams may still sign them;
+        only the team that let them go is blocked, and only for this draft — next
+        offseason their freeAgentYears is >= 1, so the block lifts on its own.
+        """
+        return (
+            getattr(player, 'previousTeam', None) == team.name
+            and getattr(player, 'freeAgentYears', 1) == 0
+        )
+
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                           eventLog=None) -> bool:
@@ -3583,19 +3609,33 @@ class PlayerManager:
             return True
 
         # Build candidates: for each open position, best FA + best prospect.
-        candidates = []  # list of (slot, player, kind) where kind ∈ {'fa', 'prospect'}
+        # A team may not re-sign a player it just released this offseason (cut by
+        # fan vote, or expired and not kept), so the best *signable* FA skips
+        # those. Fall back to allowing them only if there's nothing else on the
+        # board — a roster hole the sim can't run with is worse than overriding
+        # the fans for a single slot.
         prospects = getattr(team, 'prospects', []) or []
-        for posVal, slot in firstOpenSlotByPos.items():
-            # Best FA at this position
-            faList = POS_TO_FALIST.get(posVal, [])
-            if faList:
-                candidates.append((slot, faList[0], 'fa'))
-            # Best prospect at this position
-            posProspects = [p for p in prospects if p.position.value == posVal]
-            if posProspects:
-                best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
-                candidates.append((slot, best, 'prospect'))
 
+        def _gather(applyReleaseBlock):
+            cands = []  # (slot, player, kind) where kind ∈ {'fa', 'prospect'}
+            for posVal, slot in firstOpenSlotByPos.items():
+                faList = POS_TO_FALIST.get(posVal, [])
+                if applyReleaseBlock:
+                    bestFa = next(
+                        (p for p in faList if not self._leftThisTeamThisOffseason(p, team)),
+                        None,
+                    )
+                else:
+                    bestFa = faList[0] if faList else None
+                if bestFa is not None:
+                    cands.append((slot, bestFa, 'fa'))
+                posProspects = [p for p in prospects if p.position.value == posVal]
+                if posProspects:
+                    best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
+                    cands.append((slot, best, 'prospect'))
+            return cands
+
+        candidates = _gather(applyReleaseBlock=True) or _gather(applyReleaseBlock=False)
         if not candidates:
             return False  # open slots exist but no FAs or prospects to fill them
 

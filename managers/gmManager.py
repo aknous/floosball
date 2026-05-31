@@ -41,9 +41,9 @@ class GmManager:
         spends a few votes each can pass; a large turnout doesn't suddenly
         need a mountain of votes just because more people showed up.
 
-        Each fan can still cast multiple votes (GM_VOTES_PER_TYPE) for
-        emphasis. Roughly: "every fan kicking in one vote" hits the
-        threshold; smaller groups can hit it with multi-votes.
+        Under single-vote each fan contributes at most one net vote per
+        target (yea or nay, withdraw to change), so clearing the bar means
+        close to the whole fanbase is pulling the same direction.
 
         Low-quorum / test mode keeps the threshold at 1.
 

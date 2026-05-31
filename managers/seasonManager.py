@@ -4392,6 +4392,12 @@ class SeasonManager:
             logger.info("Step 3.5: Resolve GM cut player votes")
             await self._resolveGmCutVotes(gmResults)
 
+            # STEP 3.6: Award the "Scorched Earth" secret to fans who voted to
+            # tear their team all the way down. Runs here, after cuts, while the
+            # roster still reflects every removal and before the drafts refill it.
+            logger.info("Step 3.6: Award clean-house achievements")
+            await self._awardCleanHouseAchievements(gmResults)
+
             self._markOffseasonStepComplete('frontoffice_decisions')
         else:
             logger.info("Frontoffice decisions already completed (resumed) — skipping STEP 1-3.5")
@@ -5799,6 +5805,76 @@ class SeasonManager:
         except Exception as e:
             session.rollback()
             logger.error(f"GM cut resolution error: {e}")
+        finally:
+            session.close()
+
+    async def _awardCleanHouseAchievements(self, gmResults: list) -> None:
+        """Grant the 'mutineer' secret (Scorched Earth) to fans who orchestrated
+        a total teardown of their favorite team this offseason.
+
+        Earned when, in one offseason, a fan votes to fire the coach AND to
+        remove players (cut or let walk), and the team actually ends up gutted:
+        the coach was fired and every roster slot is now empty. Must run right
+        after cut resolution — at that point the roster reflects every cut and
+        non-resign, and the rookie/FA drafts that refill it haven't fired yet.
+        The coach always gets backfilled in the fire/hire step, so the coach
+        side is gated on "fired this offseason" (a ratified fire vote in
+        gmResults), not an empty coach slot.
+        """
+        from database.connection import get_session
+        from database.models import GmVote
+        from managers import achievementManager as _am
+
+        # Teams whose coach was fired this offseason (ratified fire vote).
+        firedTeamIds = {
+            r["teamId"] for r in gmResults
+            if r.get("voteType") == "fire_coach" and r.get("outcome") == "success"
+        }
+        if not firedTeamIds:
+            return
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+
+        # Of the fired-coach teams, the ones whose entire roster is now empty —
+        # every starter cut or not re-signed. rosterDict slots go None when vacated.
+        clearedTeamIds = {
+            t.id for t in teamManager.teams
+            if t.id in firedTeamIds
+            and all(p is None for p in t.rosterDict.values())
+        }
+        if not clearedTeamIds:
+            return
+
+        season = self.currentSeason.seasonNumber if self.currentSeason else 0
+        session = get_session()
+        try:
+            for teamId in clearedTeamIds:
+                votes = session.query(GmVote).filter_by(
+                    team_id=teamId, season=season,
+                ).all()
+                # Fans who voted to fire the coach...
+                fireBackers = {
+                    v.user_id for v in votes
+                    if v.vote_type == "fire_coach" and (v.direction or "yea") != "nay"
+                }
+                # ...AND voted to remove at least one player (cut yea / re-sign nay).
+                playerPurgers = {
+                    v.user_id for v in votes
+                    if (v.vote_type == "cut_player" and (v.direction or "yea") != "nay")
+                    or (v.vote_type == "resign_player" and v.direction == "nay")
+                }
+                for uid in (fireBackers & playerPurgers):
+                    _am.unlockSecret(session, uid, "mutineer")
+                    logger.info(
+                        f"Scorched Earth (mutineer) unlocked for user {uid} "
+                        f"(team {teamId} torn down)"
+                    )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Clean-house achievement award error: {e}")
         finally:
             session.close()
 
