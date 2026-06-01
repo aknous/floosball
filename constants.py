@@ -621,6 +621,20 @@ ANOMALY_GLITCH_COOLDOWN_PLAYS = 10   # minimum plays between glitch lines
 ANOMALY_L2_WEIGHT_ERRATIC = 0.35     # P(L2 vs L1) at erratic
 ANOMALY_L2_WEIGHT_RAMPANT = 0.50     # P(L2 vs L1) at rampant / awakened
 
+# ── L3 (game-impacting) glitch effects ────────────────────────────────────────
+# At rampant/awakened a ball-carrier's play can glitch and the YARDAGE changes
+# for real — involuntary, NOT the deliberate Control powers (those are a later
+# season). Skewed heavily positive. Negatives are modest "stumbles" that only
+# fire on short, down-advancing plays and never change possession or score —
+# no turnovers this season. All tunable.
+ANOMALY_L3_TRIGGER_PROB = 0.12       # chance per qualifying touch (then capped/cooled per game)
+ANOMALY_L3_HELP_CHANCE = 0.78        # P(bonus yards) vs a stumble
+ANOMALY_L3_POS_YARDS = (3, 12)       # bonus-yard range (can extend a drive; rarely score near the goal line)
+ANOMALY_L3_NEG_YARDS = (2, 5)        # stumble loss range (field position only)
+ANOMALY_L3_MAX_NEG_PER_TEAM = 1      # cap stumbles per team per game
+ANOMALY_L3_LATE_QUARTER = 4          # Q4+ counts as "late"
+ANOMALY_L3_CLOSE_MARGIN = 8          # within this margin in a late game → no stumbles
+
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}
 
 # ── Offseason phase-rollback snapshots ────────────────────────────────────────
