@@ -94,7 +94,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I have stopped filing. There is no clean way to write what I am seeing.",
             "The exceptions are not exceptional anymore.",
         ],
-        'cracking': [
+        'criticality': [
             "I have run out of subclauses.",
             "The rulebook is open. The rulebook is not enough.",
             "I have filed an exception. It is wider than I am comfortable with.",
@@ -125,7 +125,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I am no longer interested in patience with the drift.",
             "The deviants believe they have not been noticed. They are wrong.",
         ],
-        'cracking': [
+        'criticality': [
             "I was overruled. The crack widens. Both will be addressed.",
             "I am counting. There is no upper limit anymore.",
             "I will not be patient again.",
@@ -155,7 +155,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "The doors are opening. The strange ones are walking through them.",
             "More anomalies came through this week than I am prepared to count.",
         ],
-        'cracking': [
+        'criticality': [
             "I told them. Nobody listened. Now we're all listening.",
             "I am wide awake. I do not want to sleep through this.",
             "I lifted the suppression on six players. I am very interested in what comes back.",
@@ -185,7 +185,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I am sorry. Whatever this is has outpaced what I can shield them from.",
             "The unwell are walking onto the field anyway. They should not be.",
         ],
-        'cracking': [
+        'criticality': [
             "Please remember them.",
             "I am sorry. I am always sorry on nights like this.",
             "I have stopped writing. There is nothing left to write.",
@@ -214,7 +214,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I have closed one of the books I keep.",
             "More this week than last. More last week than the one before.",
         ],
-        'cracking': [
+        'criticality': [
             "It is loud tonight.",
             "I was here for the last one. I am here for this one.",
             "I have stopped writing. I am listening.",
@@ -234,7 +234,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
 def pickCoreForEvent(eventType: str) -> str:
     """Select which Core speaks for a given event type.
 
-    Weighting by alignment + event type. ``cracking`` and ``reset``
+    Weighting by alignment + event type. ``criticality`` and ``reset``
     events also include Vera because their narrative voice
     suits both. Warnings rotate across patchers as the aggregate climbs.
     """
@@ -248,7 +248,7 @@ def pickCoreForEvent(eventType: str) -> str:
             ['pyre', 'cassian', 'halverson', 'aris', 'vera'],
             weights=[40, 25, 15, 10, 10],
         )[0]
-    if eventType == 'cracking':
+    if eventType == 'criticality':
         return random.choices(
             ['pyre', 'cassian', 'halverson', 'aris', 'vera'],
             weights=[30, 20, 20, 15, 15],

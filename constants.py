@@ -579,23 +579,41 @@ def calculateCertaintyMultiplier(quarter, homeWinProb):
 REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 
 
-# ─── Anomaly System / The Cracking ──────────────────────────────────────────────
+# ─── Anomaly System / The Criticality ──────────────────────────────────────────────
 # The anomaly system has three layers:
 #   Layer 1 — universal cosmetic micro-glitches (fires from Stirring up)
 #   Layer 2 — personality-flavored cosmetic glitches (fires from Erratic up)
-#   Cracking — the dramatic event: a Core takes control and the card-bonus
+#   Criticality — the dramatic event: a Core takes control and the card-bonus
 #              math switches to that Core's signature equation
 #
 # Layer 1 + Layer 2 are PURE FLAVOR — no mechanical impact regardless of flag.
-# This flag gates ONLY the Cracking event itself. When False, the aggregate
+# This flag gates ONLY the Criticality event itself. When False, the aggregate
 # can still climb to threshold and Core warnings/news still fire (visible
 # tease), but the trigger is suppressed and the math never swaps.
 #
 # Roadmap:
 #   Season N   (current): False — tease only. Whispers, warnings, glitches,
-#                         but no Cracking ever fires.
-#   Season N+1 (planned): True  — the payoff. Cracking can actually trigger.
-ANOMALY_CRACKING_ENABLED = False
+#                         but no Criticality ever fires.
+#   Season N+1 (planned): True  — the payoff. Criticality can actually trigger.
+ANOMALY_CRITICALITY_ENABLED = False
+
+# ── Glitch firing hygiene ─────────────────────────────────────────────────────
+# Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×
+# instability). Tuned DOWN hard from last season (was attention/1000 with no
+# per-game cap), which flooded game feeds with glitch lines. Now glitches are
+# rare, spaced by a cooldown, and hard-capped per game so each one reads as a
+# notable "huh" instead of wallpaper. (The league instability dial that scales
+# these with the suppression cycle lands in P3.)
+ANOMALY_GLITCH_PROB_SCALE = 3000.0   # higher = rarer (was effectively 1000)
+ANOMALY_GLITCH_PROB_CAP = 0.12       # per-candidate probability ceiling
+ANOMALY_GLITCH_MAX_PER_GAME = 3      # hard cap on glitch lines per game
+ANOMALY_GLITCH_COOLDOWN_PLAYS = 10   # minimum plays between glitch lines
+# Cumulative layer weights — a player's ladder state is the CEILING; each glitch
+# rolls a layer up to it. L1 = cosmetic micro, L2 = cosmetic personality.
+# (L3 = game-impacting, added at rampant+ in P2.)
+ANOMALY_L2_WEIGHT_ERRATIC = 0.35     # P(L2 vs L1) at erratic
+ANOMALY_L2_WEIGHT_RAMPANT = 0.50     # P(L2 vs L1) at rampant / awakened
+
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}
 
 # ── Offseason phase-rollback snapshots ────────────────────────────────────────

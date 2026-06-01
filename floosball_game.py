@@ -727,9 +727,13 @@ class Game:
         self._anomalyState: Dict[int, str] = {}
         self._anomalyAttentionLoaded: bool = False
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
-        # if this game is happening inside an active Cracking window.
+        # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
-        self._crackingMultiplier: float = 1.0
+        self._criticalityMultiplier: float = 1.0
+        # Per-game glitch hygiene: hard cap + cooldown so anomaly glitch
+        # lines stay rare and spaced out instead of flooding the play feed.
+        self._glitchCountThisGame: int = 0
+        self._lastGlitchPlayNumber: int = -10_000
 
         # Set up timing manager for game-level delays
         if timingManager is not None:
@@ -7389,14 +7393,14 @@ class Game:
             broadcaster.broadcast_sync(self.id, event)
 
     # ── Anomaly system hooks ───────────────────────────────────────────
-    # Per-play roll for the user-attention-driven simulation-cracking
+    # Per-play roll for the user-attention-driven simulation-criticality
     # layer. v1 only fires Layer 1 universal micro-glitches (pure play-
     # text injection, no stat-output changes). Personality-keyed and
     # signature abilities land in follow-up commits.
 
     def _loadAnomalyAttention(self) -> None:
         """Snapshot every active player's attention score + state for
-        this season, plus this game's Cracking multiplier.
+        this season, plus this game's Criticality multiplier.
 
         Called lazily on the first play of the game. The snapshot is
         held in memory for the rest of the game — DB churn would be
@@ -7405,7 +7409,7 @@ class Game:
         try:
             from database.connection import get_session
             from database.models import PlayerAttention, AnomalyState
-            from managers.anomalyManager import getCrackingMultiplier
+            from managers.anomalyManager import getCriticalityMultiplier
             session = get_session()
             try:
                 attnRows = session.query(PlayerAttention).filter_by(
@@ -7422,7 +7426,7 @@ class Game:
                 }
             finally:
                 session.close()
-            self._crackingMultiplier = getCrackingMultiplier(
+            self._criticalityMultiplier = getCriticalityMultiplier(
                 self.seasonNumber or 0, self.week or 0,
             )
         except Exception as e:
@@ -7430,7 +7434,7 @@ class Game:
             # play out the game as if no one had any attention.
             self._anomalyAttention = {}
             self._anomalyState = {}
-            self._crackingMultiplier = 1.0
+            self._criticalityMultiplier = 1.0
             try:
                 from logger_config import get_logger
                 get_logger("floosball.anomaly").debug(
@@ -7468,6 +7472,18 @@ class Game:
         if playTypeName in ('Kneel', 'Spike'):
             return
 
+        from constants import (ANOMALY_GLITCH_PROB_SCALE, ANOMALY_GLITCH_PROB_CAP,
+                               ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
+                               ANOMALY_L2_WEIGHT_ERRATIC, ANOMALY_L2_WEIGHT_RAMPANT)
+        # Per-game hygiene: stop once we've hit the per-game cap, and keep
+        # glitches spaced by a cooldown so they never cluster in the feed.
+        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+            return
+        playNum = getattr(p, 'playNumber', None)
+        if (playNum is not None
+                and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
+            return
+
         # Gather every primary actor — offensive ball-mover plus the
         # defenders who altered the play. Order doesn't matter; we
         # shuffle so neither side has a structural firing advantage.
@@ -7485,7 +7501,7 @@ class Game:
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
                 continue
-            prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
+            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier)
             if _random.random() < prob:
                 # Pick the layer based on the player's state:
                 #   stable / stirring  -> Layer 1 (subtle, "huh")
@@ -7494,11 +7510,16 @@ class Game:
                 #                         (Layer 3 ability fires separately,
                 #                         once per game, not per play)
                 #   cleansed           -> Layer 1 only (drained of weight)
+                # Cumulative layer roll: the player's state is the CEILING.
+                #   stirring / stable / cleansed -> L1 (cosmetic micro)
+                #   erratic                       -> L1 or L2
+                #   rampant / awakened            -> L1 or L2 (L3 game-impacting
+                #                                    added at these states in P2)
                 state = self._anomalyState.get(player.id, 'stable')
-                if state in ('erratic', 'rampant'):
-                    layer = 'personality' if _random.random() < 0.6 else 'micro'
-                elif state == 'awakened':
-                    layer = 'personality' if _random.random() < 0.8 else 'micro'
+                if state == 'erratic':
+                    layer = 'personality' if _random.random() < ANOMALY_L2_WEIGHT_ERRATIC else 'micro'
+                elif state in ('rampant', 'awakened'):
+                    layer = 'personality' if _random.random() < ANOMALY_L2_WEIGHT_RAMPANT else 'micro'
                 else:
                     layer = 'micro'
 
@@ -7510,6 +7531,9 @@ class Game:
                     layer = 'micro'
 
                 self._injectAnomalyLine(player, layer=layer)
+                self._glitchCountThisGame += 1
+                if playNum is not None:
+                    self._lastGlitchPlayNumber = playNum
                 # One anomaly per play. Multiple Awakened players on
                 # the field don't stack glitch lines.
                 return
@@ -7589,7 +7613,7 @@ class Game:
                     layer=layer,
                     ability=None,
                     play_text=line,
-                    during_thinning=(self._crackingMultiplier > 1.0),
+                    during_thinning=(self._criticalityMultiplier > 1.0),
                 )
                 session.add(evt)
                 session.commit()

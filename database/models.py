@@ -1767,7 +1767,7 @@ class AppSetting(Base):
 
 
 # ─── Anomaly system ─────────────────────────────────────────────────────────
-# User-attention-driven simulation-cracking layer. Players accumulate
+# User-attention-driven simulation-criticality layer. Players accumulate
 # "attention" from being equipped on cards, rostered in fantasy, followed,
 # etc. Past a threshold they enter a state ladder (stirring → erratic →
 # rampant → awakened). At awakened, they roll a signature ability that
