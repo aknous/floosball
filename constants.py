@@ -54,6 +54,13 @@ FG_MIN_ATTEMPT_PROB = 0.20      # Coaches attempt FG if estimated make probabili
 YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 
+# Interception model — three independent pick paths in calculateCatchProbability.
+# Each K scales one path's contribution before they combine as independent
+# risks. Tuned so league INT rate lands near the NFL ~2.3% per attempt.
+INT_BAD_READ_K = 0.22    # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.26   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.08    # above-average DB jumps a contested throw
+
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
 CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
@@ -443,12 +450,12 @@ GM_VOTE_BASE_MIN = {
     "hire_coach": 2,
 }
 
-# Per-user limits.
-# GM_VOTES_PER_TYPE caps how many votes a single fan can spend on one vote
-# type per season. Coach votes (fire/hire) cap at 4 — there's only one
-# coach to deal with, so more budget there is wasted. Player votes
-# (resign/cut) cap at 8 because a team often has multiple candidates worth
-# voting on, and fans need to spread their support.
+# Per-user GM limits.
+#
+# LEGACY: the per-season / per-type / per-target caps below are retired. The
+# single-vote model (one vote per fan per target, withdraw to change, flat
+# per-vote cost) replaced hard caps entirely, so nothing in the live vote path
+# reads these anymore. Kept defined only so any stray importer doesn't break.
 GM_VOTES_PER_SEASON = 20
 GM_VOTES_PER_TYPE = {
     "fire_coach":     4,
@@ -459,6 +466,12 @@ GM_VOTES_PER_TYPE = {
 }
 GM_VOTES_PER_TYPE_DEFAULT = 4
 GM_VOTES_PER_TARGET = 4
+
+# Tribune secret achievement: cast this many GM votes in a single season. Under
+# single-vote a fan votes at most once per decision, so a season's ceiling is
+# roughly their team's slate (~6 roster calls plus the coach). 6 reads as
+# "voted on basically everything" while staying reachable across seasons.
+GM_TRIBUNE_VOTE_THRESHOLD = 6
 
 # Front Office voting window opens at this week. Before this, GM vote UIs show
 # a "convening..." state. Mirrors the frontend const GM_ACTIVE_WEEK in
@@ -499,7 +512,7 @@ GM_COACH_POOL_SIZE = 5
 # ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
 
 PICKEM_CORRECT_REWARD = 5           # (Legacy) Floobits per correct pick
-PICKEM_CLAIRVOYANT_THRESHOLD = 96    # Points threshold for Clairvoyant bonus (e.g. 12 games × 8 pts = all correct by Q1)
+PICKEM_CLAIRVOYANT_THRESHOLD = 80    # Points threshold for Clairvoyant bonus. Favorites pay <1.0x (0.5/winProb), so a perfect 12-game week scores ~83-103 and most great weeks land 70-90. Was 96 — unreachable, since even a flawless week often fell short. 80 makes a perfect week always clear it and lands ~top 8-13% of strong weeks.
 PICKEM_CLAIRVOYANT_BONUS = 35       # Bonus Floobits when threshold is met (was 25, bumped 40% in v0.16.1 economy pass)
 
 # Points-based system (v2)
@@ -519,6 +532,11 @@ PICKEM_WEEKLY_TOP_PCT_PRIZE = 4                 # was 3
 PICKEM_SEASON_PRIZES = {1: 100, 2: 65, 3: 33}  # was {75, 50, 25}
 PICKEM_SEASON_TOP_PCT = 0.25
 PICKEM_SEASON_TOP_PCT_PRIZE = 13                # was 10
+
+# Playoff bracket challenge — floobit prizes by final rank (one-time/season).
+PLAYOFF_BRACKET_PRIZES = {1: 120, 2: 75, 3: 40}
+PLAYOFF_BRACKET_TOP_PCT = 0.25
+PLAYOFF_BRACKET_TOP_PCT_PRIZE = 15
 
 # Win-probability multiplier (applies at any pick time)
 PICKEM_UNDERDOG_MAX = 3.0           # Max multiplier for extreme underdogs
@@ -586,3 +604,24 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 #   Season N+1 (planned): True  — the payoff. Cracking can actually trigger.
 ANOMALY_CRACKING_ENABLED = False
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}
+
+# ── Offseason phase-rollback snapshots ────────────────────────────────────────
+# Only these phases make non-idempotent mutations (drafts compound picks), so a
+# mid-phase restart must roll the DB back to the phase-entry snapshot and re-run
+# the phase cleanly. Other phases resume via offseason_completed_steps alone.
+# Shared by seasonManager._snapshotDbForPhase (writer) and
+# run_api._restorePartialPhaseSnapshotIfNeeded (reader) — keep them in sync here.
+OFFSEASON_PARTIAL_PHASES = {'rookie_draft', 'fa_draft', 'training'}
+
+# Large, in-season, append-only tables that offseason phases provably never
+# write (no games/weeks/pick-ems happen during a draft). Excluded from the
+# phase-rollback snapshot so it stays small AND flat across seasons — these are
+# exactly the tables that grow every season. Everything not listed IS snapshotted
+# (safe direction: a missed table is merely copied, never silently un-rolled-back).
+OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
+    'game_player_stats',    # ~20MB at S14 — per-game per-player box scores
+    'weekly_card_bonuses',  # ~16MB — weekly fantasy card settlement
+    'weekly_player_fp',     # weekly fantasy points
+    'pick_em_picks',        # weekly pick-em selections
+    'games',                # game records
+}

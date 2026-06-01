@@ -276,7 +276,34 @@ class FantasyTracker:
     def _seasonManager(self):
         return self.serviceContainer.getService('season_manager')
 
+    _SNAPSHOT_TTL_SECONDS = 8.0  # leaderboard staleness budget (broadcast cadence is 10s)
+
     def getSnapshot(self, seasonNum: int = None) -> dict:
+        """Short-TTL cache around the (read-only) snapshot computation.
+
+        The snapshot aggregates every roster/leaderboard entry and is recomputed
+        by the 10s broadcast loop AND by every /api/fantasy/{snapshot,leaderboard}
+        request. The TTL dedupes the frequent overlapping calls (broadcast +
+        concurrent page loads) without noticeably staling live points: the TTL is
+        shorter than the broadcast interval, so the broadcast still recomputes
+        fresh each cycle. Consumers read the result (never mutate in place), so
+        sharing the cached dict is safe."""
+        import time
+        sm = self._seasonManager
+        resolved = seasonNum
+        if resolved is None:
+            resolved = sm.currentSeason.seasonNumber if (sm and sm.currentSeason) else None
+        if resolved is not None:
+            cache = getattr(self, '_snapshotCache', None)
+            if (cache is not None and cache[0] == resolved
+                    and (time.monotonic() - cache[1]) < self._SNAPSHOT_TTL_SECONDS):
+                return cache[2]
+        result = self._computeSnapshot(seasonNum)
+        if resolved is not None:
+            self._snapshotCache = (resolved, time.monotonic(), result)
+        return result
+
+    def _computeSnapshot(self, seasonNum: int = None) -> dict:
         """Build a complete fantasy snapshot for all users.
 
         Returns a dict with season, week, gamesActive flag, and ranked entries.
@@ -347,11 +374,17 @@ class FantasyTracker:
                     "modifier": preLockModifier,
                 }
 
-            # ── 2. Collect all roster player IDs ──
+            # ── 2. Collect all roster player IDs + batch-load roster users ──
             allRosterPlayerIds = set()
             for roster in rosters:
                 for rp in roster.players:
                     allRosterPlayerIds.add(rp.player_id)
+            # One IN query instead of session.get(User) per roster (N+1) below.
+            rosterUserIds = {r.user_id for r in rosters}
+            usersById = {
+                u.id: u for u in
+                session.query(User).filter(User.id.in_(rosterUserIds)).all()
+            } if rosterUserIds else {}
 
             # ── 3. Per-player per-week FP from WeeklyPlayerFP (banked) + _weekFP (live) ──
             weekPlayerFPMap = self._getWeekPlayerFPFromDB(
@@ -499,7 +532,7 @@ class FantasyTracker:
             entries = []
             for roster in rosters:
                 userId = roster.user_id
-                rosterUser = session.get(User, userId)
+                rosterUser = usersById.get(userId)
                 rosterPlayerIds = {rp.player_id for rp in roster.players}
 
                 # Per-player weekly FP (banked + live from _weekFP overlay)

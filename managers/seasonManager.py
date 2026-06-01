@@ -3615,7 +3615,110 @@ class SeasonManager:
             weeks.append(week)
         
         return weeks
-    
+
+    # ── Playoff bracket challenge hooks ──────────────────────────────────
+    def _freezePlayoffSeeds(self, playoffTeamsByConf) -> None:
+        """Freeze the bracket field when seeding locks so the challenge can
+        project matchups. playoffTeamsByConf: {confName: [Team,...] best-first};
+        top 2 per conference are byes."""
+        try:
+            seeds = {"conferences": {}}
+            for confName, teams in playoffTeamsByConf.items():
+                seeds["conferences"][confName] = [
+                    {
+                        "teamId": t.id,
+                        "seed": i + 1,
+                        "bye": i < 2,
+                        "winPct": round(t.seasonTeamStats.get('winPerc', 0), 4),
+                        "scoreDiff": t.seasonTeamStats.get('scoreDiff', 0),
+                        "teamName": t.name,
+                        "city": getattr(t, 'city', ''),
+                        "abbreviation": getattr(t, 'abbreviation', None) or t.name[:3].upper(),
+                    }
+                    for i, t in enumerate(teams)
+                ]
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            s = _gs()
+            try:
+                PlayoffBracketRepository(s).freezeSeeds(self.currentSeason.seasonNumber, seeds)
+                s.commit()
+            finally:
+                s.close()
+            logger.info(
+                f"Playoff bracket field frozen "
+                f"({sum(len(v) for v in seeds['conferences'].values())} teams)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to freeze playoff seeds: {e}")
+
+    def _scorePlayoffBrackets(self) -> None:
+        """Recompute all bracket scores from results so far (idempotent).
+        Called after each playoff round resolves."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            s = _gs()
+            try:
+                PlayoffBracketRepository(s).scoreAllBrackets(self.currentSeason.seasonNumber)
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to score playoff brackets: {e}")
+
+    def _awardPlayoffBracketPrizes(self) -> None:
+        """After the Floos Bowl: final scoring + floobit prizes to the top
+        brackets. Guarded against double-payment by a per-season tx check."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.models import CurrencyTransaction
+            from constants import (PLAYOFF_BRACKET_PRIZES, PLAYOFF_BRACKET_TOP_PCT,
+                                   PLAYOFF_BRACKET_TOP_PCT_PRIZE)
+            season = self.currentSeason.seasonNumber
+            txType = 'playoff_bracket_prize'
+            s = _gs()
+            try:
+                if s.query(CurrencyTransaction.id).filter(
+                        CurrencyTransaction.transaction_type == txType,
+                        CurrencyTransaction.season == season).first():
+                    logger.info("Playoff bracket prizes already awarded — skipping")
+                    return
+                repo = PlayoffBracketRepository(s)
+                repo.scoreAllBrackets(season)
+                board = [b for b in repo.getLeaderboard(season) if b.points > 0]
+                cur = CurrencyRepository(s)
+                topPctCount = int(len(board) * PLAYOFF_BRACKET_TOP_PCT)
+                paid = 0
+                for rank, b in enumerate(board, start=1):
+                    prize = PLAYOFF_BRACKET_PRIZES.get(rank, 0)
+                    if prize == 0 and rank <= topPctCount:
+                        prize = PLAYOFF_BRACKET_TOP_PCT_PRIZE
+                    if prize > 0:
+                        cur.addFunds(b.user_id, prize, txType,
+                                     f"Playoff bracket #{rank} ({b.points} pts)", season)
+                        paid += 1
+                # Bracket achievements — granted once (this whole method is
+                # guarded against re-running by the prize-tx check above).
+                from managers import achievementManager as _am
+                advancers, _champ = repo.computeActualAdvancers(season)
+                totalAdvancers = sum(len(v) for v in advancers.values())
+                topPoints = board[0].points if board else 0
+                for b in board:
+                    _am.onPlayoffBracketScored(s, b.user_id, b.points, season)  # Bracketeer I-IV
+                    if totalAdvancers > 0 and b.correct_count >= totalAdvancers:
+                        _am.unlockSecret(s, b.user_id, "flawless")              # perfect bracket
+                    if b.points == topPoints:
+                        _am.unlockSecret(s, b.user_id, "pool_shark")            # #1 on the leaderboard
+                s.commit()
+                logger.info(f"Playoff bracket prizes awarded to {paid} brackets")
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to award playoff bracket prizes: {e}")
+
     async def _simulatePlayoffRounds(self) -> None:
         """Simulate all playoff rounds"""
 
@@ -3719,6 +3822,10 @@ class SeasonManager:
             self._testPlayoffAnchor = datetime.datetime.utcnow()
             self.timingManager.playoffPhase = True
             logger.info(f"PLAYOFF_TEST: playoff anchor set, gap={self.timingManager.scheduleGap}s between rounds")
+
+        # Seeding is locked — freeze the bracket-challenge field (opens it for
+        # submission until Round 1 kicks off).
+        self._freezePlayoffSeeds(playoffTeams)
 
         for x in range(numOfRounds):
 
@@ -3934,6 +4041,9 @@ class SeasonManager:
             # Resolve pick-em weekly prizes for this playoff round
             self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
+            # Re-score playoff brackets now this round's results are final.
+            self._scorePlayoffBrackets()
+
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
                 playoffTeamsList.clear()
@@ -3964,6 +4074,10 @@ class SeasonManager:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _champText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_champText))
+
+                # Bracket challenge: final scoring + floobit prizes to top brackets.
+                self._awardPlayoffBracketPrizes()
+
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)
                 self.currentSeason.freeAgencyOrder.append(self.currentSeason.champion)
@@ -4392,6 +4506,12 @@ class SeasonManager:
             logger.info("Step 3.5: Resolve GM cut player votes")
             await self._resolveGmCutVotes(gmResults)
 
+            # STEP 3.6: Award the "Scorched Earth" secret to fans who voted to
+            # tear their team all the way down. Runs here, after cuts, while the
+            # roster still reflects every removal and before the drafts refill it.
+            logger.info("Step 3.6: Award clean-house achievements")
+            await self._awardCleanHouseAchievements(gmResults)
+
             self._markOffseasonStepComplete('frontoffice_decisions')
         else:
             logger.info("Frontoffice decisions already completed (resumed) — skipping STEP 1-3.5")
@@ -4476,6 +4596,7 @@ class SeasonManager:
                             outcome=r.get('outcome', ''),
                             targetPlayerName=r.get('targetPlayerName'),
                             totalVotes=r.get('totalVotes', 0),
+                            votesAgainst=r.get('votesAgainst', 0),
                             threshold=r.get('threshold', 0),
                             probability=r.get('probability', 0.0),
                         )
@@ -5801,6 +5922,76 @@ class SeasonManager:
         finally:
             session.close()
 
+    async def _awardCleanHouseAchievements(self, gmResults: list) -> None:
+        """Grant the 'mutineer' secret (Scorched Earth) to fans who orchestrated
+        a total teardown of their favorite team this offseason.
+
+        Earned when, in one offseason, a fan votes to fire the coach AND to
+        remove players (cut or let walk), and the team actually ends up gutted:
+        the coach was fired and every roster slot is now empty. Must run right
+        after cut resolution — at that point the roster reflects every cut and
+        non-resign, and the rookie/FA drafts that refill it haven't fired yet.
+        The coach always gets backfilled in the fire/hire step, so the coach
+        side is gated on "fired this offseason" (a ratified fire vote in
+        gmResults), not an empty coach slot.
+        """
+        from database.connection import get_session
+        from database.models import GmVote
+        from managers import achievementManager as _am
+
+        # Teams whose coach was fired this offseason (ratified fire vote).
+        firedTeamIds = {
+            r["teamId"] for r in gmResults
+            if r.get("voteType") == "fire_coach" and r.get("outcome") == "success"
+        }
+        if not firedTeamIds:
+            return
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+
+        # Of the fired-coach teams, the ones whose entire roster is now empty —
+        # every starter cut or not re-signed. rosterDict slots go None when vacated.
+        clearedTeamIds = {
+            t.id for t in teamManager.teams
+            if t.id in firedTeamIds
+            and all(p is None for p in t.rosterDict.values())
+        }
+        if not clearedTeamIds:
+            return
+
+        season = self.currentSeason.seasonNumber if self.currentSeason else 0
+        session = get_session()
+        try:
+            for teamId in clearedTeamIds:
+                votes = session.query(GmVote).filter_by(
+                    team_id=teamId, season=season,
+                ).all()
+                # Fans who voted to fire the coach...
+                fireBackers = {
+                    v.user_id for v in votes
+                    if v.vote_type == "fire_coach" and (v.direction or "yea") != "nay"
+                }
+                # ...AND voted to remove at least one player (cut yea / re-sign nay).
+                playerPurgers = {
+                    v.user_id for v in votes
+                    if (v.vote_type == "cut_player" and (v.direction or "yea") != "nay")
+                    or (v.vote_type == "resign_player" and v.direction == "nay")
+                }
+                for uid in (fireBackers & playerPurgers):
+                    _am.unlockSecret(session, uid, "mutineer")
+                    logger.info(
+                        f"Scorched Earth (mutineer) unlocked for user {uid} "
+                        f"(team {teamId} torn down)"
+                    )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Clean-house achievement award error: {e}")
+        finally:
+            session.close()
+
     async def _openFaVotingWindowMidSeason(self) -> None:
         """Open the FA voting window mid-season when the Front Office activates.
 
@@ -6032,22 +6223,40 @@ class SeasonManager:
         self._persistOffseasonFlow()
 
     def _snapshotDbForPhase(self, phase: str) -> None:
-        """Copy floosball.db to /data/offseason_${season}_${phase}.db using
-        SQLite's online backup API so a corrupted resume can be rolled back
-        manually. Skipped on non-prod paths (no /data) and silently noops
-        on any error — snapshots are belt-and-suspenders, not load-bearing.
+        """Snapshot the offseason-mutable tables to
+        /data/offseason_${season}_${phase}.db so a mid-phase restart can roll the
+        DB back and re-run the phase cleanly (drafts compound picks, so they
+        aren't safe to replay). Skipped on non-prod paths (no /data) and silently
+        noops on any error — snapshots are belt-and-suspenders, not load-bearing.
 
-        Old snapshots from previous seasons are pruned before writing the
-        new one. Each season produces 6 checkpoints at ~90MB each, so
-        accumulating them across seasons would burn ~500MB/year of disk.
+        Two things keep this cheap and flat across seasons:
+          1. Only the non-idempotent phases (OFFSEASON_PARTIAL_PHASES) are
+             snapshotted — the restore path never rolls back any other phase.
+          2. Only the offseason-mutable tables are copied; the large in-season
+             append-only tables (OFFSEASON_SNAPSHOT_EXCLUDE_TABLES) are skipped
+             since drafts never touch them. That drops each snapshot from a full
+             ~57MB copy to ~15MB, and — since the excluded tables are exactly the
+             ones that grow every season — keeps it from ballooning over time.
+
+        Restore (run_api._restorePartialPhaseSnapshotIfNeeded) replaces only the
+        snapshotted tables, leaving the excluded ones (which never changed during
+        the phase) untouched. Old snapshots from prior seasons are pruned first.
         """
+        from constants import OFFSEASON_PARTIAL_PHASES, OFFSEASON_SNAPSHOT_EXCLUDE_TABLES
+        # Only the non-idempotent phases need a rollback point.
+        if phase not in OFFSEASON_PARTIAL_PHASES:
+            return
         try:
             import os
             import glob
             import sqlite3
-            dbPath = os.path.join('data', 'floosball.db')
+            # Resolve the DB path the same way run_api._restorePartialPhaseSnapshotIfNeeded
+            # does, so the writer and reader always agree (prod → /data; local →
+            # DATABASE_DIR or ./data).
+            dbDir = os.environ.get('DATABASE_DIR', 'data')
             if os.path.exists('/data') and os.path.isdir('/data'):
-                dbPath = '/data/floosball.db'
+                dbDir = '/data'
+            dbPath = os.path.join(dbDir, 'floosball.db')
             if not os.path.exists(dbPath):
                 return
             seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
@@ -6070,16 +6279,41 @@ class SeasonManager:
                         pass
 
             outPath = os.path.join(outDir, f"offseason_s{seasonNum}_{phase}.db")
+            # Start fresh — a stale same-season/phase file would collide with the
+            # CREATE TABLE statements below.
+            if os.path.exists(outPath):
+                try:
+                    os.remove(outPath)
+                except OSError:
+                    pass
+
             src = sqlite3.connect(dbPath)
             try:
-                dst = sqlite3.connect(outPath)
+                tables = [r[0] for r in src.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()]
+                included = [t for t in tables
+                            if t not in OFFSEASON_SNAPSHOT_EXCLUDE_TABLES]
+                src.execute("ATTACH DATABASE ? AS snap", (outPath,))
                 try:
-                    src.backup(dst)
+                    # CREATE TABLE AS SELECT copies columns (in declared order) +
+                    # rows. Constraints/indexes are intentionally omitted: restore
+                    # inserts positionally back into the real (constrained) tables,
+                    # so the snapshot is just a data carrier.
+                    for t in included:
+                        src.execute(
+                            f'CREATE TABLE snap."{t}" AS SELECT * FROM main."{t}"'
+                        )
                 finally:
-                    dst.close()
+                    src.execute("DETACH DATABASE snap")
             finally:
                 src.close()
-            logger.info(f"  Offseason checkpoint snapshot: {outPath}")
+            sizeMb = os.path.getsize(outPath) / 1e6 if os.path.exists(outPath) else 0
+            logger.info(
+                f"  Offseason checkpoint snapshot: {outPath} "
+                f"({len(included)} tables, {sizeMb:.1f}MB)"
+            )
         except Exception as e:
             logger.debug(f"Could not snapshot DB for phase {phase}: {e}")
 

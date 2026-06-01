@@ -735,6 +735,11 @@ class Season(Base):
     # GM vote threshold so a fan who logs in for the first time after the
     # voting window opens doesn't inflate the bar mid-vote.
     front_office_fan_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Frozen playoff field for the bracket challenge, set when seeding locks.
+    # JSON: {"conferences": {confName: [{teamId, seed, winPct, scoreDiff, bye}]}}.
+    # The bracket projects matchups from this + a user's picks (re-seeding is
+    # deterministic once seeds are frozen).
+    playoff_seeds: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Indexes
@@ -1503,6 +1508,10 @@ class GmVote(Base):
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'yea' (support) or 'nay' (oppose). Only the threshold directives
+    # (fire_coach / cut_player / resign_player) carry 'nay'; hire_coach and the
+    # ranked ballots are always 'yea'. Existing rows default to 'yea'.
+    direction: Mapped[str] = mapped_column(String(8), nullable=False, default="yea")
     # Optional JSON payload for vote types that need structured data beyond a
     # single target_player_id — e.g. draft_rookie carries the ranked ballot here.
     details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1531,7 +1540,8 @@ class GmVoteResult(Base):
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
-    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)  # 'yea' (for) count
+    votes_against: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 'nay' count; net = total_votes - votes_against
     threshold: Mapped[int] = mapped_column(Integer, nullable=False)
     success_probability: Mapped[float] = mapped_column(Float, nullable=False)
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -1574,6 +1584,37 @@ class GmFaBallot(Base):
 
     def __repr__(self):
         return f"<GmFaBallot(user={self.user_id}, team={self.team_id}, season={self.season})>"
+
+
+class PlayoffBracket(Base):
+    """A user's playoff bracket-challenge entry for a season.
+
+    predictions JSON: {round_key: [teamId,...]} — teams the user picks to
+    advance PAST each round (round1 / round2 / league_championship /
+    floosbowl). The floosbowl list's single team is the predicted champion.
+    Scored per-advancer (see playoff_bracket.scoreBracket). One per user/season.
+    """
+    __tablename__ = "playoff_brackets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    predictions: Mapped[str] = mapped_column(Text, nullable=False)  # JSON {round_key: [teamId,...]}
+    points: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    correct_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", name="uq_playoff_bracket_user_season"),
+        Index("idx_playoff_brackets_season", "season"),
+    )
+
+    def __repr__(self):
+        return f"<PlayoffBracket(user={self.user_id}, season={self.season}, points={self.points})>"
 
 
 # ─── Pick-Em ("Prognostications") ────────────────────────────────────────────

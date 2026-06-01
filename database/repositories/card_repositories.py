@@ -338,6 +338,27 @@ class CurrencyRepository:
 
         return currency
 
+    def refundFunds(self, userId: int, amount: int, transactionType: str,
+                    description: str = None, season: int = None, week: int = None) -> UserCurrency:
+        """Reverse a prior spend (e.g. a withdrawn GM vote): restore balance and
+        roll back lifetime_spent, without counting it as 'earned' or firing the
+        earn/spend achievement hooks. Keeps cast->withdraw from farming stats."""
+        currency = self.getOrCreate(userId)
+        currency.balance += amount
+        currency.lifetime_spent = max(0, currency.lifetime_spent - amount)
+        tx = CurrencyTransaction(
+            user_id=userId,
+            amount=amount,
+            balance_after=currency.balance,
+            transaction_type=transactionType,
+            description=description,
+            season=season,
+            week=week,
+        )
+        self.session.add(tx)
+        self.session.flush()
+        return currency
+
     def spendFunds(self, userId: int, amount: int, transactionType: str,
                    description: str = None, season: int = None, week: int = None) -> Optional[UserCurrency]:
         """Spend Floobits. Returns None if insufficient balance."""

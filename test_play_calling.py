@@ -33,6 +33,7 @@ import floosball_game as FloosGame   # real load — managers already in sys.mod
 
 from types import SimpleNamespace
 from floosball_game import PlayType
+from game_rules import GameRules
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Minimal stubs — only the attributes playCaller() and the weight pipeline need
@@ -56,7 +57,12 @@ def makeTeam(name='TEAM', coach=None, defRunRating=75, defPassRating=75):
         teamName=name,   # used by _callTimeout()
         abbr=name[:3],
         coach=coach,
-        rosterDict={'k': SimpleNamespace(maxFgDistance=52)},
+        rosterDict={'k': SimpleNamespace(
+            maxFgDistance=52,
+            gameAttributes=SimpleNamespace(confidenceModifier=0.0, determinationModifier=0.0,
+                                           overallRating=75),
+            gameStatsDict={'kicking': {}},
+        )},
         defenseRunCoverageRating=defRunRating,
         defensePassRating=defPassRating,
         defensePassCoverageRating=defPassRating,
@@ -94,6 +100,10 @@ def makeGame(down=1, ytg=10, quarter=1, clock=600, homeScore=0, awayScore=0,
     g.gameClockSeconds = clock
     g.clockRunning     = clockRunning
     g.twoMinuteWarningShown = True   # suppress mid-test two-minute-warning
+    g._clockStoppedByWarning = False
+    g.gamePressure     = 50          # play-caller reads this for situation insights
+    g.momentum         = 0.0
+    g.gameRules        = GameRules() # real clock thresholds (kneel/spike/timeout/FG)
 
     g.totalPlays       = 1
     g.gameFeed         = []
@@ -375,6 +385,7 @@ class MockPlay:
     """Records what play was called instead of simulating it."""
     def __init__(self, game):
         self.game = game
+        self.insights = {}
         self.playType = None
         self.passType = None
         self.playResult = None
@@ -543,6 +554,21 @@ def runClockManagementTests():
     # Q1 — spike only triggers in Q2/Q4
     clockTest("Q1  trailing  0:10  no TOs  running   → no spike (wrong quarter)",
               makeGame(down=2, ytg=15, quarter=1, clock=10,
+                       homeScore=14, awayScore=7, offIsHome=False,
+                       clockRunning=True, homeTOs=3, awayTOs=0),
+              expectNot=PlayType.Spike)
+
+    # 3rd down with time for a play (>20s) — never spike, even in FG range
+    clockTest("Q4  trailing  0:50  3rd  no TOs  FG range → no spike (>20s, play fits)",
+              makeGame(down=3, ytg=8, quarter=4, clock=50, yardsToEndzone=20,
+                       homeScore=14, awayScore=11, offIsHome=False,
+                       clockRunning=True, homeTOs=3, awayTOs=0),
+              expectNot=PlayType.Spike)
+
+    # 3rd down, goal-to-go, trailing by a TD — spiking only sets up a useless
+    # FG (need 7), so it must run a play (the reported bad case).
+    clockTest("Q4  trailing -7  0:12  3rd  goal-to-go    → no spike (need a TD)",
+              makeGame(down=3, ytg=3, quarter=4, clock=12, yardsToEndzone=3,
                        homeScore=14, awayScore=7, offIsHome=False,
                        clockRunning=True, homeTOs=3, awayTOs=0),
               expectNot=PlayType.Spike)

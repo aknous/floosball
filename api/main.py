@@ -6,7 +6,7 @@ Uses refactored manager system with clean separation of concerns
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, Header, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
@@ -67,7 +67,13 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    # Report simulation liveness, not just "the HTTP server is up", so the
+    # platform health check and uptime monitors can catch a dead/crashed sim
+    # task. During startup floosball_app / simTask may be unset — treat as OK.
+    task = getattr(floosball_app, 'simTask', None) if floosball_app is not None else None
+    if task is not None and task.done() and not task.cancelled():
+        return JSONResponse(status_code=503, content={"status": "degraded", "simRunning": False})
+    return {"status": "ok", "simRunning": bool(task is not None and not task.done())}
 
 # Global reference to FloosballApplication (set during startup)
 floosball_app = None
@@ -2151,6 +2157,22 @@ async def get_season_info(response: Response):
         if offseasonPhaseTarget is not None:
             offseasonPhaseTargetTime = offseasonPhaseTarget.isoformat() + 'Z'
 
+        # Playoff bracket challenge: are the seeds frozen yet? Drives the Bracket
+        # nav item (only shown once the playoffs are seeded). DB-backed so it
+        # survives a mid-playoffs restart; cheap single-row read on a 10s-cached
+        # endpoint. Never let it break the season response.
+        bracketAvailable = False
+        try:
+            from database.connection import get_session as _gsBracket
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository as _PBRepo
+            _bracketSess = _gsBracket()
+            try:
+                bracketAvailable = _PBRepo(_bracketSess).getFrozenSeeds(current_season.seasonNumber) is not None
+            finally:
+                _bracketSess.close()
+        except Exception:
+            bracketAvailable = False
+
         return build_success_response({
             'season_number': current_season.seasonNumber,
             'current_week': current_season.currentWeek,
@@ -2165,6 +2187,7 @@ async def get_season_info(response: Response):
             'next_season_start_time': nextSeasonStartTime,
             'offseason_phase': offseasonPhase,
             'offseason_phase_target_time': offseasonPhaseTargetTime,
+            'bracket_available': bracketAvailable,
             'regular_season_over': current_season.currentWeek > 28 or (
                 current_season.currentWeek == 28 and current_season.completedWeekGames is not None
             ),
@@ -2634,6 +2657,146 @@ _VALID_STAT_CATEGORIES = {
     'def_sacks', 'def_ints', 'def_tackles', 'def_tfl', 'def_forced_fumbles', 'def_pass_breakups',
 }
 _VALID_POSITIONS = {'ALL', 'QB', 'RB', 'WR', 'TE', 'K'}
+
+
+# ============================================================================
+# PLAYOFF BRACKET CHALLENGE
+# ============================================================================
+
+class PlayoffBracketSubmit(BaseModel):
+    # {round1:[...], round2:[...], league_championship:[...], floosbowl:[...]}
+    predictions: Dict[str, List[int]]
+
+
+def _playoffBracketTemplate(season: int, repo) -> Optional[Dict[str, Any]]:
+    """Frozen field + projected Round 1 (fixed) matchups for the fill-out UI."""
+    import playoff_bracket as pb
+    seeds = repo.getFrozenSeeds(season)
+    if not seeds:
+        return None
+    confs = seeds.get('conferences', {})
+    field = [
+        {"teamId": t["teamId"], "winPct": t.get("winPct", 0),
+         "scoreDiff": t.get("scoreDiff", 0), "conference": conf, "seed": t.get("seed", 0)}
+        for conf, teams in confs.items() for t in teams
+    ]
+    survivors = {c: [t["teamId"] for t in teams if not t.get("bye")] for c, teams in confs.items()}
+    r1 = pb.projectRound(field, pb.ROUND_1, survivors)
+    round1 = {conf: [{"higherSeed": hi["teamId"], "lowerSeed": lo["teamId"]} for hi, lo in pairs]
+              for conf, pairs in r1.items()}
+    return {"conferences": confs, "round1Matchups": round1, "roundLabels": pb.ROUND_LABELS}
+
+
+@app.get("/api/playoffs/bracket/template")
+def get_playoff_bracket_template(user: _User = Depends(_getCurrentUser)):
+    """Frozen seeds + fixed Round 1 matchups + the user's current picks."""
+    import json as _json
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        tmpl = _playoffBracketTemplate(season, repo)
+        if tmpl is None:
+            return build_success_response({"season": season, "available": False})
+        existing = repo.getUserBracket(user.id, season)
+        myPreds = _json.loads(existing.predictions) if (existing and existing.predictions) else None
+        return build_success_response({
+            "season": season, "available": True, "open": repo.isOpen(season),
+            "myPredictions": myPreds, **tmpl,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/playoffs/bracket")
+def submit_playoff_bracket(req: PlayoffBracketSubmit, user: _User = Depends(_getCurrentUser)):
+    """Submit/update the user's bracket (rejected once Round 1 kicks off)."""
+    import playoff_bracket as pb
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        if not repo.isOpen(season):
+            raise HTTPException(400, "The bracket is locked — playoffs have started")
+        seeds = repo.getFrozenSeeds(season) or {}
+        validIds = {t["teamId"] for teams in seeds.get("conferences", {}).values() for t in teams}
+        preds = {}
+        for key in pb.ROUND_KEYS.values():
+            picks = req.predictions.get(key, []) or []
+            if not isinstance(picks, list) or any(p not in validIds for p in picks):
+                raise HTTPException(400, f"Invalid picks for {key}")
+            preds[key] = picks
+        b = repo.submitPredictions(user.id, season, preds)
+        session.commit()
+        return build_success_response({"bracketId": b.id, "season": season, "predictions": preds})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Playoff bracket submit error: {e}")
+        raise HTTPException(500, "Failed to submit bracket")
+    finally:
+        session.close()
+
+
+@app.get("/api/playoffs/bracket/me")
+def get_my_playoff_bracket(user: _User = Depends(_getCurrentUser)):
+    """The user's bracket + live score breakdown."""
+    import json as _json
+    import playoff_bracket as pb
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        b = repo.getUserBracket(user.id, season)
+        if b is None:
+            return build_success_response({"season": season, "hasBracket": False})
+        preds = _json.loads(b.predictions or '{}')
+        advancers, championId = repo.computeActualAdvancers(season)
+        breakdown = pb.scoreBracket(preds, advancers, championId)
+        return build_success_response({
+            "season": season, "hasBracket": True, "predictions": preds,
+            "points": b.points, "correctCount": b.correct_count, "locked": b.locked,
+            "perRound": breakdown["perRound"], "actualAdvancers": advancers,
+            "gameResults": repo.getPlayoffGameResults(season),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/playoffs/bracket/leaderboard")
+def get_playoff_bracket_leaderboard(user: _User = Depends(_getCurrentUser)):
+    """Ranked brackets (points desc). Public — only points/username, not picks."""
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    from database.models import User as _U
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        board = repo.getLeaderboard(season)
+        userIds = [b.user_id for b in board]
+        names = ({u.id: (u.username or f"User{u.id}")
+                  for u in session.query(_U).filter(_U.id.in_(userIds)).all()}
+                 if userIds else {})
+        rows = [{"rank": i + 1, "userId": b.user_id,
+                 "username": names.get(b.user_id, f"User{b.user_id}"),
+                 "points": b.points, "correctCount": b.correct_count,
+                 "isMe": b.user_id == user.id}
+                for i, b in enumerate(board)]
+        return build_success_response({"season": season, "leaderboard": rows})
+    finally:
+        session.close()
 
 
 @app.get("/api/stats/leaders", response_model=Dict[str, Any])
@@ -8686,6 +8849,12 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
 class GmVoteRequest(BaseModel):
     voteType: str
     targetPlayerId: Optional[int] = None
+    direction: str = "yea"  # 'yea' (support) or 'nay' (oppose)
+
+
+class GmVoteUndoRequest(BaseModel):
+    voteType: str
+    targetPlayerId: Optional[int] = None
 
 
 class GmFaBallotRequest(BaseModel):
@@ -8699,10 +8868,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
     from database.repositories.gm_repository import GmVoteRepository
     from database.repositories.card_repositories import CurrencyRepository
     from database.models import User, Player, Coach
-    from constants import (
-        GM_VOTE_TYPES, GM_VOTE_COST, GM_VOTES_PER_SEASON,
-        GM_VOTES_PER_TYPE, GM_VOTES_PER_TYPE_DEFAULT, GM_VOTES_PER_TARGET,
-    )
+    from constants import GM_VOTE_TYPES, GM_VOTE_COST, GM_TRIBUNE_VOTE_THRESHOLD
     from managers.gmManager import GmManager
 
     if req.voteType not in GM_VOTE_TYPES:
@@ -8710,6 +8876,12 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
 
     if req.voteType == "sign_fa":
         raise HTTPException(400, "Use POST /api/gm/fa-ballot for free agent votes")
+
+    # Yea/nay only applies to the binary threshold directives; hire_coach is a
+    # selection (oppose by backing someone else) and ranked ballots are support.
+    direction = "nay" if req.direction == "nay" else "yea"
+    if direction == "nay" and req.voteType not in ("fire_coach", "resign_player", "cut_player"):
+        raise HTTPException(400, "Only fire, cut, and re-sign votes can be opposed")
 
     # Block votes during offseason
     sm = floosball_app.seasonManager if floosball_app else None
@@ -8747,44 +8919,22 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             if assignedAt is not None:
                 raise HTTPException(400, "Coach not available in the hiring pool")
 
-        # Check limits
         voteRepo = GmVoteRepository(session)
         sm = floosball_app.seasonManager if floosball_app else None
         currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-        counts = voteRepo.getUserVoteCounts(user.id, currentSeason)
 
-        if counts["total"] >= GM_VOTES_PER_SEASON:
-            raise HTTPException(400, f"Season vote limit reached ({GM_VOTES_PER_SEASON})")
-        perTypeCap = GM_VOTES_PER_TYPE.get(req.voteType, GM_VOTES_PER_TYPE_DEFAULT)
-        if counts["perType"].get(req.voteType, 0) >= perTypeCap:
-            raise HTTPException(400, f"Vote type limit reached ({perTypeCap} per type)")
-        targetKey = f"{req.voteType}:{req.targetPlayerId or 'none'}"
-        if counts["perTarget"].get(targetKey, 0) >= GM_VOTES_PER_TARGET:
-            raise HTTPException(400, f"Target vote limit reached ({GM_VOTES_PER_TARGET} per target)")
-
-        # If a threshold-based directive (fire/resign/cut) has already cleared
-        # its bar, it's guaranteed to pass at resolution — no need to keep
-        # spending floobits on it. Hire_coach is plurality so additional
-        # votes always matter (they can shift the leader).
-        if req.voteType in ("fire_coach", "resign_player", "cut_player"):
-            existingTallies = voteRepo.getVoteTallies(teamId, currentSeason)
-            existingCount = next(
-                (t["votes"] for t in existingTallies
-                 if t["voteType"] == req.voteType
-                 and t["targetPlayerId"] == req.targetPlayerId),
-                0,
+        # One vote per fan per target. To change your mind (or switch sides),
+        # withdraw first — no stacking, so the cost is flat (no escalation).
+        existingDir = voteRepo.getUserDirectionOnTarget(
+            user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
+        )
+        if existingDir:
+            raise HTTPException(
+                400,
+                "You've already voted on this. Withdraw your vote to change it.",
             )
-            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
-            if existingCount >= max(1, teamFanCount):
-                raise HTTPException(
-                    400,
-                    "Directive already meets the threshold to pass — no further votes needed",
-                )
 
-        # Escalating cost: base * 2^(votes already cast for this specific target)
-        baseCost = GM_VOTE_COST[req.voteType]
-        targetCount = counts["perTarget"].get(targetKey, 0)
-        cost = baseCost * (2 ** targetCount)
+        cost = GM_VOTE_COST[req.voteType]
         currencyRepo = CurrencyRepository(session)
         result = currencyRepo.spendFunds(
             user.id, cost, "gm_vote",
@@ -8797,25 +8947,20 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         vote = voteRepo.castVote(
             userId=user.id, teamId=teamId, season=currentSeason,
             voteType=req.voteType, costPaid=cost,
-            targetPlayerId=req.targetPlayerId,
+            targetPlayerId=req.targetPlayerId, direction=direction,
         )
 
-        # Secret hooks — Mutineer (max fire_coach votes allowed against the
-        # single coach target = GM_VOTES_PER_TARGET) and Tribune (spend the
-        # entire season vote budget, any mix of types). Fire coach is capped
-        # per-target, not per-type, since there's only one coach to fire —
-        # so the per-target cap is the real ceiling for this achievement.
+        # Tribune — cast GM_TRIBUNE_VOTE_THRESHOLD votes in a season (any mix of
+        # targets). The other GM secret, Scorched Earth (key "mutineer"), now
+        # fires at offseason resolution on a full team teardown — see
+        # seasonManager._awardCleanHouseAchievements — not on vote cast.
         try:
             updatedCounts = voteRepo.getUserVoteCounts(user.id, currentSeason)
-            totalVotes = updatedCounts.get("total", 0)
-            fireVotes = (updatedCounts.get("perType") or {}).get("fire_coach", 0)
-            from managers import achievementManager as _am
-            if fireVotes >= GM_VOTES_PER_TARGET:
-                _am.unlockSecret(session, user.id, "mutineer")
-            if totalVotes >= GM_VOTES_PER_SEASON:
+            if updatedCounts.get("total", 0) >= GM_TRIBUNE_VOTE_THRESHOLD:
+                from managers import achievementManager as _am
                 _am.unlockSecret(session, user.id, "tribune")
         except Exception as _e:
-            logger.warning(f"Mutineer/Tribune hook failed: {_e}")
+            logger.warning(f"Tribune hook failed: {_e}")
 
         session.commit()
 
@@ -8826,7 +8971,7 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
             (t for t in tallies
              if t["voteType"] == req.voteType
              and t["targetPlayerId"] == req.targetPlayerId),
-            {"votes": 1}
+            {"votes": 0, "votesFor": 0, "votesAgainst": 0}
         )
         gm = GmManager(session)
         if req.voteType == "hire_coach":
@@ -8853,9 +8998,12 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         return build_success_response({
             "voteId": vote.id,
             "voteType": req.voteType,
+            "direction": direction,
             "targetPlayerId": req.targetPlayerId,
             "costPaid": cost,
             "currentVotes": targetTally["votes"],
+            "votesFor": targetTally.get("votesFor", 0),
+            "votesAgainst": targetTally.get("votesAgainst", 0),
             "threshold": threshold,
             "probability": round(probability, 3),
             "remainingBalance": result.balance,
@@ -8866,6 +9014,81 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
         session.rollback()
         logger.error(f"GM vote error: {e}")
         raise HTTPException(500, "Failed to cast vote")
+    finally:
+        session.close()
+
+
+@app.post("/api/gm/vote/undo")
+def undo_gm_vote(req: GmVoteUndoRequest, user: _User = Depends(_getCurrentUser)):
+    """Withdraw the user's most-recent vote on a target and refund its cost.
+
+    Lets a fan flip sides (withdraw, then cast the other way) or simply take
+    back a misclick — the affordance the UI already exposed but had no backend
+    for. Refund reverses the spend cleanly (no lifetime-earned inflation)."""
+    from database.connection import get_session
+    from database.repositories.gm_repository import GmVoteRepository
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.models import User
+    from managers.gmManager import GmManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    if sm and sm.currentSeason and sm.currentSeason.currentWeek == 'Offseason':
+        raise HTTPException(400, "The Board has adjourned for the offseason")
+
+    session = get_session()
+    try:
+        dbUser = session.query(User).filter_by(id=user.id).first()
+        if not dbUser or not dbUser.favorite_team_id:
+            raise HTTPException(400, "You must have a favorite team to vote")
+        teamId = dbUser.favorite_team_id
+        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        voteRepo = GmVoteRepository(session)
+        vote = voteRepo.withdrawMostRecentVote(
+            user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
+        )
+        if vote is None:
+            raise HTTPException(400, "You have no vote to withdraw on this")
+        refund = vote.cost_paid  # read before commit — the row is now deleted
+
+        currencyRepo = CurrencyRepository(session)
+        currency = currencyRepo.refundFunds(
+            user.id, refund, "gm_vote_refund",
+            f"GM vote withdrawn: {req.voteType}", currentSeason,
+        )
+        session.commit()
+
+        # Updated net tally for the response. The frontend also refetches the
+        # team summary, which carries the authoritative per-type thresholds.
+        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
+        targetTally = next(
+            (t for t in tallies
+             if t["voteType"] == req.voteType
+             and t["targetPlayerId"] == req.targetPlayerId),
+            {"votes": 0, "votesFor": 0, "votesAgainst": 0}
+        )
+        gm = GmManager(session)
+        teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
+        threshold = gm.calculateThreshold(teamFanCount)
+        probability = gm.calculateProbability(targetTally["votes"], threshold)
+
+        return build_success_response({
+            "voteType": req.voteType,
+            "targetPlayerId": req.targetPlayerId,
+            "refunded": refund,
+            "currentVotes": targetTally["votes"],
+            "votesFor": targetTally.get("votesFor", 0),
+            "votesAgainst": targetTally.get("votesAgainst", 0),
+            "threshold": threshold,
+            "probability": round(probability, 3),
+            "remainingBalance": currency.balance,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"GM vote undo error: {e}")
+        raise HTTPException(500, "Failed to withdraw vote")
     finally:
         session.close()
 
@@ -9788,6 +10011,7 @@ def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
                     "id": v.id,
                     "voteType": v.vote_type,
                     "targetPlayerId": v.target_player_id,
+                    "direction": getattr(v, 'direction', 'yea') or 'yea',
                     "costPaid": v.cost_paid,
                     "createdAt": v.created_at.isoformat() + 'Z' if v.created_at else None,
                 }
@@ -10978,14 +11202,7 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
 
 # ============================================================================
 
-@app.get("/health")
-async def health_check():
-    """API health check endpoint"""
-    return {
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'app_initialized': floosball_app is not None
-    }
+# /health is defined near the top of this file (with sim-liveness reporting).
 
 
 # ============================================================================

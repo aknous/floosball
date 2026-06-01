@@ -35,6 +35,7 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
+    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
@@ -460,6 +461,56 @@ throwAwayCoverageList = [
                     '{} finds no one open, throws it away',
                 ]
 
+# ── Context-aware incompletes — args: (passer.name, receiver.name) ──
+# Bad throw to a wide-open receiver: the QB simply missed an open target.
+overthrowOpenList = [
+                    '{} misses a wide-open {}, incomplete',
+                    '{} sails it past a wide-open {}, incomplete',
+                    '{} had {} open and missed the throw, incomplete',
+                    '{} leaves an open {} waiting, throw is off the mark',
+                    '{} airmails it to {} with nobody near, incomplete',
+                ]
+# Bad throw forced into coverage: errant ball into a tight window.
+forcedCoverageList = [
+                    '{} forces it into coverage for {}, incomplete',
+                    '{} tries to squeeze it to a blanketed {}, broken up',
+                    '{} throws into traffic for {}, knocked away',
+                    '{} forces it to {} in a tight window, no good',
+                    '{} airs it into coverage for {}, incomplete',
+                ]
+# Accurate throw to a covered receiver, broken up at the catch point.
+coverageBreakupList = [
+                    '{} on target to {}, broken up in coverage',
+                    '{} hits {} in stride, knocked loose by the defender',
+                    '{} puts it on {}, but the defender knocks it away',
+                    '{} and {} nearly connect, broken up at the catch point',
+                ]
+
+# ── Context-aware interceptions — args: (passer.name, defender.name) ──
+# Picked off after forcing it into coverage (bad read / covered receiver).
+intoCoverageList = [
+                    '{} throws into coverage, {} steps in front for the pick',
+                    '{} forces it into traffic, picked off by {}',
+                    '{} never saw the defender, {} jumps the route',
+                    '{} throws into double coverage, {} comes down with it',
+                    '{} telegraphs it into coverage, {} with the interception',
+                ]
+# Picked off on an errant throw the QB sailed; the defender takes it.
+errantPickList = [
+                    '{} sails it, {} reels in the errant throw',
+                    '{} airmails it right to {}, intercepted',
+                    '{} loses it on the throw, picked off by {}',
+                    '{} floats one up for grabs, {} brings it in',
+                ]
+# Picked off on an on-target throw — the receiver was covered and the
+# defender stepped in. Stated by action, not judged.
+defPlayPickList = [
+                    '{} on target, but {} steps in front for the interception',
+                    '{} throws on target, {} jumps the route for the pick',
+                    '{} hits the window, but {} undercuts it for the pick',
+                    '{} puts it on the target, {} cuts in front for the interception',
+                ]
+
 passPlayBook = {
                     'Play1': {
                         'dropback': QbDropback.long,
@@ -757,7 +808,11 @@ class Game:
         self.homeTimeoutsRemaining = 3
         self.awayTimeoutsRemaining = 3
         self.twoMinuteWarningShown = False
-        
+        # True from the instant the two-minute warning stops the clock until the
+        # next snap. Blocks teams from burning a timeout on the dead clock right
+        # after the warning (the warning already gave a free stop).
+        self._clockStoppedByWarning = False
+
         self.homePlaysTotal = 0
         self.awayPlaysTotal = 0
         self.home1stDownsTotal = 0
@@ -1862,6 +1917,10 @@ class Game:
             return
         if not self.clockRunning:
             return
+        # The two-minute warning already stopped the clock for free — don't
+        # waste a timeout on the dead clock before a snap runs.
+        if self._clockStoppedByWarning:
+            return
         secs = self.gameClockSeconds
         # Determine if the defensive team is trailing
         defIsHome = (self.defensiveTeam == self.homeTeam)
@@ -1877,25 +1936,33 @@ class Game:
         defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
         if defTimeouts <= 0:
             return
-        # Time window: Q4/OT up to 5 min; Q2 up to 60 sec
+        # Time window: a defense burns timeouts to get the ball back, which only
+        # pays off close to the end. Inside 2:00 for a one-score game; extended
+        # to 3:00 only when down multiple scores (genuinely needs the clock).
+        # Calling them at 4-5 min in a tight game is the "no coach does that" case.
         isEndGame = self.currentQuarter == 4 or self.currentQuarter >= 5
-        threshold = 300 if isEndGame else 60
+        multiScore = deficit >= 9
+        if isEndGame:
+            threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
+        else:
+            threshold = 60  # Q2 end-of-half
         if secs > threshold:
+            return
+        # Don't waste a timeout right before the free two-minute-warning stop.
+        if (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                and self.gameRules.timeoutClockThreshold < secs
+                <= self.gameRules.timeoutClockThreshold + 15):
             return
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
         # Urgency-based timeout probability
-        if isEndGame and secs <= self.gameRules.timeoutClockThreshold:
-            # Under 2 min: high urgency (original behavior)
-            toChance = 0.5 + 0.5 * defGameIQ
-        elif isEndGame:
-            # 2-5 min: scale by time urgency and deficit size
-            urgency = (300 - secs) / 180  # 0→1 as time decreases toward 2 min
-            deficitScale = min(1.0, deficit / 14)
-            toChance = urgency * deficitScale * (0.3 + 0.5 * defGameIQ)
+        if secs <= self.gameRules.timeoutClockThreshold:
+            # Inside 2:00 — high urgency to get the ball back
+            toChance = (0.5 + 0.5 * defGameIQ) if isEndGame else (0.4 + 0.4 * defGameIQ)
         else:
-            # Q2: moderate urgency
-            toChance = 0.4 + 0.4 * defGameIQ
+            # 2-3 min, multi-score only — urgency builds toward the 2-min mark
+            urgency = max(0.0, (180 - secs) / 60)
+            toChance = (0.25 + 0.45 * defGameIQ) * urgency
         if _random.random() >= toChance:
             return
         # Call timeout
@@ -2628,6 +2695,26 @@ class Game:
                 # Cruise control — no adjustment, vulnerable to comeback
                 self._tallyCoachArchetype('leading_cruise')
 
+        # ── PROTECTING A ONE-SCORE LEAD late in Q4/OT ──
+        # The big-lead branch above only fires at 8+. A 1-7 point lead in the
+        # final minutes is exactly when a real coach runs the ball in-bounds to
+        # bleed clock and force the opponent to spend timeouts — incompletions
+        # would stop your own clock. Ramps as the clock winds down; coach-scaled
+        # via _mul so poor clock managers protect less.
+        elif 0 < scoreDiff <= 7 and q >= 4:
+            if secs <= 120:
+                protectUrgency = 1.0
+            elif secs <= 300:
+                protectUrgency = 0.6
+            else:
+                protectUrgency = 0.0
+            if protectUrgency > 0:
+                _mul('run',    1 + 0.7 * protectUrgency)
+                _mul('short',  1 + 0.2 * protectUrgency)
+                _mul('medium', 1 - 0.1 * protectUrgency)
+                _mul('long',   1 - 0.5 * protectUrgency)
+                _mul('deep',   1 - 0.7 * protectUrgency)
+
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:
             _mul('run', 0.3)
@@ -2917,10 +3004,23 @@ class Game:
             # Urgency scales with remaining time — almost always spike under 30s,
             # less likely at 90s+ (sometimes better to just run a play)
             secs = self.gameClockSeconds
+            # Down gate: spiking forfeits a down, so it's a 1st/2nd-down tool.
+            # On 3rd down it's only defensible to stop the clock for a tying/
+            # winning FG that's in range AND would be the last play (no time
+            # left for another snap) — spike on 3rd, kick on 4th. Never when a
+            # TD is still needed or a play still fits (that just burns the down
+            # into a 4th-down must-score).
+            spikeKicker = self.offensiveTeam.rosterDict.get('k')
+            spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
+            spikeFgException = (self.down == 3 and -3 <= scoreDiff <= 0
+                                and self.yardsToEndzone <= spikeKickerMax
+                                and secs <= 20)
+            spikeDownOK = self.down <= 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
                     and timeoutsLeft == 0 and scoreDiff <= 0
+                    and spikeDownOK
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
@@ -2936,31 +3036,38 @@ class Game:
                     }
                     self.play.spike()
                     return
-            # Call timeout (offense): trailing/tied, clock running, timeouts available
-            # Q4/OT: expanded window to 5 min — urgency scales with deficit and time
-            # Q2: standard 2-min window
+            # Call timeout (offense): trailing/tied, clock running, timeouts left.
+            # The offense controls its own tempo with hurry-up, so spending a
+            # timeout to stop the clock only matters inside the final two minutes
+            # — extended to 3:00 only when down multiple scores. Calling them at
+            # 4-5 min is the "no coach does that" case the window used to allow.
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
+            multiScore = scoreDiff <= -9
+            toWindow = (180 if (self.currentQuarter >= 4 and multiScore)
+                        else self.gameRules.timeoutClockThreshold)
+            twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                              and self.gameRules.timeoutClockThreshold < secs
+                              <= self.gameRules.timeoutClockThreshold + 15)
             if (isLateGame and scoreDiff <= 0 and self.clockRunning
-                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
-                toWindow = 300 if self.currentQuarter >= 4 else self.gameRules.timeoutClockThreshold
-                if secs <= toWindow:
-                    if secs <= self.gameRules.timeoutClockThreshold:
-                        # Under 2 min: high urgency (original behavior)
-                        toChance = 0.5 + 0.5 * gameIQ
-                    else:
-                        # 2-5 min (Q4/OT): scale by deficit — bigger hole = more urgent
-                        # Tied games get 0.5 floor — still urgent enough to manage clock
-                        deficitScale = max(0.5, min(1.0, abs(scoreDiff) / 16))
-                        toChance = (0.2 + 0.5 * gameIQ) * deficitScale
-                    if _random.random() < toChance:
-                        self.play.insights['clockMgmt'] = {
-                            'decision': 'timeout',
-                            'reason': 'Stop clock while trailing/tied',
-                            'clockRemaining': secs,
-                            'timeoutsLeft': timeoutsLeft,
-                            'coachClockIQ': round(gameIQ, 2),
-                        }
-                        self._callTimeout(isHome)
+                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
+                    and not twoMinImminent and not self._clockStoppedByWarning
+                    and secs <= toWindow):
+                if secs <= self.gameRules.timeoutClockThreshold:
+                    # Inside 2:00 — high urgency
+                    toChance = 0.5 + 0.5 * gameIQ
+                else:
+                    # 2-3 min, multi-score only — urgency builds toward 2:00
+                    urgency = max(0.0, (180 - secs) / 60)
+                    toChance = (0.2 + 0.45 * gameIQ) * urgency
+                if _random.random() < toChance:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'timeout',
+                        'reason': 'Stop clock while trailing/tied',
+                        'clockRemaining': secs,
+                        'timeoutsLeft': timeoutsLeft,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self._callTimeout(isHome)
                 # fall through — still need to call a play
 
         # Overtime
@@ -3330,25 +3437,56 @@ class Game:
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
                 interceptorName = interceptor.name if interceptor else self.play.defense.abbr
-                text = choice(interceptionList).format(self.play.passer.name, interceptorName)
+                # Pick the flavor from how the throw came about: forced into
+                # coverage, a sailed errant ball, or a good throw a DB jumped.
+                passI = self.play.insights.get('pass', {}) if isinstance(self.play.insights, dict) else {}
+                tq = passI.get('throwQuality')
+                actOpen = passI.get('rcvActualOpenness', passI.get('rcvOpenness'))
+                badThrow = tq is not None and tq < 50
+                covered = actOpen is not None and actOpen < 45
+                if covered and badThrow:
+                    intList = intoCoverageList      # forced it into traffic
+                elif covered:
+                    intList = defPlayPickList        # good throw, DB made the play
+                elif badThrow:
+                    intList = errantPickList         # sailed it to the defender
+                else:
+                    intList = interceptionList       # generic
+                text = choice(intList).format(self.play.passer.name, interceptorName)
             else:
-                if self.play.passType is PassType.short:
-                    if self.play.passIsDropped:
-                        text = choice(shortDropList).format(self.play.passer.name, self.play.receiver.name)
-                    else:
-                        text = choice(shortIncompleteList).format(self.play.passer.name, self.play.receiver.name)
-                elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
-                    if self.play.passIsDropped:
-                        text = choice(deepDropList).format(self.play.passer.name, self.play.receiver.name)
-                    else:
-                        text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
-                elif self.play.passType is PassType.throwAway:
-                    protDiff = self.play.insights.get('pass', {}).get('protectionDiff', 0)
+                # Classify the incompletion: did the QB miss an open man, force
+                # it into coverage, or did the defense break up an on-target ball?
+                passI = self.play.insights.get('pass', {}) if isinstance(self.play.insights, dict) else {}
+                tq = passI.get('throwQuality')
+                actOpen = passI.get('rcvActualOpenness', passI.get('rcvOpenness'))
+                badThrow = tq is not None and tq < 50
+                covered = actOpen is not None and actOpen < 45
+                wideOpen = actOpen is not None and actOpen >= 60
+
+                if self.play.passType is PassType.throwAway:
+                    protDiff = passI.get('protectionDiff', 0)
                     taList = throwAwayPressureList if protDiff < -5 else throwAwayCoverageList
                     text = choice(taList).format(self.play.passer.name)
-                else:
-                    if self.play.passIsDropped:
+                elif self.play.passIsDropped:
+                    # Drops keep their tier-specific flavor.
+                    if self.play.passType is PassType.short:
+                        text = choice(shortDropList).format(self.play.passer.name, self.play.receiver.name)
+                    elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
+                        text = choice(deepDropList).format(self.play.passer.name, self.play.receiver.name)
+                    else:
                         text = choice(midDropList).format(self.play.passer.name, self.play.receiver.name)
+                elif badThrow and wideOpen:
+                    text = choice(overthrowOpenList).format(self.play.passer.name, self.play.receiver.name)
+                elif badThrow and covered:
+                    text = choice(forcedCoverageList).format(self.play.passer.name, self.play.receiver.name)
+                elif covered:
+                    text = choice(coverageBreakupList).format(self.play.passer.name, self.play.receiver.name)
+                else:
+                    # Generic tier incomplete — good throw, open-ish, just didn't connect.
+                    if self.play.passType is PassType.short:
+                        text = choice(shortIncompleteList).format(self.play.passer.name, self.play.receiver.name)
+                    elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
+                        text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
                     else:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
@@ -4427,6 +4565,10 @@ class Game:
                 self.playCaller()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
+
+                # A snap has now been committed — the post-warning dead-clock
+                # window is over (timeouts allowed again on the next stoppage).
+                self._clockStoppedByWarning = False
 
                 # Tempo intent is captured on every play so the play insights
                 # always show the offense's intent (hurry-up / burn / neutral),
@@ -6623,8 +6765,8 @@ class Game:
             return ('burnClock', 40)  # Late Q3 with two-score lead
         if q >= 4 and scoreDiff > 8:
             return ('burnClock', 40)  # Q4/OT comfortable lead
-        if q >= 4 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff > 0:
-            return ('burnClock', 38)  # Q4/OT any lead under 2:00
+        if q >= 4 and scoreDiff > 0 and secs <= 300:
+            return ('burnClock', 38)  # Q4/OT any lead inside 5:00 — protect it
         return ('neutral', DEFAULT_BASE)
 
     def recordTempoIntent(self) -> None:
@@ -6976,6 +7118,7 @@ class Game:
             if self.currentQuarter == 2 or self.currentQuarter == 4:
                 self.twoMinuteWarningShown = True
                 self.clockRunning = False
+                self._clockStoppedByWarning = True
                 # Two-minute warning is like a free timeout
                 self.gameFeed.insert(0, {'event': {
                     'text': 'Two-Minute Warning',
@@ -8564,7 +8707,7 @@ class Play():
 
         return max(5, min(100, throwQuality))
     
-    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None) -> dict:
+    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None, receiverActualOpenness: float = None) -> dict:
         """
         Two-phase catch model with hard floors that prevent attribute compounding:
 
@@ -8634,10 +8777,48 @@ class Play():
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
 
-        # INT probability — bad throws to covered receivers get picked
-        intProb = 0
-        if throwQuality < 50 and receiverOpenness < 50:
-            intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
+        # INT probability — three independent paths, any of which can pick a
+        # pass (they don't have to co-occur the way the old single-gate model
+        # required):
+        #   1. Bad read — QB throws into coverage. Scales with how covered the
+        #      receiver ACTUALLY is (not how open the QB thought they were), so
+        #      low-vision QBs who target covered receivers get punished here.
+        #   2. Bad throw — an errant ball sails into traffic. The trigger is
+        #      throw quality (independent of the read), but a defender still has
+        #      to be near the target to capitalize: a bad throw to a wide-open
+        #      receiver falls incomplete (and reach may still bail it out), it
+        #      doesn't get picked out of empty space.
+        #   3. Defender's play — an above-average DB jumps a contested throw on
+        #      his own, even when the read and throw were fine.
+        # Combined as independent risks (probabilistic OR) so they stack but
+        # stay bounded. No per-tier multiplier: deep throws already pick more
+        # because their throw quality runs lower.
+        intOpenness = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
+        cov = defensePassCoverage
+        covFactor = cov / 100
+        openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
+        throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
+        # Proximity: how reachable the ball is for a defender. Full effect when
+        # the receiver is blanketed, fades toward zero once he's wide open
+        # (≥75). The floor is tier-dependent: a short throw can be genuinely
+        # uncontested, but a deep ball always has a safety in the area, so even
+        # an "open" deep receiver leaves a pickable window. This restores the
+        # deep > short INT gradient without a blanket per-tier multiplier.
+        proximityFloor = {
+            PassType.short:    0.00,
+            PassType.medium:   0.05,
+            PassType.long:     0.20,
+            PassType.deep:     0.35,
+            PassType.hailMary: 0.50,
+        }.get(passType, 0.10) if passType is not None else 0.0
+        proximity = max(proximityFloor, min(1.0, (75 - intOpenness) / 55))
+
+        pBadRead = openGap * covFactor * INT_BAD_READ_K
+        pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
+        pDefPlay = max(0.0, (cov - 70) / 30) * openGap * INT_DEF_PLAY_K
+
+        intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
+        intProb = intFrac * 100
 
         # Drop probability — receiver gets hands on it but doesn't secure
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
@@ -9057,6 +9238,11 @@ class Play():
                 self.insights['pass']['rcvReach'] = getattr(self.receiver.gameAttributes, 'reach', 0)
                 self.insights['pass']['rcvRouteRunning'] = self.selectedTarget.get('routeQuality', self.receiver.gameAttributes.routeRunning)
                 self.insights['pass']['rcvOpenness'] = round(self.selectedTarget.get('openness', 0))
+                # Actual (not QB-perceived) openness — drives the context-aware
+                # incomplete/INT narration the same way the INT model judges it.
+                self.insights['pass']['rcvActualOpenness'] = round(
+                    self.selectedTarget.get('actualOpenness', self.selectedTarget.get('openness', 0))
+                )
 
                 # STAGE 4: Calculate catch probability and outcome
                 # Use individual defender coverage if available
@@ -9076,6 +9262,7 @@ class Play():
                     catchDefCoverage,
                     receiverPressureMod,
                     passType=self.passType,
+                    receiverActualOpenness=self.selectedTarget.get('actualOpenness', self.selectedTarget['openness']),
                 )
 
                 # Choke boosts only in high-pressure situations (Q4 close games, etc.)
@@ -9318,15 +9505,22 @@ class Play():
                             defStripAbility = defAttrs.get('tackling', 70)
                             defStripAbility += self._defenderMentalMod(primaryTackler)
                         if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
+                            # Ball is out. Credit the forced fumble regardless of
+                            # who recovers, then run a recovery contest so the
+                            # offense can fall on it — same as a run fumble,
+                            # instead of every strip being an automatic turnover.
                             self.isFumble = True
-                            self.receiver.updateInGameConfidence(-.02)
-                            self.defense.updateInGameConfidence(.02)
-                            self.defense.gameDefenseStats['fumRec'] += 1
-                            self.isFumbleLost = True
                             self.forcedFumbleBy = primaryTackler
                             if hasattr(primaryTackler, 'stat_tracker'):
                                 primaryTackler.stat_tracker.add_forced_fumble(isReg)
-                            self.playResult = PlayResult.Fumble
+                            rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
+                            if (self.defense.defensePassCoverageRating + batched_randint(-5, 5)) >= \
+                               (self.receiver.gameAttributes.overallRating + rcvRecoveryMod + batched_randint(-5, 5)):
+                                self.receiver.updateInGameConfidence(-.02)
+                                self.defense.updateInGameConfidence(.02)
+                                self.defense.gameDefenseStats['fumRec'] += 1
+                                self.isFumbleLost = True
+                                self.playResult = PlayResult.Fumble
 
                     # Track long completions
                     if self.yardage >= 20:
