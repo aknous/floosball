@@ -1610,6 +1610,7 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'glitchPlayerId': getattr(play_data, 'glitchPlayerId', None),
                                 'glitchPlayerName': getattr(play_data, 'glitchPlayerName', None),
                                 'glitchLayer': getattr(play_data, 'glitchLayer', None),
+                                'glitchYardDelta': getattr(play_data, 'glitchYardDelta', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
