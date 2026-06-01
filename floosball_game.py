@@ -6478,6 +6478,7 @@ class Game:
                 'glitchPlayerId': getattr(self.play, 'glitchPlayerId', None),
                 'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
                 'glitchLayer': getattr(self.play, 'glitchLayer', None),
+                'glitchYardDelta': getattr(self.play, 'glitchYardDelta', None),
                 # Participant IDs — used by the frontend highlights feed
                 # to filter "plays involving players the user cares
                 # about." Null when the role didn't apply to this play.
@@ -7743,6 +7744,7 @@ class Game:
             p.glitchPlayerId = carrier.id
             p.glitchPlayerName = carrier.name
             p.glitchLayer = 'signature'
+            p.glitchYardDelta = newYardage - baseYardage
             p._l3Fired = True
         except Exception:
             pass
@@ -7855,12 +7857,13 @@ class Play():
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
-        # Anomaly system attachments — populated when a Layer 1 glitch
-        # fires on this play. None / empty when no anomaly happened.
+        # Anomaly system attachments — populated when a glitch fires on this
+        # play. None / empty when no anomaly happened.
         self.glitchText = None          # The glitch flavor line
         self.glitchPlayerId = None      # Player whose anomaly triggered
         self.glitchPlayerName = None
-        self.glitchLayer = None         # 'micro' for Layer 1 (Layers 2-3 land later)
+        self.glitchLayer = None         # 'micro' (L1) / 'personality' (L2) / 'signature' (L3)
+        self.glitchYardDelta = None     # L3 only: signed yards the glitch added (+) or cost (-)
         self.insights = {}              # Play insights dict — populated during execution
 
     def _captureBlitzer(self, scheme, defGameplanObj):
