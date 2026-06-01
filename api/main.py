@@ -2157,6 +2157,22 @@ async def get_season_info(response: Response):
         if offseasonPhaseTarget is not None:
             offseasonPhaseTargetTime = offseasonPhaseTarget.isoformat() + 'Z'
 
+        # Playoff bracket challenge: are the seeds frozen yet? Drives the Bracket
+        # nav item (only shown once the playoffs are seeded). DB-backed so it
+        # survives a mid-playoffs restart; cheap single-row read on a 10s-cached
+        # endpoint. Never let it break the season response.
+        bracketAvailable = False
+        try:
+            from database.connection import get_session as _gsBracket
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository as _PBRepo
+            _bracketSess = _gsBracket()
+            try:
+                bracketAvailable = _PBRepo(_bracketSess).getFrozenSeeds(current_season.seasonNumber) is not None
+            finally:
+                _bracketSess.close()
+        except Exception:
+            bracketAvailable = False
+
         return build_success_response({
             'season_number': current_season.seasonNumber,
             'current_week': current_season.currentWeek,
@@ -2171,6 +2187,7 @@ async def get_season_info(response: Response):
             'next_season_start_time': nextSeasonStartTime,
             'offseason_phase': offseasonPhase,
             'offseason_phase_target_time': offseasonPhaseTargetTime,
+            'bracket_available': bracketAvailable,
             'regular_season_over': current_season.currentWeek > 28 or (
                 current_season.currentWeek == 28 and current_season.completedWeekGames is not None
             ),
@@ -2640,6 +2657,146 @@ _VALID_STAT_CATEGORIES = {
     'def_sacks', 'def_ints', 'def_tackles', 'def_tfl', 'def_forced_fumbles', 'def_pass_breakups',
 }
 _VALID_POSITIONS = {'ALL', 'QB', 'RB', 'WR', 'TE', 'K'}
+
+
+# ============================================================================
+# PLAYOFF BRACKET CHALLENGE
+# ============================================================================
+
+class PlayoffBracketSubmit(BaseModel):
+    # {round1:[...], round2:[...], league_championship:[...], floosbowl:[...]}
+    predictions: Dict[str, List[int]]
+
+
+def _playoffBracketTemplate(season: int, repo) -> Optional[Dict[str, Any]]:
+    """Frozen field + projected Round 1 (fixed) matchups for the fill-out UI."""
+    import playoff_bracket as pb
+    seeds = repo.getFrozenSeeds(season)
+    if not seeds:
+        return None
+    confs = seeds.get('conferences', {})
+    field = [
+        {"teamId": t["teamId"], "winPct": t.get("winPct", 0),
+         "scoreDiff": t.get("scoreDiff", 0), "conference": conf, "seed": t.get("seed", 0)}
+        for conf, teams in confs.items() for t in teams
+    ]
+    survivors = {c: [t["teamId"] for t in teams if not t.get("bye")] for c, teams in confs.items()}
+    r1 = pb.projectRound(field, pb.ROUND_1, survivors)
+    round1 = {conf: [{"higherSeed": hi["teamId"], "lowerSeed": lo["teamId"]} for hi, lo in pairs]
+              for conf, pairs in r1.items()}
+    return {"conferences": confs, "round1Matchups": round1, "roundLabels": pb.ROUND_LABELS}
+
+
+@app.get("/api/playoffs/bracket/template")
+def get_playoff_bracket_template(user: _User = Depends(_getCurrentUser)):
+    """Frozen seeds + fixed Round 1 matchups + the user's current picks."""
+    import json as _json
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        tmpl = _playoffBracketTemplate(season, repo)
+        if tmpl is None:
+            return build_success_response({"season": season, "available": False})
+        existing = repo.getUserBracket(user.id, season)
+        myPreds = _json.loads(existing.predictions) if (existing and existing.predictions) else None
+        return build_success_response({
+            "season": season, "available": True, "open": repo.isOpen(season),
+            "myPredictions": myPreds, **tmpl,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/playoffs/bracket")
+def submit_playoff_bracket(req: PlayoffBracketSubmit, user: _User = Depends(_getCurrentUser)):
+    """Submit/update the user's bracket (rejected once Round 1 kicks off)."""
+    import playoff_bracket as pb
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        if not repo.isOpen(season):
+            raise HTTPException(400, "The bracket is locked — playoffs have started")
+        seeds = repo.getFrozenSeeds(season) or {}
+        validIds = {t["teamId"] for teams in seeds.get("conferences", {}).values() for t in teams}
+        preds = {}
+        for key in pb.ROUND_KEYS.values():
+            picks = req.predictions.get(key, []) or []
+            if not isinstance(picks, list) or any(p not in validIds for p in picks):
+                raise HTTPException(400, f"Invalid picks for {key}")
+            preds[key] = picks
+        b = repo.submitPredictions(user.id, season, preds)
+        session.commit()
+        return build_success_response({"bracketId": b.id, "season": season, "predictions": preds})
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Playoff bracket submit error: {e}")
+        raise HTTPException(500, "Failed to submit bracket")
+    finally:
+        session.close()
+
+
+@app.get("/api/playoffs/bracket/me")
+def get_my_playoff_bracket(user: _User = Depends(_getCurrentUser)):
+    """The user's bracket + live score breakdown."""
+    import json as _json
+    import playoff_bracket as pb
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        b = repo.getUserBracket(user.id, season)
+        if b is None:
+            return build_success_response({"season": season, "hasBracket": False})
+        preds = _json.loads(b.predictions or '{}')
+        advancers, championId = repo.computeActualAdvancers(season)
+        breakdown = pb.scoreBracket(preds, advancers, championId)
+        return build_success_response({
+            "season": season, "hasBracket": True, "predictions": preds,
+            "points": b.points, "correctCount": b.correct_count, "locked": b.locked,
+            "perRound": breakdown["perRound"], "actualAdvancers": advancers,
+            "gameResults": repo.getPlayoffGameResults(season),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/playoffs/bracket/leaderboard")
+def get_playoff_bracket_leaderboard(user: _User = Depends(_getCurrentUser)):
+    """Ranked brackets (points desc). Public — only points/username, not picks."""
+    from database.connection import get_session
+    from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+    from database.models import User as _U
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        repo = PlayoffBracketRepository(session)
+        board = repo.getLeaderboard(season)
+        userIds = [b.user_id for b in board]
+        names = ({u.id: (u.username or f"User{u.id}")
+                  for u in session.query(_U).filter(_U.id.in_(userIds)).all()}
+                 if userIds else {})
+        rows = [{"rank": i + 1, "userId": b.user_id,
+                 "username": names.get(b.user_id, f"User{b.user_id}"),
+                 "points": b.points, "correctCount": b.correct_count,
+                 "isMe": b.user_id == user.id}
+                for i, b in enumerate(board)]
+        return build_success_response({"season": season, "leaderboard": rows})
+    finally:
+        session.close()
 
 
 @app.get("/api/stats/leaders", response_model=Dict[str, Any])

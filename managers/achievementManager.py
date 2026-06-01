@@ -640,6 +640,15 @@ def onSeasonPickemPointsTotal(session: Session, userId: int, totalSeasonPoints: 
     return unlocked
 
 
+def onPlayoffBracketScored(session: Session, userId: int, points: int, currentSeason: int) -> List[UserAchievement]:
+    """Bracketeer tiers (I–IV) — final playoff bracket points this season."""
+    unlocked = []
+    for key in ("bracketeer_i", "bracketeer_ii", "bracketeer_iii", "bracketeer_iv"):
+        u = recordProgress(session, userId, key, absolute=points, currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
+
+
 def onSeasonFloobitsSpent(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
     """Magnate tiers (I–IV) — cumulative season floobits spent.
     Sums CurrencyTransaction negatives for this user this season."""
