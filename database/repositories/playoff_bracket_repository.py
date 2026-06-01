@@ -88,6 +88,30 @@ class PlayoffBracketRepository:
                 championId = winner
         return advancers, championId
 
+    def getPlayoffGameResults(self, season: int) -> List[Dict]:
+        """Final playoff games with scores, so the bracket UI can show the
+        actual result of each matchup. The frontend keys these by the team
+        pair (single-elimination, so a pair meets at most once)."""
+        games = (self.session.query(Game)
+                 .filter(Game.season == season,
+                         Game.playoff_round.isnot(None),
+                         Game.status == 'final')
+                 .all())
+        out: List[Dict] = []
+        for g in games:
+            try:
+                rnd = int(g.playoff_round)
+            except (ValueError, TypeError):
+                continue
+            out.append({
+                "round": rnd,
+                "homeTeamId": g.home_team_id,
+                "awayTeamId": g.away_team_id,
+                "homeScore": g.home_score or 0,
+                "awayScore": g.away_score or 0,
+            })
+        return out
+
     def scoreAllBrackets(self, season: int) -> List[PlayoffBracket]:
         """Recompute every bracket's points from current results. Idempotent.
         Also flips `locked` on once scoring begins (playoffs have started)."""

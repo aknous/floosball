@@ -2157,6 +2157,22 @@ async def get_season_info(response: Response):
         if offseasonPhaseTarget is not None:
             offseasonPhaseTargetTime = offseasonPhaseTarget.isoformat() + 'Z'
 
+        # Playoff bracket challenge: are the seeds frozen yet? Drives the Bracket
+        # nav item (only shown once the playoffs are seeded). DB-backed so it
+        # survives a mid-playoffs restart; cheap single-row read on a 10s-cached
+        # endpoint. Never let it break the season response.
+        bracketAvailable = False
+        try:
+            from database.connection import get_session as _gsBracket
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository as _PBRepo
+            _bracketSess = _gsBracket()
+            try:
+                bracketAvailable = _PBRepo(_bracketSess).getFrozenSeeds(current_season.seasonNumber) is not None
+            finally:
+                _bracketSess.close()
+        except Exception:
+            bracketAvailable = False
+
         return build_success_response({
             'season_number': current_season.seasonNumber,
             'current_week': current_season.currentWeek,
@@ -2171,6 +2187,7 @@ async def get_season_info(response: Response):
             'next_season_start_time': nextSeasonStartTime,
             'offseason_phase': offseasonPhase,
             'offseason_phase_target_time': offseasonPhaseTargetTime,
+            'bracket_available': bracketAvailable,
             'regular_season_over': current_season.currentWeek > 28 or (
                 current_season.currentWeek == 28 and current_season.completedWeekGames is not None
             ),
@@ -2750,6 +2767,7 @@ def get_my_playoff_bracket(user: _User = Depends(_getCurrentUser)):
             "season": season, "hasBracket": True, "predictions": preds,
             "points": b.points, "correctCount": b.correct_count, "locked": b.locked,
             "perRound": breakdown["perRound"], "actualAdvancers": advancers,
+            "gameResults": repo.getPlayoffGameResults(season),
         })
     finally:
         session.close()

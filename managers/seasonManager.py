@@ -3700,6 +3700,18 @@ class SeasonManager:
                         cur.addFunds(b.user_id, prize, txType,
                                      f"Playoff bracket #{rank} ({b.points} pts)", season)
                         paid += 1
+                # Bracket achievements — granted once (this whole method is
+                # guarded against re-running by the prize-tx check above).
+                from managers import achievementManager as _am
+                advancers, _champ = repo.computeActualAdvancers(season)
+                totalAdvancers = sum(len(v) for v in advancers.values())
+                topPoints = board[0].points if board else 0
+                for b in board:
+                    _am.onPlayoffBracketScored(s, b.user_id, b.points, season)  # Bracketeer I-IV
+                    if totalAdvancers > 0 and b.correct_count >= totalAdvancers:
+                        _am.unlockSecret(s, b.user_id, "flawless")              # perfect bracket
+                    if b.points == topPoints:
+                        _am.unlockSecret(s, b.user_id, "pool_shark")            # #1 on the leaderboard
                 s.commit()
                 logger.info(f"Playoff bracket prizes awarded to {paid} brackets")
             finally:

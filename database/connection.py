@@ -1787,6 +1787,19 @@ def _seedAchievements():
             {"key": "oracle_iv", "name": "Oracle IV", "category": "guidance", "scope": "per_season", "sort_order": 213, "target": 1800,
              "description": "Earn 1,800 total prognostication points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Bracketeer tiers — playoff bracket points this season (28 max).
+            {"key": "bracketeer_i", "name": "Bracketeer I", "category": "guidance", "scope": "per_season", "sort_order": 214, "target": 6,
+             "description": "Score 6 points in the playoff bracket challenge.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "bracketeer_ii", "name": "Bracketeer II", "category": "guidance", "scope": "per_season", "sort_order": 215, "target": 12,
+             "description": "Score 12 points in the playoff bracket challenge.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "bracketeer_iii", "name": "Bracketeer III", "category": "guidance", "scope": "per_season", "sort_order": 216, "target": 18,
+             "description": "Score 18 points in the playoff bracket challenge.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "bracketeer_iv", "name": "Bracketeer IV", "category": "guidance", "scope": "per_season", "sort_order": 217, "target": 24,
+             "description": "Score 24 points in the playoff bracket challenge.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Magnate tiers — cumulative season floobits spent. Targets
             # widened (next-season) so tier IV is a real spender milestone
             # given the floobit-curve income changes.
@@ -1939,6 +1952,12 @@ def _seedAchievements():
             {"key": "anthology", "name": "Anthology", "category": "secret", "scope": "once", "sort_order": 720, "target": 1,
              "description": "Buy one of every pack type in a single season.",
              "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "flawless", "name": "Flawless", "category": "secret", "scope": "once", "sort_order": 730, "target": 1,
+             "description": "Predict every playoff advancer correctly in a single bracket.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "pool_shark", "name": "Pool Shark", "category": "secret", "scope": "once", "sort_order": 740, "target": 1,
+             "description": "Finish #1 on the season playoff bracket leaderboard.",
+             "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "sparkler", "name": "Sparkler", "category": "guidance", "scope": "per_season", "sort_order": 170, "target": 1,
              "description": "Open your first Diamond card of the season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
