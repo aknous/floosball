@@ -1,16 +1,16 @@
-"""Anomaly tracker — user-attention-driven simulation-cracking layer.
+"""Anomaly tracker — user-attention-driven simulation-criticality layer.
 
 Responsibilities:
   * Recompute every player's attention score weekly from engagement
     sources (equipped cards, fantasy rosters, follows, favorite-team
     fan presence). Decay 10%/week absent fresh input.
   * Soft-cap individual attention at 100; excess flows into a per-
-    season league aggregate that drives the Cracking trigger.
+    season league aggregate that drives the Criticality trigger.
   * Manage state-ladder transitions (stable → stirring → erratic →
     rampant → awakened). Awakened is sticky until a Reset purge.
-  * Detect the Cracking when aggregate crosses the season's hidden
+  * Detect the Criticality when aggregate crosses the season's hidden
     threshold; tag the next 1–2 rounds for amplified anomaly rolls.
-  * Fire the Reset post-Cracking: roll purge per awakened player,
+  * Fire the Reset post-Criticality: roll purge per awakened player,
     cleanse losers, scale survivors back, open suppression window.
 
 The manager is called once per week from the season loop's
@@ -50,7 +50,7 @@ logger = get_logger("floosball.anomaly")
 # ─── Tuning constants ───────────────────────────────────────────────────────
 
 # Env-override for testing: set FLOOSBALL_ANOMALY_FAST=1 to compress
-# every threshold so a fresh sim run can produce Awakenings + Crackings
+# every threshold so a fresh sim run can produce Awakenings + Criticalitys
 # within a single fast-mode season. Boosts contributions, slashes
 # thresholds, and raises per-play roll caps.
 _ANOMALY_FAST = os.environ.get('FLOOSBALL_ANOMALY_FAST', '').lower() in ('1', 'true', 'yes')
@@ -91,7 +91,7 @@ else:
     ]
     AWAKEN_THRESHOLD = 90.0
 
-# League aggregate threshold for Cracking trigger.
+# League aggregate threshold for Criticality trigger.
 # Randomized per season in this range; the chosen value is hidden.
 # Fast mode pulls it way down so any decently-engaged season triggers.
 THRESHOLD_MIN = 80 if _ANOMALY_FAST else 600
@@ -101,19 +101,19 @@ THRESHOLD_MAX = 200 if _ANOMALY_FAST else 1200
 # is floored league-wide.
 SUPPRESSION_WINDOW_WEEKS = 2
 
-# Each subsequent Cracking in the same season triggers at a reduced
+# Each subsequent Criticality in the same season triggers at a reduced
 # threshold so engaged leagues get multiple events.
-THRESHOLD_DECAY_AFTER_CRACKING = 0.75
+THRESHOLD_DECAY_AFTER_CRITICALITY = 0.75
 
-# Cracking duration — number of rounds (weeks) the Cracking is active.
-# 1 round for first Cracking, 2 rounds if the aggregate was 50%+ over
+# Criticality duration — number of rounds (weeks) the Criticality is active.
+# 1 round for first Criticality, 2 rounds if the aggregate was 50%+ over
 # the threshold when it fired (runaway league signal).
-CRACKING_DURATION_DEFAULT = 1
-CRACKING_DURATION_RUNAWAY = 2
-CRACKING_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Cracking
+CRITICALITY_DURATION_DEFAULT = 1
+CRITICALITY_DURATION_RUNAWAY = 2
+CRITICALITY_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Criticality
 
-# During a Cracking round, per-play anomaly probabilities multiply.
-CRACKING_MULTIPLIER = 8.0 if _ANOMALY_FAST else 5.0
+# During a Criticality round, per-play anomaly probabilities multiply.
+CRITICALITY_MULTIPLIER = 8.0 if _ANOMALY_FAST else 5.0
 
 # Reset purge dodge multipliers, keyed by personality meta-awareness tier.
 # Aware-tier players resist purges better — they perceive the Cores'
@@ -127,7 +127,7 @@ PARTIALLY_AWARE_PERSONALITIES = {'paranoid', 'mystic'}
 
 # Post-Reset aftermath scaling. league aggregate is multiplied by this to
 # leave a partial baseline (the Cores didn't fully zero things) — high
-# enough that another Cracking is plausible later, low enough to give
+# enough that another Criticality is plausible later, low enough to give
 # room for buildup.
 RESET_AGGREGATE_SCALE = 0.2
 
@@ -136,13 +136,13 @@ RESET_AGGREGATE_SCALE = 0.2
 RESET_SURVIVOR_ATTENTION_SCALE = 0.5
 
 # Post-Reset suppression window — the Cores actively dampen anomaly
-# rates league-wide for this many weeks. During suppression, no Cracking
+# rates league-wide for this many weeks. During suppression, no Criticality
 # can fire even if aggregate climbs again.
 RESET_SUPPRESSION_WEEKS = 2
 
-# Pre-Cracking warning milestones — once the league aggregate crosses
+# Pre-Criticality warning milestones — once the league aggregate crosses
 # these fractions of the threshold, the Cores narrate a warning into
-# the news feed. Each milestone fires once per Cracking cycle (the
+# the news feed. Each milestone fires once per Criticality cycle (the
 # audit trail tracks which have already fired so we don't repeat).
 WARNING_LOW_THRESHOLD = 0.40   # 40% of threshold — first vague warning
 WARNING_HIGH_THRESHOLD = 0.65  # 65% — pointed, escalating warning
@@ -202,14 +202,14 @@ def weeklyTick(seasonNumber: int, week: int) -> None:
       2. Compute this week's attention contributions from each
          engagement source and add them in.
       3. Enforce soft cap; excess flows into over_cap_carry (per
-         player, accumulates over the season toward the Cracking).
+         player, accumulates over the season toward the Criticality).
       4. Update state ladder (stable → ... → awakened).
-      5. Recompute league aggregate; (Cracking trigger detection
+      5. Recompute league aggregate; (Criticality trigger detection
          lands in a follow-up commit).
     """
     session = get_session()
     try:
-        # If a Cracking window has just ended without a Reset, fire one
+        # If a Criticality window has just ended without a Reset, fire one
         # before this week's updates so the purge applies to current
         # attention values rather than this week's freshly-incremented
         # ones.
@@ -252,10 +252,10 @@ def getAnomalyState(playerId: int, seasonNumber: int) -> Optional[AnomalyState]:
         session.close()
 
 
-def isCrackingWeek(seasonNumber: int, week: int) -> bool:
-    """Return True if the given week is currently inside a Cracking window.
+def isCriticalityWeek(seasonNumber: int, week: int) -> bool:
+    """Return True if the given week is currently inside a Criticality window.
 
-    A Cracking lasts 1 or 2 consecutive rounds starting at
+    A Criticality lasts 1 or 2 consecutive rounds starting at
     ``last_thinning_week``. Outside the window, returns False.
     """
     session = get_session()
@@ -264,39 +264,39 @@ def isCrackingWeek(seasonNumber: int, week: int) -> bool:
         if state is None or state.last_thinning_week is None:
             return False
         start = state.last_thinning_week
-        # Inspect the patch trail to figure out duration. The Cracking
+        # Inspect the patch trail to figure out duration. The Criticality
         # trigger records its planned duration in the cores_patches_applied
-        # list (see _triggerCracking); 1 by default.
-        duration = CRACKING_DURATION_DEFAULT
+        # list (see _triggerCriticality); 1 by default.
+        duration = CRITICALITY_DURATION_DEFAULT
         for entry in (state.cores_patches_applied or []):
             if entry.get('event') == 'thinning_trigger' and entry.get('start_week') == start:
-                duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
+                duration = entry.get('duration', CRITICALITY_DURATION_DEFAULT)
                 break
         return start <= week < start + duration
     finally:
         session.close()
 
 
-def getCrackingMultiplier(seasonNumber: int, week: int) -> float:
-    """Per-play anomaly probability multiplier. 1.0 normally, 5.0 during Cracking."""
-    return CRACKING_MULTIPLIER if isCrackingWeek(seasonNumber, week) else 1.0
+def getCriticalityMultiplier(seasonNumber: int, week: int) -> float:
+    """Per-play anomaly probability multiplier. 1.0 normally, 5.0 during Criticality."""
+    return CRITICALITY_MULTIPLIER if isCriticalityWeek(seasonNumber, week) else 1.0
 
 
-def getActiveCrackingCore(seasonNumber: int, week: int) -> Optional[str]:
-    """Return the controlling Core's key for the active Cracking, or None.
+def getActiveCriticalityCore(seasonNumber: int, week: int) -> Optional[str]:
+    """Return the controlling Core's key for the active Criticality, or None.
 
     Scans the LeagueAnomalyState's audit trail for a thinning_trigger entry
     whose [start_week, start_week + duration) span contains `week`. Returns
-    the `core` field on that entry — selected once at Cracking trigger time
+    the `core` field on that entry — selected once at Criticality trigger time
     via `_pickControllingCore` and pinned for the duration.
 
-    Feature-flagged: when ANOMALY_CRACKING_ENABLED is False (the season-long
+    Feature-flagged: when ANOMALY_CRITICALITY_ENABLED is False (the season-long
     tease state), this always returns None. The Layer 1/2 cosmetic glitches
-    + Core news/warnings keep firing; only the math-swapping Cracking event
+    + Core news/warnings keep firing; only the math-swapping Criticality event
     is gated off until we flip the flag for the next season's payoff.
     """
-    from constants import ANOMALY_CRACKING_ENABLED
-    if not ANOMALY_CRACKING_ENABLED:
+    from constants import ANOMALY_CRITICALITY_ENABLED
+    if not ANOMALY_CRITICALITY_ENABLED:
         return None
     session = get_session()
     try:
@@ -307,7 +307,7 @@ def getActiveCrackingCore(seasonNumber: int, week: int) -> Optional[str]:
             if entry.get('event') != 'thinning_trigger':
                 continue
             start = entry.get('start_week')
-            duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
+            duration = entry.get('duration', CRITICALITY_DURATION_DEFAULT)
             if start is None:
                 continue
             if start <= week < start + duration:
@@ -320,7 +320,7 @@ def getActiveCrackingCore(seasonNumber: int, week: int) -> Optional[str]:
 def _pickControllingCore(state: LeagueAnomalyState) -> str:
     """Weighted-random pick from the 4 active Cores. Stenographer never
     takes control. Cores used more recently this season get less weight,
-    so each Cracking tends to rotate. If a Core hasn't been used this
+    so each Criticality tends to rotate. If a Core hasn't been used this
     season, it gets the heaviest weight."""
     from managers.coreEquations import CONTROLLING_CORES
 
@@ -641,11 +641,11 @@ def _broadcastStateTransition(playerId: int, playerName: str, state: str,
         logger.debug(f"State-transition broadcast skipped: {e}")
 
 
-# ─── League aggregate + Cracking trigger ────────────────────────────────────
+# ─── League aggregate + Criticality trigger ────────────────────────────────────
 
 
 def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> None:
-    """Recompute the league-wide aggregate and check Cracking threshold.
+    """Recompute the league-wide aggregate and check Criticality threshold.
 
     Aggregate inputs (v1):
       * Sum of over_cap_carry across all PlayerAttention rows.
@@ -683,45 +683,45 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         f"(over-cap sum={overCapSum:.1f}, pressure={backgroundPressure:.1f})"
     )
 
-    # Pre-Cracking warnings. Cores notice when the aggregate climbs past
+    # Pre-Criticality warnings. Cores notice when the aggregate climbs past
     # certain fractions of the threshold and fire flavor-only news
-    # entries. Each milestone fires once per Cracking cycle — the audit
+    # entries. Each milestone fires once per Criticality cycle — the audit
     # trail tracks which we've already broadcast.
     _maybeFireWarning(state, session=session, week=week)
 
-    # Cracking trigger detection — if aggregate has crossed the hidden
-    # threshold AND we're not already inside an active Cracking window
+    # Criticality trigger detection — if aggregate has crossed the hidden
+    # threshold AND we're not already inside an active Criticality window
     # AND we're not in a post-Reset suppression window, fire the
-    # Cracking for the next round.
+    # Criticality for the next round.
     if state.aggregate_score >= state.threshold:
         inSuppression = (
             state.suppression_window_ends_week is not None
             and week < state.suppression_window_ends_week
         )
-        # Block re-triggering inside an active Cracking window. The
+        # Block re-triggering inside an active Criticality window. The
         # Reset that follows clears last_thinning_week's "active" status
         # by setting last_reset_week, so subsequent crossings only fire
-        # once the previous Cracking has been resolved.
-        inActiveCracking = False
+        # once the previous Criticality has been resolved.
+        inActiveCriticality = False
         if state.last_thinning_week is not None:
             # Pull duration from the audit trail.
-            duration = CRACKING_DURATION_DEFAULT
+            duration = CRITICALITY_DURATION_DEFAULT
             for entry in (state.cores_patches_applied or []):
                 if (entry.get('event') == 'thinning_trigger'
                         and entry.get('start_week') == state.last_thinning_week):
-                    duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
-            crackingEndWeek = state.last_thinning_week + duration - 1
+                    duration = entry.get('duration', CRITICALITY_DURATION_DEFAULT)
+            criticalityEndWeek = state.last_thinning_week + duration - 1
             # Active window: between trigger and next-week Reset.
-            if week <= crackingEndWeek:
-                inActiveCracking = True
-            elif state.last_reset_week is None or state.last_reset_week < crackingEndWeek + 1:
-                # Cracking window has ended but Reset hasn't yet fired.
-                inActiveCracking = True
-        if not inSuppression and not inActiveCracking:
-            _triggerCracking(state, week, session=session)
+            if week <= criticalityEndWeek:
+                inActiveCriticality = True
+            elif state.last_reset_week is None or state.last_reset_week < criticalityEndWeek + 1:
+                # Criticality window has ended but Reset hasn't yet fired.
+                inActiveCriticality = True
+        if not inSuppression and not inActiveCriticality:
+            _triggerCriticality(state, week, session=session)
 
 
-# ─── Pre-Cracking warnings ──────────────────────────────────────────────────
+# ─── Pre-Criticality warnings ──────────────────────────────────────────────────
 
 
 def _maybeFireWarning(state: LeagueAnomalyState,
@@ -729,7 +729,7 @@ def _maybeFireWarning(state: LeagueAnomalyState,
                       week: Optional[int] = None) -> None:
     """Broadcast a Cores-attributed warning when aggregate crosses a
     milestone fraction of threshold. Each milestone fires once per
-    Cracking cycle (audit trail tracks which we've already done)."""
+    Criticality cycle (audit trail tracks which we've already done)."""
     ratio = float(state.aggregate_score) / max(1, state.threshold)
     if ratio < WARNING_LOW_THRESHOLD:
         return  # Below the warning floor — no Cores attention yet.
@@ -740,7 +740,7 @@ def _maybeFireWarning(state: LeagueAnomalyState,
     else:
         milestone = 'warning_low'
 
-    # Find the start of the current Cracking cycle. Cores warnings reset
+    # Find the start of the current Criticality cycle. Cores warnings reset
     # each time a Reset fires — so any warning fired since the last reset
     # counts as "this cycle."
     cycleStart = state.last_reset_week if state.last_reset_week is not None else 0
@@ -792,22 +792,22 @@ def _maybeFireWarning(state: LeagueAnomalyState,
 
 
 def _maybeFireReset(session: Session, seasonNumber: int, week: int) -> None:
-    """If a Cracking window just ended and no Reset has been issued for
+    """If a Criticality window just ended and no Reset has been issued for
     it yet, fire the Reset now."""
     state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
     if state is None or state.last_thinning_week is None:
         return
-    # Pull the Cracking duration from the audit trail.
-    duration = CRACKING_DURATION_DEFAULT
+    # Pull the Criticality duration from the audit trail.
+    duration = CRITICALITY_DURATION_DEFAULT
     for entry in (state.cores_patches_applied or []):
         if entry.get('event') == 'thinning_trigger' and entry.get('start_week') == state.last_thinning_week:
-            duration = entry.get('duration', CRACKING_DURATION_DEFAULT)
-    crackingEndWeek = state.last_thinning_week + duration - 1
-    # Reset fires on the week immediately after the Cracking window ends.
-    if week <= crackingEndWeek:
-        return  # Cracking still active
-    if state.last_reset_week == crackingEndWeek + 1:
-        return  # Already handled this Cracking
+            duration = entry.get('duration', CRITICALITY_DURATION_DEFAULT)
+    criticalityEndWeek = state.last_thinning_week + duration - 1
+    # Reset fires on the week immediately after the Criticality window ends.
+    if week <= criticalityEndWeek:
+        return  # Criticality still active
+    if state.last_reset_week == criticalityEndWeek + 1:
+        return  # Already handled this Criticality
     _fireReset(session, state, week)
 
 
@@ -936,39 +936,39 @@ def _getPlayerPersonality(session: Session, playerId: int) -> Optional[str]:
         return None
 
 
-def _triggerCracking(state: LeagueAnomalyState, currentWeek: int,
+def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
                      session: Optional[Session] = None) -> None:
-    """Fire a Cracking event for the upcoming round(s).
+    """Fire a Criticality event for the upcoming round(s).
 
     Records the trigger event in cores_patches_applied (which doubles as
     the league's audit trail). Bumps the threshold for next time so a
-    second Cracking in the same season requires fresh attention buildup.
+    second Criticality in the same season requires fresh attention buildup.
     Broadcasts a Cores-attributed news entry to the league feed.
 
-    Feature-flagged: when ANOMALY_CRACKING_ENABLED is False, the trigger
+    Feature-flagged: when ANOMALY_CRITICALITY_ENABLED is False, the trigger
     is suppressed entirely — no audit entry, no news. Aggregate continues
     to climb (visible in diagnostics) but never actually fires. This is
     the season-long tease state.
     """
-    from constants import ANOMALY_CRACKING_ENABLED
-    if not ANOMALY_CRACKING_ENABLED:
+    from constants import ANOMALY_CRITICALITY_ENABLED
+    if not ANOMALY_CRITICALITY_ENABLED:
         logger.info(
-            f"Cracking suppressed (flag disabled). Aggregate {state.aggregate_score:.1f} "
+            f"Criticality suppressed (flag disabled). Aggregate {state.aggregate_score:.1f} "
             f"crossed threshold {state.threshold} in season {state.season} "
             f"week {currentWeek} — would have fired."
         )
         return
     overRatio = state.aggregate_score / max(1, state.threshold)
     duration = (
-        CRACKING_DURATION_RUNAWAY
-        if overRatio >= (1.0 + CRACKING_RUNAWAY_OVER_THRESHOLD)
-        else CRACKING_DURATION_DEFAULT
+        CRITICALITY_DURATION_RUNAWAY
+        if overRatio >= (1.0 + CRITICALITY_RUNAWAY_OVER_THRESHOLD)
+        else CRITICALITY_DURATION_DEFAULT
     )
-    startWeek = currentWeek  # Cracking applies to the current/just-started round
+    startWeek = currentWeek  # Criticality applies to the current/just-started round
     state.thinnings_this_season = (state.thinnings_this_season or 0) + 1
     state.last_thinning_week = startWeek
-    # Reduce threshold for any subsequent Cracking in this season.
-    state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_CRACKING))
+    # Reduce threshold for any subsequent Criticality in this season.
+    state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_CRITICALITY))
 
     # Compose the Cores' news entry and record it on the audit trail.
     news = None
@@ -978,10 +978,10 @@ def _triggerCracking(state: LeagueAnomalyState, currentWeek: int,
     except Exception as e:
         logger.warning(f"coresManager unavailable for thinning news: {e}")
 
-    # Pick the Core that controls the equation for this Cracking. Weighted
+    # Pick the Core that controls the equation for this Criticality. Weighted
     # toward Cores that haven't been active this season so the four active
-    # Cores rotate naturally. Pinned for the Cracking duration via the
-    # audit-trail entry below; `getActiveCrackingCore` reads it back out.
+    # Cores rotate naturally. Pinned for the Criticality duration via the
+    # audit-trail entry below; `getActiveCriticalityCore` reads it back out.
     controllingCore = _pickControllingCore(state)
 
     patches = list(state.cores_patches_applied or [])
@@ -999,7 +999,7 @@ def _triggerCracking(state: LeagueAnomalyState, currentWeek: int,
     state.cores_patches_applied = patches
 
     logger.warning(
-        f"THE CRACKING FIRED (#{state.thinnings_this_season}, season="
+        f"THE CRITICALITY FIRED (#{state.thinnings_this_season}, season="
         f"{state.season}): start_week={startWeek}, duration={duration} round(s), "
         f"core={controllingCore}, aggregate={state.aggregate_score:.1f} "
         f"(×{overRatio:.2f} threshold)"

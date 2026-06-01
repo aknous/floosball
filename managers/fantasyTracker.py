@@ -778,19 +778,19 @@ class FantasyTracker:
                         gamesActive=gamesActive,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
-                    # When a Cracking is active, the controlling Core's
+                    # When a Criticality is active, the controlling Core's
                     # signature equation replaces the baseline aggregator.
-                    # No Cracking → computeFinalOutput uses the standard
+                    # No Criticality → computeFinalOutput uses the standard
                     # bonus-additive formula (next-season's aggregator).
                     try:
-                        from managers.anomalyManager import getActiveCrackingCore
-                        crackingCore = getActiveCrackingCore(seasonNum, currentWeek)
+                        from managers.anomalyManager import getActiveCriticalityCore
+                        criticalityCore = getActiveCriticalityCore(seasonNum, currentWeek)
                     except Exception:
-                        crackingCore = None
+                        criticalityCore = None
                     from managers.coreEquations import computeFinalOutput, equationTemplate
-                    rawTotalFP, crackingEquation = computeFinalOutput(
+                    rawTotalFP, criticalityEquation = computeFinalOutput(
                         weekRawFP, calcResult.totalBonusFP, calcResult.multFactors,
-                        coreKey=crackingCore,
+                        coreKey=criticalityCore,
                     )
                     weekCardBonus = round(rawTotalFP - weekRawFP, 2)
                     if weekCardBonus < 0:
@@ -841,9 +841,9 @@ class FantasyTracker:
                         "totalBonusFP": round(calcResult.totalBonusFP, 2),
                         "multFactors": [round(f, 2) for f in calcResult.multFactors],
                         "handSynergies": handSynergies,
-                        "crackingCore": crackingCore,
-                        "crackingEquation": crackingEquation if crackingCore else None,
-                        "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
+                        "criticalityCore": criticalityCore,
+                        "criticalityEquation": criticalityEquation if criticalityCore else None,
+                        "criticalityEquationTemplate": equationTemplate(criticalityCore) if criticalityCore else None,
                     }
                 elif hasStoredCurrentWeekBonus:
                     stored = userWeekBonuses[currentWeek]

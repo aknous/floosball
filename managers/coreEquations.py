@@ -1,8 +1,8 @@
-"""Per-Core signature equations — used during a Cracking.
+"""Per-Core signature equations — used during a Criticality.
 
 Each active Core (Cassian, Pyre, Aris, Halverson) has its own math shape
 that replaces the baseline `(R + ΣF) × (1 + Σ(M−1))` aggregator while
-the Cracking is live. Vera is meta-only and never takes control, so it
+the Criticality is live. Vera is meta-only and never takes control, so it
 has no equation. The "broken simulation" framing is the point: these
 equations are intentionally uncapped and produce outputs many multiples
 above baseline.
@@ -13,7 +13,7 @@ Inputs (same three across all equations):
   M   = 1 + Σ(Mᵢ − 1) — the bonus-additive aggregate multiplier (≥ 1.0)
 
 The caller is responsible for:
-  * Detecting Cracking-active and resolving the controlling Core.
+  * Detecting Criticality-active and resolving the controlling Core.
   * Subtracting raw rosterFP from the output when storing the
     card-bonus-only portion (mirrors how the baseline path does it).
 """
@@ -24,14 +24,14 @@ import math
 from typing import List, Optional, Tuple
 
 
-# Public list of Cores that can actually take control during a Cracking.
+# Public list of Cores that can actually take control during a Criticality.
 # Stenographer is excluded — per the design, it remains a meta-narrator.
 CONTROLLING_CORES = ('cassian', 'pyre', 'aris', 'halverson')
 
 
 def _bonusAdditiveMultiplier(multFactors: List[float]) -> float:
     """Match the baseline aggregator (cardEffectCalculator.aggregateMultFactors)
-    so the Cracking equations operate on the same `M` the rest of the system
+    so the Criticality equations operate on the same `M` the rest of the system
     sees on stable weeks. Duplicated here to avoid an import cycle."""
     return 1.0 + sum(max(0.0, f - 1.0) for f in multFactors)
 
@@ -47,7 +47,7 @@ def applyCoreEquation(
     `coreKey` is the Cores roster key (e.g. 'pyre'). Returns the baseline
     bonus-additive result if `coreKey` is None or unknown — this is the
     on-ramp for callers that always invoke this helper regardless of
-    Cracking state.
+    Criticality state.
     """
     R = float(rosterFP or 0.0)
     F = float(flatFPSum or 0.0)
@@ -115,10 +115,10 @@ def computeFinalOutput(
 ) -> Tuple[float, str]:
     """Top-level output helper for the card calc.
 
-    When a Core is in control during a Cracking, returns its signature
+    When a Core is in control during a Criticality, returns its signature
     equation's output. Otherwise returns the compounding baseline that
     the rest of this branch uses today (matches the legacy aggregation
-    so non-Cracking weeks behave unchanged).
+    so non-Criticality weeks behave unchanged).
 
     Callers should subtract rosterFP from the returned output if they're
     storing only the card-bonus portion (mirroring the existing flow).
