@@ -10327,7 +10327,15 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
         finally:
             session.close()
 
-    weekText = currentSeason.currentWeekText if playoffRound else f'Week {week}'
+    # Playoff weeks (29+) are always labeled by round name, never "Week N".
+    # Prefer the live round label; fall back to a week-derived label if it's not
+    # a playoff string yet (covers brief windows where currentPlayoffRound is
+    # unset, e.g. just after a mid-playoff restart).
+    if playoffRound or week >= 29:
+        _cwt = currentSeason.currentWeekText or ''
+        weekText = _cwt if (_cwt and not _cwt.startswith('Week')) else sm.playoffRoundLabel(week)
+    else:
+        weekText = f'Week {week}'
 
     return build_success_response({
         "season": seasonNum,

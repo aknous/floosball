@@ -283,6 +283,9 @@ class FloosballApplication:
         savedState = self._loadSimulationState()
         
         resumeMidOffseason = False
+        resumeMidPlayoffs = False
+        playoffResumeRound = 1
+        playoffResumeState = None
         if savedState and savedState['is_active']:
             totalSeasons = savedState['total_seasons']
             seasonsPlayed = savedState['current_season'] - 1  # We'll restart the current season
@@ -313,6 +316,21 @@ class FloosballApplication:
                 # flow with the resume flag set.
                 resumeFromWeek = 0
                 resumeMidOffseason = True
+            elif savedState.get('in_playoffs'):
+                # Crash landed mid-playoffs. Resume at the round after the last
+                # one persisted to simulation_state.playoff_state, preserving the
+                # already-completed rounds instead of replaying from Round 1.
+                playoffResumeState = self.seasonManager.loadPlayoffStateFromDb()
+                completedRound = (playoffResumeState or {}).get('completedRound', 0)
+                playoffResumeRound = completedRound + 1
+                resumeFromWeek = 0
+                resumeMidPlayoffs = True
+                logger.info(
+                    f"Resume mid-playoffs: season {savedState['current_season']} — "
+                    f"last completed round {completedRound} "
+                    f"({(playoffResumeState or {}).get('roundText', '?')}); "
+                    f"resuming at round {playoffResumeRound}."
+                )
             else:
                 logger.info(f"Resuming simulation from Season {savedState['current_season']}, Week {savedState['current_week']}")
 
@@ -371,6 +389,33 @@ class FloosballApplication:
                 # in_offseason flag is already True in DB from the previous run
                 await self.seasonManager.handleOffseason(resumeFromOffseason=True)
                 resumeMidOffseason = False  # only honor on first iteration
+            elif resumeMidPlayoffs:
+                # We restarted mid-playoffs. The regular season is done and the
+                # already-played playoff rounds are persisted; re-running the
+                # regular season would re-award MVP / season-end prizes. Restore
+                # minimal state and resume the bracket at the next unplayed round,
+                # then finish the season normally into the offseason.
+                logger.info(
+                    f"Mid-playoff resume: restoring season {currentSeason} and "
+                    f"resuming playoffs at round {playoffResumeRound}"
+                )
+                await self.seasonManager.restoreForPlayoffResume(currentSeason)
+                await self.seasonManager.resumePlayoffsAndFinishSeason(
+                    playoffResumeRound, playoffResumeState
+                )
+                resumeFromWeek = 0
+                # Playoffs done → enter the offseason (fresh), mirroring the
+                # normal path's in_offseason checkpoint before handleOffseason.
+                self._saveSimulationState(
+                    current_season=currentSeason,
+                    current_week=self.seasonManager.currentSeason.currentWeek if self.seasonManager.currentSeason else 0,
+                    in_playoffs=False,
+                    total_seasons=totalSeasons,
+                    is_active=True,
+                    in_offseason=True,
+                )
+                await self.seasonManager.handleOffseason()
+                resumeMidPlayoffs = False  # only honor on first iteration
             else:
                 # Start new season — pass resumeFromWeek so a mid-season restart
                 # preserves accumulated fatigue / form instead of zeroing them.
@@ -449,6 +494,7 @@ class FloosballApplication:
                     'offseason_phase': getattr(state, 'offseason_phase', None),
                     'offseason_phase_target': getattr(state, 'offseason_phase_target', None),
                     'offseason_completed_steps': getattr(state, 'offseason_completed_steps', None),
+                    'playoff_state': getattr(state, 'playoff_state', None),
                     'last_saved': state.last_saved
                 }
             return None

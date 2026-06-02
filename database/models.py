@@ -1053,6 +1053,11 @@ class SimulationState(Base):
     # JSON array of completed step keys (e.g. ["frontoffice_decisions",
     # "training"]). Lets phase resume skip non-idempotent batch work.
     offseason_completed_steps: Mapped[Optional[str]] = mapped_column(Text)
+    # JSON snapshot of in-progress playoff bracket state (last completed round,
+    # surviving teams per league, accumulated free-agency/draft order). Written
+    # at the end of each playoff round so a mid-playoff restart resumes at the
+    # next unplayed round instead of replaying the bracket from Round 1.
+    playoff_state: Mapped[Optional[str]] = mapped_column(Text)
     total_seasons: Mapped[int] = mapped_column(Integer, default=20)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
