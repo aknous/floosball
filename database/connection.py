@@ -656,6 +656,9 @@ def _runPendingMigrations():
             ("offseason_phase",           "VARCHAR(32)"),
             ("offseason_phase_target",    "DATETIME"),
             ("offseason_completed_steps", "TEXT"),
+            # Mid-playoff resume (hotfix/playoff-resume): JSON snapshot of the
+            # in-progress bracket so a restart resumes at the next unplayed round.
+            ("playoff_state",             "TEXT"),
         ):
             try:
                 conn.execute(text(f"ALTER TABLE simulation_state ADD COLUMN {col} {ddl}"))
