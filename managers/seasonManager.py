@@ -4127,8 +4127,14 @@ class SeasonManager:
 
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
+                # Bind the bowl's own results. Previously this relied on a stale
+                # gameResults left over from an earlier round's multi-game branch,
+                # which is unset when resuming straight into the bowl (round 4) —
+                # raising UnboundLocalError — and stored the wrong game's dict even
+                # in a normal run.
+                gameResults = game.gameDict
                 playoffTeamsList.clear()
-                
+
                 season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
                 
                 # Both teams in the Floosbowl are league champions
