@@ -346,13 +346,24 @@ class FloosballApplication:
         # NOTE: removed the legacy "advance past offseason and clear flags"
         # block here — the loop below now branches on resumeMidOffseason and
         # calls handleOffseason(resumeFromOffseason=True) instead of skipping.
-        
+
+        # When resuming mid-playoffs, the persisted bracket checkpoint
+        # (simulation_state.playoff_state) is the source of truth, but the
+        # "mark active" saves below write in_playoffs unconditionally. If they
+        # downgraded it to False, a SECOND interruption during the resumed round
+        # (e.g. stopping while the Floos Bowl plays — the final round writes no
+        # new checkpoint) would lose the in_playoffs flag and the next restart
+        # would replay from week 1. So preserve in_playoffs / the round's week
+        # for the playoff-resume case.
+        initInPlayoffs = resumeMidPlayoffs
+        initWeek = (28 + (playoffResumeRound - 1)) if resumeMidPlayoffs else resumeFromWeek
+
         # Mark simulation as active (preserve resumeFromWeek so a second
         # restart before the week loop progresses doesn't lose the checkpoint)
         self._saveSimulationState(
             current_season=seasonsPlayed + 1,
-            current_week=resumeFromWeek,
-            in_playoffs=False,
+            current_week=initWeek,
+            in_playoffs=initInPlayoffs,
             total_seasons=totalSeasons,
             is_active=True
         )
@@ -364,11 +375,17 @@ class FloosballApplication:
             logger.info(f"=== SEASON {currentSeason} ===")
 
             # Update simulation state for this season (preserve week checkpoint
-            # for the first iteration so a quick re-restart doesn't lose progress)
+            # for the first iteration so a quick re-restart doesn't lose progress;
+            # preserve in_playoffs for the mid-playoff resume case so a re-interrupt
+            # during the resumed round doesn't fall back to week 1). Recompute from
+            # the resume flags here — they're reset after the first iteration, so
+            # later seasons correctly write in_playoffs=False / week 0.
+            loopInPlayoffs = resumeMidPlayoffs
+            loopWeek = (28 + (playoffResumeRound - 1)) if resumeMidPlayoffs else resumeFromWeek
             self._saveSimulationState(
                 current_season=currentSeason,
-                current_week=resumeFromWeek,
-                in_playoffs=False,
+                current_week=loopWeek,
+                in_playoffs=loopInPlayoffs,
                 total_seasons=totalSeasons,
                 is_active=True
             )
