@@ -3921,6 +3921,15 @@ class SeasonManager:
                 newGame.playoffRound = currentRound
                 newGame.gameNumber = gameNumber
                 newGame.gameType = 'playoff'
+                newGame.isFloosBowl = True
+                # Admin-configurable halftime pause so the Floos Bowl halftime
+                # show has room to play. None / unset → default halftime delay.
+                try:
+                    from database.models import AppSetting as _AppSetting
+                    _hsRow = self.db_session.query(_AppSetting).filter_by(key='halftime_show_pause_seconds').first()
+                    newGame.halftimeShowPauseSeconds = float(_hsRow.value) if (_hsRow and _hsRow.value) else None
+                except Exception:
+                    newGame.halftimeShowPauseSeconds = None
 
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.startTime = roundStartTime

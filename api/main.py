@@ -3055,7 +3055,8 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     from database.models import AppSetting
     if not isinstance(payload, dict) or not payload:
         raise HTTPException(status_code=400, detail="payload must be a non-empty object")
-    allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text'}
+    allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text',
+               'halftime_show_url', 'halftime_show_pause_seconds'}
     session = get_session()
     try:
         updated = []

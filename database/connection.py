@@ -608,6 +608,8 @@ def _runPendingMigrations():
                 ('feedback_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
                 ('feedback_visible', 'true'),
                 ('survey_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
+                ('halftime_show_url', ''),
+                ('halftime_show_pause_seconds', '120'),
             ]
             for k, v in defaults:
                 conn.execute(text(

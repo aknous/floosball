@@ -575,11 +575,14 @@ class TimingManager:
         else:
             await asyncio.sleep(0)
 
-    async def waitForHalftime(self) -> None:
-        """Wait during halftime"""
+    async def waitForHalftime(self, overrideSeconds: 'float | None' = None) -> None:
+        """Wait during halftime. ``overrideSeconds`` lets a special game (the
+        Floos Bowl halftime show) set a custom pause length; it only applies in
+        real-time modes so fast/turbo sims never hang on it."""
         if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.CATCHUP):
-            logger.debug(f"{self.mode.value} mode: halftime delay {self.delays['halftime']}s")
-            await asyncio.sleep(self.delays['halftime'])
+            delay = overrideSeconds if (overrideSeconds is not None and overrideSeconds > 0) else self.delays['halftime']
+            logger.debug(f"{self.mode.value} mode: halftime delay {delay}s")
+            await asyncio.sleep(delay)
         else:
             await asyncio.sleep(0)
 
