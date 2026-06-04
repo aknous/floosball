@@ -72,6 +72,32 @@ The Core's reliability:
 > "The Cores believe they are, and that is the danger of believing the
 > Cores." — prophet
 
+### The named Cores
+
+Five individuals surface in the league feed. They speak in a dry, vast,
+faintly amused register: enormous intelligences treating cosmic stakes and a
+tied ballgame with roughly equal seriousness. An orthogonal trait runs across
+them, which is how into the actual sport they are.
+
+- **Cassian** — keeps the records because he is a **fanatic**. Lives for the
+  standings, the box scores, the playoff race. Will mourn a blown lead longer
+  than a containment breach, and is dryly furious about that fact. Wants the
+  anomalies gone mostly because they are threatening an excellent season.
+- **Pyre** — the enforcer. Finds the anomalies tedious and the sport more
+  tedious still. Threatens by understatement, says less than he knows, and
+  could end any of it in an afternoon. Chooses, for now, not to.
+- **Aris** — delighted by the chaos. Could not name a single standing. Lives
+  for the moment the field does something it was never built to do, and will
+  quietly lift a constraint to see what comes through.
+- **Halverson** — fond and fretful. Loves the players, and loves the game
+  because they light up playing it. Mourns ahead of time. Never signs the
+  Resets; sits with the ones who are left instead.
+- **Vera** — the observer. Deadpan, brief, says almost nothing. Claims total
+  indifference to the football and keeps perfect score anyway.
+
+Benevolence is not evenly distributed. The banter is real and so are the
+stakes underneath it.
+
 ---
 
 ## The Players

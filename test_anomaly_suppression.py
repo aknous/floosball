@@ -158,12 +158,48 @@ def testStatusBands(session):
     print("  ok: qualitative status bands (dormant/stirring/unstable/critical, number-free)")
 
 
+def testCoresExchanges():
+    """P4 — the multi-Core dialogue system: exchange shape/threading, the
+    football-fan character split, and solo fallback."""
+    import managers.coresManager as c
+
+    # The roster carries the orthogonal football-interest trait, with exactly
+    # one fanatic and a mix of into-it / not.
+    interests = {k: v['footballInterest'] for k, v in c.CORES.items()}
+    fanatics = [k for k, v in interests.items() if v == 'fanatic']
+    assert len(fanatics) == 1, f"exactly one fanatic expected, got {fanatics}"
+    assert any(v == 'none' for v in interests.values()), "some Cores are not into football"
+    assert any(v in ('fond', 'secret') for v in interests.values()), "some Cores are into football"
+
+    # Exchanges thread: shared exchangeId, ordered turnIndex, consistent turnCount.
+    for ev in ('warning_high', 'suppression', 'criticality', 'idle'):
+        assert c.hasExchange(ev), f"expected an exchange pool for {ev}"
+        turns = c.exchangeEntriesFor(ev)
+        assert len(turns) >= 2, f"{ev} exchange should be a conversation"
+        assert len({t['exchangeId'] for t in turns}) == 1, "turns share one exchangeId"
+        assert [t['turnIndex'] for t in turns] == list(range(len(turns))), "turns are ordered"
+        assert all(t['turnCount'] == len(turns) for t in turns)
+        assert all(t['category'] == 'cores' and t['core'] in c.CORES for t in turns)
+        assert all(t['text'] for t in turns)
+        # Voice hygiene: no em-dashes in any Core line (user copy rule).
+        assert all('—' not in t['text'] for t in turns), f"em-dash leaked in {ev} exchange"
+
+    # entriesForEvent: exchange where a pool exists, solo line where it doesn't.
+    assert len(c.entriesForEvent('warning_high')) >= 2, "warning_high prefers an exchange"
+    assert len(c.entriesForEvent('warning_low')) == 1, "warning_low has no exchange → solo"
+    # A forced core always yields a single attributed line.
+    solo = c.entriesForEvent('suppression', core='pyre')
+    assert len(solo) == 1 and solo[0]['core'] == 'pyre'
+    print("  ok: Cores exchanges (threading, fanatic split, solo fallback, no em-dashes)")
+
+
 def testTriggerPathFiresOneSuppression(session):
     """End-to-end: a gated crossing in _updateLeagueAggregate fires exactly one
-    suppression (not a Criticality) and goes quiet."""
+    suppression (not a Criticality), goes quiet, and narrates it as a multi-Core
+    exchange persisted to the news feed."""
     import managers.anomalyManager as a
     from constants import ANOMALY_CRITICALITY_ENABLED
-    from database.models import LeagueAnomalyState, PlayerAttention
+    from database.models import LeagueAnomalyState, PlayerAttention, LeagueNewsItem
 
     assert ANOMALY_CRITICALITY_ENABLED is False, "test assumes the gated tease state"
     season = 55
@@ -183,7 +219,14 @@ def testTriggerPathFiresOneSuppression(session):
     sup = [e for e in (refreshed.cores_patches_applied or []) if e.get('event') == 'suppression']
     assert len(sup) == 1, "exactly one suppression beat from the crossing"
     assert refreshed.suppression_window_ends_week == 20 + a.SUPPRESSION_WINDOW_WEEKS
-    print("  ok: _updateLeagueAggregate fires one suppression (no Criticality) while gated")
+
+    # The suppression exchange was persisted to the feed (one row per turn).
+    # The same tick also fires a warning exchange (the ratio is far over the
+    # line), so the feed legitimately carries both event types.
+    suppItems = (session.query(LeagueNewsItem)
+                 .filter_by(season=season, category='cores', event_type='suppression').all())
+    assert len(suppItems) >= 2, "suppression should narrate as a multi-turn exchange"
+    print("  ok: _updateLeagueAggregate fires one suppression, narrated as an exchange")
 
 
 def main():
@@ -199,9 +242,10 @@ def main():
     from database.models import Base
     Base.metadata.create_all(bind=engine)
 
-    print("P3 anomaly suppression tests")
+    print("P3/P4 anomaly suppression + Cores dialogue tests")
     testHelpers()
     testInstabilityDial()
+    testCoresExchanges()
 
     session = get_session()
     try:

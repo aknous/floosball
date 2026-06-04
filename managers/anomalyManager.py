@@ -901,13 +901,15 @@ def _maybeFireWarning(state: LeagueAnomalyState,
     if alreadyFired:
         return
 
-    # Compose the Cores news entry. Broadcast + record on audit trail.
-    news = None
+    # Compose the Cores narration. warning_high prefers a multi-Core exchange;
+    # warning_low has no exchange pool and falls back to a single line.
+    entries = []
     try:
-        from managers.coresManager import newsEntryFor
-        news = newsEntryFor(milestone)
+        from managers.coresManager import entriesForEvent
+        entries = entriesForEvent(milestone)
     except Exception as e:
         logger.warning(f"coresManager unavailable for warning news: {e}")
+    news = entries[0] if entries else None  # representative entry for the audit trail
 
     patches = list(state.cores_patches_applied or [])
     patches.append({
@@ -922,9 +924,10 @@ def _maybeFireWarning(state: LeagueAnomalyState,
 
     logger.info(
         f"Cores {milestone} fired (season={state.season}, "
-        f"aggregate={state.aggregate_score:.1f}, ratio={ratio:.2f})"
+        f"aggregate={state.aggregate_score:.1f}, ratio={ratio:.2f}, "
+        f"{len(entries)} turn(s))"
     )
-    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=week)
+    _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=week)
 
 
 # ─── Reset + purge ──────────────────────────────────────────────────────────
@@ -1106,13 +1109,16 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     # Reduce threshold for any subsequent Criticality in this season.
     state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_CRITICALITY))
 
-    # Compose the Cores' news entry and record it on the audit trail.
-    news = None
+    # Compose the Cores' narration (multi-Core exchange) and record a
+    # representative entry on the audit trail. Event type 'criticality' matches
+    # the coresManager pools (the old 'thinning' key had no pool).
+    entries = []
     try:
-        from managers.coresManager import newsEntryFor
-        news = newsEntryFor('thinning')
+        from managers.coresManager import entriesForEvent
+        entries = entriesForEvent('criticality')
     except Exception as e:
-        logger.warning(f"coresManager unavailable for thinning news: {e}")
+        logger.warning(f"coresManager unavailable for criticality news: {e}")
+    news = entries[0] if entries else None
 
     # Pick the Core that controls the equation for this Criticality. Weighted
     # toward Cores that haven't been active this season so the four active
@@ -1142,7 +1148,7 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     )
 
     # Broadcast to the league news feed.
-    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=currentWeek)
+    _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=currentWeek)
 
 
 def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
@@ -1181,14 +1187,19 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
         return
 
     patchNumber = priorPatches + 1
+    # The Core that mechanically led the patch (recorded for getCriticalityStatus
+    # / the control room). The narration below is a multi-Core scramble exchange
+    # and is intentionally decoupled from this — the conversation reads better
+    # than a single attributed line.
     controllingCore = _pickControllingCore(state)
 
-    news = None
+    entries = []
     try:
-        from managers.coresManager import newsEntryFor
-        news = newsEntryFor('suppression', core=controllingCore)
+        from managers.coresManager import entriesForEvent
+        entries = entriesForEvent('suppression')
     except Exception as e:
         logger.warning(f"coresManager unavailable for suppression news: {e}")
+    news = entries[0] if entries else None
 
     overRatio = float(state.aggregate_score) / max(1, state.threshold)
     patches = list(state.cores_patches_applied or [])
@@ -1232,7 +1243,7 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
         f"(drained {drainedFrom} carry rows)."
     )
 
-    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=currentWeek)
+    _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=currentWeek)
 
 
 def _broadcastCoreNews(news: Optional[Dict], session: Optional[Session] = None,
@@ -1273,6 +1284,21 @@ def _broadcastCoreNews(news: Optional[Dict], session: Optional[Session] = None,
         event['coreDisplayName'] = news.get('coreDisplayName')
         event['category'] = 'cores'
         event['eventType'] = news.get('eventType')
+        # Exchange threading (P4) — present only when this entry is one turn of
+        # a multi-Core conversation. Lets the feed group the turns together.
+        for k in ('exchangeId', 'turnIndex', 'turnCount'):
+            if news.get(k) is not None:
+                event[k] = news.get(k)
         broadcaster.broadcast_sync('season', event)
     except Exception as e:
         logger.debug(f"Cores news broadcast skipped: {e}")
+
+
+def _broadcastCoreEntries(entries: Optional[List[Dict]], session: Optional[Session] = None,
+                          seasonNumber: Optional[int] = None,
+                          week: Optional[int] = None) -> None:
+    """Broadcast a list of Cores feed entries in order — a solo line (length 1)
+    or every turn of a multi-Core exchange. Each turn is persisted + broadcast
+    via _broadcastCoreNews, preserving its exchange threading fields."""
+    for entry in (entries or []):
+        _broadcastCoreNews(entry, session=session, seasonNumber=seasonNumber, week=week)

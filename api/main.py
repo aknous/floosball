@@ -1205,6 +1205,32 @@ async def cores_status():
     return build_success_response(status)
 
 
+@app.get("/api/cores/conversation", response_model=Dict[str, Any])
+async def cores_conversation(event: str = Query(default="idle")):
+    """A fresh multi-Core exchange (ambient banter by default) for the Cores
+    control room. Returns an ordered list of turns, each `{core, coreDisplayName,
+    text, turnIndex, turnCount}`. These are ephemeral flavor — not persisted to
+    the news feed — so the control room can show the Cores talking among
+    themselves between the louder anomaly beats."""
+    from managers.coresManager import exchangeEntriesFor, hasExchange
+    if not hasExchange(event):
+        event = "idle"
+    turns = exchangeEntriesFor(event)
+    return build_success_response({
+        'event': event,
+        'turns': [
+            {
+                'core': t.get('core'),
+                'coreDisplayName': t.get('coreDisplayName'),
+                'text': t.get('text'),
+                'turnIndex': t.get('turnIndex', 0),
+                'turnCount': t.get('turnCount', len(turns)),
+            }
+            for t in turns
+        ],
+    })
+
+
 @app.post("/api/debug/anomaly-bump", response_model=Dict[str, Any])
 async def debug_anomaly_bump(player_id: int, amount: float = 50.0):
     """Testing aid — force-add attention to a specific player. Skips
