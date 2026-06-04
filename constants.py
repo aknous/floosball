@@ -598,10 +598,14 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 # can still climb to threshold and Core warnings/news still fire (visible
 # tease), but the trigger is suppressed and the math never swaps.
 #
-# Roadmap:
-#   Season N   (current): False — tease only. Whispers, warnings, glitches,
-#                         but no Criticality ever fires.
-#   Season N+1 (planned): True  — the payoff. Criticality can actually trigger.
+# Roadmap (full event DEFERRED — decided 2026-06-04):
+#   This season (shipping): False — the tease. Whispers, warnings, glitches, the
+#     instability dial, and the near-miss SUPPRESSION cycle + Cores dialogue. The
+#     full event never fires.
+#   A future season (deferred, NOT the next one): flip True — the payoff. A Core
+#     seizes the card-bonus math, the Reset purges the awakened, L4 control powers
+#     land. Pushed back beyond the upcoming season. Do NOT enable without an
+#     explicit go from the owner.
 ANOMALY_CRITICALITY_ENABLED = False
 
 # ── Glitch firing hygiene ─────────────────────────────────────────────────────
