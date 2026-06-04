@@ -805,6 +805,12 @@ class User(Base):
     # Vacancy fallback preference: prospect | fa | best_available (default)
     vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
+    # Supporter income (feature/fan-income): a non-fantasy, idle Floobit path.
+    # supporter_weeks = tenure backing the current favorite team (drives the
+    # loyalty multiplier; persists across seasons, soft-reset on a team change).
+    # supporter_unclaimed = accrued Floobits awaiting claim (the idle pool).
+    supporter_weeks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    supporter_unclaimed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Season number the user last claimed their free starter pack in.
     # Resets each season — null means never claimed.
     starter_pack_claimed_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

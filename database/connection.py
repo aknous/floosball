@@ -637,6 +637,21 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Supporter income (feature/fan-income): fan-loyalty dividend state.
+        # supporter_weeks = tenure backing the current favorite team; persists
+        # across seasons, soft-reset on a team change. supporter_unclaimed =
+        # accrued Floobits awaiting claim (the idle pool).
+        for col, colDef in [
+            ('supporter_weeks', 'INTEGER DEFAULT 0 NOT NULL'),
+            ('supporter_unclaimed', 'INTEGER DEFAULT 0 NOT NULL'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added users.{col}")
+            except Exception:
+                conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared

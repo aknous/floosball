@@ -110,6 +110,29 @@ WEEKLY_LEADERBOARD_PRIZES = {1: 30, 2: 20, 3: 15}
 WEEKLY_LEADERBOARD_TOP_PCT_PRIZE = 5
 WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 
+# ── Supporter income (fan loyalty dividends) — feature/fan-income ──────────────
+# A non-fantasy, IDLE Floobit path: back a team, earn passively, claim on login.
+# Tenure (weeks backing the current favorite team) drives a loyalty multiplier;
+# team performance nudges the weekly dividend. The guaranteed base stays small —
+# real profit is concentrated in the contingent milestone payouts (the CLINCH_* /
+# FLOOSBOWL_WIN rewards above, scaled by loyalty in a later phase), so only
+# long-tenure fans of great teams come out ahead of what they fund. All tunable;
+# validate against fantasy income with a sim-check.
+SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is active
+SUPPORTER_WIN_BONUS = 4               # added the weeks your team wins
+SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added when they win as the pre-game ELO underdog
+SUPPORTER_TEAM_CHANGE_TENURE_KEEP = 0.5  # fraction of tenure kept on a team change (soft reset)
+# Loyalty tiers by supporter_weeks (persists across seasons; ~28 wks = 1 season).
+# (minWeeks, multiplier, label), descending — first match from the top wins.
+# Gaps WIDEN as you climb (28 → 56 → 84 wks between tiers) so each tier is a
+# bigger commitment than the last and the top tier is a genuine long-hauler.
+SUPPORTER_LOYALTY_TIERS = [
+    (168, 2.0,  'Lifer'),     # ~6 seasons
+    (84,  1.5,  'Faithful'),  # ~3 seasons
+    (28,  1.25, 'Regular'),   # ~1 season
+    (0,   1.0,  'New Fan'),
+]
+
 SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
 SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25
