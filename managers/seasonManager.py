@@ -395,6 +395,16 @@ class SeasonManager:
         # Simulate playoffs (pick-em continues through playoffs)
         await self._simulatePlayoffs()
 
+        # Season-end wrap-up (shared with the mid-playoff resume path)
+        await self._finishSeasonAfterPlayoffs()
+
+    async def _finishSeasonAfterPlayoffs(self) -> None:
+        """Post-playoff season wrap-up: pick-em season prizes, season-end
+        emails, the unspent-Floobit tax, funding-tier lock-in, and season
+        completion. Extracted so the mid-playoff resume path runs the exact
+        same tail after finishing the resumed bracket. All steps here run
+        once per season (after the bowl), so they're safe on the resume path
+        too — they never executed in the interrupted run."""
         # Award pick-em season prizes after playoffs so all rounds are included
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
@@ -415,12 +425,12 @@ class SeasonManager:
 
         # Close game stats file
         self._closeGameStatsFile()
-        
+
         # Handle season completion
         await self._completeSeasonSimulation()
-        
+
         logger.info(f"Season {self.currentSeason.seasonNumber} simulation complete")
-    
+
     async def _simulateRegularSeason(self, resumeFromWeek: int = 0) -> None:
         """Simulate all regular season games.
 
@@ -887,13 +897,13 @@ class SeasonManager:
             logger.info("Catch-up complete at end of regular season — switched to SCHEDULED mode")
         self.timingManager.catchingUp = False
 
-    async def _simulatePlayoffs(self) -> None:
+    async def _simulatePlayoffs(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate playoff games"""
         logger.info("Starting playoff simulation")
-        
-        
+
+
         # Simulate playoff rounds
-        await self._simulatePlayoffRounds()
+        await self._simulatePlayoffRounds(resumeFromRound=resumeFromRound, restoredState=restoredState)
 
     async def _simulateGame(self, game: FloosGame.Game, gameIndex: int = -1) -> None:
         """Simulate a single game"""
@@ -1249,6 +1259,12 @@ class SeasonManager:
         # Process card effects for this week (regular season only)
         if not in_playoffs:
             self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
+            # Card bonuses just landed in WeeklyCardBonus — drop the cached
+            # snapshot so downstream consumers (leaderboard prizes, FP payout,
+            # achievements) recompute a weekTotal that includes them.
+            _ft = self.serviceContainer.getService('fantasy_tracker')
+            if _ft:
+                _ft.invalidateSnapshotCache()
 
         # Award weekly leaderboard prizes (after card effects are finalized)
         if not in_playoffs:
@@ -2553,14 +2569,22 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Failed to clean up orphaned week games: {e}")
 
-    def _cleanupOrphanedPlayoffData(self, season: int) -> None:
+    def _cleanupOrphanedPlayoffData(self, season: int, fromWeek: int = 29) -> None:
         """Clean up stale playoff data so replaying playoffs is safe on restart.
 
         Resets team playoff state, deletes orphaned Game/PlayerStats records,
         unresolves pick-em picks, and removes duplicate prize transactions.
         This is a no-op on first run (nothing to clean up).
+
+        ``fromWeek`` scopes the DB deletions to playoff weeks >= fromWeek. On a
+        fresh run it's 29 (the first playoff week), wiping the whole bracket.
+        On a mid-playoff resume it's 28 + resumeRound, so already-completed
+        rounds are preserved and only the interrupted round (and later) are
+        cleared for a clean replay.
         """
-        # A. Reset team playoff state to prevent stacked modifiers and stale flags
+        # A. Reset team playoff state to prevent stacked modifiers and stale flags.
+        # On resume the survivor list + eliminations are re-applied right after
+        # the bracket is rebuilt, so resetting to a clean baseline here is safe.
         teamManager = self.serviceContainer.getService('team_manager')
         from managers.teamManager import logPressureDiag
         seasonNum = self.currentSeason.seasonNumber if self.currentSeason else None
@@ -2570,7 +2594,8 @@ class SeasonManager:
             team.pressureModifier = 1.0
             logPressureDiag(team, "playoff_reset", season=seasonNum, week=getattr(self.currentSeason, 'currentWeek', None))
 
-        # B. Clear freeAgencyOrder — it gets rebuilt during playoffs
+        # B. Clear freeAgencyOrder — it gets rebuilt during playoffs (and is
+        # restored from the persisted snapshot on a mid-playoff resume).
         self.currentSeason.freeAgencyOrder = []
 
         if not DB_IMPORTS_AVAILABLE or not USE_DATABASE:
@@ -2583,9 +2608,13 @@ class SeasonManager:
 
             session = _getSession()
 
-            # C. Delete orphaned playoff Game + GamePlayerStats records
-            orphanedGames = session.query(DBGame).filter_by(
-                season=season, is_playoff=True
+            # C. Delete orphaned playoff Game + GamePlayerStats records for the
+            # interrupted round and later (week >= fromWeek). Completed rounds
+            # below fromWeek are preserved so a resume keeps their results.
+            orphanedGames = session.query(DBGame).filter(
+                DBGame.season == season,
+                DBGame.is_playoff == True,  # noqa: E712
+                DBGame.week >= fromWeek,
             ).all()
             if orphanedGames:
                 gameIds = [g.id for g in orphanedGames]
@@ -2599,18 +2628,20 @@ class SeasonManager:
                     f"{statsDeleted} player stat records for S{season}"
                 )
 
-            # D. Unresolve pick-em picks for playoff weeks (29-32)
+            # D. Unresolve pick-em picks for the affected playoff weeks
+            # (fromWeek..32) so they re-resolve cleanly on replay.
             pickemRepo = PickEmRepository(session)
             totalUnresolved = 0
-            for playoffWeek in range(29, 33):
+            for playoffWeek in range(fromWeek, 33):
                 totalUnresolved += pickemRepo.unresolvePicksByWeek(season, playoffWeek)
             if totalUnresolved:
                 logger.info(f"Unresolved {totalUnresolved} playoff pick-em picks for S{season}")
 
-            # E. Delete currency transactions for playoff weeks to prevent double prizes
+            # E. Delete currency transactions for the affected playoff weeks to
+            # prevent double prizes on replay (completed rounds keep theirs).
             txDeleted = session.query(CurrencyTransaction).filter(
                 CurrencyTransaction.season == season,
-                CurrencyTransaction.week >= 29,
+                CurrencyTransaction.week >= fromWeek,
                 CurrencyTransaction.transaction_type.in_([
                     'pickem_correct', 'pickem_leaderboard_weekly'
                 ]),
@@ -3719,11 +3750,22 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to award playoff bracket prizes: {e}")
 
-    async def _simulatePlayoffRounds(self) -> None:
-        """Simulate all playoff rounds"""
+    async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
+        """Simulate all playoff rounds.
 
-        # Clean up stale data from any previous playoff run (safe no-op on first run)
-        self._cleanupOrphanedPlayoffData(self.currentSeason.seasonNumber)
+        ``resumeFromRound`` > 1 (with ``restoredState``) resumes an interrupted
+        playoff run: completed rounds are preserved, the bracket survivors and
+        free-agency order are restored from the persisted snapshot, and the loop
+        picks up at the next unplayed round. The bracket-setup awards/broadcasts
+        are skipped on resume (those clinch bonuses already fired and the team
+        flags that gate them are runtime-only, so re-running would double-pay).
+        """
+        resuming = resumeFromRound > 1
+
+        # Clean up stale data from any previous playoff run (safe no-op on first
+        # run). On resume, scope it to the interrupted round and later so the
+        # already-completed rounds keep their games / pick-em / prizes.
+        self._cleanupOrphanedPlayoffData(self.currentSeason.seasonNumber, fromWeek=28 + resumeFromRound)
 
         playoffDict = {}
         playoffTeams = {}
@@ -3745,8 +3787,10 @@ class SeasonManager:
             list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
-            # Award top seed Floobits if not already clinched mid-season
-            if not getattr(playoffsByeTeamList[0], 'clinchedTopSeed', False):
+            # Award top seed Floobits if not already clinched mid-season.
+            # Skipped on resume — the bonus already fired and clinchedTopSeed is
+            # runtime-only, so re-running here would double-pay favorite-team fans.
+            if not resuming and not getattr(playoffsByeTeamList[0], 'clinchedTopSeed', False):
                 from constants import CLINCH_TOPSEED_REWARD
                 self._awardFavoriteTeamBonus(
                     playoffsByeTeamList[0].id, CLINCH_TOPSEED_REWARD, 'team_clinch_topseed',
@@ -3760,10 +3804,11 @@ class SeasonManager:
             season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
             if season_str not in topSeed.topSeeds:
                 topSeed.topSeeds.append(season_str)
-            _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
-            self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
-            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
+            if not resuming:
+                _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
 
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
@@ -3773,7 +3818,7 @@ class SeasonManager:
                 team: FloosTeam.Team
                 team.playoffAppearances += 1
                 team.seasonTeamStats['madePlayoffs'] = True
-                if not team.clinchedPlayoffs:
+                if not resuming and not team.clinchedPlayoffs:
                     from constants import CLINCH_PLAYOFF_REWARD
                     self._awardFavoriteTeamBonus(
                         team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
@@ -3789,15 +3834,16 @@ class SeasonManager:
                 if not team.clinchedPlayoffs:
                     team.clinchedPlayoffs = True
                     team.eliminated = False
-                    from constants import CLINCH_PLAYOFF_REWARD
-                    self._awardFavoriteTeamBonus(
-                        team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
-                        description='Favorite team clinched playoffs',
-                        season=self.currentSeason.seasonNumber)
-                    _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
-                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
-                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
+                    if not resuming:
+                        from constants import CLINCH_PLAYOFF_REWARD
+                        self._awardFavoriteTeamBonus(
+                            team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
+                            description='Favorite team clinched playoffs',
+                            season=self.currentSeason.seasonNumber)
+                        _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
+                        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
+                        if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                            await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
 
         for team in nonPlayoffTeamList:
             team: FloosTeam.Team
@@ -3805,16 +3851,43 @@ class SeasonManager:
             if not team.eliminated:
                 team.eliminated = True
                 team.clinchedPlayoffs = False
-                _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
-                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
-                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
+                if not resuming:
+                    _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
+                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
 
 
-        self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
-        list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
+        # freeAgencyOrder seeding: on a fresh run, start it with the non-playoff
+        # teams (worst-first). On resume it's restored wholesale from the
+        # persisted snapshot below, so skip the rebuild here.
+        if not resuming:
+            self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
+            list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
         import floosball_methods as FloosMethods
         numOfRounds = FloosMethods.getPower(2, len(self.leagueManager.teams)/2)
+
+        # On resume, replace the freshly-seeded bracket with the persisted
+        # snapshot: survivors entering the resume round (per league) and the
+        # accumulated free-agency/draft order. Eliminations for completed rounds
+        # are re-applied here so downstream offseason logic sees the right state.
+        if resuming and restoredState:
+            teamById = {t.id: t for t in self.serviceContainer.getService('team_manager').teams}
+            survivors = restoredState.get('survivors', {}) or {}
+            for league in self.leagueManager.leagues:
+                survivingIds = survivors.get(league.name, [])
+                survivingTeams = [teamById[tid] for tid in survivingIds if tid in teamById]
+                playoffTeams[league.name] = survivingTeams
+                # Anyone who made the playoffs in this league but isn't a
+                # survivor was eliminated in a completed round.
+                for team in league.teamList:
+                    if team.seasonTeamStats.get('madePlayoffs') and team not in survivingTeams:
+                        team.eliminated = True
+            faOrderIds = restoredState.get('faOrder', []) or []
+            self.currentSeason.freeAgencyOrder = [teamById[tid] for tid in faOrderIds if tid in teamById]
+            logger.info(f"Playoff resume: restored bracket at round {resumeFromRound} — "
+                        f"survivors={{ {', '.join(f'{lg}:{len(playoffTeams.get(lg, []))}' for lg in [l.name for l in self.leagueManager.leagues])} }}, "
+                        f"faOrder={len(self.currentSeason.freeAgencyOrder)}")
 
         # PLAYOFF_TEST: set anchor for compressed scheduling and enable playoff waits
         from managers.timingManager import TimingMode
@@ -3824,10 +3897,11 @@ class SeasonManager:
             logger.info(f"PLAYOFF_TEST: playoff anchor set, gap={self.timingManager.scheduleGap}s between rounds")
 
         # Seeding is locked — freeze the bracket-challenge field (opens it for
-        # submission until Round 1 kicks off).
-        self._freezePlayoffSeeds(playoffTeams)
+        # submission until Round 1 kicks off). Already frozen on a resume.
+        if not resuming:
+            self._freezePlayoffSeeds(playoffTeams)
 
-        for x in range(numOfRounds):
+        for x in range(resumeFromRound - 1, numOfRounds):
 
             playoffGamesDict = {}
             playoffGamesList = []
@@ -3843,11 +3917,15 @@ class SeasonManager:
                     teamsInRound = []
                     gamesList = []
 
+                    # Pressure is set ABSOLUTELY by round (1.5 / 1.7 / 1.9 ...)
+                    # rather than incremented, so it's correct regardless of how
+                    # many rounds actually ran in-process — i.e. resume-safe.
+                    roundPressure = round(1.5 + 0.2 * (currentRound - 1), 2)
                     if currentRound == 1:
                         teamsInRound.extend(playoffsNonByeTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
-                            team.pressureModifier = 1.5
+                            team.pressureModifier = roundPressure
                             from managers.teamManager import logPressureDiag
                             logPressureDiag(team, "playoff_r1", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
@@ -3855,7 +3933,7 @@ class SeasonManager:
                         teamsInRound.extend(playoffTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
-                            team.pressureModifier += .2
+                            team.pressureModifier = roundPressure
                             from managers.teamManager import logPressureDiag
                             logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
@@ -3921,6 +3999,15 @@ class SeasonManager:
                 newGame.playoffRound = currentRound
                 newGame.gameNumber = gameNumber
                 newGame.gameType = 'playoff'
+                newGame.isFloosBowl = True
+                # Admin-configurable halftime pause so the Floos Bowl halftime
+                # show has room to play. None / unset → default halftime delay.
+                try:
+                    from database.models import AppSetting as _AppSetting
+                    _hsRow = self.db_session.query(_AppSetting).filter_by(key='halftime_show_pause_seconds').first()
+                    newGame.halftimeShowPauseSeconds = float(_hsRow.value) if (_hsRow and _hsRow.value) else None
+                except Exception:
+                    newGame.halftimeShowPauseSeconds = None
 
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.startTime = roundStartTime
@@ -4046,8 +4133,14 @@ class SeasonManager:
 
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
+                # Bind the bowl's own results. Previously this relied on a stale
+                # gameResults left over from an earlier round's multi-game branch,
+                # which is unset when resuming straight into the bowl (round 4) —
+                # raising UnboundLocalError — and stored the wrong game's dict even
+                # in a normal run.
+                gameResults = game.gameDict
                 playoffTeamsList.clear()
-                
+
                 season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
                 
                 # Both teams in the Floosbowl are league champions
@@ -4172,6 +4265,14 @@ class SeasonManager:
                         nextGameStartTime=None,
                     )
                     broadcaster.broadcast_sync('season', weekEndEvent)
+
+            # Checkpoint this completed round so a restart resumes at the NEXT
+            # unplayed round instead of replaying the bracket. Must be LAST in
+            # the round body: a crash before here replays the round; after here
+            # it's durably done. The bowl (final round) needs no checkpoint — the
+            # post-playoff finish flips simulation_state to the offseason.
+            if x < numOfRounds - 1:
+                self._persistPlayoffState(currentRound, self.currentWeekText, playoffTeams)
 
         # Clear PLAYOFF_TEST phase flag
         self.timingManager.playoffPhase = False
@@ -4350,6 +4451,112 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"restoreForOffseasonResume: rookie pool rebuild failed: {e}")
             self._pendingRookiePool = []
+
+    # ── Mid-playoff resume (hotfix/playoff-resume) ──────────────────────────
+    def _persistPlayoffState(self, completedRound: int, roundText: str, playoffTeams: dict) -> None:
+        """Snapshot the bracket to simulation_state after a round completes.
+
+        Stores the last completed round, the surviving teams per league, and
+        the accumulated free-agency/draft order (the one order-sensitive piece
+        that can't be safely rebuilt from game results). Also flips
+        in_playoffs=True so the resume path triggers. Mirrors
+        _persistOffseasonFlow — direct single-row write on its own session.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            import json
+            from database.connection import get_session as _gs
+            from database.models import SimulationState
+            survivors = {
+                league.name: [t.id for t in playoffTeams.get(league.name, [])]
+                for league in self.leagueManager.leagues
+            }
+            faOrder = [getattr(t, 'id', None) for t in (self.currentSeason.freeAgencyOrder or [])]
+            faOrder = [tid for tid in faOrder if tid is not None]
+            payload = json.dumps({
+                'completedRound': completedRound,
+                'roundText': roundText,
+                'survivors': survivors,
+                'faOrder': faOrder,
+            })
+            sess = _gs()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                if not row:
+                    return
+                row.in_playoffs = True
+                row.playoff_round = roundText
+                row.current_week = 28 + completedRound
+                row.playoff_state = payload
+                sess.commit()
+                logger.info(f"Persisted playoff state: completed round {completedRound} "
+                            f"({roundText}), survivors per league + faOrder of {len(faOrder)}")
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.warning(f"Could not persist playoff state: {e}")
+
+    def loadPlayoffStateFromDb(self) -> Optional[dict]:
+        """Read the persisted playoff snapshot. Returns None if absent/unparseable."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return None
+        try:
+            import json
+            from database.connection import get_session
+            from database.models import SimulationState
+            sess = get_session()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                encoded = getattr(row, 'playoff_state', None) if row else None
+                if not encoded:
+                    return None
+                return json.loads(encoded)
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.warning(f"Could not load playoff state: {e}")
+            return None
+
+    async def restoreForPlayoffResume(self, seasonNumber: int) -> None:
+        """Rebuild the minimal state needed to resume mid-playoffs, WITHOUT
+        re-running the regular season (which would re-award MVP / All-Pro /
+        season-end fantasy prizes) and WITHOUT _clearSeasonData.
+
+        Loads the season record, the startDate anchor, regular-season standings,
+        and the full schedule (which also advances _gameIdCounter past every
+        existing game so newly-simulated resume-round games get fresh ids).
+        """
+        self.currentSeason = Season(seasonNumber)
+        self._restoreSeasonStartDate(seasonNumber)
+        teamManager = self.serviceContainer.getService('team_manager')
+        if teamManager:
+            teamManager.loadSeasonTeamStats(seasonNumber)
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+            try:
+                self._fillMissingScheduleWeeks(seasonNumber)
+                self._loadScheduleFromDatabase(seasonNumber)
+            except Exception as e:
+                logger.warning(f"restoreForPlayoffResume: schedule reload failed: {e}")
+        # Seed the playoff round state from the persisted snapshot so playoff-
+        # aware API paths (pick-em week/label, week_text) read correctly during
+        # the resume window — otherwise a playoff week with an unset
+        # currentPlayoffRound shows up as "Week 29/30" instead of the round name.
+        ps = self.loadPlayoffStateFromDb() or {}
+        completedRound = ps.get('completedRound', 0)
+        self.currentSeason.currentPlayoffRound = completedRound or None
+        self.currentSeason.currentWeek = 28 + completedRound if completedRound else 28
+        self.currentSeason.currentWeekText = ps.get('roundText') or 'Playoffs'
+
+    async def resumePlayoffsAndFinishSeason(self, resumeFromRound: int, restoredState: Optional[dict]) -> None:
+        """Resume an interrupted playoff bracket at resumeFromRound and run the
+        normal post-playoff season wrap-up. Called by floosballApplication's
+        restart path when simulation_state.in_playoffs is set."""
+        logger.info(f"Resuming playoffs at round {resumeFromRound} for season "
+                    f"{self.currentSeason.seasonNumber if self.currentSeason else '?'}")
+        self._openGameStatsFile()
+        await self._simulatePlayoffs(resumeFromRound=resumeFromRound, restoredState=restoredState)
+        await self._finishSeasonAfterPlayoffs()
 
     async def handleOffseason(self, resumeFromOffseason: bool = False) -> None:
         """Handle offseason activities.
@@ -7189,7 +7396,10 @@ class SeasonManager:
             return
 
         try:
-            snapshot = fantasyTracker.getSnapshot(season)
+            # forceFresh: this runs once at week end, right after card bonuses
+            # are persisted — the 8s cache could otherwise serve a pre-card-bonus
+            # snapshot and rank/pay prizes on the wrong weekTotal.
+            snapshot = fantasyTracker.getSnapshot(season, forceFresh=True)
         except Exception as e:
             logger.error(f"Error getting snapshot for weekly leaderboard: {e}")
             return
@@ -7367,7 +7577,10 @@ class SeasonManager:
             return
 
         try:
-            snapshot = fantasyTracker.getSnapshot(season)
+            # forceFresh: card bonuses for this week just persisted; a stale
+            # cached snapshot would under-pay the FP Floobit reward and
+            # under-credit Banner Week / Dynamo achievements by the card bonus.
+            snapshot = fantasyTracker.getSnapshot(season, forceFresh=True)
         except Exception as e:
             logger.error(f"Error getting snapshot for weekly FP floobits: {e}")
             return
@@ -7437,8 +7650,14 @@ class SeasonManager:
                     # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
                     try:
                         from managers import achievementManager as _am
-                        _am.onWeeklyFantasyPoints(session, userId, int(weekFp), season)
-                        seasonFp = int(entry.get('seasonTotal', 0) or 0)
+                        # Round (don't truncate) so the integer the achievement
+                        # system compares against its target matches the rounded
+                        # value the user sees on the fantasy page (.toFixed(0)).
+                        # int(4999.6)=4999 would miss a 5000 target the UI shows
+                        # as "5,000". Floobit-curve math above still uses the raw
+                        # float weekFp.
+                        _am.onWeeklyFantasyPoints(session, userId, round(weekFp), season)
+                        seasonFp = round(entry.get('seasonTotal', 0) or 0)
                         if seasonFp > 0:
                             _am.onSeasonFantasyPointsTotal(session, userId, seasonFp, season)
                         # Secret — Blank (≤20 FP with a full roster of 6)
@@ -8655,6 +8874,20 @@ class SeasonManager:
             return 28 + playoffRound
         week = self.currentSeason.currentWeek
         return week if isinstance(week, int) else 0
+
+    def playoffRoundLabel(self, week: int) -> str:
+        """Human label for a playoff virtual week (29+): 'Playoffs Round N',
+        'League Championship', or 'Floos Bowl'. Derived from the week number so
+        it's correct even when the volatile currentPlayoffRound flag is unset
+        (e.g. a brief window during a mid-playoff restart)."""
+        import floosball_methods as FloosMethods
+        numOfRounds = int(FloosMethods.getPower(2, len(self.leagueManager.teams) / 2))
+        rnd = week - 28
+        if rnd >= numOfRounds:
+            return 'Floos Bowl'
+        if rnd == numOfRounds - 1:
+            return 'League Championship'
+        return f'Playoffs Round {max(1, rnd)}'
 
     def _autoPickFavorites(self, games) -> None:
         """Auto-submit picks for users who opted into auto-pick.

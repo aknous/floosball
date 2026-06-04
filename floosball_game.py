@@ -749,6 +749,8 @@ class Game:
         self.week = None  # Week number for regular season
         self.playoffRound = None  # Round number for playoffs (1=wildcard, 2=divisional, etc.)
         self.gameType = 'regular'  # 'regular' or 'playoff'
+        self.isFloosBowl = False  # True only for the cross-league final (drives the halftime show)
+        self.halftimeShowPauseSeconds = None  # Optional halftime-pause override (Floos Bowl show), set at creation
         self.gameNumber = None  # Game number within the week/round
         self.status = None
         self.personalityManager = personalityManager  # Layer 1/2/3 template firing
@@ -4223,7 +4225,11 @@ class Game:
                         'timeRemaining': '0:00'
                     })
                     if self.timingManager:
-                        await self.timingManager.waitForHalftime()
+                        # Floos Bowl runs a longer, admin-configurable halftime
+                        # so the halftime show has room to play.
+                        halftimeOverride = (getattr(self, 'halftimeShowPauseSeconds', None)
+                                            if getattr(self, 'isFloosBowl', False) else None)
+                        await self.timingManager.waitForHalftime(overrideSeconds=halftimeOverride)
 
                     # Halftime gameplan adjustments
                     if GAMEPLAN_AVAILABLE:
@@ -4529,6 +4535,13 @@ class Game:
                             )
 
                         self._pendingKickoff = False
+                        # Clock is stopped after every kickoff until the receiving
+                        # team snaps (shouldClockRun restarts it on the first
+                        # in-bounds play). The TD scoring branches don't reset
+                        # clockRunning the way the FG branch does, so without this
+                        # the receiving team would wrongly burn a late-game timeout
+                        # on an already-stopped clock right after a score + kickoff.
+                        self.clockRunning = False
                         if self.timingManager:
                             await self.timingManager.waitAfterKickoff()
                     else:
@@ -6664,6 +6677,7 @@ class Game:
             'homeWpa': round(homeWpa, 2),
             'awayWpa': round(awayWpa, 2),
             'isHalftime': getattr(self, 'isHalftime', False),
+            'isFloosBowl': getattr(self, 'isFloosBowl', False),
             'isOvertime': self.currentQuarter > 4 if hasattr(self, 'currentQuarter') else False,
             'isUpsetAlert': isUpsetAlert,
             'homeTimeouts': self.homeTimeoutsRemaining,

@@ -608,6 +608,8 @@ def _runPendingMigrations():
                 ('feedback_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
                 ('feedback_visible', 'true'),
                 ('survey_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
+                ('halftime_show_url', ''),
+                ('halftime_show_pause_seconds', '120'),
             ]
             for k, v in defaults:
                 conn.execute(text(
@@ -656,6 +658,9 @@ def _runPendingMigrations():
             ("offseason_phase",           "VARCHAR(32)"),
             ("offseason_phase_target",    "DATETIME"),
             ("offseason_completed_steps", "TEXT"),
+            # Mid-playoff resume (hotfix/playoff-resume): JSON snapshot of the
+            # in-progress bracket so a restart resumes at the next unplayed round.
+            ("playoff_state",             "TEXT"),
         ):
             try:
                 conn.execute(text(f"ALTER TABLE simulation_state ADD COLUMN {col} {ddl}"))
