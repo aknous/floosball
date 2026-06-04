@@ -1259,6 +1259,12 @@ class SeasonManager:
         # Process card effects for this week (regular season only)
         if not in_playoffs:
             self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
+            # Card bonuses just landed in WeeklyCardBonus — drop the cached
+            # snapshot so downstream consumers (leaderboard prizes, FP payout,
+            # achievements) recompute a weekTotal that includes them.
+            _ft = self.serviceContainer.getService('fantasy_tracker')
+            if _ft:
+                _ft.invalidateSnapshotCache()
 
         # Award weekly leaderboard prizes (after card effects are finalized)
         if not in_playoffs:
@@ -7390,7 +7396,10 @@ class SeasonManager:
             return
 
         try:
-            snapshot = fantasyTracker.getSnapshot(season)
+            # forceFresh: this runs once at week end, right after card bonuses
+            # are persisted — the 8s cache could otherwise serve a pre-card-bonus
+            # snapshot and rank/pay prizes on the wrong weekTotal.
+            snapshot = fantasyTracker.getSnapshot(season, forceFresh=True)
         except Exception as e:
             logger.error(f"Error getting snapshot for weekly leaderboard: {e}")
             return
@@ -7568,7 +7577,10 @@ class SeasonManager:
             return
 
         try:
-            snapshot = fantasyTracker.getSnapshot(season)
+            # forceFresh: card bonuses for this week just persisted; a stale
+            # cached snapshot would under-pay the FP Floobit reward and
+            # under-credit Banner Week / Dynamo achievements by the card bonus.
+            snapshot = fantasyTracker.getSnapshot(season, forceFresh=True)
         except Exception as e:
             logger.error(f"Error getting snapshot for weekly FP floobits: {e}")
             return

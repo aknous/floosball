@@ -256,6 +256,9 @@ class FantasyTracker:
         # Mark as banked but keep data so getSnapshot overlay still works
         # between week end and next week start
         self._bankedWeek = week
+        # Banking changed the FP source rows — drop any cached snapshot so the
+        # week-end consumers recompute against banked totals.
+        self.invalidateSnapshotCache()
 
     def clearWeekFP(self):
         """Clear the in-memory FP accumulator for a new week.
@@ -278,7 +281,18 @@ class FantasyTracker:
 
     _SNAPSHOT_TTL_SECONDS = 8.0  # leaderboard staleness budget (broadcast cadence is 10s)
 
-    def getSnapshot(self, seasonNum: int = None) -> dict:
+    def invalidateSnapshotCache(self) -> None:
+        """Drop the cached snapshot so the next getSnapshot recomputes.
+
+        Must be called whenever the data the snapshot aggregates changes outside
+        the normal live-scoring flow — specifically after bankWeek persists
+        WeeklyPlayerFP and after _processWeekCardEffects persists WeeklyCardBonus.
+        Without this, the 8s TTL can hand a pre-card-bonus weekTotal to the
+        week-end consumers (FP Floobit payout, leaderboard prizes, Banner Week /
+        Dynamo achievements), under-counting by the card-bonus FP."""
+        self._snapshotCache = None
+
+    def getSnapshot(self, seasonNum: int = None, forceFresh: bool = False) -> dict:
         """Short-TTL cache around the (read-only) snapshot computation.
 
         The snapshot aggregates every roster/leaderboard entry and is recomputed
@@ -287,13 +301,18 @@ class FantasyTracker:
         concurrent page loads) without noticeably staling live points: the TTL is
         shorter than the broadcast interval, so the broadcast still recomputes
         fresh each cycle. Consumers read the result (never mutate in place), so
-        sharing the cached dict is safe."""
+        sharing the cached dict is safe.
+
+        forceFresh bypasses the cache read — used by the once-per-week week-end
+        consumers (FP payout, leaderboard prizes, achievements) where the 8s
+        dedupe buys nothing but a stale pre-card-bonus weekTotal costs a wrong
+        payout / missed achievement."""
         import time
         sm = self._seasonManager
         resolved = seasonNum
         if resolved is None:
             resolved = sm.currentSeason.seasonNumber if (sm and sm.currentSeason) else None
-        if resolved is not None:
+        if resolved is not None and not forceFresh:
             cache = getattr(self, '_snapshotCache', None)
             if (cache is not None and cache[0] == resolved
                     and (time.monotonic() - cache[1]) < self._SNAPSHOT_TTL_SECONDS):
