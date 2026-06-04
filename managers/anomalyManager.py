@@ -115,6 +115,27 @@ CRITICALITY_RUNAWAY_OVER_THRESHOLD = 0.5  # 50% over → 2-round Criticality
 # During a Criticality round, per-play anomaly probabilities multiply.
 CRITICALITY_MULTIPLIER = 8.0 if _ANOMALY_FAST else 5.0
 
+# ── Instability dial (P3) ─────────────────────────────────────────────────────
+# While Criticality is gated off (ANOMALY_CRITICALITY_ENABLED=False) the league
+# never actually fires — but the buildup is no longer silent. The per-play glitch
+# multiplier (getCriticalityMultiplier) rides this dial instead of sitting flat at
+# 1.0: it ramps with the aggregate's approach to threshold, so glitches grow more
+# frequent as a season tenses, then drop during the post-near-miss suppression
+# window. The full CRITICALITY_MULTIPLIER above is reserved for an actually-fired
+# Criticality (enabled seasons only); the gated dial tops out lower.
+INSTABILITY_BASELINE = 1.0           # multiplier when the league is quiet
+INSTABILITY_PRECRIT_CEILING = 2.6    # max multiplier from buildup alone (gated)
+INSTABILITY_RAMP_START = 0.40        # ratio below which the dial stays at baseline (matches WARNING_LOW)
+INSTABILITY_SUPPRESSED = 0.45        # multiplier during a suppression window — pointedly quiet
+
+# ── Near-miss / patch beat (P3) ───────────────────────────────────────────────
+# When the aggregate crosses threshold while Criticality is gated, the Cores
+# scramble and force it back rather than letting the event fire. This is the
+# dramatized tease beat — 1-2 per season, each one quieter to recover from.
+SUPPRESSION_MAX_PER_SEASON = 1 if _ANOMALY_FAST else 2  # hard cap on patch beats per season
+SUPPRESSION_AGGREGATE_DAMP = 0.55    # aggregate is knocked to this fraction on a patch (must re-climb)
+SUPPRESSION_THRESHOLD_BUMP = 1.10    # each patch reinforces containment: threshold ×= this
+
 # Reset purge dodge multipliers, keyed by personality meta-awareness tier.
 # Aware-tier players resist purges better — they perceive the Cores'
 # intervention coming and adapt. Unaware-tier players roll full odds.
@@ -277,9 +298,127 @@ def isCriticalityWeek(seasonNumber: int, week: int) -> bool:
         session.close()
 
 
+def _bandRatio(state: Optional[LeagueAnomalyState]) -> float:
+    """How close the league is to its hidden Criticality threshold (aggregate /
+    threshold). 0 = quiet, 1.0 = at the line, >1.0 = over. Internal only — this
+    number never surfaces to users; it drives the dial and the qualitative band."""
+    if state is None:
+        return 0.0
+    return float(state.aggregate_score or 0.0) / max(1, state.threshold or 1)
+
+
+def _inSuppressionWindow(state: Optional[LeagueAnomalyState], week: Optional[int]) -> bool:
+    """True while a post-near-miss suppression window is still open — the Cores
+    have just forced the anomaly back and the league is pointedly quiet."""
+    return (state is not None
+            and state.suppression_window_ends_week is not None
+            and week is not None
+            and week < state.suppression_window_ends_week)
+
+
+def _instabilityMultiplier(state: Optional[LeagueAnomalyState], week: Optional[int]) -> float:
+    """Gated per-play glitch multiplier (the 'instability dial').
+
+    Rides the league aggregate's approach to threshold: flat at baseline while
+    quiet, ramping toward INSTABILITY_PRECRIT_CEILING as the ratio climbs from
+    INSTABILITY_RAMP_START to 1.0, and floored low during a suppression window
+    (the post-patch lull). Always strictly below CRITICALITY_MULTIPLIER — the
+    gated league tenses but never reaches a real Criticality's intensity."""
+    if _inSuppressionWindow(state, week):
+        return INSTABILITY_SUPPRESSED
+    ratio = _bandRatio(state)
+    if ratio <= INSTABILITY_RAMP_START:
+        return INSTABILITY_BASELINE
+    span = max(1e-6, 1.0 - INSTABILITY_RAMP_START)
+    frac = min(1.0, (ratio - INSTABILITY_RAMP_START) / span)
+    return INSTABILITY_BASELINE + (INSTABILITY_PRECRIT_CEILING - INSTABILITY_BASELINE) * frac
+
+
 def getCriticalityMultiplier(seasonNumber: int, week: int) -> float:
-    """Per-play anomaly probability multiplier. 1.0 normally, 5.0 during Criticality."""
-    return CRITICALITY_MULTIPLIER if isCriticalityWeek(seasonNumber, week) else 1.0
+    """Per-play anomaly probability multiplier.
+
+    - Inside an actually-fired Criticality window (enabled seasons only): the
+      full CRITICALITY_MULTIPLIER.
+    - Otherwise: the gated instability dial, which ramps with the league
+      aggregate's approach to its hidden threshold and drops during a
+      post-near-miss suppression window.
+    """
+    if isCriticalityWeek(seasonNumber, week):
+        return CRITICALITY_MULTIPLIER
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        return _instabilityMultiplier(state, week)
+    finally:
+        session.close()
+
+
+# Qualitative status bands for the Cores control room (P5). NO numbers ever
+# surface — the dread is in not having a gauge to game. Ordered low → high.
+CRITICALITY_STATUS_BANDS = [
+    ('dormant',  'Dormant',  'All readings nominal. The simulation holds.'),
+    ('stirring', 'Stirring', 'Irregularities are accumulating faster than they decay.'),
+    ('unstable', 'Unstable', 'The Cores are working to hold the simulation together.'),
+    ('critical', 'Critical', 'Containment is failing. The Cores cannot hold this much longer.'),
+]
+SUPPRESSION_STATUS = (
+    'stabilizing', 'Stabilizing',
+    'The Cores have forced the anomaly back. The simulation is quiet. For now.',
+)
+
+
+def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
+    """Ominous, number-free status for the Cores control room (P5).
+
+    Returns a qualitative band derived from how close the hidden aggregate is to
+    its hidden threshold, plus suppression state. Deliberately exposes no raw
+    numbers — users feel the pressure without a meter to optimize against.
+    """
+    if isCriticalityWeek(seasonNumber, week):
+        # An actually-fired Criticality (enabled seasons) reads as full breach.
+        key, label, desc = CRITICALITY_STATUS_BANDS[3]
+        activeCore = getActiveCriticalityCore(seasonNumber, week)
+        return {
+            'status': key, 'label': label, 'description': desc,
+            'inSuppression': False, 'patchesApplied': 0, 'activeCore': activeCore,
+            'criticalityActive': True,
+        }
+
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+    finally:
+        session.close()
+
+    suppressionEntries = [
+        e for e in (state.cores_patches_applied or [])
+        if e.get('event') == 'suppression'
+    ] if state is not None else []
+    inSuppression = _inSuppressionWindow(state, week)
+
+    if inSuppression:
+        key, label, desc = SUPPRESSION_STATUS
+        # Surface the Core that led the most recent patch, for the control room.
+        activeCore = suppressionEntries[-1].get('core') if suppressionEntries else None
+    else:
+        ratio = _bandRatio(state)
+        if ratio >= 1.0:
+            key, label, desc = CRITICALITY_STATUS_BANDS[3]
+        elif ratio >= WARNING_HIGH_THRESHOLD:
+            key, label, desc = CRITICALITY_STATUS_BANDS[2]
+        elif ratio >= WARNING_LOW_THRESHOLD:
+            key, label, desc = CRITICALITY_STATUS_BANDS[1]
+        else:
+            key, label, desc = CRITICALITY_STATUS_BANDS[0]
+        activeCore = None
+
+    return {
+        'status': key, 'label': label, 'description': desc,
+        'inSuppression': inSuppression,
+        'patchesApplied': len(suppressionEntries),
+        'activeCore': activeCore,
+        'criticalityActive': False,
+    }
 
 
 def getActiveCriticalityCore(seasonNumber: int, week: int) -> Optional[str]:
@@ -945,18 +1084,15 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     second Criticality in the same season requires fresh attention buildup.
     Broadcasts a Cores-attributed news entry to the league feed.
 
-    Feature-flagged: when ANOMALY_CRITICALITY_ENABLED is False, the trigger
-    is suppressed entirely — no audit entry, no news. Aggregate continues
-    to climb (visible in diagnostics) but never actually fires. This is
-    the season-long tease state.
+    Feature-flagged: when ANOMALY_CRITICALITY_ENABLED is False, the event does
+    not fire — instead the crossing is dramatized as a near-miss/patch beat
+    (_suppressCriticality): the Cores scramble and force the aggregate back. The
+    league still never reaches a real Criticality, but the buildup is no longer
+    silent. This is the season-long tease.
     """
     from constants import ANOMALY_CRITICALITY_ENABLED
     if not ANOMALY_CRITICALITY_ENABLED:
-        logger.info(
-            f"Criticality suppressed (flag disabled). Aggregate {state.aggregate_score:.1f} "
-            f"crossed threshold {state.threshold} in season {state.season} "
-            f"week {currentWeek} — would have fired."
-        )
+        _suppressCriticality(state, currentWeek, session=session)
         return
     overRatio = state.aggregate_score / max(1, state.threshold)
     duration = (
@@ -1006,6 +1142,96 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     )
 
     # Broadcast to the league news feed.
+    _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=currentWeek)
+
+
+def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
+                         session: Optional[Session] = None) -> None:
+    """Gated near-miss: the aggregate crossed threshold but Criticality is off.
+
+    Rather than firing, the Cores scramble and force the buildup back — a
+    dramatized "we caught it this time" patch beat. Capped per season; once the
+    cap is reached the Cores can no longer push it back and the league sits
+    pinned at critical instability (the dial stays high) for the rest of the
+    year, though the event still cannot fire while gated.
+
+    Each patch:
+      * records a `suppression` audit entry (controlling Core + week),
+      * opens a suppression window (instability dial goes quiet),
+      * drains the accumulated over-cap fuel so the aggregate must genuinely
+        re-climb (the weekly recompute reads from over_cap_carry),
+      * reinforces the threshold a little (each save is harder to need again),
+      * re-arms the Cores' warning cycle for the next buildup,
+      * broadcasts a Cores-attributed patch line to the league feed.
+    """
+    priorPatches = sum(
+        1 for e in (state.cores_patches_applied or [])
+        if e.get('event') == 'suppression'
+    )
+    if priorPatches >= SUPPRESSION_MAX_PER_SEASON:
+        # Out of patches for the season — the Cores can't force it back again.
+        # The league stays pinned critical (the instability dial sits at its
+        # ceiling), but the event remains gated off, so nothing actually fires.
+        logger.warning(
+            f"Criticality crossed threshold but suppression cap reached "
+            f"({priorPatches}/{SUPPRESSION_MAX_PER_SEASON}); league pinned critical "
+            f"(season={state.season}, week={currentWeek}, "
+            f"aggregate={state.aggregate_score:.1f})."
+        )
+        return
+
+    patchNumber = priorPatches + 1
+    controllingCore = _pickControllingCore(state)
+
+    news = None
+    try:
+        from managers.coresManager import newsEntryFor
+        news = newsEntryFor('suppression', core=controllingCore)
+    except Exception as e:
+        logger.warning(f"coresManager unavailable for suppression news: {e}")
+
+    overRatio = float(state.aggregate_score) / max(1, state.threshold)
+    patches = list(state.cores_patches_applied or [])
+    patches.append({
+        'event': 'suppression',
+        'patch_number': patchNumber,
+        'week': currentWeek,
+        'aggregate_at_patch': float(state.aggregate_score),
+        'over_ratio': overRatio,
+        'core': controllingCore,
+        'fired_at': datetime.utcnow().isoformat() + 'Z',
+        'news': news,
+    })
+    state.cores_patches_applied = patches
+
+    # Open the quiet window and reinforce containment.
+    state.suppression_window_ends_week = currentWeek + SUPPRESSION_WINDOW_WEEKS
+    state.threshold = int(state.threshold * SUPPRESSION_THRESHOLD_BUMP)
+    state.last_reset_week = currentWeek  # warnings re-arm for the next buildup
+    state.updated_at = datetime.utcnow()
+
+    # Drain the accumulated over-cap fuel so the weekly recompute genuinely
+    # restarts lower. This is what makes the re-climb real — the aggregate is
+    # recomputed from over_cap_carry every tick, so damping the stored
+    # aggregate alone wouldn't survive next week.
+    drainedFrom = 0
+    if session is not None:
+        carryRows = session.query(PlayerAttention).filter_by(season=state.season).all()
+        for row in carryRows:
+            if row.over_cap_carry:
+                row.over_cap_carry = float(row.over_cap_carry) * SUPPRESSION_AGGREGATE_DAMP
+                drainedFrom += 1
+    # Reflect the drain immediately for any in-tick reads (recomputed next week).
+    state.aggregate_score = float(state.aggregate_score) * SUPPRESSION_AGGREGATE_DAMP
+
+    logger.warning(
+        f"CRITICALITY SUPPRESSED (patch #{patchNumber}/{SUPPRESSION_MAX_PER_SEASON}, "
+        f"season={state.season}, week={currentWeek}): core={controllingCore}, "
+        f"aggregate forced to {state.aggregate_score:.1f}, threshold reinforced to "
+        f"{state.threshold}, quiet until week {state.suppression_window_ends_week} "
+        f"(drained {drainedFrom} carry rows)."
+    )
+
     _broadcastCoreNews(news, session=session, seasonNumber=state.season, week=currentWeek)
 
 

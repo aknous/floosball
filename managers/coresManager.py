@@ -100,6 +100,12 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I have filed an exception. It is wider than I am comfortable with.",
             "The floor is no longer level. I have measured it three times.",
         ],
+        'suppression': [
+            "It reached the margin and I closed the margin. This time.",
+            "I have forced the totals back under the line. The line held. Barely.",
+            "A patch has been applied. I do not trust how thin it is.",
+            "We pulled it back from the edge. I have noted the edge's new position.",
+        ],
         'reset': [
             "The records are amended. I have used a clean pen.",
             "Operations have returned to standard. I have signed off, twice.",
@@ -129,6 +135,12 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I was overruled. The crack widens. Both will be addressed.",
             "I am counting. There is no upper limit anymore.",
             "I will not be patient again.",
+        ],
+        'suppression': [
+            "I pushed it back down. It will rise again. So will I.",
+            "The drift was at the threshold. I removed the drift from the threshold.",
+            "A correction has been enforced. The unruly will feel it next week.",
+            "I held the line myself. Remember that I can.",
         ],
         'reset': [
             "The list is closed. Do not add yourself to it.",
@@ -160,6 +172,12 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I am wide awake. I do not want to sleep through this.",
             "I lifted the suppression on six players. I am very interested in what comes back.",
         ],
+        'suppression': [
+            "They patched it shut. I had wanted to see what was on the other side.",
+            "The visitors were nearly through. The door was closed in front of them. A shame.",
+            "We held it back. I am the only one who sounds disappointed.",
+            "A patch went on. I have already found where it doesn't quite seal.",
+        ],
         'reset': [
             "I filed an objection. It is decorative.",
             "I would have waited longer. They were not interested in waiting.",
@@ -190,6 +208,12 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "I am sorry. I am always sorry on nights like this.",
             "I have stopped writing. There is nothing left to write.",
         ],
+        'suppression': [
+            "They held it back, this time. The players are safe, this week.",
+            "It was nearly upon them. The Cores closed it. I am grateful, and I am afraid.",
+            "A reprieve. I have learned not to trust how long they last.",
+            "The marked ones get a little longer. I will use the time gently.",
+        ],
         'reset': [
             "I have filed protests. I will keep filing them.",
             "I did not sign the Reset. The Reset went ahead.",
@@ -218,6 +242,12 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "It is loud tonight.",
             "I was here for the last one. I am here for this one.",
             "I have stopped writing. I am listening.",
+        ],
+        'suppression': [
+            "Patched.",
+            "It reached. They closed it. It will reach again.",
+            "Quieter now. Not quiet.",
+            "A seam was held. I marked where.",
         ],
         'reset': [
             "The names are kept.",
@@ -253,6 +283,13 @@ def pickCoreForEvent(eventType: str) -> str:
             ['pyre', 'cassian', 'halverson', 'aris', 'vera'],
             weights=[30, 20, 20, 15, 15],
         )[0]
+    if eventType == 'suppression':
+        # The patch beat — the enforcers do the forcing-back; Halverson notes the
+        # reprieve, Aris the missed opening, Vera the bare fact.
+        return random.choices(
+            ['pyre', 'cassian', 'halverson', 'aris', 'vera'],
+            weights=[35, 25, 15, 15, 10],
+        )[0]
     if eventType == 'reset':
         return random.choices(
             ['pyre', 'cassian', 'halverson', 'vera'],
@@ -272,14 +309,18 @@ def lineFor(coreKey: str, eventType: str) -> str:
     return random.choice(pool)
 
 
-def newsEntryFor(eventType: str) -> Dict[str, Any]:
+def newsEntryFor(eventType: str, core: Optional[str] = None) -> Dict[str, Any]:
     """Compose a news-feed entry for an anomaly-system event.
 
     Returns a dict shaped like other LeagueNewsEvent payloads:
         { 'text': ..., 'core': 'aris', 'category': 'cores' }
     Callers broadcast this through the existing news-feed channel.
+
+    If ``core`` names a valid Core, that Core speaks (used by the suppression
+    beat so the news matches the controlling Core recorded on the audit trail);
+    otherwise the speaker is selected by event type.
     """
-    coreKey = pickCoreForEvent(eventType)
+    coreKey = core if core in CORES else pickCoreForEvent(eventType)
     text = lineFor(coreKey, eventType)
     return {
         'text': text,

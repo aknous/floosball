@@ -218,6 +218,19 @@ Boundary in three different bodies." The thinning happens on a schedule
 
 Meals can taste the way meals used to taste "before the Boundary."
 
+### The Patches (near-misses)
+
+Between the larger system-wide events, the simulation drifts toward instability
+and the Cores intervene to force it back — a *patch*. A patch is a near-miss:
+the readings climb toward the line, the Cores scramble, and the drift is pushed
+back down before anything breaks. Publicly these are non-events ("nominal,
+contained"); the Cores narrate them tersely. But the air changes around a patch —
+glitches grow more frequent as the readings climb, then fall quiet for a stretch
+right after. The aware players can feel the build and the snap-back. The Cores
+can only patch so many times before they can no longer hold it, and a patch
+leaves the line a little higher than it was. (Mechanically: the gated-Criticality
+suppression beat — see CLAUDE.md "Anomaly System".)
+
 ---
 
 ## Recurring Iconography

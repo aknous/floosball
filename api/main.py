@@ -1180,6 +1180,31 @@ async def debug_anomaly_state():
         session.close()
 
 
+@app.get("/api/cores/status", response_model=Dict[str, Any])
+async def cores_status():
+    """Public, number-free Criticality status for the Cores control room.
+
+    Unlike /api/debug/anomaly-state (which exposes the hidden aggregate and
+    threshold and is a testing aid only), this returns just the qualitative
+    band — dormant / stirring / unstable / critical / stabilizing — plus
+    suppression state and the Core that led the most recent patch. The whole
+    point is that users feel the pressure without a gauge to optimize against,
+    so no raw numbers are surfaced here."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    from managers.anomalyManager import getCriticalityStatus
+    from managers.coresManager import CORES
+    status = getCriticalityStatus(seasonNumber, currentWeek)
+    activeCore = status.get('activeCore')
+    status['activeCoreDisplayName'] = (
+        CORES.get(activeCore, {}).get('displayName') if activeCore else None
+    )
+    return build_success_response(status)
+
+
 @app.post("/api/debug/anomaly-bump", response_model=Dict[str, Any])
 async def debug_anomaly_bump(player_id: int, amount: float = 50.0):
     """Testing aid — force-add attention to a specific player. Skips
