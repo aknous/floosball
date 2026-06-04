@@ -2012,11 +2012,13 @@ async def get_league_news_recent(
     limit: int = Query(default=30, ge=1, le=200),
     season: Optional[int] = Query(default=None),
     week: Optional[int] = Query(default=None),
+    category: Optional[str] = Query(default=None),
 ):
     """Recent persisted league-news items (Cores voice lines, anomaly state
     transitions). Default scope is the *current* season+week so the
     highlight feed naturally rolls over with the schedule. Pass ?week=0
-    to ignore the week filter and pull a longer history.
+    to ignore the week filter and pull a longer history. Pass ?category=cores
+    to restrict to Cores dialogue (the Cores control room does this).
     """
     response.headers["Cache-Control"] = "public, max-age=15"
     if floosball_app is None:
@@ -2041,6 +2043,8 @@ async def get_league_news_recent(
                     q = q.filter(LeagueNewsItem.week == week)
             elif cs is not None and hasattr(cs, 'currentWeek'):
                 q = q.filter(LeagueNewsItem.week == cs.currentWeek)
+            if category is not None:
+                q = q.filter(LeagueNewsItem.category == category)
             rows = q.order_by(LeagueNewsItem.created_at.desc()).limit(limit).all()
             return [{
                 'id': r.id,
