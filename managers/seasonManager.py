@@ -7638,8 +7638,14 @@ class SeasonManager:
                     # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
                     try:
                         from managers import achievementManager as _am
-                        _am.onWeeklyFantasyPoints(session, userId, int(weekFp), season)
-                        seasonFp = int(entry.get('seasonTotal', 0) or 0)
+                        # Round (don't truncate) so the integer the achievement
+                        # system compares against its target matches the rounded
+                        # value the user sees on the fantasy page (.toFixed(0)).
+                        # int(4999.6)=4999 would miss a 5000 target the UI shows
+                        # as "5,000". Floobit-curve math above still uses the raw
+                        # float weekFp.
+                        _am.onWeeklyFantasyPoints(session, userId, round(weekFp), season)
+                        seasonFp = round(entry.get('seasonTotal', 0) or 0)
                         if seasonFp > 0:
                             _am.onSeasonFantasyPointsTotal(session, userId, seasonFp, season)
                         # Secret — Blank (≤20 FP with a full roster of 6)
