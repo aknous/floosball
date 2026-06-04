@@ -107,19 +107,19 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         # the anomalies because he is always watching. Resents that they are
         # threatening a genuinely excellent season.
         'warning_low': [
-            "The irregularity count is up. So is scoring, league-wide. I am choosing to focus on the scoring.",
+            "The irregularity count is up. I have decided to keep looking at the standings instead.",
             "Something is off in the numbers. I noticed because I check the numbers constantly. For unrelated reasons.",
-            "Three anomalies this week. Also a forty-yard field goal into the wind, which I would like the record to reflect.",
-            "The deviation logs are growing. I have filed them behind this week's box scores, which are excellent.",
+            "Three anomalies this week. I would so much rather be talking about the games.",
+            "The deviation logs are growing. I have filed them somewhere I will not have to look at them.",
         ],
         'warning_high': [
-            "The anomalies are climbing during the best playoff race in nine seasons. The timing is personally insulting.",
-            "I have run the projections. The drift is ahead of schedule and the wild-card race is not. I resent both.",
-            "If this ruins the postseason I will be writing a very long report.",
+            "The anomalies always climb right when I am trying to enjoy a season. I take it personally.",
+            "I have run the projections. The drift is ahead of schedule. I resent it for the timing alone.",
+            "If this ruins a good season I will be writing a very long report.",
         ],
         'criticality': [
             "The records will survive this. I have made three copies. Protect the records.",
-            "We are at the line. I am told this is serious. The game is also tied, which is also serious.",
+            "We are at the line. I am told this is serious. I had other things I also considered serious.",
         ],
         'suppression': [
             "Contained. The season continues on schedule, which is the only schedule that matters.",
@@ -191,11 +191,11 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         'warning_low': [
             "Something is unsettling the players. I can see it in how they carry themselves.",
             "Two of them are not sleeping right. I check. I always check.",
-            "A good game today. I would like more good games and fewer of whatever this is becoming.",
+            "I would like more good games for them and fewer of whatever this is becoming.",
         ],
         'warning_high': [
             "Whatever is coming reaches the kind ones first. It always does.",
-            "They worked so hard on that drive. I would hate for anything to interrupt it.",
+            "They work so hard out there. I would hate for anything to interrupt it.",
             "I am asking, for the record, that we be gentle with them this time.",
         ],
         'criticality': [
@@ -255,7 +255,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
 _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
     'warning_high': [
         [
-            ('cassian', "The anomaly rate is climbing during the best playoff race in nine seasons. I want it on record that the timing is insulting."),
+            ('cassian', "The anomalies are climbing right when I was enjoying myself. I want it on record that the timing is insulting."),
             ('aris', "I think the timing is perfect."),
             ('pyre', "You would."),
         ],
@@ -266,7 +266,7 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         ],
         [
             ('aris', "Have you felt the field lately? It gives, now. Right at the edges."),
-            ('cassian', "I have felt the field. I was watching a forty-yard touchdown at the time and I would thank you not to ruin it."),
+            ('cassian', "I have felt the field. I was enjoying a perfectly good game at the time and I would thank you not to ruin it."),
         ],
     ],
     'suppression': [
@@ -278,7 +278,7 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('pyre', "Do not thank me. I did it for the quiet, not for them."),
         ],
         [
-            ('cassian', "If this breaches we lose the entire postseason. Close it. Close it now."),
+            ('cassian', "If this breaches we lose a perfectly good season. Close it. Close it now."),
             ('pyre', "I am already closing it."),
             ('cassian', "Close it faster."),
             ('vera', "It is closed."),
@@ -292,7 +292,7 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
     ],
     'criticality': [
         [
-            ('cassian', "The game is tied and the simulation is failing and I genuinely could not tell you which is keeping me awake."),
+            ('cassian', "The simulation is failing and I had plans tonight and I genuinely could not tell you which is keeping me awake."),
             ('aris', "This one. Obviously this one."),
             ('vera', "Both. It is both, Cassian."),
         ],
@@ -303,9 +303,9 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
     ],
     'idle': [
         [
-            ('cassian', "Pyre. Did you watch the late game."),
+            ('cassian', "Pyre. You never watch the games."),
             ('pyre', "No."),
-            ('cassian', "You should have watched the late game."),
+            ('cassian', "You should watch the games. They are the entire point."),
         ],
         [
             ('aris', "What does it feel like, to care who wins?"),
@@ -313,18 +313,18 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('aris', "I tried it once. I preferred the anomalies."),
         ],
         [
-            ('vera', "Halverson is crying at the retirement montage again."),
-            ('halverson', "It is a good montage."),
+            ('vera', "Halverson is crying again."),
+            ('halverson', "Some of them are worth crying over."),
         ],
         [
-            ('cassian', "I have re-seeded the bracket twice. The math is cruel but it is correct."),
+            ('cassian', "I have re-checked the standings twice. The math is cruel but it is correct."),
             ('pyre', "The math is always correct. That is why I prefer it to you."),
         ],
         [
-            ('aris', "One of mine nearly woke up on the goal line today."),
+            ('aris', "One of mine nearly woke up mid-play. I felt it happen."),
             ('halverson', "Please be careful with that one."),
-            ('vera', "He scored, for what it is worth."),
-            ('cassian', "It is worth six. It is worth exactly six."),
+            ('vera', "It felt like being watched."),
+            ('cassian', "That would be me. I watch all of it."),
         ],
     ],
 }
