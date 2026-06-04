@@ -9309,44 +9309,51 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
 
         seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
 
-        # Vote tallies per (team_id, vote_type, target_player_id)
+        # Vote tallies per (team_id, vote_type, target_player_id), split by
+        # direction. The projection must mirror the resolver's net-vote math
+        # (gmManager.resolveCutVotes / resolveResignVotes): a slot only opens
+        # when NET votes (yea - nay) clear the team's fan-count threshold.
+        # Counting raw rows (yea + nay lumped together) wrongly treats a "keep"
+        # (nay) vote as support, inverting which positions appear open.
         voteRows = session.query(
             GmVote.team_id, GmVote.vote_type, GmVote.target_player_id,
+            GmVote.direction,
             _func.count(GmVote.id).label('n'),
         ).filter(
             GmVote.season == seasonNum,
             GmVote.vote_type.in_(['cut_player', 'resign_player']),
-        ).group_by(GmVote.team_id, GmVote.vote_type, GmVote.target_player_id).all()
+        ).group_by(
+            GmVote.team_id, GmVote.vote_type, GmVote.target_player_id,
+            GmVote.direction,
+        ).all()
 
-        # {(teamId, voteType, targetPlayerId): voteCount}
-        voteTally: Dict[tuple, int] = {
-            (r.team_id, r.vote_type, r.target_player_id): r.n
-            for r in voteRows
-        }
+        # {(teamId, voteType, targetPlayerId): netVotes (yea - nay)}
+        netTally: Dict[tuple, int] = {}
+        for r in voteRows:
+            key = (r.team_id, r.vote_type, r.target_player_id)
+            isNay = (r.direction or 'yea') == 'nay'
+            netTally[key] = netTally.get(key, 0) + (-r.n if isNay else r.n)
 
-        # Engaged-fan count per team for threshold calc
-        engagedPerTeam: Dict[int, int] = {}
-        engagedRows = session.query(
-            User.favorite_team_id,
-            _func.count(_func.distinct(GmVote.user_id)).label('n'),
-        ).join(GmVote, GmVote.user_id == User.id).filter(
-            GmVote.season == seasonNum,
-            User.favorite_team_id.isnot(None),
-        ).group_by(User.favorite_team_id).all()
-        for r in engagedRows:
-            engagedPerTeam[r.favorite_team_id] = r.n
+        # Threshold = team fan count, the same source the resolver uses
+        # (frozen front-office snapshot), so the ballot projection can't drift
+        # from the actual resolution. Memoized per team.
+        _thresholdCache: Dict[int, int] = {}
+        def _threshold(teamId: int) -> int:
+            if teamId not in _thresholdCache:
+                _thresholdCache[teamId] = _gm.calculateThreshold(
+                    _gm.voteRepo.getTeamFanCount(teamId, season=seasonNum)
+                )
+            return _thresholdCache[teamId]
 
         def likelyCut(teamId: int, playerId: int) -> bool:
-            votes = voteTally.get((teamId, 'cut_player', playerId), 0)
-            if votes == 0: return False
-            threshold = _gm.calculateThreshold(engagedPerTeam.get(teamId, 0), 'cut_player')
-            return votes >= threshold
+            net = netTally.get((teamId, 'cut_player', playerId), 0)
+            if net <= 0: return False
+            return net >= _threshold(teamId)
 
         def likelyResigned(teamId: int, playerId: int) -> bool:
-            votes = voteTally.get((teamId, 'resign_player', playerId), 0)
-            if votes == 0: return False
-            threshold = _gm.calculateThreshold(engagedPerTeam.get(teamId, 0), 'resign_player')
-            return votes >= threshold
+            net = netTally.get((teamId, 'resign_player', playerId), 0)
+            if net <= 0: return False
+            return net >= _threshold(teamId)
 
         openSlots = []
         slotPosMap = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
