@@ -4535,6 +4535,13 @@ class Game:
                             )
 
                         self._pendingKickoff = False
+                        # Clock is stopped after every kickoff until the receiving
+                        # team snaps (shouldClockRun restarts it on the first
+                        # in-bounds play). The TD scoring branches don't reset
+                        # clockRunning the way the FG branch does, so without this
+                        # the receiving team would wrongly burn a late-game timeout
+                        # on an already-stopped clock right after a score + kickoff.
+                        self.clockRunning = False
                         if self.timingManager:
                             await self.timingManager.waitAfterKickoff()
                     else:
