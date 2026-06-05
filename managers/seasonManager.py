@@ -1278,6 +1278,11 @@ class SeasonManager:
         if not in_playoffs:
             self._creditVeteranForWeek(self.currentSeason.seasonNumber)
 
+        # Supporter dividends (fan-income) — accrue every week, regular AND
+        # playoff (backing a deep-run team keeps paying). Ticks tenure for all
+        # fans; credits a dividend to those whose team played this week.
+        self._accrueSupporterDividends(self.currentSeason.seasonNumber, week)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
@@ -5348,8 +5353,11 @@ class SeasonManager:
             pendingUsers = session.query(User).filter(
                 User.pending_favorite_team_id.isnot(None)
             ).all()
+            from managers.supporterManager import onFavoriteTeamChange
             for u in pendingUsers:
                 logger.info(f"User {u.id}: promoting pending favorite team {u.pending_favorite_team_id}")
+                # Switching teams — soft-reset Supporter loyalty tenure (anti-bandwagon).
+                onFavoriteTeamChange(u)
                 u.favorite_team_id = u.pending_favorite_team_id
                 u.pending_favorite_team_id = None
                 u.favorite_team_locked_season = None
@@ -7383,6 +7391,21 @@ class SeasonManager:
                 session.close()
         except ImportError:
             return 0
+
+    def _accrueSupporterDividends(self, season: int, week: int) -> None:
+        """Accrue weekly Supporter (fan-loyalty) dividends. Idle income — accrues
+        to each fan's claim pool; they collect via POST /api/supporter/claim."""
+        try:
+            from database.connection import get_session
+            from managers.supporterManager import accrueWeekly
+            session = get_session()
+            try:
+                accrueWeekly(session, season, week)
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Supporter dividend accrual failed (s{season} w{week}): {e}")
 
     def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
         """Award Floobits to top leaderboard performers for the week."""

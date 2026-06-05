@@ -5561,6 +5561,11 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
         if offseason or dbUser.favorite_team_id is None:
             # Offseason or first-time pick: apply immediately
             wasFirstTime = dbUser.favorite_team_id is None
+            if not wasFirstTime:
+                # Switching teams — soft-reset Supporter loyalty tenure so a
+                # switch is a setback, not a clean slate (anti-bandwagon).
+                from managers.supporterManager import onFavoriteTeamChange
+                onFavoriteTeamChange(dbUser)
             dbUser.favorite_team_id = req.teamId
             dbUser.pending_favorite_team_id = None
             if currentSeasonNum is not None and not offseason:
@@ -5589,6 +5594,38 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
         session.rollback()
         logger.error(f"Error setting favorite team: {e}")
         raise HTTPException(status_code=500, detail="Failed to update favorite team")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# SUPPORTER (fan-income) ENDPOINTS
+# ============================================================================
+
+@app.get("/api/supporter/me")
+def supporter_me(user: _User = Depends(_getCurrentUser)):
+    """The current user's Supporter status: loyalty tier, tenure, next tier, and
+    the Floobits accrued and waiting to be claimed."""
+    from database.connection import get_session
+    from managers.supporterManager import getStatus
+    session = get_session()
+    try:
+        return build_success_response(getStatus(session, user.id) or {})
+    finally:
+        session.close()
+
+
+@app.post("/api/supporter/claim")
+def supporter_claim(user: _User = Depends(_getCurrentUser)):
+    """Claim the user's accrued Supporter dividends into their balance."""
+    from database.connection import get_session
+    from managers.supporterManager import claim
+    season = _getCurrentSeasonNumber() or 0
+    sm = floosball_app.seasonManager if floosball_app else None
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        return build_success_response({'claimed': claim(session, user.id, season, week)})
     finally:
         session.close()
 

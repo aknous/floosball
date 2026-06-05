@@ -1,0 +1,138 @@
+"""Supporter income — the non-fantasy, IDLE Floobit path (feature/fan-income).
+
+Back a team, earn passively, claim on login. Tenure (weeks supporting the
+current favorite team) drives a loyalty multiplier; team performance nudges the
+weekly dividend. Accrual runs once per week from the season loop's week-complete
+hook; users collect what's accrued via POST /api/supporter/claim.
+
+The guaranteed weekly base is small by design — the real money lives in the
+contingent milestone payouts (clinch / Floos Bowl, scaled by loyalty in a later
+phase), so only long-tenure fans of great teams come out ahead of what they put
+in. Patron-rank multipliers and underdog bonuses land in later phases.
+"""
+from __future__ import annotations
+
+from typing import Dict, Optional, Tuple
+
+from sqlalchemy.orm import Session
+
+from database.models import User, Game
+from constants import (
+    SUPPORTER_BASE_DIVIDEND,
+    SUPPORTER_WIN_BONUS,
+    SUPPORTER_LOYALTY_TIERS,
+    SUPPORTER_TEAM_CHANGE_TENURE_KEEP,
+)
+from logger_config import get_logger
+
+logger = get_logger("floosball.supporter")
+
+
+def loyaltyTier(weeks: int) -> Tuple[float, str]:
+    """Return (multiplier, label) for a tenure of `weeks` supporter-weeks.
+    SUPPORTER_LOYALTY_TIERS is descending, so the first match from the top wins."""
+    for minWeeks, mult, label in SUPPORTER_LOYALTY_TIERS:
+        if weeks >= minWeeks:
+            return mult, label
+    return 1.0, SUPPORTER_LOYALTY_TIERS[-1][2]
+
+
+def nextTier(weeks: int) -> Optional[dict]:
+    """The next loyalty tier above the current tenure, or None if at the top."""
+    for minWeeks, mult, label in reversed(SUPPORTER_LOYALTY_TIERS):  # ascending
+        if minWeeks > weeks:
+            return {'label': label, 'multiplier': mult, 'weeksAway': minWeeks - weeks}
+    return None
+
+
+def _teamResultsForWeek(session: Session, season: int, week: int) -> Dict[int, bool]:
+    """Map team_id -> won? for FINAL games in this season+week. A team absent
+    from the map didn't play (bye / eliminated)."""
+    results: Dict[int, bool] = {}
+    games = session.query(Game).filter_by(season=season, week=week).all()
+    for g in games:
+        if (g.status or '').lower() != 'final':
+            continue
+        if g.home_score == g.away_score:
+            results[g.home_team_id] = False
+            results[g.away_team_id] = False
+            continue
+        homeWon = g.home_score > g.away_score
+        results[g.home_team_id] = homeWon
+        results[g.away_team_id] = not homeWon
+    return results
+
+
+def accrueWeekly(session: Session, season: int, week: int) -> int:
+    """Accrue this week's Supporter dividend for every active fan.
+
+    Ticks tenure for ALL fans (loyalty is duration, not games watched) and
+    credits a dividend to those whose team actually played, scaled by their
+    loyalty multiplier. Returns the number of users credited. Caller commits.
+    """
+    teamResults = _teamResultsForWeek(session, season, week)
+    fans = (
+        session.query(User)
+        .filter(User.is_active.is_(True), User.favorite_team_id.isnot(None))
+        .all()
+    )
+    credited = 0
+    for user in fans:
+        user.supporter_weeks = (user.supporter_weeks or 0) + 1
+        won = teamResults.get(user.favorite_team_id)
+        if won is None:
+            continue  # team didn't play this week — tenure ticks, no dividend
+        mult, _label = loyaltyTier(user.supporter_weeks)
+        amount = SUPPORTER_BASE_DIVIDEND + (SUPPORTER_WIN_BONUS if won else 0)
+        # (underdog bonus deferred — needs pre-game ELO plumbing)
+        dividend = int(round(amount * mult))
+        user.supporter_unclaimed = (user.supporter_unclaimed or 0) + dividend
+        credited += 1
+    logger.info(
+        f"Supporter accrual s{season} w{week}: {credited}/{len(fans)} fans credited"
+    )
+    return credited
+
+
+def claim(session: Session, userId: int, season: int, week: int) -> int:
+    """Move a user's accrued Supporter pool into their balance. Returns the
+    amount claimed (0 if nothing to claim). Atomic: the zero-out and the credit
+    commit together so a claim can't be lost or double-counted."""
+    from database.repositories.card_repositories import CurrencyRepository
+
+    user = session.query(User).filter_by(id=userId).first()
+    if not user or not user.supporter_unclaimed:
+        return 0
+    amount = int(user.supporter_unclaimed)
+    user.supporter_unclaimed = 0
+    CurrencyRepository(session).addFunds(
+        userId, amount, 'supporter_dividend',
+        description='Supporter dividend claimed', season=season, week=week,
+    )
+    session.commit()
+    return amount
+
+
+def getStatus(session: Session, userId: int) -> Optional[dict]:
+    """Supporter status for the /api/supporter/me surface."""
+    user = session.query(User).filter_by(id=userId).first()
+    if not user:
+        return None
+    weeks = int(user.supporter_weeks or 0)
+    mult, label = loyaltyTier(weeks)
+    return {
+        'favoriteTeamId': user.favorite_team_id,
+        'supporterWeeks': weeks,
+        'loyaltyTier': label,
+        'loyaltyMultiplier': mult,
+        'nextTier': nextTier(weeks),
+        'unclaimed': int(user.supporter_unclaimed or 0),
+    }
+
+
+def onFavoriteTeamChange(user: User) -> None:
+    """Soft-reset tenure when a user switches their favorite team — keep a
+    fraction so a switch is a setback, not a wipe (anti-bandwagon). Call this
+    BEFORE reassigning favorite_team_id, only on an actual change (not a
+    first-time pick). Caller commits."""
+    user.supporter_weeks = int((user.supporter_weeks or 0) * SUPPORTER_TEAM_CHANGE_TENURE_KEEP)
