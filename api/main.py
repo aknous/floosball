@@ -5632,6 +5632,67 @@ def supporter_claim(user: _User = Depends(_getCurrentUser)):
 
 
 # ============================================================================
+# SPECTATOR (cheer bar) ENDPOINTS
+# ============================================================================
+
+class SpectatorHeartbeatRequest(BaseModel):
+    gameId: int
+
+
+def _liveGameById(gameId: int):
+    """The in-memory live game object for an id, or None if it isn't live."""
+    sm = floosball_app.seasonManager if floosball_app else None
+    if not sm or not sm.currentSeason or not sm.currentSeason.activeGames:
+        return None
+    for g in sm.currentSeason.activeGames:
+        if getattr(g, 'id', None) == gameId:
+            return g
+    return None
+
+
+@app.post("/api/spectator/heartbeat")
+def spectator_heartbeat(req: SpectatorHeartbeatRequest, user: _User = Depends(_getCurrentUser)):
+    """Presence heartbeat while watching a live game. The server reads the game's
+    REAL play count (from in-memory season state) and credits cheer-bar fill for
+    plays that have actually happened since the last beat — so fill can't outrun
+    the game. Sent only while the tab is visible and a game view is open."""
+    from database.connection import get_session
+    from managers import spectatorManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    game = _liveGameById(req.gameId)
+    session = get_session()
+    try:
+        if game is None:
+            return build_success_response(spectatorManager.getStatus(session, user.id, season, week))
+        playCount = int(getattr(game, 'totalPlays', 0) or 0)
+        favId = user.favorite_team_id
+        homeId = getattr(getattr(game, 'homeTeam', None), 'id', None)
+        awayId = getattr(getattr(game, 'awayTeam', None), 'id', None)
+        supported = favId is not None and favId in (homeId, awayId)
+        status = spectatorManager.heartbeat(session, user.id, req.gameId, playCount, supported, season, week)
+        return build_success_response(status)
+    finally:
+        session.close()
+
+
+@app.get("/api/spectator/me")
+def spectator_me(user: _User = Depends(_getCurrentUser)):
+    """Current cheer-bar status: bar fill, segment progress, weekly earned/cap."""
+    from database.connection import get_session
+    from managers import spectatorManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        return build_success_response(spectatorManager.getStatus(session, user.id, season, week))
+    finally:
+        session.close()
+
+
+# ============================================================================
 # NOTIFICATION ENDPOINTS
 # ============================================================================
 
