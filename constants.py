@@ -118,6 +118,12 @@ WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 # FLOOSBOWL_WIN rewards above, scaled by loyalty in a later phase), so only
 # long-tenure fans of great teams come out ahead of what they fund. All tunable;
 # validate against fantasy income with a sim-check.
+# Activity gate: "idle" means doesn't watch games, NOT abandoned the account.
+# A fan who hasn't logged in within this many REAL days is frozen — no tenure
+# tick, no dividend — until they return (so dormant accounts don't rack up
+# Floobits). A sim-season plays out in ~1 real week, so 14 days ≈ "sign in about
+# once every season or two" is enough to keep earning. Tunable.
+SUPPORTER_ACTIVITY_WINDOW_DAYS = 14
 SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is active
 SUPPORTER_WIN_BONUS = 4               # added the weeks your team wins
 SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added when they win as the pre-game ELO underdog

@@ -8,6 +8,7 @@ Exits non-zero on failure.
 """
 import os
 import tempfile
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 
@@ -40,13 +41,14 @@ def testAccrualAndClaim(session):
     session.add(Game(season=1, week=5, home_team_id=1, away_team_id=2,
                      home_score=24, away_score=17, status='final'))
     # Fan of the winner (Lifer), fan of the loser (New Fan), fan of a team that
-    # didn't play (tenure should still tick, no dividend).
+    # didn't play (tenure should still tick, no dividend). All recently active.
+    now = datetime.utcnow()
     session.add(User(id=10, email='w@x.com', is_active=True, favorite_team_id=1,
-                     supporter_weeks=200, supporter_unclaimed=0))
+                     supporter_weeks=200, supporter_unclaimed=0, last_login_at=now))
     session.add(User(id=11, email='l@x.com', is_active=True, favorite_team_id=2,
-                     supporter_weeks=0, supporter_unclaimed=0))
+                     supporter_weeks=0, supporter_unclaimed=0, last_login_at=now))
     session.add(User(id=12, email='n@x.com', is_active=True, favorite_team_id=99,
-                     supporter_weeks=10, supporter_unclaimed=0))
+                     supporter_weeks=10, supporter_unclaimed=0, last_login_at=now))
     session.commit()
 
     credited = s.accrueWeekly(session, season=1, week=5)
@@ -88,13 +90,38 @@ def testIdleNoTeam(session):
     import managers.supporterManager as s
     from database.models import User
     session.add(User(id=20, email='not@x.com', is_active=True, favorite_team_id=None,
-                     supporter_weeks=5, supporter_unclaimed=0))
+                     supporter_weeks=5, supporter_unclaimed=0, last_login_at=datetime.utcnow()))
     session.commit()
     s.accrueWeekly(session, season=1, week=6)
     session.commit()
     u = session.get(User, 20)
     assert u.supporter_weeks == 5 and u.supporter_unclaimed == 0
     print("  ok: no-favorite-team fans untouched")
+
+
+def testDormantFrozen(session):
+    """A fan who hasn't logged in within the window is frozen: no tenure tick,
+    no dividend — even if their team played and won."""
+    import managers.supporterManager as s
+    from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+    from database.models import User, Game
+    session.add(Game(season=1, week=7, home_team_id=1, away_team_id=2,
+                     home_score=30, away_score=10, status='final'))
+    stale = datetime.utcnow() - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS + 5)
+    session.add(User(id=30, email='gone@x.com', is_active=True, favorite_team_id=1,
+                     supporter_weeks=200, supporter_unclaimed=0, last_login_at=stale))
+    # And one who never logged in at all (NULL).
+    session.add(User(id=31, email='never@x.com', is_active=True, favorite_team_id=1,
+                     supporter_weeks=50, supporter_unclaimed=0, last_login_at=None))
+    session.commit()
+    s.accrueWeekly(session, season=1, week=7)
+    session.commit()
+    dormant = session.get(User, 30)
+    never = session.get(User, 31)
+    assert dormant.supporter_weeks == 200 and dormant.supporter_unclaimed == 0, "dormant frozen"
+    assert never.supporter_weeks == 50 and never.supporter_unclaimed == 0, "never-logged-in frozen"
+    assert s.isEarning(dormant) is False and s.isEarning(never) is False
+    print("  ok: dormant + never-logged-in fans frozen (activity gate)")
 
 
 def main():
@@ -113,6 +140,7 @@ def main():
     try:
         testAccrualAndClaim(session)
         testIdleNoTeam(session)
+        testDormantFrozen(session)
     finally:
         session.close()
     print("ALL PASSED")

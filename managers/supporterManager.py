@@ -12,6 +12,7 @@ in. Patron-rank multipliers and underdog bonuses land in later phases.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from constants import (
     SUPPORTER_WIN_BONUS,
     SUPPORTER_LOYALTY_TIERS,
     SUPPORTER_TEAM_CHANGE_TENURE_KEEP,
+    SUPPORTER_ACTIVITY_WINDOW_DAYS,
 )
 from logger_config import get_logger
 
@@ -43,6 +45,17 @@ def nextTier(weeks: int) -> Optional[dict]:
         if minWeeks > weeks:
             return {'label': label, 'multiplier': mult, 'weeksAway': minWeeks - weeks}
     return None
+
+
+def _activityCutoff() -> datetime:
+    """Fans must have logged in since this instant to keep earning (the activity
+    gate — idle income still requires you to exist, just not to be on right now)."""
+    return datetime.utcnow() - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+
+
+def isEarning(user: User) -> bool:
+    """Whether a fan currently passes the activity gate."""
+    return bool(user.last_login_at and user.last_login_at >= _activityCutoff())
 
 
 def _teamResultsForWeek(session: Session, season: int, week: int) -> Dict[int, bool]:
@@ -71,9 +84,17 @@ def accrueWeekly(session: Session, season: int, week: int) -> int:
     loyalty multiplier. Returns the number of users credited. Caller commits.
     """
     teamResults = _teamResultsForWeek(session, season, week)
+    # Activity gate: only fans who have signed in recently keep earning. Dormant
+    # accounts are frozen — no tenure tick, no dividend — until they return, so
+    # users who never log in don't silently rack up Floobits.
     fans = (
         session.query(User)
-        .filter(User.is_active.is_(True), User.favorite_team_id.isnot(None))
+        .filter(
+            User.is_active.is_(True),
+            User.favorite_team_id.isnot(None),
+            User.last_login_at.isnot(None),
+            User.last_login_at >= _activityCutoff(),
+        )
         .all()
     )
     credited = 0
@@ -127,6 +148,8 @@ def getStatus(session: Session, userId: int) -> Optional[dict]:
         'loyaltyMultiplier': mult,
         'nextTier': nextTier(weeks),
         'unclaimed': int(user.supporter_unclaimed or 0),
+        # False = income paused because the fan has been away (activity gate).
+        'earning': isEarning(user),
     }
 
 
