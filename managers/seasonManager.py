@@ -7348,40 +7348,51 @@ class SeasonManager:
 
     def _awardFavoriteTeamBonus(self, teamId: int, amount: int, transactionType: str,
                                  description: str, season: int, week: int = None) -> int:
-        """Award Floobits to all users whose favorite_team_id matches teamId.
+        """Award a milestone Floobit bonus to a team's fans, scaled per-fan by
+        Supporter loyalty × patron rank (this is where the "profit only for
+        long-tenure fans of great teams" envelope actually bites). Gated on the
+        same activity rule as idle accrual — dormant accounts don't get paid.
         Returns the number of users rewarded."""
         try:
             from database.connection import get_session
             from database.models import User
             from database.repositories.card_repositories import CurrencyRepository
+            from managers.supporterManager import (
+                computePatronRanks, combinedMultiplier, isEarning,
+            )
 
             session = get_session()
             try:
                 users = session.query(User).filter_by(
                     favorite_team_id=teamId, is_active=True
                 ).all()
+                # Only fans who pass the activity gate (consistent with accrual).
+                users = [u for u in users if isEarning(u)]
                 if not users:
                     session.close()
                     return 0
+                patronRanks = computePatronRanks(session, season)
                 currencyRepo = CurrencyRepository(session)
                 from database.repositories.notification_repository import NotificationRepository
                 notifRepo = NotificationRepository(session)
                 count = 0
                 for user in users:
+                    mult, _loyalty, _patron = combinedMultiplier(user, patronRanks)
+                    scaled = int(round(amount * mult))
                     currencyRepo.addFunds(
-                        user.id, amount, transactionType,
+                        user.id, scaled, transactionType,
                         description=description,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         user.id, 'favorite_team',
                         'Team Bonus',
-                        f'{description}! +{amount} Floobits',
-                        data={'teamId': teamId, 'amount': amount},
+                        f'{description}! +{scaled} Floobits',
+                        data={'teamId': teamId, 'amount': scaled},
                     )
                     count += 1
                 session.commit()
-                logger.info(f"Awarded {amount} Floobits ({transactionType}) to {count} users for team {teamId}")
+                logger.info(f"Awarded scaled {transactionType} bonus (base {amount}F) to {count} fans of team {teamId}")
                 return count
             except Exception as e:
                 session.rollback()

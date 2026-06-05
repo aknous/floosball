@@ -22,6 +22,7 @@ from constants import (
     SUPPORTER_BASE_DIVIDEND,
     SUPPORTER_WIN_BONUS,
     SUPPORTER_LOYALTY_TIERS,
+    SUPPORTER_PATRON_TIERS,
     SUPPORTER_TEAM_CHANGE_TENURE_KEEP,
     SUPPORTER_ACTIVITY_WINDOW_DAYS,
 )
@@ -58,6 +59,82 @@ def isEarning(user: User) -> bool:
     return bool(user.last_login_at and user.last_login_at >= _activityCutoff())
 
 
+# ── Patron rank (share of your team's funding) ────────────────────────────────
+
+
+def _patronTier(rankIndex: int, total: int) -> Optional[Tuple[float, str]]:
+    """Map a contributor's 0-based rank within their team to a patron tier.
+    The single biggest backer (rank 0) is always the Patron; everyone else is
+    bucketed by percentile. Returns None below the lowest tier."""
+    if total <= 0:
+        return None
+    if rankIndex == 0:
+        mult, label = SUPPORTER_PATRON_TIERS[0][1], SUPPORTER_PATRON_TIERS[0][2]
+        return mult, label
+    pct = rankIndex / total
+    for maxPct, mult, label in SUPPORTER_PATRON_TIERS:  # ascending percentile
+        if pct < maxPct:
+            return mult, label
+    return None
+
+
+def computePatronRanks(session: Session, season: int) -> Dict[int, Tuple[float, str]]:
+    """Return {userId: (multiplier, label)} for every contributor this season,
+    ranked by their share of their (favorite) team's funding. Non-contributors
+    and those below the lowest tier are absent (callers treat as ×1.0 / None).
+
+    Contributions are derived from CurrencyTransaction (type 'team_contribution',
+    amount stored negative on spend) — no separate ledger needed, and a user can
+    only contribute to their favorite team, so each total belongs to that team."""
+    from database.models import CurrencyTransaction
+    from sqlalchemy import func
+
+    rows = (
+        session.query(
+            CurrencyTransaction.user_id,
+            func.coalesce(func.sum(-CurrencyTransaction.amount), 0),
+        )
+        .filter(
+            CurrencyTransaction.season == season,
+            CurrencyTransaction.transaction_type == 'team_contribution',
+        )
+        .group_by(CurrencyTransaction.user_id)
+        .all()
+    )
+    contrib = {uid: float(amt) for uid, amt in rows if amt and amt > 0}
+    if not contrib:
+        return {}
+
+    userTeams = dict(
+        session.query(User.id, User.favorite_team_id)
+        .filter(User.id.in_(list(contrib.keys())))
+        .all()
+    )
+    byTeam: Dict[int, list] = {}
+    for uid, amt in contrib.items():
+        team = userTeams.get(uid)
+        if team is not None:
+            byTeam.setdefault(team, []).append((uid, amt))
+
+    result: Dict[int, Tuple[float, str]] = {}
+    for members in byTeam.values():
+        members.sort(key=lambda x: x[1], reverse=True)  # biggest backer first
+        n = len(members)
+        for idx, (uid, _amt) in enumerate(members):
+            tier = _patronTier(idx, n)
+            if tier:
+                result[uid] = tier
+    return result
+
+
+def combinedMultiplier(user: User, patronRanks: Dict[int, Tuple[float, str]]) -> Tuple[float, str, Optional[str]]:
+    """Total Supporter multiplier for a fan: loyalty × patron. Returns
+    (multiplier, loyaltyLabel, patronLabel)."""
+    loyaltyMult, loyaltyLabel = loyaltyTier(int(user.supporter_weeks or 0))
+    patronMult, patronLabel = patronRanks.get(user.id, (1.0, None))
+    return loyaltyMult * patronMult, loyaltyLabel, patronLabel
+
+
 def _teamResultsForWeek(session: Session, season: int, week: int) -> Dict[int, bool]:
     """Map team_id -> won? for FINAL games in this season+week. A team absent
     from the map didn't play (bye / eliminated)."""
@@ -84,6 +161,7 @@ def accrueWeekly(session: Session, season: int, week: int) -> int:
     loyalty multiplier. Returns the number of users credited. Caller commits.
     """
     teamResults = _teamResultsForWeek(session, season, week)
+    patronRanks = computePatronRanks(session, season)
     # Activity gate: only fans who have signed in recently keep earning. Dormant
     # accounts are frozen — no tenure tick, no dividend — until they return, so
     # users who never log in don't silently rack up Floobits.
@@ -103,7 +181,7 @@ def accrueWeekly(session: Session, season: int, week: int) -> int:
         won = teamResults.get(user.favorite_team_id)
         if won is None:
             continue  # team didn't play this week — tenure ticks, no dividend
-        mult, _label = loyaltyTier(user.supporter_weeks)
+        mult, _l, _p = combinedMultiplier(user, patronRanks)  # loyalty × patron
         amount = SUPPORTER_BASE_DIVIDEND + (SUPPORTER_WIN_BONUS if won else 0)
         # (underdog bonus deferred — needs pre-game ELO plumbing)
         dividend = int(round(amount * mult))
@@ -134,18 +212,25 @@ def claim(session: Session, userId: int, season: int, week: int) -> int:
     return amount
 
 
-def getStatus(session: Session, userId: int) -> Optional[dict]:
-    """Supporter status for the /api/supporter/me surface."""
+def getStatus(session: Session, userId: int, season: Optional[int] = None) -> Optional[dict]:
+    """Supporter status for the /api/supporter/me surface. Pass the current
+    season to include the fan's patron tier (their share of team funding)."""
     user = session.query(User).filter_by(id=userId).first()
     if not user:
         return None
     weeks = int(user.supporter_weeks or 0)
-    mult, label = loyaltyTier(weeks)
+    loyaltyMult, loyaltyLabel = loyaltyTier(weeks)
+    patronMult, patronLabel = 1.0, None
+    if season is not None:
+        patronMult, patronLabel = computePatronRanks(session, season).get(userId, (1.0, None))
     return {
         'favoriteTeamId': user.favorite_team_id,
         'supporterWeeks': weeks,
-        'loyaltyTier': label,
-        'loyaltyMultiplier': mult,
+        'loyaltyTier': loyaltyLabel,
+        'loyaltyMultiplier': loyaltyMult,
+        'patronTier': patronLabel,
+        'patronMultiplier': patronMult,
+        'totalMultiplier': round(loyaltyMult * patronMult, 3),
         'nextTier': nextTier(weeks),
         'unclaimed': int(user.supporter_unclaimed or 0),
         # False = income paused because the fan has been away (activity gate).

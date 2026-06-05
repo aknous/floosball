@@ -128,6 +128,16 @@ SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is ac
 SUPPORTER_WIN_BONUS = 4               # added the weeks your team wins
 SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added when they win as the pre-game ELO underdog
 SUPPORTER_TEAM_CHANGE_TENURE_KEEP = 0.5  # fraction of tenure kept on a team change (soft reset)
+# Patron rank — your share of your team's funding, applied ON TOP of loyalty.
+# Percentile thresholds (top X% of a team's contributors this season); the single
+# biggest backer is always the Patron. Frames as recognition/status, and the
+# combined ceiling (top loyalty × top patron = 2.0 × 1.5 = 3.0) keeps even the
+# best corner only mildly profitable. (maxPercentile, multiplier, label) ascending.
+SUPPORTER_PATRON_TIERS = [
+    (0.10, 1.5,  'Patron'),      # top 10% (or the biggest backer)
+    (0.25, 1.3,  'Benefactor'),  # top 25%
+    (0.50, 1.15, 'Backer'),      # top half
+]
 # Loyalty tiers by supporter_weeks (persists across seasons; ~28 wks = 1 season).
 # (minWeeks, multiplier, label), descending — first match from the top wins.
 # Gaps WIDEN as you climb (28 → 56 → 84 wks between tiers) so each tier is a

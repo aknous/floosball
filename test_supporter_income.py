@@ -124,6 +124,51 @@ def testDormantFrozen(session):
     print("  ok: dormant + never-logged-in fans frozen (activity gate)")
 
 
+def testPatronRanks(session):
+    """Share-based patron tiers from team_contribution transactions."""
+    import managers.supporterManager as s
+    from database.models import User, CurrencyTransaction
+    now = datetime.utcnow()
+    # Team 5: three contributors (40 > 41 > 42). Team 6: a sole contributor.
+    for uid, fav in [(40, 5), (41, 5), (42, 5), (60, 6)]:
+        session.add(User(id=uid, email=f'{uid}@x.com', is_active=True, favorite_team_id=fav,
+                         supporter_weeks=0, supporter_unclaimed=0, last_login_at=now))
+    for uid, amt in [(40, 400), (41, 200), (42, 100), (60, 50)]:
+        session.add(CurrencyTransaction(user_id=uid, amount=-amt, balance_after=0,
+                                        transaction_type='team_contribution', season=2))
+    session.commit()
+    ranks = s.computePatronRanks(session, season=2)
+    assert ranks[40] == (1.5, 'Patron'), ranks.get(40)     # biggest backer
+    assert ranks[41] == (1.15, 'Backer'), ranks.get(41)    # middle, top-half
+    assert 42 not in ranks, "smallest backer below the lowest tier"
+    assert ranks[60] == (1.5, 'Patron'), ranks.get(60)     # sole backer → Patron
+    # getStatus surfaces the tier + combined multiplier.
+    st = s.getStatus(session, 40, season=2)
+    assert st['patronTier'] == 'Patron' and st['patronMultiplier'] == 1.5
+    print("  ok: patron ranks (biggest + sole = Patron; combined surfaced in status)")
+
+
+def testCombinedScaling(session):
+    """A Lifer who is also a Patron earns the dividend at loyalty × patron."""
+    import managers.supporterManager as s
+    from constants import SUPPORTER_BASE_DIVIDEND, SUPPORTER_WIN_BONUS
+    from database.models import User, Game, CurrencyTransaction
+    now = datetime.utcnow()
+    session.add(Game(season=3, week=1, home_team_id=7, away_team_id=8,
+                     home_score=21, away_score=14, status='final'))
+    session.add(User(id=70, email='70@x.com', is_active=True, favorite_team_id=7,
+                     supporter_weeks=200, supporter_unclaimed=0, last_login_at=now))  # Lifer ×2.0
+    session.add(CurrencyTransaction(user_id=70, amount=-500, balance_after=0,
+                                    transaction_type='team_contribution', season=3))  # sole Patron ×1.5
+    session.commit()
+    s.accrueWeekly(session, season=3, week=1)
+    session.commit()
+    u = session.get(User, 70)
+    expected = round((SUPPORTER_BASE_DIVIDEND + SUPPORTER_WIN_BONUS) * 2.0 * 1.5)  # ×3.0
+    assert u.supporter_unclaimed == expected, (u.supporter_unclaimed, expected)
+    print(f"  ok: combined scaling (Lifer ×2.0 × Patron ×1.5 → {expected}F)")
+
+
 def main():
     if os.path.exists('/data'):
         print("SKIP: /data exists on this host — would target the prod volume")
@@ -141,6 +186,8 @@ def main():
         testAccrualAndClaim(session)
         testIdleNoTeam(session)
         testDormantFrozen(session)
+        testPatronRanks(session)
+        testCombinedScaling(session)
     finally:
         session.close()
     print("ALL PASSED")

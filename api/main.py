@@ -5608,9 +5608,10 @@ def supporter_me(user: _User = Depends(_getCurrentUser)):
     the Floobits accrued and waiting to be claimed."""
     from database.connection import get_session
     from managers.supporterManager import getStatus
+    season = _getCurrentSeasonNumber()
     session = get_session()
     try:
-        return build_success_response(getStatus(session, user.id) or {})
+        return build_success_response(getStatus(session, user.id, season=season) or {})
     finally:
         session.close()
 
