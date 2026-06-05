@@ -1864,6 +1864,16 @@ def post_game_rally(game_id: int, req: _RallyRequest, user: _User = Depends(_get
         dbUser = session.query(_DBUser).get(user.id)
         username = dbUser.username if dbUser else 'fan'
         session.commit()
+        # Spectator: a rally also fills the cheer bar (presence-gated — no-op
+        # unless the user is actively watching/heartbeating this game).
+        try:
+            from managers import spectatorManager
+            _sm = floosball_app.seasonManager if floosball_app else None
+            _season = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+            _week = _sm.currentSeason.currentWeek if _sm and _sm.currentSeason else 0
+            spectatorManager.addRallyFill(session, user.id, _season, _week)
+        except Exception as _e:
+            logger.debug(f"spectator rally fill skipped: {_e}")
     finally:
         session.close()
 
