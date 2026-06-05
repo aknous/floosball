@@ -149,6 +149,22 @@ SUPPORTER_LOYALTY_TIERS = [
     (0,   1.0,  'New Fan'),
 ]
 
+# ── Spectator income (the cheer bar) — feature/fan-income ──────────────────────
+# The ACTIVE non-fantasy path: watch live games, fill a segmented bar, get paid
+# per segment. Server-validated (fill is credited only for plays that actually
+# happened in a game you're heartbeating, so you can't earn faster than the game
+# plays) and hard-capped per game + per week, so idling/botting nets little.
+SPECTATOR_FILL_PER_PLAY = 1.0          # bar fill per witnessed play
+SPECTATOR_SEGMENT_SIZE = 18.0          # fill needed to complete a segment (~18 plays)
+SPECTATOR_SEGMENT_PAYOUT = 3           # Floobits per completed segment
+SPECTATOR_RALLY_FILL = 5.0             # a (free) rally adds this much
+SPECTATOR_REACTION_FILL = 1.0          # a reaction adds this (diminishing, capped/game)
+SPECTATOR_REACTION_CAP_PER_GAME = 8    # max reaction-fill events credited per game
+SPECTATOR_SUPPORTED_TEAM_MULT = 1.5    # watching your favorite team fills faster
+SPECTATOR_HEARTBEAT_WINDOW_SEC = 30    # must heartbeat within this to count as "present"
+SPECTATOR_MAX_PLAYS_PER_HEARTBEAT = 12 # cap plays credited per heartbeat (anti-burst)
+SPECTATOR_WEEKLY_PAYOUT_CAP = 60       # max Floobits/week from spectating
+
 SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
 SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25

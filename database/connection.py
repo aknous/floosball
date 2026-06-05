@@ -652,6 +652,27 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # Spectator cheer-bar state (feature/fan-income).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS spectator_progress ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL UNIQUE, "
+                "bar_fill REAL NOT NULL DEFAULT 0, "
+                "week_marker INTEGER NOT NULL DEFAULT 0, "
+                "weekly_floobits INTEGER NOT NULL DEFAULT 0, "
+                "weekly_segments INTEGER NOT NULL DEFAULT 0, "
+                "updated_at DATETIME)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_spectator_progress_user "
+                "ON spectator_progress(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured spectator_progress table")
+        except Exception:
+            conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared

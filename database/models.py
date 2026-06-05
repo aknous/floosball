@@ -688,6 +688,32 @@ class GameRally(Base):
         Index("idx_game_rallies_game_user", "game_id", "user_id"),
     )
 
+
+class SpectatorProgress(Base):
+    """Per-user cheer-bar state (feature/fan-income, Spectator).
+
+    The ACTIVE non-fantasy income path: watching live games fills a segmented
+    bar, each completed segment pays Floobits. bar_fill is the current partial
+    segment; the weekly counters bound the payout (reset when the week rolls).
+    Per-game witnessed-play tracking lives in memory (SpectatorManager), not
+    here — this row only persists the durable bar + the weekly cap.
+    """
+    __tablename__ = "spectator_progress"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    bar_fill: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Week marker the weekly counters belong to (season*100 + week); on change
+    # the weekly counters reset.
+    week_marker: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weekly_floobits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weekly_segments: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_spectator_progress_user", "user_id"),
+    )
+
     def __repr__(self):
         return f"<GameRally(game={self.game_id}, user={self.user_id}, team={self.team_id}, tier={self.tier})>"
 
