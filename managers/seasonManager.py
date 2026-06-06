@@ -3710,9 +3710,22 @@ class SeasonManager:
         try:
             from database.connection import get_session as _gs
             from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            from managers import achievementManager as _am
+            season = self.currentSeason.seasonNumber
             s = _gs()
             try:
-                PlayoffBracketRepository(s).scoreAllBrackets(self.currentSeason.seasonNumber)
+                repo = PlayoffBracketRepository(s)
+                repo.scoreAllBrackets(season)
+                s.commit()
+                # Grant Bracketeer point tiers (I-IV) AS thresholds are crossed
+                # each round, not batched at the Floos Bowl. recordProgress is
+                # monotonic (absolute=max) + idempotent (no re-grant once
+                # completed) and toasts on unlock, so calling it every round just
+                # fires newly-crossed tiers. (flawless/pool_shark stay end-only —
+                # they need the COMPLETE bracket / final leaderboard.)
+                for b in repo.getLeaderboard(season):
+                    if b.points > 0:
+                        _am.onPlayoffBracketScored(s, b.user_id, b.points, season)
                 s.commit()
             finally:
                 s.close()
@@ -3752,8 +3765,11 @@ class SeasonManager:
                         cur.addFunds(b.user_id, prize, txType,
                                      f"Playoff bracket #{rank} ({b.points} pts)", season)
                         paid += 1
-                # Bracket achievements — granted once (this whole method is
-                # guarded against re-running by the prize-tx check above).
+                # Bracket achievements. Bracketeer point tiers are already
+                # granted incrementally each round in _scorePlayoffBrackets; the
+                # call below is an idempotent final backstop. The flawless /
+                # pool_shark secrets are end-only — they need the COMPLETE
+                # bracket (all advancers correct) and the FINAL leaderboard (#1).
                 from managers import achievementManager as _am
                 advancers, _champ = repo.computeActualAdvancers(season)
                 totalAdvancers = sum(len(v) for v in advancers.values())
