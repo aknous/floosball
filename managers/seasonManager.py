@@ -409,9 +409,15 @@ class SeasonManager:
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
 
-        # Send season-end email reports (before tax so earned totals are accurate)
+        # Send season-end email reports. Offloaded to a worker thread (same hot-
+        # path reason as day-end emails). Safe to run alongside the tax/offseason
+        # that follow: the report's "earned totals" sum POSITIVE transactions
+        # only (the tax is a negative transaction, excluded), and the rest
+        # (champion, pick-em leaderboard) is immutable historical data.
         if not self.timingManager.catchingUp:
-            self._sendSeasonEndEmails(self.currentSeason.seasonNumber)
+            asyncio.get_running_loop().run_in_executor(
+                None, self._sendSeasonEndEmails, self.currentSeason.seasonNumber,
+            )
 
         # Apply season-end tax on unspent Floobits
         self._applySeasonEndTax(self.currentSeason.seasonNumber)
@@ -885,11 +891,21 @@ class SeasonManager:
                 else:
                     await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
 
-            # Send day-end email reports (skip during catch-up / fast modes)
+            # Send day-end email reports (skip during catch-up / fast modes).
+            # Offload to a worker thread: sending loops over every opted-in user
+            # with a throttle sleep + blocking Resend HTTP call each, which would
+            # otherwise freeze the event loop (and the API, same process) for the
+            # whole batch. The method only READS shared state + writes to Resend
+            # via its own DB session, so a background thread is safe. Fire-and-
+            # forget — the executor runs it to completion even if we drop the
+            # future, and the inter-day wait gives it idle time to finish.
             if isLastRoundOfDay and not self.timingManager.catchingUp:
                 firstRound = roundIndex - 6  # 0-indexed first round of this day
                 weekRange = list(range(firstRound + 1, roundIndex + 2))  # 1-indexed week numbers
-                self._sendDayEndEmails(self.currentSeason.seasonNumber, dayNum, weekRange)
+                asyncio.get_running_loop().run_in_executor(
+                    None, self._sendDayEndEmails,
+                    self.currentSeason.seasonNumber, dayNum, weekRange,
+                )
 
         # Catch-up is done — switch to SCHEDULED so playoffs run at normal speed
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
