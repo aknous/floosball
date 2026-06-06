@@ -195,10 +195,13 @@ def main():
                   'player_name', 'classification'):
             setattr(ft, a, getattr(t, a, None))
         ec = dict(t.effect_config or {})
+        ec['editionScale'] = 1.0  # so the calc's own stale-rebuild also uses 1.0
         ename = ec.get('effectName')
         try:
-            fresh = rebuildPrimaryParams(ename, getattr(t, 'player_rating', 75) or 75,
-                                         ec.get('editionScale', 1.0))
+            # editionScale is fixed at 1.0 for all newly-built cards (edition no
+            # longer scales params). Stored prod templates have inconsistent
+            # historical scales, so force 1.0 for the forward-looking view.
+            fresh = rebuildPrimaryParams(ename, getattr(t, 'player_rating', 75) or 75, 1.0)
             if isinstance(fresh, dict):
                 posLabel = (ec.get('primary') or {}).get('posLabel')
                 if posLabel:

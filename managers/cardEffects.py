@@ -1197,7 +1197,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
                 "maxMult": round(1 + (0.42 + rn * 0.014) * editionScale * _BAL_FPX_MULT, 2),
                 "fpThreshold": 15}
     if effectName == "three_pointer":
-        return {"perFgFP": round((16.8 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1)}
+        return {"perFgFP": round((25.0 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "garbage_time":
         return {"perPlayerFP": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "loyalty_bonus":
@@ -1232,7 +1232,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"baseFP": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1),
                 "perStreakFP": round((5.4 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "safety_blanket":
-        return {"rewardType": "fp", "perReceptionFP": round((6.75 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
+        return {"rewardType": "fp", "perReceptionFP": round((5.3 + rn * 0.21) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "lead_blocker":
         return {"rewardType": "fp", "perTdFP": round((43.0 + rn * 2.16) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "sniper":
@@ -1275,7 +1275,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "castaway":
         return {"rewardFP": round((66.0 + rn * 1.9) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "sleeper":
-        return {"baseFP": round((150.0 + rn * 3.0) * editionScale * _BAL_FP_MULT, 1),
+        return {"baseFP": round((105.0 + rn * 2.0) * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((150.0 + rn * 2.40) * editionScale * _BAL_FP_MULT, 1),
                 "baseChance": 15, "chancePerLow": 12,
                 "isChanceEffect": True}
