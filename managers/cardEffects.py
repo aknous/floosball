@@ -1102,7 +1102,7 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         return {"rewardType": "mult", "baseXMult": round(1 + (0.105 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2),
                 "perDuplicateXMult": round((0.168 + rn * 0.0084) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "diversified":
-        return {"rewardType": "fp", "perTypeFP": round((33.0 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
+        return {"rewardType": "fp", "perTypeFP": round((63.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gold_rush":
         # Floobits output — leave untouched
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
@@ -1218,8 +1218,8 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"perYacFP": round((1.02 + rn * 0.054) * editionScale * _BAL_FP_MULT, 2)}
     if effectName == "jailbreak":
         return {"rewardType": "fp",
-                "baseFP": round((21 + rn * 0.69) * editionScale * _BAL_FP_MULT, 1),
-                "rewardValue": round((48 + rn * 1.68) * editionScale * _BAL_FP_MULT, 1),
+                "baseFP": round((15 + rn * 0.5) * editionScale * _BAL_FP_MULT, 1),
+                "rewardValue": round((35 + rn * 1.2) * editionScale * _BAL_FP_MULT, 1),
                 "threshold": 30}
     if effectName == "expedition":
         return {"perFiftyYardsFP": round((6.6 + rn * 0.32) * editionScale * _BAL_FP_MULT, 1)}
@@ -1234,7 +1234,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "safety_blanket":
         return {"rewardType": "fp", "perReceptionFP": round((6.75 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "lead_blocker":
-        return {"rewardType": "fp", "perTdFP": round((27.0 + rn * 1.35) * editionScale * _BAL_FP_MULT, 1)}
+        return {"rewardType": "fp", "perTdFP": round((43.0 + rn * 2.16) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "sniper":
         return {"perFgFP": round((20.4 + rn * 0.69) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "range":
@@ -1263,7 +1263,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     # ── Strategy-Warping: Opulence (FP per Floobits balance)
     if effectName == "fat_cat":
         floobitsPerFP = max(1, int(round((3 - rn * 0.02) / editionScale)))
-        maxFP = int(round((102 + rn * 3.39) * editionScale * _BAL_FP_MULT))
+        maxFP = int(round((61 + rn * 2.0) * editionScale * _BAL_FP_MULT))
         return {"floobitsPerFP": floobitsPerFP, "maxFP": maxFP}
     if effectName == "alchemy":
         return {"perFgBonusFP": round((40.5 + rn * 1.35) * editionScale * _BAL_FP_MULT, 1)}
@@ -1273,7 +1273,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"q4MultFactor": round(1 + (1.05 + rn * 0.063) * editionScale * _BAL_FPX_MULT, 2)}
     # ── Roster-trait flat FP cards
     if effectName == "castaway":
-        return {"rewardFP": round((94.5 + rn * 2.70) * editionScale * _BAL_FP_MULT, 1)}
+        return {"rewardFP": round((66.0 + rn * 1.9) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "sleeper":
         return {"baseFP": round((150.0 + rn * 3.0) * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((150.0 + rn * 2.40) * editionScale * _BAL_FP_MULT, 1),
@@ -1282,9 +1282,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "patient":
         return {"baseFP": round((10.2 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "rookie_hype":
-        return {"perRookieFP": round((30.0 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
+        return {"perRookieFP": round((75.0 + rn * 2.0) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "wanderer":
-        return {"perTeamFP": round((20.4 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1)}
+        return {"perTeamFP": round((12.9 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(13.5 * editionScale * _BAL_FP_MULT, 1)}
 
 
@@ -1378,7 +1378,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "dark_horse":
         return {"perStarMult": round((0.168 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "vagabond":
-        return {"perSwapXMult": round((0.063 + rn * 0.0021) * editionScale * _BAL_FPX_MULT, 2)}
+        return {"perSwapXMult": round((0.038 + rn * 0.0013) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "synergy":
         # FPx delta per pair of roster players from the same team.
         return {"rewardType": "mult",
@@ -1536,7 +1536,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "on_fire":
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.105 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2),
-                "growthPerTick": round((0.105 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2)}
+                "growthPerTick": round((0.052 + rn * 0.0021) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "snowball_fight":
         return {"rewardType": "fp",
                 "baseReward": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1),
@@ -1574,7 +1574,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "momentum":
         return {"rewardType": "mult",
                 "baseReward": round(1 + (0.105 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2),
-                "growthPerTick": round((0.105 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2)}
+                "growthPerTick": round((0.052 + rn * 0.0021) * editionScale * _BAL_FPX_MULT, 2)}
     # ── Inverse streaks — grow when roster underperforms ──
     if effectName == "sandbagger":
         return {"rewardType": "fp",
