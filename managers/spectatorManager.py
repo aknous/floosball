@@ -31,6 +31,8 @@ from constants import (
     SPECTATOR_HEARTBEAT_WINDOW_SEC,
     SPECTATOR_MAX_PLAYS_PER_HEARTBEAT,
     SPECTATOR_WEEKLY_PAYOUT_CAP,
+    SPECTATOR_BIG_PLAY_FILL,
+    SPECTATOR_OWN_BIG_PLAY_MULT,
 )
 from logger_config import get_logger
 
@@ -128,6 +130,69 @@ def heartbeat(session: Session, userId: int, gameId: int, currentPlayCount: int,
     fill = (newPlays * SPECTATOR_FILL_PER_PLAY + newPoints * SPECTATOR_FILL_PER_POINT) * mult
     _addFill(session, userId, fill, season, week)
     session.commit()
+    return _status(session, userId, season, week)
+
+
+def claim(session: Session, userId: int, gameId: int, witnessedPlays: int,
+          witnessedPoints: int, supportedTeam: bool, season: int, week: int,
+          realPlayCount: int, realScore: int, witnessedBigPlays: int = 0,
+          realBigMine: int = 0, realBigOther: int = 0) -> dict:
+    """WS-driven bank. The client watches the season WebSocket and counts the
+    plays/points (and big plays) it actually WITNESSED (modal open + tab visible)
+    since its last bank; it posts those here. We credit the MINIMUM of what the
+    client claims and the game's REAL progress since the last claim (the endpoint
+    reads the live game's true play count/score/big-plays from in-memory state):
+
+      * fill can't outrun the game        (witnessed capped to real → anti-cheat)
+      * plays that streamed by while the   (the client never witnessed them →
+        modal was closed aren't credited    witnessed stays low → that's the cap)
+
+    Big plays (WPA-swing highlights) pay a bonus on top of the per-play fill,
+    worth more when YOUR supported team made it (`realBigMine` vs `realBigOther`
+    are the season-state big-play counts attributed to your team / the other).
+
+    The witnessed count IS the presence signal, so there's no fixed polling
+    cadence: the client banks on segment completion, a slow keepalive, and on
+    close. A claim that credits nothing (a keepalive during a lull, or the first
+    sync after reopening) does no DB write. Caller need not commit."""
+    now = time.time()
+    st = _watch.get(userId)
+    if not st or st.get('gameId') != gameId:
+        # New watch session (first claim, or switched games) — baseline at the
+        # current real progress, credit nothing retroactively.
+        _watch[userId] = {'gameId': gameId, 'lastPlayCount': realPlayCount,
+                          'lastScore': realScore, 'lastBeat': now, 'reactionCount': 0,
+                          'lastBigMine': realBigMine, 'lastBigOther': realBigOther}
+        _loadProgress(session, userId, season, week)
+        session.commit()  # persist the row (and any week-rollover reset)
+        return _status(session, userId, season, week)
+
+    realPlays = max(0, realPlayCount - st['lastPlayCount'])
+    realPoints = max(0, realScore - st.get('lastScore', realScore))
+    creditPlays = max(0, min(int(witnessedPlays or 0), realPlays))
+    creditPoints = max(0, min(int(witnessedPoints or 0), realPoints))
+    st['lastPlayCount'] = realPlayCount
+    st['lastScore'] = realScore
+    st['lastBeat'] = now
+
+    # Big plays: credit what the client witnessed, capped by what really
+    # happened this window; attribute to your team (own-mult) vs the other.
+    realMineDelta = max(0, realBigMine - st.get('lastBigMine', realBigMine))
+    realOtherDelta = max(0, realBigOther - st.get('lastBigOther', realBigOther))
+    st['lastBigMine'] = realBigMine
+    st['lastBigOther'] = realBigOther
+    creditBig = max(0, min(int(witnessedBigPlays or 0), realMineDelta + realOtherDelta))
+    mineCredit = min(creditBig, realMineDelta)
+    otherCredit = creditBig - mineCredit
+    bigFill = (mineCredit * SPECTATOR_BIG_PLAY_FILL * SPECTATOR_OWN_BIG_PLAY_MULT
+               + otherCredit * SPECTATOR_BIG_PLAY_FILL)
+
+    if creditPlays or creditPoints or bigFill:
+        mult = SPECTATOR_SUPPORTED_TEAM_MULT if supportedTeam else 1.0
+        fill = (creditPlays * SPECTATOR_FILL_PER_PLAY + creditPoints * SPECTATOR_FILL_PER_POINT) * mult
+        fill += bigFill
+        _addFill(session, userId, fill, season, week)
+        session.commit()
     return _status(session, userId, season, week)
 
 

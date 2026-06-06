@@ -45,6 +45,67 @@ def testScoringBonus(session):
     print(f"  ok: scoring bonus (+7 pts adds {7 * SPECTATOR_FILL_PER_POINT:.1f} fill)")
 
 
+def testClaimCapsToRealProgress(session):
+    import managers.spectatorManager as sp
+    from constants import SPECTATOR_FILL_PER_PLAY
+    _mkUser(session, 7)
+    # First claim = baseline at real play 0, no retro credit.
+    s = sp.claim(session, 7, gameId=700, witnessedPlays=0, witnessedPoints=0,
+                 supportedTeam=False, season=1, week=1, realPlayCount=0, realScore=0)
+    assert s['barFill'] == 0
+    # Client claims it witnessed 10 plays; the game really advanced 8 → credit 8.
+    s = sp.claim(session, 7, 700, witnessedPlays=10, witnessedPoints=0,
+                 supportedTeam=False, season=1, week=1, realPlayCount=8, realScore=0)
+    assert abs(s['barFill'] - 8 * SPECTATOR_FILL_PER_PLAY) < 1e-6, s['barFill']
+    print("  ok: claim credits min(witnessed, real progress) — can't outrun the game")
+
+
+def testClaimGapNotCredited(session):
+    import managers.spectatorManager as sp
+    from constants import SPECTATOR_FILL_PER_PLAY
+    _mkUser(session, 8)
+    sp.claim(session, 8, 800, 0, 0, False, 1, 1, realPlayCount=0, realScore=0)  # baseline
+    sp.claim(session, 8, 800, 5, 0, False, 1, 1, realPlayCount=5, realScore=0)  # watched 5
+    # Modal closed: game ran to play 40 while away. On reopen the client's
+    # witnessed resets to 0, then it witnesses 3 new plays (game now at 43).
+    s = sp.claim(session, 8, 800, witnessedPlays=3, witnessedPoints=0,
+                 supportedTeam=False, season=1, week=1, realPlayCount=43, realScore=0)
+    # Only the 3 witnessed-while-watching plays credit — not the 35-play gap.
+    assert abs(s['barFill'] - 8 * SPECTATOR_FILL_PER_PLAY) < 1e-6, s['barFill']
+    print("  ok: plays while modal was closed are not credited (witnessed is the cap)")
+
+
+def testBigPlayBonus(session):
+    import managers.spectatorManager as sp
+    from constants import (SPECTATOR_FILL_PER_PLAY, SPECTATOR_BIG_PLAY_FILL,
+                           SPECTATOR_OWN_BIG_PLAY_MULT)
+    _mkUser(session, 9)
+    # Baseline at play 0, no big plays yet.
+    sp.claim(session, 9, gameId=900, witnessedPlays=0, witnessedPoints=0,
+             supportedTeam=True, season=1, week=1, realPlayCount=0, realScore=0,
+             witnessedBigPlays=0, realBigMine=0, realBigOther=0)
+    # +2 plays, of which 1 was a big play BY my team and 1 by the opponent.
+    # (kept under the segment size so barFill == credited fill, no payout)
+    s = sp.claim(session, 9, 900, witnessedPlays=2, witnessedPoints=0,
+                 supportedTeam=False, season=1, week=1, realPlayCount=2, realScore=0,
+                 witnessedBigPlays=2, realBigMine=1, realBigOther=1)
+    # plays: 2 × 1; big: mine 4×2 + other 4 = 12.
+    expected = 2 * SPECTATOR_FILL_PER_PLAY \
+        + SPECTATOR_BIG_PLAY_FILL * SPECTATOR_OWN_BIG_PLAY_MULT + SPECTATOR_BIG_PLAY_FILL
+    assert abs(s['barFill'] - expected) < 1e-6, (s['barFill'], expected)
+
+    # Anti-cheat: claim more big plays than really happened → capped to real.
+    _mkUser(session, 10)
+    sp.claim(session, 10, 1000, 0, 0, False, 1, 1, realPlayCount=0, realScore=0,
+             witnessedBigPlays=0, realBigMine=0, realBigOther=0)
+    s2 = sp.claim(session, 10, 1000, witnessedPlays=0, witnessedPoints=0,
+                  supportedTeam=False, season=1, week=1, realPlayCount=0, realScore=0,
+                  witnessedBigPlays=9, realBigMine=0, realBigOther=1)
+    # Only 1 real big play happened (other) → 1 × base fill, the rest uncredited.
+    assert abs(s2['barFill'] - SPECTATOR_BIG_PLAY_FILL) < 1e-6, s2['barFill']
+    print(f"  ok: big-play bonus (own ×{SPECTATOR_OWN_BIG_PLAY_MULT}, capped to real)")
+
+
 def testWeeklyCap(session):
     import managers.spectatorManager as sp
     from constants import SPECTATOR_WEEKLY_PAYOUT_CAP
@@ -112,6 +173,9 @@ def main():
     try:
         testFillAndSegment(session)
         testScoringBonus(session)
+        testClaimCapsToRealProgress(session)
+        testClaimGapNotCredited(session)
+        testBigPlayBonus(session)
         testWeeklyCap(session)
         testSupportedMult(session)
         testWeeklyReset(session)

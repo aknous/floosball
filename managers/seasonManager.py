@@ -4133,6 +4133,11 @@ class SeasonManager:
             # Resolve pick-em weekly prizes for this playoff round
             self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
+            # Supporter dividends for this playoff round — pays deep-run fans
+            # (incl. the playoff round bonus) but does NOT tick tenure, so only
+            # full regular seasons build loyalty.
+            self._accrueSupporterDividends(self.currentSeason.seasonNumber, 28 + currentRound, tickTenure=False)
+
             # Re-score playoff brackets now this round's results are final.
             self._scorePlayoffBrackets()
 
@@ -7403,15 +7408,17 @@ class SeasonManager:
         except ImportError:
             return 0
 
-    def _accrueSupporterDividends(self, season: int, week: int) -> None:
+    def _accrueSupporterDividends(self, season: int, week: int, tickTenure: bool = True) -> None:
         """Accrue weekly Supporter (fan-loyalty) dividends. Idle income — accrues
-        to each fan's claim pool; they collect via POST /api/supporter/claim."""
+        to each fan's claim pool; they collect via POST /api/supporter/claim.
+        `tickTenure=False` for playoff rounds: pay the dividend without advancing
+        tenure (full regular seasons drive tenure, not playoff weeks)."""
         try:
             from database.connection import get_session
             from managers.supporterManager import accrueWeekly
             session = get_session()
             try:
-                accrueWeekly(session, season, week)
+                accrueWeekly(session, season, week, tickTenure=tickTenure)
                 session.commit()
             finally:
                 session.close()

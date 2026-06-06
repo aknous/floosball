@@ -718,6 +718,33 @@ class SpectatorProgress(Base):
         return f"<GameRally(game={self.game_id}, user={self.user_id}, team={self.team_id}, tier={self.tier})>"
 
 
+class SupporterDividend(Base):
+    """Itemized UNCLAIMED Supporter dividends — one row per fan per week credited,
+    holding that week's amount + its bonus breakdown (base/win/upset/shutout/…
+    and the applied Tenure×Funding multiplier).
+
+    These rows represent only what's currently sitting in the pool: they're
+    deleted when the fan claims. So the table stays tiny (weeks since the last
+    claim) and the UI can show *why* the pool is what it is, without keeping a
+    full lifetime ledger. The authoritative pool total stays on
+    `users.supporter_unclaimed`; these rows are the breakdown of it.
+    """
+    __tablename__ = "supporter_dividends"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    breakdown_json: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "week", name="uq_supporter_dividend_week"),
+        Index("idx_supporter_dividends_user", "user_id"),
+    )
+
+
 class Championship(Base):
     """Championship table - tracks team championships by season and type."""
     __tablename__ = "championships"

@@ -169,6 +169,155 @@ def testCombinedScaling(session):
     print(f"  ok: combined scaling (Lifer ×2.0 × Patron ×1.5 → {expected}F)")
 
 
+def testWinQualityBonuses(session):
+    import managers.supporterManager as s
+    from constants import (
+        SUPPORTER_WIN_BONUS, SUPPORTER_SHUTOUT_BONUS, SUPPORTER_BLOWOUT_BONUS,
+        SUPPORTER_COMEBACK_BONUS, SUPPORTER_PLAYOFF_WIN_BONUS,
+    )
+    from database.models import Game
+
+    # Shutout blowout: team 40 wins 35-0 (margin 35 >= 21, opponent 0).
+    g1 = Game(season=5, week=1, home_team_id=40, away_team_id=41,
+              home_score=35, away_score=0, status='final')
+    session.add(g1); session.commit()
+    bonus, bd = s.winBonusForGame(session, g1, 40, 5, 1)
+    assert bd.get('shutout') == SUPPORTER_SHUTOUT_BONUS
+    assert bd.get('blowout') == SUPPORTER_BLOWOUT_BONUS
+    assert 'comeback' not in bd, "a shutout can't be a comeback"
+    assert bonus == SUPPORTER_WIN_BONUS + SUPPORTER_SHUTOUT_BONUS + SUPPORTER_BLOWOUT_BONUS
+
+    # Comeback: trailing 0-14 after Q3, wins 21-14 in Q4.
+    g2 = Game(season=5, week=2, home_team_id=42, away_team_id=43,
+              home_score=21, away_score=14, status='final',
+              home_score_q1=0, home_score_q2=0, home_score_q3=0, home_score_q4=21,
+              away_score_q1=7, away_score_q2=7, away_score_q3=0, away_score_q4=0)
+    session.add(g2); session.commit()
+    bonus, bd = s.winBonusForGame(session, g2, 42, 5, 2)
+    assert bd.get('comeback') == SUPPORTER_COMEBACK_BONUS, bd
+    assert 'blowout' not in bd  # margin 7
+
+    # Win streak: team 44 wins weeks 1,2,3 → streak 3 → +2 (length beyond first).
+    for wk in (1, 2, 3):
+        session.add(Game(season=6, week=wk, home_team_id=44, away_team_id=45 + wk,
+                         home_score=20, away_score=10, status='final'))
+    session.commit()
+    _, bd = s.winBonusForGame(session, session.query(Game).filter_by(season=6, week=3).first(), 44, 6, 3)
+    assert bd.get('streak') == 2, bd  # 3-win streak, bonus = 3 - 1
+
+    # Playoff win (Floos Bowl = round 4 = week 32) pays the round bonus.
+    g4 = Game(season=5, week=32, home_team_id=46, away_team_id=47,
+              home_score=17, away_score=13, status='final', is_playoff=True)
+    session.add(g4); session.commit()
+    _, bd = s.winBonusForGame(session, g4, 46, 5, 32)
+    assert bd.get('playoff') == SUPPORTER_PLAYOFF_WIN_BONUS[4], bd
+
+    # Upset: lower-ELO team 48 beats higher-ELO team 49 → upset bonus.
+    from constants import SUPPORTER_UNDERDOG_WIN_BONUS
+    from database.models import TeamSeasonStats
+    session.add(TeamSeasonStats(team_id=48, season=5, elo=1400))
+    session.add(TeamSeasonStats(team_id=49, season=5, elo=1650))
+    g5 = Game(season=5, week=3, home_team_id=48, away_team_id=49,
+              home_score=20, away_score=17, status='final')
+    session.add(g5); session.commit()
+    _, bd = s.winBonusForGame(session, g5, 48, 5, 3)
+    assert bd.get('upset') == SUPPORTER_UNDERDOG_WIN_BONUS, bd
+    # Favorite (higher ELO) winning → no upset.
+    _, bd2 = s.winBonusForGame(session, g5, 48, 5, 3) if False else s.winBonusForGame(
+        session, Game(season=5, week=4, home_team_id=49, away_team_id=48,
+                      home_score=30, away_score=3, status='final'), 49, 5, 4)
+    assert 'upset' not in bd2, bd2
+    print("  ok: win-quality bonuses (shutout/blowout/comeback/streak/playoff/upset)")
+
+
+def testDividendLedger(session):
+    import managers.supporterManager as s
+    from database.models import User, Game, SupporterDividend
+    now = datetime.utcnow()
+    session.add(Game(season=7, week=1, home_team_id=50, away_team_id=51,
+                     home_score=21, away_score=20, status='final'))
+    session.add(Game(season=7, week=2, home_team_id=50, away_team_id=52,
+                     home_score=30, away_score=0, status='final'))  # shutout + blowout
+    session.add(User(id=90, email='90@x.com', is_active=True, favorite_team_id=50,
+                     supporter_weeks=84, supporter_unclaimed=0, last_login_at=now))
+    session.commit()
+
+    s.accrueWeekly(session, 7, 1); session.commit()
+    s.accrueWeekly(session, 7, 2); session.commit()
+
+    rows = session.query(SupporterDividend).filter_by(user_id=90).all()
+    assert len(rows) == 2, rows
+    st = s.getStatus(session, 90, season=7)
+    assert len(st['pending']) == 2
+    assert st['unclaimed'] == sum(r.amount for r in rows)
+    assert st['pending'][0]['week'] == 2, "newest first"
+    assert 'shutout' in st['pending'][0]['breakdown']['parts'], st['pending'][0]
+
+    # Idempotent re-run: no duplicate rows, no extra pay.
+    before = st['unclaimed']
+    s.accrueWeekly(session, 7, 2); session.commit()
+    assert session.query(SupporterDividend).filter_by(user_id=90).count() == 2
+    assert s.getStatus(session, 90, season=7)['unclaimed'] == before
+
+    # Claim clears the ledger (it only ever holds the current pool).
+    s.claim(session, 90, 7, 2)
+    assert session.query(SupporterDividend).filter_by(user_id=90).count() == 0
+    assert s.getStatus(session, 90, season=7)['pending'] == []
+    print("  ok: dividend ledger (per-week rows, pending in status, idempotent, cleared on claim)")
+
+
+def testPlayoffAccrualNoTenure(session):
+    import managers.supporterManager as s
+    from database.models import User, Game
+    now = datetime.utcnow()
+    # Floos Bowl (week 32 = playoff round 4) win.
+    session.add(Game(season=8, week=32, home_team_id=60, away_team_id=61,
+                     home_score=24, away_score=20, status='final', is_playoff=True))
+    session.add(User(id=95, email='95@x.com', is_active=True, favorite_team_id=60,
+                     supporter_weeks=50, supporter_unclaimed=0, last_login_at=now))
+    session.commit()
+    s.accrueWeekly(session, 8, 32, tickTenure=False); session.commit()
+    u = session.get(User, 95)
+    assert u.supporter_weeks == 50, "playoff accrual must NOT tick tenure"
+    assert u.supporter_unclaimed > 0, "but it should still pay the dividend"
+    st = s.getStatus(session, 95, season=8)
+    assert 'playoff' in st['pending'][0]['breakdown']['parts'], st['pending'][0]
+    print("  ok: playoff accrual pays (incl. playoff bonus) without ticking tenure")
+
+
+def testTenureBackfill(session):
+    import managers.supporterManager as s
+    from database.models import User
+    # Picked team in season 3, never switched → going into s9, ~6 seasons backed.
+    session.add(User(id=80, email='80@x.com', is_active=True, favorite_team_id=1,
+                     favorite_team_locked_season=3, supporter_weeks=0))
+    # Switched team last season (locked s8) → ~1 season on the new team.
+    session.add(User(id=81, email='81@x.com', is_active=True, favorite_team_id=2,
+                     favorite_team_locked_season=8, supporter_weeks=0))
+    # Already has accrued tenure higher than the estimate → must NOT be lowered.
+    session.add(User(id=82, email='82@x.com', is_active=True, favorite_team_id=3,
+                     favorite_team_locked_season=8, supporter_weeks=200))
+    # No locked_season → no signal → left untouched.
+    session.add(User(id=83, email='83@x.com', is_active=True, favorite_team_id=4,
+                     favorite_team_locked_season=None, supporter_weeks=0))
+    session.commit()
+
+    dry = s.backfillTenure(session, currentSeason=9, apply=False)
+    assert session.query(User).get(80).supporter_weeks == 0, "dry run must not write"
+
+    res = s.backfillTenure(session, currentSeason=9, apply=True)
+    assert session.query(User).get(80).supporter_weeks == 6 * 28  # Lifer
+    assert s.loyaltyTier(session.query(User).get(80).supporter_weeks)[1] == 'Lifer'
+    assert session.query(User).get(81).supporter_weeks == 1 * 28  # Regular
+    assert session.query(User).get(82).supporter_weeks == 200      # not lowered
+    assert session.query(User).get(83).supporter_weeks == 0        # no signal
+
+    # Idempotent: a second apply changes nothing.
+    again = s.backfillTenure(session, currentSeason=9, apply=True)
+    assert again['updated'] == 0, "re-run should be a no-op"
+    print("  ok: tenure backfill (locked_season → weeks, only-raises, idempotent)")
+
+
 def main():
     if os.path.exists('/data'):
         print("SKIP: /data exists on this host — would target the prod volume")
@@ -188,6 +337,10 @@ def main():
         testDormantFrozen(session)
         testPatronRanks(session)
         testCombinedScaling(session)
+        testWinQualityBonuses(session)
+        testDividendLedger(session)
+        testPlayoffAccrualNoTenure(session)
+        testTenureBackfill(session)
     finally:
         session.close()
     print("ALL PASSED")

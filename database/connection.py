@@ -673,6 +673,30 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Supporter dividend ledger — itemized breakdown of the current unclaimed
+        # pool (feature/fan-income). Rows are deleted on claim, so it only holds
+        # weeks since the last claim.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS supporter_dividends ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL, "
+                "amount INTEGER NOT NULL, "
+                "breakdown_json TEXT, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, week))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_supporter_dividends_user "
+                "ON supporter_dividends(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured supporter_dividends table")
+        except Exception:
+            conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared
