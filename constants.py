@@ -110,6 +110,82 @@ WEEKLY_LEADERBOARD_PRIZES = {1: 30, 2: 20, 3: 15}
 WEEKLY_LEADERBOARD_TOP_PCT_PRIZE = 5
 WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 
+# ── Supporter income (fan loyalty dividends) — feature/fan-income ──────────────
+# A non-fantasy, IDLE Floobit path: back a team, earn passively, claim on login.
+# Tenure (weeks backing the current favorite team) drives a loyalty multiplier;
+# team performance nudges the weekly dividend. The guaranteed base stays small —
+# real profit is concentrated in the contingent milestone payouts (the CLINCH_* /
+# FLOOSBOWL_WIN rewards above, scaled by loyalty in a later phase), so only
+# long-tenure fans of great teams come out ahead of what they fund. All tunable;
+# validate against fantasy income with a sim-check.
+# Activity gate: "idle" means doesn't watch games, NOT abandoned the account.
+# A fan who hasn't logged in within this many REAL days is frozen — no tenure
+# tick, no dividend — until they return (so dormant accounts don't rack up
+# Floobits). A sim-season plays out in ~1 real week, so 14 days ≈ "sign in about
+# once every season or two" is enough to keep earning. Tunable.
+SUPPORTER_ACTIVITY_WINDOW_DAYS = 14
+SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is active
+SUPPORTER_WIN_BONUS = 4               # base bonus the weeks your team wins
+# Win-quality add-ons, stacked onto the win bonus (the whole dividend is then
+# multiplied by Tenure × Funding, so great weeks for long-haul patrons pay big).
+# Most are read straight off the game (scores, quarter scores, playoff flag).
+SUPPORTER_SHUTOUT_BONUS = 3           # opponent held to 0
+SUPPORTER_BLOWOUT_MARGIN = 21        # win by >= this (3 scores) is a blowout
+SUPPORTER_BLOWOUT_BONUS = 2           # added on a blowout win
+SUPPORTER_COMEBACK_BONUS = 3          # won after trailing at the end of Q3
+SUPPORTER_STREAK_BONUS_PER_WIN = 1    # +1 per win in the streak beyond the first (a lone win adds 0)...
+SUPPORTER_STREAK_BONUS_CAP = 6        # ...capped here (a 7+ win streak maxes it)
+SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added on an upset win (beat a higher-ELO opponent — same rule as the UPSET badge / house_money card)
+# Playoff wins pay more, scaled by round (1=Rd1, 2=Rd2, 3=League Championship,
+# 4=Floos Bowl). Keyed by round number = week - 28.
+SUPPORTER_PLAYOFF_WIN_BONUS = {1: 4, 2: 6, 3: 8, 4: 12}
+SUPPORTER_TEAM_CHANGE_TENURE_KEEP = 0.5  # fraction of tenure kept on a team change (soft reset)
+# Patron rank — your share of your team's funding, applied ON TOP of loyalty.
+# Percentile thresholds (top X% of a team's contributors this season); the single
+# biggest backer is always the Patron. Frames as recognition/status, and the
+# combined ceiling (top loyalty × top patron = 2.0 × 1.5 = 3.0) keeps even the
+# best corner only mildly profitable. (maxPercentile, multiplier, label) ascending.
+SUPPORTER_PATRON_TIERS = [
+    (0.10, 1.5,  'Patron'),      # top 10% (or the biggest backer)
+    (0.25, 1.3,  'Benefactor'),  # top 25%
+    (0.50, 1.15, 'Backer'),      # top half
+]
+# Loyalty tiers by supporter_weeks (persists across seasons; ~28 wks = 1 season).
+# (minWeeks, multiplier, label), descending — first match from the top wins.
+# Gaps WIDEN as you climb (28 → 56 → 84 wks between tiers) so each tier is a
+# bigger commitment than the last and the top tier is a genuine long-hauler.
+SUPPORTER_LOYALTY_TIERS = [
+    (168, 2.0,  'Lifer'),     # ~6 seasons
+    (84,  1.5,  'Faithful'),  # ~3 seasons
+    (28,  1.25, 'Regular'),   # ~1 season
+    (0,   1.0,  'New Fan'),
+]
+# Weeks of tenure one season represents (matches the tier spacing above). Used by
+# the one-time tenure backfill to convert seasons-as-a-fan into supporter_weeks.
+SUPPORTER_WEEKS_PER_SEASON = 28
+
+# ── Spectator income (the cheer bar) — feature/fan-income ──────────────────────
+# The ACTIVE non-fantasy path: watch live games, fill a segmented bar, get paid
+# per segment. Server-validated (fill is credited only for plays that actually
+# happened in a game you're heartbeating, so you can't earn faster than the game
+# plays) and hard-capped per game + per week, so idling/botting nets little.
+SPECTATOR_FILL_PER_PLAY = 1.0          # bar fill per witnessed play
+SPECTATOR_FILL_PER_POINT = 0.6         # bonus fill per point scored while watching (TDs/FGs fill faster)
+SPECTATOR_SEGMENT_SIZE = 18.0          # fill needed to complete a segment (~18 plays)
+SPECTATOR_SEGMENT_PAYOUT = 3           # Floobits per completed segment
+SPECTATOR_RALLY_FILL = 5.0             # a (free) rally adds this much
+SPECTATOR_REACTION_FILL = 1.0          # a reaction adds this (diminishing, capped/game)
+SPECTATOR_REACTION_CAP_PER_GAME = 8    # max reaction-fill events credited per game
+SPECTATOR_SUPPORTED_TEAM_MULT = 1.5    # watching your favorite team fills faster
+SPECTATOR_HEARTBEAT_WINDOW_SEC = 60    # must claim/heartbeat within this to count as "present" (rally/reaction gate)
+SPECTATOR_MAX_PLAYS_PER_HEARTBEAT = 12 # legacy heartbeat: cap plays credited per beat (claim model caps to real progress instead)
+SPECTATOR_WEEKLY_PAYOUT_CAP = 60       # max Floobits/week from spectating
+# Big plays — any play that flashes the field / posts a big-play WPA highlight
+# (WPA swing >= 7). Bonus fill on TOP of the per-play fill; worth more when your
+# own supported team is the one making it.
+SPECTATOR_BIG_PLAY_FILL = 4.0          # bonus fill per witnessed big play
+SPECTATOR_OWN_BIG_PLAY_MULT = 2.0      # multiplier when YOUR team makes the big play
+
 SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
 SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25

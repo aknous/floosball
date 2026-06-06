@@ -1857,6 +1857,18 @@ def post_play_reaction(game_id: int, req: _ReactionRequest, user: _User = Depend
             action = 'added'
         session.commit()
         aggregate = _buildReactionAggregate(session, game_id, req.playNumber, req.targetType)
+        # Spectator: a newly-added reaction adds a little cheer-bar fill
+        # (presence-gated + diminishing/capped per game). Only on 'added' so
+        # toggling a reaction on/off can't farm fill.
+        if action == 'added':
+            try:
+                from managers import spectatorManager
+                _sm = floosball_app.seasonManager if floosball_app else None
+                _season = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+                _week = _sm.currentSeason.currentWeek if _sm and _sm.currentSeason else 0
+                spectatorManager.addReactionFill(session, user.id, game_id, _season, _week)
+            except Exception as _e:
+                logger.debug(f"spectator reaction fill skipped: {_e}")
     finally:
         session.close()
 
@@ -1916,6 +1928,16 @@ def post_game_rally(game_id: int, req: _RallyRequest, user: _User = Depends(_get
         dbUser = session.query(_DBUser).get(user.id)
         username = dbUser.username if dbUser else 'fan'
         session.commit()
+        # Spectator: a rally also fills the cheer bar (presence-gated — no-op
+        # unless the user is actively watching/heartbeating this game).
+        try:
+            from managers import spectatorManager
+            _sm = floosball_app.seasonManager if floosball_app else None
+            _season = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+            _week = _sm.currentSeason.currentWeek if _sm and _sm.currentSeason else 0
+            spectatorManager.addRallyFill(session, user.id, _season, _week)
+        except Exception as _e:
+            logger.debug(f"spectator rally fill skipped: {_e}")
     finally:
         session.close()
 
@@ -5617,6 +5639,11 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
         if offseason or dbUser.favorite_team_id is None:
             # Offseason or first-time pick: apply immediately
             wasFirstTime = dbUser.favorite_team_id is None
+            if not wasFirstTime:
+                # Switching teams — soft-reset Supporter loyalty tenure so a
+                # switch is a setback, not a clean slate (anti-bandwagon).
+                from managers.supporterManager import onFavoriteTeamChange
+                onFavoriteTeamChange(dbUser)
             dbUser.favorite_team_id = req.teamId
             dbUser.pending_favorite_team_id = None
             if currentSeasonNum is not None and not offseason:
@@ -5645,6 +5672,166 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
         session.rollback()
         logger.error(f"Error setting favorite team: {e}")
         raise HTTPException(status_code=500, detail="Failed to update favorite team")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# SUPPORTER (fan-income) ENDPOINTS
+# ============================================================================
+
+@app.get("/api/supporter/me")
+def supporter_me(user: _User = Depends(_getCurrentUser)):
+    """The current user's Supporter status: loyalty tier, tenure, next tier, and
+    the Floobits accrued and waiting to be claimed."""
+    from database.connection import get_session
+    from managers.supporterManager import getStatus
+    season = _getCurrentSeasonNumber()
+    session = get_session()
+    try:
+        return build_success_response(getStatus(session, user.id, season=season) or {})
+    finally:
+        session.close()
+
+
+@app.post("/api/supporter/claim")
+def supporter_claim(user: _User = Depends(_getCurrentUser)):
+    """Claim the user's accrued Supporter dividends into their balance."""
+    from database.connection import get_session
+    from managers.supporterManager import claim
+    season = _getCurrentSeasonNumber() or 0
+    sm = floosball_app.seasonManager if floosball_app else None
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        return build_success_response({'claimed': claim(session, user.id, season, week)})
+    finally:
+        session.close()
+
+
+# ============================================================================
+# SPECTATOR (cheer bar) ENDPOINTS
+# ============================================================================
+
+class SpectatorHeartbeatRequest(BaseModel):
+    gameId: int
+
+
+class SpectatorClaimRequest(BaseModel):
+    gameId: int
+    witnessedPlays: int = 0
+    witnessedPoints: int = 0
+    witnessedBigPlays: int = 0
+
+
+def _bigPlayCounts(game):
+    """(homeBig, awayBig): big plays so far benefiting each team, read from the
+    live game's feed (a big play is a WPA swing >= 7; the beneficiary is the team
+    with the positive WPA). Used to credit the spectator big-play bonus."""
+    homeBig = awayBig = 0
+    for entry in getattr(game, 'gameFeed', []) or []:
+        if entry.get('isBigPlay'):
+            if (entry.get('homeWpa') or 0) > 0:
+                homeBig += 1
+            else:
+                awayBig += 1
+    return homeBig, awayBig
+
+
+def _liveGameById(gameId: int):
+    """The in-memory live game object for an id, or None if it isn't live."""
+    sm = floosball_app.seasonManager if floosball_app else None
+    if not sm or not sm.currentSeason or not sm.currentSeason.activeGames:
+        return None
+    for g in sm.currentSeason.activeGames:
+        if getattr(g, 'id', None) == gameId:
+            return g
+    return None
+
+
+@app.post("/api/spectator/heartbeat")
+def spectator_heartbeat(req: SpectatorHeartbeatRequest, user: _User = Depends(_getCurrentUser)):
+    """Presence heartbeat while watching a live game. The server reads the game's
+    REAL play count (from in-memory season state) and credits cheer-bar fill for
+    plays that have actually happened since the last beat — so fill can't outrun
+    the game. Sent only while the tab is visible and a game view is open."""
+    from database.connection import get_session
+    from managers import spectatorManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    game = _liveGameById(req.gameId)
+    session = get_session()
+    try:
+        if game is None:
+            return build_success_response(spectatorManager.getStatus(session, user.id, season, week))
+        playCount = int(getattr(game, 'totalPlays', 0) or 0)
+        score = int((getattr(game, 'homeScore', 0) or 0) + (getattr(game, 'awayScore', 0) or 0))
+        favId = user.favorite_team_id
+        homeId = getattr(getattr(game, 'homeTeam', None), 'id', None)
+        awayId = getattr(getattr(game, 'awayTeam', None), 'id', None)
+        supported = favId is not None and favId in (homeId, awayId)
+        status = spectatorManager.heartbeat(session, user.id, req.gameId, playCount, supported, season, week, currentScore=score)
+        return build_success_response(status)
+    finally:
+        session.close()
+
+
+@app.post("/api/spectator/claim")
+def spectator_claim(req: SpectatorClaimRequest, user: _User = Depends(_getCurrentUser)):
+    """WS-driven cheer-bar bank. The client fills its bar locally from the season
+    WebSocket's play events (no polling) and posts the plays/points it witnessed
+    while watching. The server credits the MIN of that and the game's REAL
+    progress since the last claim (read from in-memory season state), so fill
+    can't outrun the game and plays that streamed while the modal was closed
+    aren't credited. Fired on segment completion, a slow keepalive, and on close
+    (bank-on-close)."""
+    from database.connection import get_session
+    from managers import spectatorManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    game = _liveGameById(req.gameId)
+    session = get_session()
+    try:
+        if game is None:
+            return build_success_response(spectatorManager.getStatus(session, user.id, season, week))
+        playCount = int(getattr(game, 'totalPlays', 0) or 0)
+        score = int((getattr(game, 'homeScore', 0) or 0) + (getattr(game, 'awayScore', 0) or 0))
+        favId = user.favorite_team_id
+        homeId = getattr(getattr(game, 'homeTeam', None), 'id', None)
+        awayId = getattr(getattr(game, 'awayTeam', None), 'id', None)
+        supported = favId is not None and favId in (homeId, awayId)
+        # Big plays attributed to the user's team vs the other side, for the
+        # own-team-worth-more bonus.
+        homeBig, awayBig = _bigPlayCounts(game)
+        if favId == homeId:
+            bigMine, bigOther = homeBig, awayBig
+        elif favId == awayId:
+            bigMine, bigOther = awayBig, homeBig
+        else:
+            bigMine, bigOther = 0, homeBig + awayBig
+        status = spectatorManager.claim(session, user.id, req.gameId,
+                                        req.witnessedPlays, req.witnessedPoints,
+                                        supported, season, week, playCount, score,
+                                        witnessedBigPlays=req.witnessedBigPlays,
+                                        realBigMine=bigMine, realBigOther=bigOther)
+        return build_success_response(status)
+    finally:
+        session.close()
+
+
+@app.get("/api/spectator/me")
+def spectator_me(user: _User = Depends(_getCurrentUser)):
+    """Current cheer-bar status: bar fill, segment progress, weekly earned/cap."""
+    from database.connection import get_session
+    from managers import spectatorManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        return build_success_response(spectatorManager.getStatus(session, user.id, season, week))
     finally:
         session.close()
 

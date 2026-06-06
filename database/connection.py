@@ -637,6 +637,66 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Supporter income (feature/fan-income): fan-loyalty dividend state.
+        # supporter_weeks = tenure backing the current favorite team; persists
+        # across seasons, soft-reset on a team change. supporter_unclaimed =
+        # accrued Floobits awaiting claim (the idle pool).
+        for col, colDef in [
+            ('supporter_weeks', 'INTEGER DEFAULT 0 NOT NULL'),
+            ('supporter_unclaimed', 'INTEGER DEFAULT 0 NOT NULL'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added users.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Spectator cheer-bar state (feature/fan-income).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS spectator_progress ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL UNIQUE, "
+                "bar_fill REAL NOT NULL DEFAULT 0, "
+                "week_marker INTEGER NOT NULL DEFAULT 0, "
+                "weekly_floobits INTEGER NOT NULL DEFAULT 0, "
+                "weekly_segments INTEGER NOT NULL DEFAULT 0, "
+                "updated_at DATETIME)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_spectator_progress_user "
+                "ON spectator_progress(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured spectator_progress table")
+        except Exception:
+            conn.rollback()
+
+        # Supporter dividend ledger — itemized breakdown of the current unclaimed
+        # pool (feature/fan-income). Rows are deleted on claim, so it only holds
+        # weeks since the last claim.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS supporter_dividends ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL, "
+                "amount INTEGER NOT NULL, "
+                "breakdown_json TEXT, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, week))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_supporter_dividends_user "
+                "ON supporter_dividends(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured supporter_dividends table")
+        except Exception:
+            conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared

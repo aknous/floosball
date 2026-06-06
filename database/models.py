@@ -688,8 +688,61 @@ class GameRally(Base):
         Index("idx_game_rallies_game_user", "game_id", "user_id"),
     )
 
+
+class SpectatorProgress(Base):
+    """Per-user cheer-bar state (feature/fan-income, Spectator).
+
+    The ACTIVE non-fantasy income path: watching live games fills a segmented
+    bar, each completed segment pays Floobits. bar_fill is the current partial
+    segment; the weekly counters bound the payout (reset when the week rolls).
+    Per-game witnessed-play tracking lives in memory (SpectatorManager), not
+    here — this row only persists the durable bar + the weekly cap.
+    """
+    __tablename__ = "spectator_progress"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    bar_fill: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Week marker the weekly counters belong to (season*100 + week); on change
+    # the weekly counters reset.
+    week_marker: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weekly_floobits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weekly_segments: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_spectator_progress_user", "user_id"),
+    )
+
     def __repr__(self):
         return f"<GameRally(game={self.game_id}, user={self.user_id}, team={self.team_id}, tier={self.tier})>"
+
+
+class SupporterDividend(Base):
+    """Itemized UNCLAIMED Supporter dividends — one row per fan per week credited,
+    holding that week's amount + its bonus breakdown (base/win/upset/shutout/…
+    and the applied Tenure×Funding multiplier).
+
+    These rows represent only what's currently sitting in the pool: they're
+    deleted when the fan claims. So the table stays tiny (weeks since the last
+    claim) and the UI can show *why* the pool is what it is, without keeping a
+    full lifetime ledger. The authoritative pool total stays on
+    `users.supporter_unclaimed`; these rows are the breakdown of it.
+    """
+    __tablename__ = "supporter_dividends"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    breakdown_json: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "week", name="uq_supporter_dividend_week"),
+        Index("idx_supporter_dividends_user", "user_id"),
+    )
 
 
 class Championship(Base):
@@ -805,6 +858,12 @@ class User(Base):
     # Vacancy fallback preference: prospect | fa | best_available (default)
     vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
+    # Supporter income (feature/fan-income): a non-fantasy, idle Floobit path.
+    # supporter_weeks = tenure backing the current favorite team (drives the
+    # loyalty multiplier; persists across seasons, soft-reset on a team change).
+    # supporter_unclaimed = accrued Floobits awaiting claim (the idle pool).
+    supporter_weeks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    supporter_unclaimed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Season number the user last claimed their free starter pack in.
     # Resets each season — null means never claimed.
     starter_pack_claimed_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

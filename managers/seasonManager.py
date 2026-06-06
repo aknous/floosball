@@ -1278,6 +1278,11 @@ class SeasonManager:
         if not in_playoffs:
             self._creditVeteranForWeek(self.currentSeason.seasonNumber)
 
+        # Supporter dividends (fan-income) — accrue every week, regular AND
+        # playoff (backing a deep-run team keeps paying). Ticks tenure for all
+        # fans; credits a dividend to those whose team played this week.
+        self._accrueSupporterDividends(self.currentSeason.seasonNumber, week)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
@@ -4128,6 +4133,11 @@ class SeasonManager:
             # Resolve pick-em weekly prizes for this playoff round
             self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
+            # Supporter dividends for this playoff round — pays deep-run fans
+            # (incl. the playoff round bonus) but does NOT tick tenure, so only
+            # full regular seasons build loyalty.
+            self._accrueSupporterDividends(self.currentSeason.seasonNumber, 28 + currentRound, tickTenure=False)
+
             # Re-score playoff brackets now this round's results are final.
             self._scorePlayoffBrackets()
 
@@ -5348,8 +5358,11 @@ class SeasonManager:
             pendingUsers = session.query(User).filter(
                 User.pending_favorite_team_id.isnot(None)
             ).all()
+            from managers.supporterManager import onFavoriteTeamChange
             for u in pendingUsers:
                 logger.info(f"User {u.id}: promoting pending favorite team {u.pending_favorite_team_id}")
+                # Switching teams — soft-reset Supporter loyalty tenure (anti-bandwagon).
+                onFavoriteTeamChange(u)
                 u.favorite_team_id = u.pending_favorite_team_id
                 u.pending_favorite_team_id = None
                 u.favorite_team_locked_season = None
@@ -7340,40 +7353,51 @@ class SeasonManager:
 
     def _awardFavoriteTeamBonus(self, teamId: int, amount: int, transactionType: str,
                                  description: str, season: int, week: int = None) -> int:
-        """Award Floobits to all users whose favorite_team_id matches teamId.
+        """Award a milestone Floobit bonus to a team's fans, scaled per-fan by
+        Supporter loyalty × patron rank (this is where the "profit only for
+        long-tenure fans of great teams" envelope actually bites). Gated on the
+        same activity rule as idle accrual — dormant accounts don't get paid.
         Returns the number of users rewarded."""
         try:
             from database.connection import get_session
             from database.models import User
             from database.repositories.card_repositories import CurrencyRepository
+            from managers.supporterManager import (
+                computePatronRanks, combinedMultiplier, isEarning,
+            )
 
             session = get_session()
             try:
                 users = session.query(User).filter_by(
                     favorite_team_id=teamId, is_active=True
                 ).all()
+                # Only fans who pass the activity gate (consistent with accrual).
+                users = [u for u in users if isEarning(u)]
                 if not users:
                     session.close()
                     return 0
+                patronRanks = computePatronRanks(session, season)
                 currencyRepo = CurrencyRepository(session)
                 from database.repositories.notification_repository import NotificationRepository
                 notifRepo = NotificationRepository(session)
                 count = 0
                 for user in users:
+                    mult, _loyalty, _patron = combinedMultiplier(user, patronRanks)
+                    scaled = int(round(amount * mult))
                     currencyRepo.addFunds(
-                        user.id, amount, transactionType,
+                        user.id, scaled, transactionType,
                         description=description,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         user.id, 'favorite_team',
                         'Team Bonus',
-                        f'{description}! +{amount} Floobits',
-                        data={'teamId': teamId, 'amount': amount},
+                        f'{description}! +{scaled} Floobits',
+                        data={'teamId': teamId, 'amount': scaled},
                     )
                     count += 1
                 session.commit()
-                logger.info(f"Awarded {amount} Floobits ({transactionType}) to {count} users for team {teamId}")
+                logger.info(f"Awarded scaled {transactionType} bonus (base {amount}F) to {count} fans of team {teamId}")
                 return count
             except Exception as e:
                 session.rollback()
@@ -7383,6 +7407,23 @@ class SeasonManager:
                 session.close()
         except ImportError:
             return 0
+
+    def _accrueSupporterDividends(self, season: int, week: int, tickTenure: bool = True) -> None:
+        """Accrue weekly Supporter (fan-loyalty) dividends. Idle income — accrues
+        to each fan's claim pool; they collect via POST /api/supporter/claim.
+        `tickTenure=False` for playoff rounds: pay the dividend without advancing
+        tenure (full regular seasons drive tenure, not playoff weeks)."""
+        try:
+            from database.connection import get_session
+            from managers.supporterManager import accrueWeekly
+            session = get_session()
+            try:
+                accrueWeekly(session, season, week, tickTenure=tickTenure)
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Supporter dividend accrual failed (s{season} w{week}): {e}")
 
     def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
         """Award Floobits to top leaderboard performers for the week."""
