@@ -1136,7 +1136,7 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         # Lemons — multiplies the lowest FP card. Structural amp, not dialed.
         return {"rewardType": "mult", "rewardValue": min(4.0, round(2.0 + (0.50 + rn * 0.02) * editionScale, 2))}
     if effectName == "last_resort":
-        return {"rewardType": "fp", "baseFP": round(33.0 * editionScale * _BAL_FP_MULT, 1),
+        return {"rewardType": "fp", "baseFP": round(105.0 * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((135 + rn * 2.70) * editionScale * _BAL_FP_MULT, 1),
                 "isChanceEffect": True}
     # ── New cards (FP/FPx rebalance) ──
@@ -1174,17 +1174,17 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "touchdown_pinata":
         return {"perTdFP": round((6.75 + rn * 0.21) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "scrappy":
-        return {"baseFP": round(27.0 * editionScale * _BAL_FP_MULT, 1),
+        return {"baseFP": round(105.0 * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((120 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
                 "maxStars": 2, "isChanceEffect": True}
     if effectName == "rng":
         return {"minFP": round((21 + rn * 0.42) * editionScale * _BAL_FP_MULT, 1),
                 "maxFP": round((93 + rn * 1.68) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "avalanche":
-        return {"td1": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1),
-                "td2": round((27.0 + rn * 1.08) * editionScale * _BAL_FP_MULT, 1),
-                "td3": round((48.0 + rn * 1.89) * editionScale * _BAL_FP_MULT, 1),
-                "td4": round((75.0 + rn * 3.00) * editionScale * _BAL_FP_MULT, 1)}
+        return {"td1": round((4.7 + rn * 0.19) * editionScale * _BAL_FP_MULT, 1),
+                "td2": round((9.5 + rn * 0.38) * editionScale * _BAL_FP_MULT, 1),
+                "td3": round((16.8 + rn * 0.66) * editionScale * _BAL_FP_MULT, 1),
+                "td4": round((26.0 + rn * 1.05) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "hedge":
         # Manually tuned: pays max(0, floor - rosterFP). Sits a touch above
         # the typical-user roster-FP median (~100-110) so it pays ~40-50 on
@@ -1222,7 +1222,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
                 "rewardValue": round((48 + rn * 1.68) * editionScale * _BAL_FP_MULT, 1),
                 "threshold": 30}
     if effectName == "expedition":
-        return {"perFiftyYardsFP": round((16.8 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
+        return {"perFiftyYardsFP": round((6.6 + rn * 0.32) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "homer":
         # FPx delta per fav-team player on roster.
         return {"rewardType": "mult",
@@ -1275,7 +1275,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "castaway":
         return {"rewardFP": round((94.5 + rn * 2.70) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "sleeper":
-        return {"baseFP": round((33.0 + rn * 0.69) * editionScale * _BAL_FP_MULT, 1),
+        return {"baseFP": round((150.0 + rn * 3.0) * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((150.0 + rn * 2.40) * editionScale * _BAL_FP_MULT, 1),
                 "baseChance": 15, "chancePerLow": 12,
                 "isChanceEffect": True}
@@ -1302,7 +1302,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         return {"perTdMult": round((0.84 + rn * 0.012) * editionScale * _BAL_FPX_MULT, 2)}
     # ── FP-output cards from inside this builder ──
     if effectName == "babysitter":
-        return {"baseFP": round(33.0 * editionScale * _BAL_FP_MULT, 1),
+        return {"baseFP": round(120.0 * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((120 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
                 "fpThreshold": 8, "isChanceEffect": True}
     if effectName == "martyr":
@@ -1326,7 +1326,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
         return {"baseXMult": round(1 + (0.105 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2),
                 "growthPerWin": round((0.54 + rn * 0.012) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "underdog":
-        return {"baseFP": round(33.0 * editionScale * _BAL_FP_MULT, 1),
+        return {"baseFP": round(90.0 * editionScale * _BAL_FP_MULT, 1),
                 "enhancedFP": round((120 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
                 "isChanceEffect": True}
     if effectName == "stockpiler":
@@ -1352,8 +1352,8 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
                 "threshold": 25}
     if effectName == "double_trouble":
         return {"rewardType": "fp",
-                "singleWrFP": round((40.5 + rn * 1.68) * editionScale * _BAL_FP_MULT, 1),
-                "rewardValue": round((94.5 + rn * 3.72) * editionScale * _BAL_FP_MULT, 1)}
+                "singleWrFP": round((15.0 + rn * 0.62) * editionScale * _BAL_FP_MULT, 1),
+                "rewardValue": round((35.0 + rn * 1.38) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gunslinger":
         return {"rewardType": "fp", "perHundredYardsFP": round((13.5 + rn * 0.42) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "air_raid":
@@ -1469,15 +1469,17 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
     rn = playerRating - 60
 
     if effectName == "showoff":
-        # FP per 5-star roster player (92+ rating).
+        # FP per 5-star roster player (92+ rating). Was wildly over-tuned
+        # (perStarFP ~82 → ~157 FP/wk avg, ~17x a normal base card); dialed into
+        # the base band while still rewarding 5-star stacking.
         return {"rewardType": "fp",
-                "perStarFP": round((54 + rn * 1.20) * editionScale * _BAL_FP_MULT, 1)}
+                "perStarFP": round((12 + rn * 0.24) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "bandwagon":
         return {"rewardType": "mult", "rewardValue": round(1 + (0.168 + rn * 0.0084) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "believe":
         # FP per fav-team season win + small floobits when they win this week.
         return {"rewardType": "fp",
-                "perWinFP": round((9.0 + rn * 0.21) * editionScale * _BAL_FP_MULT, 1),
+                "perWinFP": round((4.5 + rn * 0.10) * editionScale * _BAL_FP_MULT, 1),
                 "floobitsOnTrigger": int(round((10 + rn * 0.3) * editionScale))}
     if effectName == "reclamation":
         return {"rewardType": "fp", "rewardValue": round((54 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1)}
@@ -1499,9 +1501,10 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "floobitsOnTrigger": int(round((30 + rn * 0.6) * editionScale))}
     if effectName == "domination":
         # Per-roster-player FP if their team is currently top-6 in the league +
-        # floobits if fav team wins by 21+ this week.
+        # floobits if fav team wins by 21+ this week. Was over-tuned like Showoff
+        # (~191 FP/wk avg); dialed toward the strong-prismatic band.
         return {"rewardType": "fp",
-                "perPlayerFP": round((36 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1),
+                "perPlayerFP": round((13 + rn * 0.31) * editionScale * _BAL_FP_MULT, 1),
                 "floobitsOnTrigger": int(round((30 + rn * 0.6) * editionScale)),
                 "marginThreshold": 21}
     if effectName == "walk_off":
@@ -1512,9 +1515,9 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
                 "floobitsOnTrigger": int(round((30 + rn * 0.6) * editionScale))}
     if effectName == "medium":
         return {"rewardType": "fp",
-                "lowFP": round((33.0 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1),
-                "midFP": round((94.5 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
-                "highFP": round((174.0 + rn * 3.39) * editionScale * _BAL_FP_MULT, 1)}
+                "lowFP": round((19.5 + rn * 0.60) * editionScale * _BAL_FP_MULT, 1),
+                "midFP": round((56.0 + rn * 1.20) * editionScale * _BAL_FP_MULT, 1),
+                "highFP": round((103.0 + rn * 2.00) * editionScale * _BAL_FP_MULT, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(20.4 * editionScale * _BAL_FP_MULT, 1)}
 
 
@@ -1555,10 +1558,10 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "odometer":
         return {"rewardType": "fp",
                 "gates": [
-                    {"yards": 200, "fp": round((20.4 + rn * 0.33) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 400, "fp": round((40.5 + rn * 0.69) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 600, "fp": round((67.5 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 800, "fp": round((94.5 + rn * 1.35) * editionScale * _BAL_FP_MULT, 1)},
+                    {"yards": 200, "fp": round((10.0 + rn * 0.16) * editionScale * _BAL_FP_MULT, 1)},
+                    {"yards": 400, "fp": round((20.0 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)},
+                    {"yards": 600, "fp": round((33.0 + rn * 0.50) * editionScale * _BAL_FP_MULT, 1)},
+                    {"yards": 800, "fp": round((46.0 + rn * 0.66) * editionScale * _BAL_FP_MULT, 1)},
                 ]}
     if effectName == "leg_day":
         return {"rewardType": "fp",
@@ -1604,7 +1607,7 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "bonsai":
         trigger = random.choice(CULTIVATION_TRIGGER_POOL)
         return {"rewardType": "fp",
-                "baseFP": round((24.0 + rn * 0.9) * editionScale * _BAL_FP_MULT, 1),
+                "baseFP": round((60.0 + rn * 1.8) * editionScale * _BAL_FP_MULT, 1),
                 "growthFP": round((12.0 + rn * 0.5) * editionScale * _BAL_FP_MULT, 1),
                 "triggerEvent": trigger["event"],
                 "triggerLabel": trigger["label"],
