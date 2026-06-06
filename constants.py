@@ -155,6 +155,7 @@ SUPPORTER_LOYALTY_TIERS = [
 # happened in a game you're heartbeating, so you can't earn faster than the game
 # plays) and hard-capped per game + per week, so idling/botting nets little.
 SPECTATOR_FILL_PER_PLAY = 1.0          # bar fill per witnessed play
+SPECTATOR_FILL_PER_POINT = 0.6         # bonus fill per point scored while watching (TDs/FGs fill faster)
 SPECTATOR_SEGMENT_SIZE = 18.0          # fill needed to complete a segment (~18 plays)
 SPECTATOR_SEGMENT_PAYOUT = 3           # Floobits per completed segment
 SPECTATOR_RALLY_FILL = 5.0             # a (free) rally adds this much

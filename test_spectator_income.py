@@ -33,6 +33,18 @@ def testFillAndSegment(session):
     print("  ok: play-validated fill + segment payout (per-beat play cap honored)")
 
 
+def testScoringBonus(session):
+    import managers.spectatorManager as sp
+    from constants import SPECTATOR_FILL_PER_PLAY, SPECTATOR_FILL_PER_POINT
+    _mkUser(session, 6)
+    sp.heartbeat(session, 6, 600, 0, False, 1, 1, currentScore=0)  # baseline
+    # +5 plays and +7 points (a TD) → base play fill + scoring bonus.
+    s = sp.heartbeat(session, 6, 600, 5, False, 1, 1, currentScore=7)
+    expected = 5 * SPECTATOR_FILL_PER_PLAY + 7 * SPECTATOR_FILL_PER_POINT
+    assert abs(s['barFill'] - expected) < 1e-6, (s['barFill'], expected)
+    print(f"  ok: scoring bonus (+7 pts adds {7 * SPECTATOR_FILL_PER_POINT:.1f} fill)")
+
+
 def testWeeklyCap(session):
     import managers.spectatorManager as sp
     from constants import SPECTATOR_WEEKLY_PAYOUT_CAP
@@ -99,6 +111,7 @@ def main():
     session = get_session()
     try:
         testFillAndSegment(session)
+        testScoringBonus(session)
         testWeeklyCap(session)
         testSupportedMult(session)
         testWeeklyReset(session)

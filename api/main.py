@@ -5677,11 +5677,12 @@ def spectator_heartbeat(req: SpectatorHeartbeatRequest, user: _User = Depends(_g
         if game is None:
             return build_success_response(spectatorManager.getStatus(session, user.id, season, week))
         playCount = int(getattr(game, 'totalPlays', 0) or 0)
+        score = int((getattr(game, 'homeScore', 0) or 0) + (getattr(game, 'awayScore', 0) or 0))
         favId = user.favorite_team_id
         homeId = getattr(getattr(game, 'homeTeam', None), 'id', None)
         awayId = getattr(getattr(game, 'awayTeam', None), 'id', None)
         supported = favId is not None and favId in (homeId, awayId)
-        status = spectatorManager.heartbeat(session, user.id, req.gameId, playCount, supported, season, week)
+        status = spectatorManager.heartbeat(session, user.id, req.gameId, playCount, supported, season, week, currentScore=score)
         return build_success_response(status)
     finally:
         session.close()

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from database.models import SpectatorProgress
 from constants import (
     SPECTATOR_FILL_PER_PLAY,
+    SPECTATOR_FILL_PER_POINT,
     SPECTATOR_SEGMENT_SIZE,
     SPECTATOR_SEGMENT_PAYOUT,
     SPECTATOR_RALLY_FILL,
@@ -101,10 +102,11 @@ def _status(session: Session, userId: int, season: int, week: int) -> dict:
 
 
 def heartbeat(session: Session, userId: int, gameId: int, currentPlayCount: int,
-              supportedTeam: bool, season: int, week: int) -> dict:
+              supportedTeam: bool, season: int, week: int, currentScore: int = 0) -> dict:
     """A presence heartbeat for a live game. Credits fill for the plays that have
-    actually happened since the last heartbeat (capped per beat), scaled up for
-    your supported team. The first beat (or after the window lapses) just sets a
+    actually happened since the last heartbeat (capped per beat) PLUS a bonus for
+    points scored in that window (TDs/FGs fill faster), scaled up for your
+    supported team. The first beat (or after the window lapses) just sets a
     baseline — no retroactive credit. Caller need not commit (we do)."""
     now = time.time()
     st = _watch.get(userId)
@@ -112,16 +114,19 @@ def heartbeat(session: Session, userId: int, gameId: int, currentPlayCount: int,
              or (now - st.get('lastBeat', 0)) > SPECTATOR_HEARTBEAT_WINDOW_SEC)
     if fresh:
         _watch[userId] = {'gameId': gameId, 'lastPlayCount': currentPlayCount,
-                          'lastBeat': now, 'reactionCount': 0}
+                          'lastScore': currentScore, 'lastBeat': now, 'reactionCount': 0}
         _loadProgress(session, userId, season, week)
         session.commit()
         return _status(session, userId, season, week)
 
     newPlays = max(0, min(currentPlayCount - st['lastPlayCount'], SPECTATOR_MAX_PLAYS_PER_HEARTBEAT))
+    newPoints = max(0, currentScore - st.get('lastScore', currentScore))  # score only climbs
     st['lastPlayCount'] = currentPlayCount
+    st['lastScore'] = currentScore
     st['lastBeat'] = now
     mult = SPECTATOR_SUPPORTED_TEAM_MULT if supportedTeam else 1.0
-    _addFill(session, userId, newPlays * SPECTATOR_FILL_PER_PLAY * mult, season, week)
+    fill = (newPlays * SPECTATOR_FILL_PER_PLAY + newPoints * SPECTATOR_FILL_PER_POINT) * mult
+    _addFill(session, userId, fill, season, week)
     session.commit()
     return _status(session, userId, season, week)
 
