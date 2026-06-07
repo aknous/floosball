@@ -1205,9 +1205,10 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "garbage_time":
         return {"perPlayerFP": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "loyalty_bonus":
-        # Buff pass: favorite-team-win-streak fan card read ~6 FP in normal play.
-        # Raised per-streak-game value so a hot favorite team pays off properly.
-        return {"perStreakFP": round((32.0 + rn * 1.0) * editionScale * _BAL_FP_MULT, 1)}
+        # NOTE: read ~6 only because the projection ctx's favoriteTeamStreak was
+        # low/negative; with a representative 4-win streak it already pays ~70
+        # (holo band). The low number was a measurement blind spot, not weakness.
+        return {"perStreakFP": round((20.4 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "windfall":
         # Windfall outputs floobits, not FP — leave untouched.
         return {"perPlayerFloobits": round((5 + rn * 0.20) * editionScale)}
@@ -1339,9 +1340,10 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
                 "enhancedFP": round((120 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
                 "isChanceEffect": True}
     if effectName == "stockpiler":
-        # Buff pass: rewards hoarding unused swaps; per-swap mult was too small to
-        # make the "patience" build competitive. ~0.065 -> ~0.10 per unused swap.
-        return {"perSwapXMult": round((0.13 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2)}
+        # NOTE: looked weak (~29) only because the projection ctx left unusedSwaps
+        # unread; with condition active it already pays ~70 (prismatic band) at 4
+        # hoarded swaps. Left at original value.
+        return {"perSwapXMult": round((0.084 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "hometown_hero":
         # Floobits output — left alone
         return {"rewardFloobits": int(round((15 + rn * 0.6) * editionScale))}
@@ -1379,9 +1381,10 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "stack":
         return {"rewardValue": round(1 + (0.315 + rn * 0.0168) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "backfield_buddies":
-        # Buff pass: RB+WR same-team FPx delta was low for a holo; raised so the
-        # roster-pairing condition is worth building toward.
-        return {"rewardValue": round((0.52 + rn * 0.0168) * editionScale * _BAL_FPX_MULT, 2)}
+        # NOTE: read ~16 only because the projection ctx left roster team IDs
+        # empty (QB+RB same-team never detected). With the condition active it
+        # pays ~73 (matching Stack), so it was never weak. Left at original value.
+        return {"rewardValue": round((0.315 + rn * 0.0168) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "eminence":
         # FPx delta per roster player ranked top-10 at their position (by
         # season FP/game). Whole-roster scope.

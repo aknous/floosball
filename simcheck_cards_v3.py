@@ -109,7 +109,9 @@ def main():
     from managers.cardEffectCalculator import calculateWeekCardBonuses, aggregateMultFactors
     from managers.cardEffects import (
         rebuildPrimaryParams, STREAK_CONFIGS, EFFECT_CATEGORY, EFFECT_REGISTRY, EFFECT_EDITION_TIER,
+        _getRosterPlayersByPosition,
     )
+    from database.models import Player
 
     sm = getattr(app, 'seasonManager', None) or container.getService('season_manager')
     pm = getattr(app, 'playerManager', None) or container.getService('player_manager')
@@ -178,19 +180,85 @@ def main():
             if cfg and not cfg.get('isWeekly', False):
                 ctx.streakCounts[eq.id] = REP_STREAK_COUNT
 
+    # Player position/rating, queried once — buildProjectionContext leaves the
+    # roster position/team/rating maps EMPTY, so any card that reads them
+    # (stack, backfield, sleeper, sniper, mismatch, spectacle, eminence, ...)
+    # silently reads zeros. enrichCtx fills them from the DB + weekPlayerStats.
+    playerPos = {}
+    playerRat = {}
+    for p in session.query(Player).all():
+        playerPos[p.id] = p.position
+        playerRat[p.id] = p.player_rating
+
+    def enrichCtx(ctx):
+        for pid in (ctx.rosterPlayerIds or set()):
+            if pid in playerPos:
+                ctx.rosterPlayerPositions[pid] = playerPos[pid]
+            if pid in playerRat:
+                ctx.rosterPlayerRatings[pid] = playerRat[pid]
+            ps = (ctx.weekPlayerStats or {}).get(pid) or {}
+            tid = ps.get('teamId')
+            if tid:
+                ctx.rosterPlayerTeamIds[pid] = tid
+            # neutral performance baseline (overperform cards read 0 over-rating)
+            ctx.playerPerformanceRatings.setdefault(pid, playerRat.get(pid, 75))
+
+    # Per-card "condition active" overrides — force each conditional card's
+    # trigger to a representative level so we measure its PAYOFF-when-active.
+    # (Trigger frequency is a separate design lever; this isolates payoff.)
+    def _condCloser(ctx):
+        for pid in (ctx.rosterPlayerIds or set()):
+            ps = (ctx.weekPlayerStats or {}).get(pid)
+            if ps:
+                ps['q4FantasyPoints'] = 0.25 * (ps.get('fantasyPoints', 0) or 0)
+
+    def _condSniper(ctx):
+        for pid in _getRosterPlayersByPosition(ctx, 5):
+            ps = (ctx.weekPlayerStats or {}).setdefault(pid, {})
+            ks = ps.setdefault('kicking_stats', {})
+            ks['fg40plus'] = max(ks.get('fg40plus', 0) or 0, 2)
+
+    def _condSameTeam(qbPos, otherPos):
+        def fn(ctx):
+            qb = _getRosterPlayersByPosition(ctx, qbPos)
+            other = _getRosterPlayersByPosition(ctx, otherPos)
+            if qb and other:
+                t = ctx.rosterPlayerTeamIds.get(qb[0]) or 1
+                ctx.rosterPlayerTeamIds[other[0]] = t
+        return fn
+
+    def _setAttr(attr, val):
+        def fn(ctx):
+            setattr(ctx, attr, val)
+        return fn
+
+    COND = {
+        'closer': _condCloser,
+        'sniper': _condSniper,
+        'stack': _condSameTeam(1, 3),            # QB + WR same team
+        'backfield_buddies': _condSameTeam(1, 2),  # QB + RB same team
+        'loyalty_bonus': _setAttr('favoriteTeamStreak', 4),
+        'stockpiler': _setAttr('unusedSwaps', 4),
+        'house_money': _setAttr('favoriteTeamUpsetWins', 4),
+    }
+
     def freshCtx(uid):
         c = buildProjectionContext(session, uid, season, args.week, sm, pm)
         if c is None:
             return None
         applyWeekState(c, c.userFavoriteTeamId, args.week, teamGames, byWeek, eloByTeam)
+        enrichCtx(c)
         return c
 
-    def handValue(uid, cards):
+    def handValue(uid, cards, mutate=None):
         """cards: list of either 'ename' or (ename, posOverride). Returns
-        (FP-equiv value, floobits) for a FRESH ctx (no cross-call bleed)."""
+        (FP-equiv value, floobits) for a FRESH ctx (no cross-call bleed).
+        `mutate(ctx)` runs after enrichment to force a condition active."""
         ctx = freshCtx(uid)
         if ctx is None:
             return 0.0, 0.0
+        if mutate:
+            mutate(ctx)
         enames = [c[0] if isinstance(c, tuple) else c for c in cards]
         eqs = [equip(*(c if isinstance(c, tuple) else (c,))) for c in cards]
         base = getattr(ctx, 'weekRawFP', 0) or 0
@@ -264,8 +332,9 @@ def main():
         else:
             sub = list(subEffects)
             card = ename
-        baseV, baseF = handValue(uid, sub)
-        fullV, fullF = handValue(uid, sub + [card])
+        mutate = COND.get(ename)  # force this card's condition active, if it has one
+        baseV, baseF = handValue(uid, sub, mutate=mutate)
+        fullV, fullF = handValue(uid, sub + [card], mutate=mutate)
         return fullV - baseV, fullF - baseF
 
     acc = {e: {'cat': category(e), 'v': [], 'f': []} for e in byEffect}
@@ -302,10 +371,14 @@ def main():
                        id(SUB_DIVERSE): 'diverse'}.get(id(SUBSTRATE.get(ename, DEFAULT_SUB)[0]), 'fp')
             sch = SUBSTRATE.get(ename, DEFAULT_SUB)[1]
             tag = subName + (f"/{sch}" if sch else '')
+            if ename in COND:
+                tag += ' [cond-active]'
             print(f"{ename:22} {ed:12} {mv:8.1f} {mx:8.1f} {mf:7.1f}  {tag}")
         print()
     print("val = avg marginal added to its substrate hand. max = best context. floob = marginal floobits.")
     print("FP/FPx/Floobit standalone cards use a plain FP substrate; synergy cards use a tailored one.")
+    print("[cond-active] = measured with the card's condition forced on (payoff-when-active);")
+    print("roster position/team/rating maps are now populated (were empty in projection ctx).")
     session.close()
 
 
