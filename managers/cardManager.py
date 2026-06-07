@@ -1097,7 +1097,6 @@ class CardManager:
                 add("Avg", f"{k.get('fgAvg')} yd")
         return {
             "season": season,
-            "gamesPlayed": row.games_played or 0,
             "fantasyPoints": row.fantasy_points or 0,
             "lines": lines,
         }
