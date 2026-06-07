@@ -1538,9 +1538,12 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round(1 + (0.105 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2),
                 "growthPerTick": round((0.052 + rn * 0.0021) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "snowball_fight":
+        # Band pass (v2): the hot streak was paying ~27 FP at a 3-week streak —
+        # 5-6x weaker than the cold-streak cards, which is backwards (winning
+        # should reward more than losing). Lifted to ~60 FP @ streak 3.
         return {"rewardType": "fp",
-                "baseReward": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1),
-                "growthPerTick": round((6.75 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
+                "baseReward": round((45.0 + rn * 1.0) * editionScale * _BAL_FP_MULT, 1),
+                "growthPerTick": round((15.0 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "fairweather_fan":
         # Floobits output — leave untouched
         return {"rewardType": "floobits",
@@ -1581,18 +1584,19 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "baseReward": round((40.5 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1),
                 "growthPerTick": round((27.0 + rn * 0.69) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "quiet_storm":
+        # Band pass (v2): was ~153 FP at a 3-week streak, >2x the prismatic band.
+        # Lifted floor lowered so cold streaks land ~85 @ streak 3, ~120 @ 6 —
+        # still a premium over the hot streak for the risk of a cold roster.
         return {"rewardType": "fp",
-                "baseReward": round((94.5 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
-                "growthPerTick": round((54.0 + rn * 1.35) * editionScale * _BAL_FP_MULT, 1)}
+                "baseReward": round((75.0 + rn * 1.65) * editionScale * _BAL_FP_MULT, 1),
+                "growthPerTick": round((17.5 + rn * 0.39) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "drought":
-        # Builder values halved again (next-season tightening): the original
-        # post-Balatro values still let Drought peak above 500 FP after
-        # ~10-week streaks, which carried forward when the streak restarted.
-        # New values cap a comparable peak around ~260 FP — still rewarding
-        # for a deep cold spell, no longer single-card-runs-the-week.
+        # Band pass (v2): was ~133 FP at a 3-week streak. Brought into line with
+        # quiet_storm — lands ~85 @ streak 3, ~120 @ 6. (Prior tightening still
+        # left it ~2x the prismatic band; this is the band-coherent value.)
         return {"rewardType": "fp",
-                "baseReward": round((68.0 + rn * 1.50) * editionScale * _BAL_FP_MULT, 1),
-                "growthPerTick": round((40.0 + rn * 1.00) * editionScale * _BAL_FP_MULT, 1)}
+                "baseReward": round((75.0 + rn * 1.65) * editionScale * _BAL_FP_MULT, 1),
+                "growthPerTick": round((17.5 + rn * 0.39) * editionScale * _BAL_FP_MULT, 1)}
     # ── Prognostication cards ─────────────────────────────────────────
     if effectName == "nose_picker":
         # Log-tapered streak — pays for showing up to Prognostications each
