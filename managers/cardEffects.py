@@ -1107,7 +1107,11 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
         # Floobits output — leave untouched
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
     if effectName == "stacked_deck":
-        return {"perCardMult": round((0.315 + rn * 0.0105) * editionScale * _BAL_FPX_MULT, 2)}
+        # Exponential by design ("multiply the multipliers"), but the old
+        # perCardMult (~0.24 @ r75) gave +136% on a full 4-FPx hand, which made
+        # "stack every multiplier" the dominant meta. Pulled down to ~0.17 so a
+        # 4-FPx hand lands ~+85% — still a strong diamond, no longer auto-win.
+        return {"perCardMult": round((0.225 + rn * 0.0075) * editionScale * _BAL_FPX_MULT, 2)}
     # ── Trigger-Chain Effects (second pass) ──
     if effectName == "copycat":
         return {"rewardType": "fp", "_noParams": True}
