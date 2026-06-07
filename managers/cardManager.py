@@ -560,31 +560,53 @@ class CardManager:
                     tierNote = f"Tier {tier}: +{fp} FP"
             else:
                 # Scale the STORED params (drift-free) by the builder's own
-                # per-key ratio. A rebuild at edScale vs edScale x tierMult tells
-                # us, per param, how it moves with tier: additive output params
-                # scale by ~tierMult; INVERSE params (e.g. fat_cat's floobitsPerFP,
-                # which goes DOWN as the card gets stronger) scale by their true
-                # ratio; thresholds/counts don't move (ratio 1, skipped). Mult-
-                # value keys scale the DELTA (keep the 1.0 base). Then derive the
-                # *Delta display keys the templates use (xMultDelta, rewardDelta...).
+                # per-key behavior. OUTPUT params are detected with a 2x probe
+                # (a true threshold/count doesn't move with editionScale; an
+                # output param does). Output params then scale:
+                #   - mult-value keys -> scale the DELTA (keep the 1.0 base)
+                #   - INVERSE params (fat_cat's floobitsPerFP, which goes DOWN as
+                #     the card gets stronger) -> scale by their builder ratio
+                #   - normal additive -> scale by tierMult directly and show a
+                #     decimal, so small integers (e.g. 2 Floobits/reception) move
+                #     visibly instead of int-rounding flat.
                 edScale = effectConfig.get("editionScale", 1.0)
                 baseR = rebuildPrimaryParams(effectName, template.player_rating, edScale) or {}
                 tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
+                bigR = rebuildPrimaryParams(effectName, template.player_rating, edScale * 2.0) or {}
                 MULT_VAL = {"xMultValue", "baseXMult", "baseMult", "enhancedMult", "maxMult", "q4MultFactor"}
                 rewardIsMult = effectName in ("bandwagon", "stack", "backfield_buddies", "full_roster")
+
+                def _fmt(v):
+                    if float(v).is_integer():
+                        return int(v)
+                    a = abs(v)
+                    # tiny per-unit FPx (e.g. vagabond ~0.02/swap) needs 3 dp so
+                    # adjacent tiers don't round to the same 2-dp value
+                    if a < 0.1:
+                        return round(v, 3)
+                    return round(v, 2) if a < 1 else round(v, 1)
+
                 scaled = dict(primary)
                 for k, bv in baseR.items():
-                    tv = tierR.get(k)
+                    bigv = bigR.get(k)
                     sv = scaled.get(k)
-                    if isinstance(bv, (int, float)) and isinstance(tv, (int, float)) and isinstance(sv, (int, float)) and bv != tv:
-                        if k in MULT_VAL or (k == "rewardValue" and rewardIsMult) \
-                                or (k == "baseReward" and scaled.get("rewardType") == "mult" and sv >= 1.0):
-                            scaled[k] = round(1 + (sv - 1) * tierMult, 2)  # scale the FPx delta
-                        else:
-                            ratio = (tv / bv) if bv else tierMult           # inverse-safe
-                            scaled[k] = int(round(sv * ratio)) if isinstance(sv, int) else round(sv * ratio, 2)
-                    elif k == "gates" and isinstance(bv, list) and isinstance(scaled.get(k), list) and bv != tv:
-                        scaled[k] = [{**g, "fp": round(g.get("fp", 0) * tierMult, 1)} for g in scaled[k]]
+                    if k == "gates" and isinstance(bv, list) and isinstance(sv, list) and bigv != bv:
+                        scaled[k] = [{**g, "fp": _fmt(g.get("fp", 0) * tierMult)} for g in sv]
+                        continue
+                    if not (isinstance(bv, (int, float)) and isinstance(sv, (int, float))):
+                        continue
+                    # Only scale params that respond to editionScale (output), not
+                    # thresholds/counts (which the 2x probe leaves unchanged).
+                    if not isinstance(bigv, (int, float)) or bv == bigv:
+                        continue
+                    if k in MULT_VAL or (k == "rewardValue" and rewardIsMult) \
+                            or (k == "baseReward" and scaled.get("rewardType") == "mult" and sv >= 1.0):
+                        scaled[k] = round(1 + (sv - 1) * tierMult, 2)  # scale the FPx delta
+                    elif bigv < bv:                                     # inverse param
+                        tv = tierR.get(k, bv)
+                        scaled[k] = _fmt(sv * ((tv / bv) if bv else tierMult))
+                    else:                                              # normal additive output
+                        scaled[k] = _fmt(sv * tierMult)
                 _FULL_MULT = {
                     "xMultValue": "xMultDelta", "baseXMult": "baseXDelta",
                     "baseMult": "baseDelta", "enhancedMult": "enhancedDelta",
