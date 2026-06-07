@@ -7312,6 +7312,14 @@ def getCardCollection(
                 continue
             data = cardManager.serializeCard(card, currentSeason)
             data["isEquipped"] = card.id in equippedCardIds
+            # Vaulted cards drop their effect and become keepsakes — attach the
+            # player's stat line for the season the card is from (back of card).
+            if data.get("vaulted") and tpl.player_id:
+                stats = cardManager.buildPlayerSeasonStats(
+                    session, tpl.player_id, tpl.season_created, tpl.position,
+                )
+                if stats:
+                    data["playerStats"] = stats
             result.append(data)
 
         # Sort. Default "recent" = newest first (highest id). All sorts keep a

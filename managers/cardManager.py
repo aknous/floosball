@@ -1057,6 +1057,51 @@ class CardManager:
         session.flush()
         return self.serializeCard(card, currentSeason)
 
+    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int):
+        """High-level stat line for a vaulted card's back — the player's numbers
+        for the season the card is from. A vaulted card drops its effect and
+        becomes a keepsake, so the back shows who the player actually was that
+        year. Returns None if no stats were recorded that season."""
+        from database.models import PlayerSeasonStats
+        row = session.query(PlayerSeasonStats).filter_by(
+            player_id=playerId, season=season,
+        ).first()
+        if not row:
+            return None
+        lines = []
+        def add(label, value):
+            lines.append({"label": label, "value": value})
+        if position == 1:  # QB
+            add("Pass Yds", row.passing_yards or 0)
+            add("Pass TD", row.passing_tds or 0)
+            add("INT", row.passing_ints or 0)
+            if (row.rushing_yards or 0) > 0:
+                add("Rush Yds", row.rushing_yards)
+        elif position == 2:  # RB
+            add("Rush Yds", row.rushing_yards or 0)
+            add("Rush TD", row.rushing_tds or 0)
+            add("Rec", row.receptions or 0)
+            add("Rec Yds", row.receiving_yards or 0)
+        elif position in (3, 4):  # WR / TE
+            add("Rec", row.receptions or 0)
+            add("Rec Yds", row.receiving_yards or 0)
+            add("Rec TD", row.receiving_tds or 0)
+        elif position == 5:  # K
+            k = row.kicking_stats or {}
+            add("FG", f"{k.get('fgs', 0)}/{k.get('fgAtt', 0)}")
+            if k.get('fgPerc'):
+                add("FG%", k.get('fgPerc'))
+            if k.get('xps'):
+                add("XP", k.get('xps'))
+            if k.get('fgAvg'):
+                add("Avg", f"{k.get('fgAvg')} yd")
+        return {
+            "season": season,
+            "gamesPlayed": row.games_played or 0,
+            "fantasyPoints": row.fantasy_points or 0,
+            "lines": lines,
+        }
+
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 
     def openPack(self, session, userId: int, packTypeId: int, currentSeason: int,
