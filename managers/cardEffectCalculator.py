@@ -910,7 +910,7 @@ def calculateWeekCardBonuses(
                     continue
                 for f in fields:
                     if f in stats and isinstance(stats[f], (int, float)):
-                        stats[f] = int(stats[f] * yardMult)
+                        stats[f] = int(round(stats[f] * yardMult))
 
     if "sharpshooter" in equippedNames:
         fgMult = _ampFactor("sharpshooter", 2.0, "fgMult")
@@ -920,11 +920,11 @@ def calculateWeekCardBonuses(
                 continue
             for f in ("fgs", "fgYards"):
                 if f in kStats and isinstance(kStats[f], (int, float)):
-                    kStats[f] = int(kStats[f] * fgMult)
+                    kStats[f] = int(round(kStats[f] * fgMult))
 
     if "doubler" in equippedNames:
         tdMult = _ampFactor("doubler", 2.0, "tdMult")
-        ctx.rosterTotalTds = int((ctx.rosterTotalTds or 0) * tdMult)
+        ctx.rosterTotalTds = int(round((ctx.rosterTotalTds or 0) * tdMult))
         for ps in (ctx.weekPlayerStats or {}).values():
             for catKey, tdKey in [
                 ("passing_stats", "tds"),
@@ -933,11 +933,11 @@ def calculateWeekCardBonuses(
             ]:
                 stats = ps.get(catKey)
                 if isinstance(stats, dict) and tdKey in stats and isinstance(stats[tdKey], (int, float)):
-                    stats[tdKey] = int(stats[tdKey] * tdMult)
+                    stats[tdKey] = int(round(stats[tdKey] * tdMult))
         # Walk Off reads q4ScoringPlays — keep the amp consistent there too.
         for ps in (ctx.weekPlayerStats or {}).values():
             if "q4ScoringPlays" in ps and isinstance(ps["q4ScoringPlays"], (int, float)):
-                ps["q4ScoringPlays"] = int(ps["q4ScoringPlays"] * tdMult)
+                ps["q4ScoringPlays"] = int(round(ps["q4ScoringPlays"] * tdMult))
 
     # Pre-pass: Alchemy converts roster K FGs into TDs for other cards'
     # tallies (Cornucopia, Touchdown Piñata, etc.). Must run before any
