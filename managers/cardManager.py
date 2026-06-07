@@ -818,13 +818,14 @@ class CardManager:
         return ((card.card_template.effect_config or {}).get("effectName") or "")
 
     def _tierUpgradeCost(self, card, toTier: int) -> int:
-        """Floobit cost to level a card INTO toTier (2-4), edition-scaled."""
+        """Floobit cost to level a card INTO toTier (2-4), edition-scaled and
+        rounded to the nearest 10 so costs read clean (not 94 / 312)."""
         from constants import CARD_TIER_UPGRADE_COST, CARD_TIER_EDITION_COST_MULT
         base = CARD_TIER_UPGRADE_COST.get(toTier)
         if base is None:
             return 0
         edMult = CARD_TIER_EDITION_COST_MULT.get(card.card_template.edition, 1.0)
-        return int(round(base * edMult))
+        return int(round(base * edMult / 10.0)) * 10
 
     def getUpgradeInfo(self, session, userId: int, targetCardId: int,
                        currentSeason: int) -> dict:

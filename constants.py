@@ -502,7 +502,7 @@ CARD_TIER_DIVIDEND_FLOOBITS = {1: 0, 2: 8, 3: 18, 4: 30}
 # Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
 # the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
 # a day-one rush (the same-effect duplicate requirement is the primary gate).
-CARD_TIER_UPGRADE_COST = {2: 40, 3: 120, 4: 350}
+CARD_TIER_UPGRADE_COST = {2: 80, 3: 250, 4: 600}
 CARD_TIER_EDITION_COST_MULT = {
     "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
 }
