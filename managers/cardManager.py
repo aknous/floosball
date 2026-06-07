@@ -1086,11 +1086,10 @@ class CardManager:
             add("INT", row.passing_ints or 0)
             if (row.rushing_yards or 0) > 0:
                 add("Rush Yds", row.rushing_yards)
-        elif position == 2:  # RB
+        elif position == 2:  # RB — no receiving game in this sim
             add("Rush Yds", row.rushing_yards or 0)
             add("Rush TD", row.rushing_tds or 0)
-            add("Rec", row.receptions or 0)
-            add("Rec Yds", row.receiving_yards or 0)
+            add("Rush Att", row.rushing_attempts or 0)
         elif position in (3, 4):  # WR / TE
             add("Rec", row.receptions or 0)
             add("Rec Yds", row.receiving_yards or 0)
