@@ -616,10 +616,11 @@ def _computeCardPass(
             CARD_TIER_MULT, CARD_TIER_DIVIDEND_FP, CARD_TIER_DIVIDEND_FLOOBITS,
         )
         prim = effectConfig.get("primary") or {}
-        # Structural = produces NO own output (delivers value by mutating other
-        # cards or setting a flag). Chance amplifiers (providence, catalyst) DO
-        # have own output (FPx / Floobits), so they self-report and scale.
-        isStructural = prim.get("isAmplifier") or prim.get("isAdvantage")
+        # Flat dividend only for binary meta cards with no scalable knob
+        # (advantage). Amplifiers scale their STRENGTH param instead (conductor's
+        # %, doubler/surveyor/sharpshooter's mult — handled where they're applied),
+        # and chance amplifiers (providence/catalyst) self-report / scale too.
+        isStructural = prim.get("isAdvantage")
         if isStructural:
             edition = template.edition or "base"
             if effectConfig.get("outputType") == "floobits":
@@ -817,9 +818,13 @@ def calculateWeekCardBonuses(
             ctx.hasAdvantage = True
         if effectName == "catalyst":
             primary = ec.get("primary", {})
-            fpPer1Pct = primary.get("fpPer1Pct", 12)
+            from managers.cardEffects import tierScaledStrength
+            from constants import CARD_TIER_MULT
+            _t = getattr(eq.user_card, "tier", 1) or 1
+            _scaled = tierScaledStrength("catalyst", primary, CARD_TIER_MULT.get(_t, 1.0))
+            fpPer1Pct = _scaled.get("fpPer1Pct", primary.get("fpPer1Pct", 12))
             baseline = primary.get("baseline", 55)
-            maxBoost = primary.get("maxBoost", 0.10)
+            maxBoost = _scaled.get("maxBoost", primary.get("maxBoost", 0.10))
             rosterFP = ctx.weekRawFP
             if rosterFP > baseline:
                 boost = min(maxBoost, (rosterFP - baseline) / fpPer1Pct / 100)
@@ -877,7 +882,22 @@ def calculateWeekCardBonuses(
         for eq in firstPassCards
     }
 
+    # Each amplifier's multiplier scales with its upgrade tier (strength, not a
+    # flat dividend) — read the base mult from the card's primary, scale by tier.
+    def _ampFactor(name, baseMult, paramKey):
+        from constants import CARD_TIER_MULT
+        from managers.cardEffects import tierScaledStrength
+        eq = next((e for e in firstPassCards
+                   if (e.user_card.card_template.effect_config or {}).get("effectName") == name), None)
+        if eq is None:
+            return baseMult
+        prim = (eq.user_card.card_template.effect_config or {}).get("primary", {}) or {}
+        tier = getattr(eq.user_card, "tier", 1) or 1
+        scaled = tierScaledStrength(name, prim, CARD_TIER_MULT.get(tier, 1.0))
+        return scaled.get(paramKey, prim.get(paramKey, baseMult))
+
     if "surveyor" in equippedNames:
+        yardMult = _ampFactor("surveyor", 1.5, "yardMult")
         for ps in (ctx.weekPlayerStats or {}).values():
             for catKey, fields in [
                 ("passing_stats", ("passYards",)),
@@ -890,19 +910,21 @@ def calculateWeekCardBonuses(
                     continue
                 for f in fields:
                     if f in stats and isinstance(stats[f], (int, float)):
-                        stats[f] = int(stats[f] * 1.5)
+                        stats[f] = int(stats[f] * yardMult)
 
     if "sharpshooter" in equippedNames:
+        fgMult = _ampFactor("sharpshooter", 2.0, "fgMult")
         for ps in (ctx.weekPlayerStats or {}).values():
             kStats = ps.get("kicking_stats")
             if not isinstance(kStats, dict):
                 continue
             for f in ("fgs", "fgYards"):
                 if f in kStats and isinstance(kStats[f], (int, float)):
-                    kStats[f] = int(kStats[f] * 2)
+                    kStats[f] = int(kStats[f] * fgMult)
 
     if "doubler" in equippedNames:
-        ctx.rosterTotalTds = int((ctx.rosterTotalTds or 0) * 2)
+        tdMult = _ampFactor("doubler", 2.0, "tdMult")
+        ctx.rosterTotalTds = int((ctx.rosterTotalTds or 0) * tdMult)
         for ps in (ctx.weekPlayerStats or {}).values():
             for catKey, tdKey in [
                 ("passing_stats", "tds"),
@@ -911,11 +933,11 @@ def calculateWeekCardBonuses(
             ]:
                 stats = ps.get(catKey)
                 if isinstance(stats, dict) and tdKey in stats and isinstance(stats[tdKey], (int, float)):
-                    stats[tdKey] = int(stats[tdKey] * 2)
+                    stats[tdKey] = int(stats[tdKey] * tdMult)
         # Walk Off reads q4ScoringPlays — keep the amp consistent there too.
         for ps in (ctx.weekPlayerStats or {}).values():
             if "q4ScoringPlays" in ps and isinstance(ps["q4ScoringPlays"], (int, float)):
-                ps["q4ScoringPlays"] = int(ps["q4ScoringPlays"] * 2)
+                ps["q4ScoringPlays"] = int(ps["q4ScoringPlays"] * tdMult)
 
     # Pre-pass: Alchemy converts roster K FGs into TDs for other cards'
     # tallies (Cornucopia, Touchdown Piñata, etc.). Must run before any
@@ -1078,7 +1100,13 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
     for eq in (equippedCards or []):
         ec = (eq.user_card.card_template.effect_config or {})
         if ec.get("effectName") == "conductor":
-            boostPct = (ec.get("primary", {}) or {}).get("boostPct", 20)
+            prim = ec.get("primary", {}) or {}
+            boostPct = prim.get("boostPct", 20)
+            # Boost % scales with the Conductor card's upgrade tier.
+            from constants import CARD_TIER_MULT
+            from managers.cardEffects import tierScaledStrength
+            tier = getattr(eq.user_card, "tier", 1) or 1
+            boostPct = tierScaledStrength("conductor", prim, CARD_TIER_MULT.get(tier, 1.0)).get("boostPct", boostPct)
             break
     matched = bool(conductorBreakdown.matchMultiplied)
     if matched:

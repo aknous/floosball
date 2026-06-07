@@ -545,9 +545,9 @@ class CardManager:
             tierMult = CARD_TIER_MULT.get(tier, 1.0)
             tierRoman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(tier, str(tier))
             prim = effectConfig.get("primary") or {}
-            # Structural = no own output. Chance amplifiers (providence, catalyst)
-            # have own output (FPx / Floobits) and scale, so they're NOT structural.
-            isStructural = prim.get("isAmplifier") or prim.get("isAdvantage")
+            # Flat dividend only for binary meta cards (advantage). Amplifiers scale
+            # their strength param instead (merged in the else branch).
+            isStructural = prim.get("isAdvantage")
             baseDetail = effectConfig.get("detail") or ""
             if isStructural:
                 # No own output — show the flat per-tier dividend (edition-banded).
@@ -621,6 +621,12 @@ class CardManager:
                 if scaled.get("rewardType") == "mult" and isinstance(scaled.get("baseReward"), (int, float)) \
                         and scaled["baseReward"] >= 1.0:
                     scaled["baseRewardDelta"] = round(scaled["baseReward"] - 1, 2)
+                # Amplifier strength params (conductor %, doubler/surveyor/
+                # sharpshooter mult, catalyst chance ramp) aren't editionScale-
+                # driven, so the loop above misses them — overlay their tier-scaled
+                # values so the description matches the calc.
+                from managers.cardEffects import tierScaledStrength
+                scaled.update(tierScaledStrength(effectName, primary, tierMult))
                 scaled["posLabel"] = primary.get("posLabel", POSITION_LABELS.get(template.position, "??"))
                 _rebuildTemplates(scaled)
                 # If nothing in the text changed (Copycat copies dynamically,
