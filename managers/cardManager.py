@@ -560,27 +560,36 @@ class CardManager:
                 if note and baseDetail:
                     effectConfig["detail"] = baseDetail + note
             else:
-                # Scale the STORED output params by tierMult (not a fresh rebuild)
-                # so display == calc on any card and the progression is smooth.
-                # Output params are the ones that scale with editionScale — found
-                # by diffing a rebuild at edScale vs edScale x tierMult; thresholds
-                # / counts / chances stay equal and are left untouched.
+                # Rebuild the display params at editionScale x tierMult. The
+                # builders express outputs as base + delta*editionScale (FP /
+                # Floobits) and 1 + delta*editionScale (FPx), so this scales the
+                # amounts AND the FPx deltas correctly while leaving thresholds
+                # alone. Then derive the *Delta display keys (xMultDelta,
+                # rewardDelta, maxDelta, ...) the templates use, exactly as
+                # _buildEffectConfig does at seed time — without that, FPx cards
+                # show no change. (Upgradeable cards are current-season, so the
+                # rebuild matches the stored values — no drift.)
                 edScale = effectConfig.get("editionScale", 1.0)
-                baseR = rebuildPrimaryParams(effectName, template.player_rating, edScale) or {}
-                tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
-                scaled = dict(primary)
-                for k, bv in baseR.items():
-                    tv = tierR.get(k)
-                    if isinstance(bv, (int, float)) and isinstance(tv, (int, float)) and bv != tv:
-                        sv = scaled.get(k)
-                        if isinstance(sv, (int, float)):
-                            scaled[k] = round(sv * tierMult, 1)
-                    elif k == "gates" and isinstance(bv, list) and bv != tv and isinstance(scaled.get(k), list):
-                        scaled[k] = [{**g, "fp": round(g.get("fp", 0) * tierMult, 1)} for g in scaled[k]]
-                scaled["posLabel"] = primary.get(
-                    "posLabel", POSITION_LABELS.get(template.position, "??"))
-                _rebuildTemplates(scaled)
-                # If nothing in the text scaled (e.g. Copycat copies dynamically,
+                scaled = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult)
+                if isinstance(scaled, dict):
+                    _FULL_MULT = {
+                        "xMultValue": "xMultDelta", "baseXMult": "baseXDelta",
+                        "baseMult": "baseDelta", "enhancedMult": "enhancedDelta",
+                        "maxMult": "maxDelta", "q4MultFactor": "q4MultDelta",
+                    }
+                    for fk, dk in _FULL_MULT.items():
+                        if isinstance(scaled.get(fk), (int, float)):
+                            scaled[dk] = round(scaled[fk] - 1, 2)
+                    if effectName in ("bandwagon", "stack", "backfield_buddies", "full_roster") \
+                            and isinstance(scaled.get("rewardValue"), (int, float)) and scaled["rewardValue"] >= 1.0:
+                        scaled["rewardDelta"] = round(scaled["rewardValue"] - 1, 2)
+                    if scaled.get("rewardType") == "mult" and isinstance(scaled.get("baseReward"), (int, float)) \
+                            and scaled["baseReward"] >= 1.0:
+                        scaled["baseRewardDelta"] = round(scaled["baseReward"] - 1, 2)
+                    scaled["posLabel"] = primary.get(
+                        "posLabel", POSITION_LABELS.get(template.position, "??"))
+                    _rebuildTemplates(scaled)
+                # If nothing in the text changed (e.g. Copycat copies dynamically,
                 # Odometer's detail shows yard thresholds not the FP), the tier
                 # boost would be invisible — spell out the multiplier instead.
                 if (effectConfig.get("detail") or "") == baseDetail:
