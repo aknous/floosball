@@ -86,6 +86,9 @@ def parseArgs():
     p.add_argument('--eval', default=None,
                    help='comma-separated hand, e.g. "td_pinata,on_fire,fortitude"; '
                         'force position with "effect:POS" (1-5)')
+    p.add_argument('--batchfile', default=None,
+                   help='file of "label: card,card,..." lines (# comments). Evaluates '
+                        'every hand in one boot and reports a comparison.')
     return p.parse_args()
 
 
@@ -272,6 +275,75 @@ def main():
 
     userIds = [r.user_id for r in session.query(FantasyRoster).filter_by(season=season).all() if r.players]
     userIds = userIds[:args.users]
+
+    def parseHand(spec):
+        cards = []
+        for tok in spec.split(','):
+            tok = tok.strip()
+            if not tok:
+                continue
+            if ':' in tok:
+                e, p = tok.split(':', 1)
+                cards.append((e.strip(), int(p)))
+            else:
+                cards.append(tok)
+        return cards
+
+    def evalHand(cards):
+        """Avg over user contexts: (totalFP, totalFloob, {effect: leave-one-out FP},
+        {effect: leave-one-out floob})."""
+        enames = [c[0] if isinstance(c, tuple) else c for c in cards]
+        fullV, fullF = [], []
+        looV = {e: [] for e in enames}
+        looF = {e: [] for e in enames}
+        for uid in userIds:
+            v, f = handValue(uid, cards)
+            fullV.append(v); fullF.append(f)
+            for i, e in enumerate(enames):
+                wv, wf = handValue(uid, cards[:i] + cards[i + 1:])
+                looV[e].append(v - wv); looF[e].append(f - wf)
+        mean = lambda x: statistics.mean(x) if x else 0.0
+        return (mean(fullV), mean(fullF),
+                {e: mean(looV[e]) for e in enames}, {e: mean(looF[e]) for e in enames})
+
+    # ── BATCH MODE ──────────────────────────────────────────────────────────
+    if args.batchfile:
+        from collections import defaultdict
+        hands = []
+        for raw in open(args.batchfile):
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            label, _, spec = line.partition(':')
+            cards = parseHand(spec)
+            enames = [c[0] if isinstance(c, tuple) else c for c in cards]
+            bad = [e for e in enames if e not in byEffect]
+            if bad:
+                print(f"  (skip '{label.strip()}': unknown {bad})"); continue
+            hands.append((label.strip(), cards))
+        print(f"Season {season} · week {args.week} · {len(userIds)} user contexts · {len(hands)} hands\n")
+        results = []
+        carryFP = defaultdict(list)
+        for label, cards in hands:
+            tv, tf, looV, looF = evalHand(cards)
+            top = max(looV.items(), key=lambda kv: kv[1]) if looV else ('-', 0)
+            results.append((label, cards, tv, tf, looV, looF, top))
+            for e, v in looV.items():
+                carryFP[e].append(v)
+            print(f"  {label} done", flush=True)
+        results.sort(key=lambda r: r[2], reverse=True)
+        print("\n━━ HANDS RANKED BY TOTAL FP " + "━" * 20)
+        print(f"{'#':>2} {'hand':32} {'cards':>5} {'totFP':>8} {'totFloob':>8}  top card (leave-1-out)")
+        for i, (label, cards, tv, tf, looV, looF, top) in enumerate(results, 1):
+            print(f"{i:2} {label:32} {len(cards):5} {tv:8.0f} {tf:8.0f}  {top[0]} ({top[1]:.0f})")
+        print("\n━━ CARRY CARDS (highest avg leave-1-out across hands they appear in) " + "━" * 4)
+        rank = sorted(((e, statistics.mean(v), len(v)) for e, v in carryFP.items() if v),
+                      key=lambda x: x[1], reverse=True)
+        print(f"{'effect':22} {'edition':12} {'avgLOO':>7} {'hands':>6}")
+        for e, avg, n in rank[:20]:
+            print(f"{e:22} {EFFECT_EDITION_TIER.get(e,'?'):12} {avg:7.1f} {n:6}")
+        session.close()
+        return
 
     # ── EVAL MODE ───────────────────────────────────────────────────────────
     if args.eval:
