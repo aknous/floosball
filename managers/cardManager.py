@@ -541,21 +541,24 @@ class CardManager:
                 CARD_TIER_MULT, CARD_TIER_DIVIDEND_FP, CARD_TIER_DIVIDEND_FLOOBITS,
             )
             from managers.cardEffects import rebuildPrimaryParams
+            tierMult = CARD_TIER_MULT.get(tier, 1.0)
             prim = effectConfig.get("primary") or {}
             isStructural = (prim.get("isAmplifier") or prim.get("isAdvantage")
                             or prim.get("isChanceAmplifier"))
+            baseDetail = effectConfig.get("detail") or ""
             if isStructural:
+                # No own output — show the flat per-tier dividend it now produces.
                 divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(tier, 0)
                 divFP = CARD_TIER_DIVIDEND_FP.get(tier, 0.0)
                 if outputType == "floobits" and divFloob:
-                    note = f" Tier {tier}: +{divFloob} Floobits."
+                    note = f" Tier {tier}: now also pays +{divFloob} Floobits."
                 elif divFP:
                     fp = int(divFP) if float(divFP).is_integer() else divFP
-                    note = f" Tier {tier}: +{fp} FP."
+                    note = f" Tier {tier}: now also pays +{fp} FP."
                 else:
                     note = ""
-                if note and effectConfig.get("detail"):
-                    effectConfig["detail"] = effectConfig["detail"] + note
+                if note and baseDetail:
+                    effectConfig["detail"] = baseDetail + note
             else:
                 # Scale the STORED output params by tierMult (not a fresh rebuild)
                 # so display == calc on any card and the progression is smooth.
@@ -563,7 +566,6 @@ class CardManager:
                 # by diffing a rebuild at edScale vs edScale x tierMult; thresholds
                 # / counts / chances stay equal and are left untouched.
                 edScale = effectConfig.get("editionScale", 1.0)
-                tierMult = CARD_TIER_MULT.get(tier, 1.0)
                 baseR = rebuildPrimaryParams(effectName, template.player_rating, edScale) or {}
                 tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
                 scaled = dict(primary)
@@ -578,6 +580,11 @@ class CardManager:
                 scaled["posLabel"] = primary.get(
                     "posLabel", POSITION_LABELS.get(template.position, "??"))
                 _rebuildTemplates(scaled)
+                # If nothing in the text scaled (e.g. Copycat copies dynamically,
+                # Odometer's detail shows yard thresholds not the FP), the tier
+                # boost would be invisible — spell out the multiplier instead.
+                if (effectConfig.get("detail") or "") == baseDetail:
+                    effectConfig["detail"] = (baseDetail + f" Tier {tier}: ×{tierMult:g} output.").strip()
 
         # Edition secondary bonuses removed — edition now determines effect tier only
         effectConfig.pop("secondary", None)
