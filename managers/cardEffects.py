@@ -1396,7 +1396,12 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "dark_horse":
         return {"perStarMult": round((0.168 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "vagabond":
-        return {"perSwapXMult": round((0.038 + rn * 0.0013) * editionScale * _BAL_FPX_MULT, 2)}
+        # Was uncapped (mult = 1 + perSwap × swapsUsed), giving a runaway ~4.6x
+        # ceiling for heavy swappers — every comparable FPx card has a maxMult.
+        # Added a ~+62% cap so swapping is rewarded without a holo out-scaling
+        # prismatic FPx at the tail.
+        return {"perSwapXMult": round((0.038 + rn * 0.0013) * editionScale * _BAL_FPX_MULT, 2),
+                "maxMult": round(1 + (1.0 + rn * 0.0167) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "synergy":
         # FPx delta per pair of roster players from the same team.
         return {"rewardType": "mult",
@@ -1416,7 +1421,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "parlay":
         return {"rewardType": "mult",
                 "baseXMult": 1.0,
-                "coef": round((0.63 + rn * 0.024) * editionScale * _BAL_FPX_MULT, 3),
+                "coef": round((0.50 + rn * 0.019) * editionScale * _BAL_FPX_MULT, 3),
                 "kPoints": 80}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.42 * editionScale * _BAL_FPX_MULT, 1)}
 
@@ -1581,8 +1586,8 @@ def _buildStreakParams(effectName, playerRating, editionScale):
                 "gates": [
                     {"yards": 200, "fp": round((10.0 + rn * 0.16) * editionScale * _BAL_FP_MULT, 1)},
                     {"yards": 400, "fp": round((20.0 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 600, "fp": round((33.0 + rn * 0.50) * editionScale * _BAL_FP_MULT, 1)},
-                    {"yards": 800, "fp": round((46.0 + rn * 0.66) * editionScale * _BAL_FP_MULT, 1)},
+                    {"yards": 600, "fp": round((28.0 + rn * 0.44) * editionScale * _BAL_FP_MULT, 1)},
+                    {"yards": 800, "fp": round((38.0 + rn * 0.56) * editionScale * _BAL_FP_MULT, 1)},
                 ]}
     if effectName == "leg_day":
         return {"rewardType": "fp",
@@ -4184,10 +4189,11 @@ def _computeHumility(primary, ctx, cardPlayerId, eqId):
 def _computeVagabond(primary, ctx, cardPlayerId, eqId):
     """FPx per roster swap used this season — inverse of Stockpiler."""
     perSwap = primary.get("perSwapXMult", 0.03)
+    maxMult = primary.get("maxMult", 1.6)
     swapsUsed = ctx.seasonSwapsUsed
     if swapsUsed <= 0:
         return EffectResult(multBonus=1.0, equation="No swaps used this season")
-    mult = round(1.0 + perSwap * swapsUsed, 3)
+    mult = round(min(1.0 + perSwap * swapsUsed, maxMult), 3)
     delta = round(mult - 1.0, 2)
     eq = f"+{perSwap}/swap × {swapsUsed} swaps used = +{delta:.2f} FPx"
     return EffectResult(multBonus=mult, equation=eq)
