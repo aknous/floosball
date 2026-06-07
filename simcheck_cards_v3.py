@@ -83,6 +83,7 @@ def parseArgs():
     p.add_argument('--season', type=int, default=None)
     p.add_argument('--users', type=int, default=6)
     p.add_argument('--week', type=int, default=14, help='representative week to sample')
+    p.add_argument('--tier', type=int, default=1, help='upgrade tier (1-4) applied to every card')
     p.add_argument('--eval', default=None,
                    help='comma-separated hand, e.g. "td_pinata,on_fire,fortitude"; '
                         'force position with "effect:POS" (1-5)')
@@ -174,7 +175,7 @@ def main():
         ft.effect_config = dict(byEffect[ename].effect_config)
         if posOverride is not None:
             ft.position = posOverride
-        return _wrapUserCardAsEquipped(_wrapTemplateAsUserCard(ft))
+        return _wrapUserCardAsEquipped(_wrapTemplateAsUserCard(ft, tier=args.tier))
 
     def setStreaks(ctx, eqs, enames):
         ctx.streakCounts = {}
