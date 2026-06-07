@@ -1187,6 +1187,7 @@ class UserCard(Base):
     tier: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # Upgrade tier 1-4 (I-IV); leveled via same-effect duplicate + Floobits
     vaulted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Permanent collection — irreversible; can't equip/sell/combine
     vaulted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When it was vaulted
+    vault_position: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Manual sort order within the Vault (null = unset)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")

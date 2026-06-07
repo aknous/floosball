@@ -216,6 +216,12 @@ def _runPendingMigrations():
             logger.info("  Migration: added user_cards.vaulted_at")
         except Exception:
             conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vault_position INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vault_position")
+        except Exception:
+            conn.rollback()
 
         # Card Showcase — seasonal 8-slot featured-card payout (vaulted cards).
         try:

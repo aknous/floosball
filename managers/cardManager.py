@@ -657,6 +657,7 @@ class CardManager:
             "tier": getattr(userCard, "tier", 1) or 1,
             "tierNote": tierNote,
             "vaulted": bool(getattr(userCard, "vaulted", False)),
+            "vaultPosition": getattr(userCard, "vault_position", None),
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,
@@ -1056,6 +1057,47 @@ class CardManager:
         card.vaulted_at = datetime.utcnow()
         session.flush()
         return self.serializeCard(card, currentSeason)
+
+    def trashVaultedCard(self, session, userId: int, cardId: int) -> dict:
+        """Permanently remove (trash) a vaulted card. Unlike selling, there's no
+        Floobit return — it's a delete. Only vaulted cards can be trashed this
+        way (un-vaulted cards are sold instead). Cleans up any showcase/equipped
+        rows that reference it first so the delete can't orphan FK rows."""
+        from database.repositories.card_repositories import UserCardRepository
+        from database.models import ShowcaseSlot, EquippedCard
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds([cardId], userId)
+        if not cards:
+            raise ValueError("Card not found or not owned")
+        card = cards[0]
+        if not getattr(card, "vaulted", False):
+            raise ValueError("Only vaulted cards can be trashed here")
+        session.query(ShowcaseSlot).filter(
+            ShowcaseSlot.user_id == userId, ShowcaseSlot.user_card_id == cardId,
+        ).delete(synchronize_session=False)
+        session.query(EquippedCard).filter(
+            EquippedCard.user_id == userId, EquippedCard.user_card_id == cardId,
+        ).delete(synchronize_session=False)
+        cardRepo.delete(card)
+        session.flush()
+        return {"trashed": True, "cardId": cardId}
+
+    def reorderVault(self, session, userId: int, orderedCardIds: list) -> dict:
+        """Set the manual sort order of vaulted cards. `orderedCardIds` is the
+        full desired order; each card's vault_position becomes its index. Only
+        the user's own vaulted cards are repositioned."""
+        from database.repositories.card_repositories import UserCardRepository
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds(orderedCardIds, userId)
+        byId = {c.id: c for c in cards}
+        pos = 0
+        for cardId in orderedCardIds:
+            card = byId.get(cardId)
+            if card and getattr(card, "vaulted", False):
+                card.vault_position = pos
+                pos += 1
+        session.flush()
+        return {"reordered": pos}
 
     def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int):
         """High-level stat line for a vaulted card's back — the player's numbers

@@ -7274,7 +7274,7 @@ def getCardCollection(
     """Get user's card collection with optional filters and sorting.
 
     `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
-    `sort`: recent | rarity | rating | tier | name | position.
+    `sort`: recent | rarity | rating | tier | name | team | position | manual.
     """
     from database.connection import get_session
     from database.repositories.card_repositories import UserCardRepository
@@ -7338,8 +7338,17 @@ def getCardCollection(
             result.sort(key=lambda d: (_num(d, "tier"), _num(d, "id")), reverse=True)
         elif sort == "name":
             result.sort(key=lambda d: ((d.get("playerName") or "").lower(), _num(d, "id")))
+        elif sort == "team":
+            result.sort(key=lambda d: (_num(d, "teamId"), (d.get("playerName") or "").lower(), _num(d, "id")))
         elif sort == "position":
             result.sort(key=lambda d: (_num(d, "position"), -_num(d, "id")))
+        elif sort == "manual":
+            # Vault manual order: vault_position asc, unset (None) last, then newest.
+            result.sort(key=lambda d: (
+                0 if isinstance(d.get("vaultPosition"), int) else 1,
+                d.get("vaultPosition") if isinstance(d.get("vaultPosition"), int) else 0,
+                -_num(d, "id"),
+            ))
         else:  # "recent"
             result.sort(key=lambda d: _num(d, "id"), reverse=True)
 
@@ -7543,6 +7552,69 @@ def vaultCard(cardId: int, user: _User = Depends(_getCurrentUser)):
             raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
         logger.error(f"Card vault failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to vault card")
+    finally:
+        session.close()
+
+
+@app.delete("/api/cards/{cardId}/vault")
+def trashVaultedCard(cardId: int, user: _User = Depends(_getCurrentUser)):
+    """Remove a card from the Vault — permanently trashes it (no Floobit return).
+    Only vaulted cards can be trashed here; un-vaulted cards are sold instead."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+    from managers import achievementManager as _am
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.trashVaultedCard(session, user.id, cardId)
+        try:
+            _am.syncCuratorProgress(session, user.id, currentSeason)
+        except Exception:
+            pass
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card trash failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove card from vault")
+    finally:
+        session.close()
+
+
+class ReorderVaultRequest(BaseModel):
+    orderedCardIds: List[int]
+
+
+@app.put("/api/cards/vault/order")
+def reorderVault(req: ReorderVaultRequest, user: _User = Depends(_getCurrentUser)):
+    """Persist the manual order of the user's vaulted cards (drag-to-arrange).
+    Send the full desired order; each card's position becomes its index."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+    session = get_session()
+    try:
+        result = cardManager.reorderVault(session, user.id, req.orderedCardIds)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Vault reorder failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reorder vault")
     finally:
         session.close()
 
