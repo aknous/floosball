@@ -192,6 +192,16 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Card upgrade tier on user_cards (1-4 / I-IV) — leveled via same-effect
+        # duplicate + Floobits; scales the card's output (or a flat dividend for
+        # structural/no-output cards).
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN tier INTEGER DEFAULT 1 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.tier")
+        except Exception:
+            conn.rollback()
+
         # Drop legacy coaches.team_id column (single-source-of-truth refactor).
         # The new code uses Team.coach_id exclusively. Important: do NOT
         # overwrite a Team.coach_id that already points at a real Coach row —

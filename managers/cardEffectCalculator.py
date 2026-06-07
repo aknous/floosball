@@ -200,6 +200,7 @@ class CardBreakdown:
     """Per-card breakdown for display and persistence."""
     slotNumber: int = 0
     edition: str = ""
+    tier: int = 1            # Upgrade tier (1-4 / I-IV); display as "Showoff III"
     playerId: int = 0
     playerName: str = ""
 
@@ -604,6 +605,31 @@ def _computeCardPass(
         if primary.multBonus > 1:
             primary.multBonus = 1 + (primary.multBonus - 1) * threshold
 
+    # 1b. Card upgrade tier. Self-reporting cards scale their own output by
+    # CARD_TIER_MULT; structural cards (amplifiers / meta — no own output) get a
+    # flat per-tier dividend instead, since scaling zero does nothing. Tier lives
+    # on the UserCard instance (defaults to 1 = no change). Applied before the
+    # match/modifier pass so the bonus composes with them like any other output.
+    tier = getattr(getattr(eq, "user_card", None), "tier", 1) or 1
+    if tier > 1:
+        from constants import (
+            CARD_TIER_MULT, CARD_TIER_DIVIDEND_FP, CARD_TIER_DIVIDEND_FLOOBITS,
+        )
+        prim = effectConfig.get("primary") or {}
+        isStructural = (prim.get("isAmplifier") or prim.get("isAdvantage")
+                        or prim.get("isChanceAmplifier"))
+        if isStructural:
+            if effectConfig.get("outputType") == "floobits":
+                primary.floobits += CARD_TIER_DIVIDEND_FLOOBITS.get(tier, 0)
+            else:
+                primary.fpBonus += CARD_TIER_DIVIDEND_FP.get(tier, 0.0)
+        else:
+            m = CARD_TIER_MULT.get(tier, 1.0)
+            primary.fpBonus *= m
+            primary.floobits = int(round(primary.floobits * m))
+            if primary.multBonus > 1:
+                primary.multBonus = 1 + (primary.multBonus - 1) * m
+
     # 2. Apply match bonus and weekly modifier
     isMatch = cardPlayerId in ctx.rosterPlayerIds
     mod = ctx.activeModifier
@@ -701,6 +727,7 @@ def _computeCardPass(
     return CardBreakdown(
         slotNumber=eq.slot_number,
         edition=cardEdition,
+        tier=tier,
         playerId=cardPlayerId,
         playerName=template.player_name,
         effectName=effectName,

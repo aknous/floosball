@@ -486,6 +486,27 @@ SHOP_REROLL_COST_INCREMENT = 10  # Each reroll costs 10 more than the last
 THEMED_PACK_REROLL_BASE_COST = 50
 THEMED_PACK_REROLL_COST_INCREMENT = 30
 
+# ---- Card Upgrade Tiers (Level Up) ----
+# Cards level I->IV (tier 1->4) by feeding ONE same-effect duplicate + Floobits.
+# Same effect ⇒ same edition (effects are edition-locked), so the duplicate is a
+# free rarity gate. Tier is per-instance, seasonal (expires with the card unless
+# vaulted). Tune all of the below via simcheck_cards_v3.
+CARD_TIER_MAX = 4
+# Single value multiplier on a card's OWN output (FP / FPx-delta / Floobits).
+CARD_TIER_MULT = {1: 1.0, 2: 1.15, 3: 1.32, 4: 1.5}
+# Structural cards produce no own output (isAmplifier / isAdvantage /
+# isChanceAmplifier) — leveling them adds a flat per-tier dividend instead.
+# FP for FP/FPx-side cards, Floobits for floobit-output ones (e.g. catalyst).
+CARD_TIER_DIVIDEND_FP = {1: 0.0, 2: 15.0, 3: 35.0, 4: 55.0}
+CARD_TIER_DIVIDEND_FLOOBITS = {1: 0, 2: 8, 3: 18, 4: 30}
+# Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
+# the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
+# a day-one rush (the same-effect duplicate requirement is the primary gate).
+CARD_TIER_UPGRADE_COST = {2: 40, 3: 120, 4: 350}
+CARD_TIER_EDITION_COST_MULT = {
+    "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
+}
+
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
 
