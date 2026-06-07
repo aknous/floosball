@@ -545,9 +545,9 @@ class CardManager:
             tierMult = CARD_TIER_MULT.get(tier, 1.0)
             tierRoman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(tier, str(tier))
             prim = effectConfig.get("primary") or {}
-            # Flat dividend only for binary meta cards (advantage). Amplifiers scale
-            # their strength param instead (merged in the else branch).
-            isStructural = prim.get("isAdvantage")
+            # No flat dividend anymore — every amplifier/meta card scales a real
+            # knob (advantage's roll count is handled in the strength merge below).
+            isStructural = False
             baseDetail = effectConfig.get("detail") or ""
             if isStructural:
                 # No own output — show the flat per-tier dividend (edition-banded).
@@ -627,6 +627,8 @@ class CardManager:
                 # values so the description matches the calc.
                 from managers.cardEffects import tierScaledStrength
                 scaled.update(tierScaledStrength(effectName, primary, tierMult))
+                if effectName == "advantage":  # roll count scales with tier (I=2, IV=5)
+                    scaled["rollCount"] = tier + 1
                 scaled["posLabel"] = primary.get("posLabel", POSITION_LABELS.get(template.position, "??"))
                 _rebuildTemplates(scaled)
                 # If nothing in the text changed (Copycat copies dynamically,

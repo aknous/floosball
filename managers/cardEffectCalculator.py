@@ -123,7 +123,8 @@ class CardCalcContext:
     gamesActive: bool = False  # True during live games, False at week end
     chanceBonus: float = 0.0  # Sum of Providence + Catalyst + innate synergy + Fortunate modifier
     chanceCardCount: int = 0  # Number of chance cards in hand (for synergy effects)
-    hasAdvantage: bool = False  # Advantage card: roll twice, take better result
+    hasAdvantage: bool = False  # Advantage card present
+    advantageRolls: int = 2     # Advantage rolls N times (tier+1), keeps the best
     kickerSeasonFgMisses: int = 0  # Season-long kicker FG misses (for Good Neighbor)
 
     # Streak card infrastructure
@@ -492,14 +493,14 @@ def computeEminenceData(session, season: int, currentWeek: int) -> tuple:
 
 
 class _AdvantageRNG:
-    """Wraps an RNG so .random() returns the better of two rolls (lower = better for chance cards)."""
-    def __init__(self, rng: _random.Random):
+    """Wraps an RNG so .random() returns the best of N rolls (lower = better for
+    chance cards). N = Advantage's roll count, which scales with its tier."""
+    def __init__(self, rng: _random.Random, rolls: int = 2):
         self._rng = rng
+        self._rolls = max(2, int(rolls))
 
     def random(self) -> float:
-        r1 = self._rng.random()
-        r2 = self._rng.random()
-        return min(r1, r2)
+        return min(self._rng.random() for _ in range(self._rolls))
 
 
 class _ProjectionRNG:
@@ -530,7 +531,7 @@ def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _
     seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
     rng = _random.Random(seedHash)
     if getattr(ctx, 'hasAdvantage', False):
-        return _AdvantageRNG(rng)
+        return _AdvantageRNG(rng, getattr(ctx, 'advantageRolls', 2))
     return rng
 
 
@@ -616,11 +617,10 @@ def _computeCardPass(
             CARD_TIER_MULT, CARD_TIER_DIVIDEND_FP, CARD_TIER_DIVIDEND_FLOOBITS,
         )
         prim = effectConfig.get("primary") or {}
-        # Flat dividend only for binary meta cards with no scalable knob
-        # (advantage). Amplifiers scale their STRENGTH param instead (conductor's
-        # %, doubler/surveyor/sharpshooter's mult — handled where they're applied),
-        # and chance amplifiers (providence/catalyst) self-report / scale too.
-        isStructural = prim.get("isAdvantage")
+        # No card uses a flat dividend anymore — every amplifier/meta card scales
+        # a real knob: conductor's %, doubler/surveyor/sharpshooter's mult, catalyst's
+        # chance ramp, advantage's roll count (all handled where they're applied).
+        isStructural = False
         if isStructural:
             edition = template.edition or "base"
             if effectConfig.get("outputType") == "floobits":
@@ -816,6 +816,9 @@ def calculateWeekCardBonuses(
             chanceCardCount += 1
         if effectName == "advantage":
             ctx.hasAdvantage = True
+            # Roll count scales with Advantage's tier: tier I = 2, IV = 5.
+            _at = getattr(eq.user_card, "tier", 1) or 1
+            ctx.advantageRolls = max(ctx.advantageRolls, _at + 1)
         if effectName == "catalyst":
             primary = ec.get("primary", {})
             from managers.cardEffects import tierScaledStrength

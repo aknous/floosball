@@ -905,7 +905,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "eminence": "+{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
-    "advantage": "All chance cards roll for their bonus twice and keeps the better result",
+    "advantage": "All chance cards roll {rollCount}x for their bonus, keeping the best result",
     "catalyst": "+1% chance boost per {fpPer1Pct} roster FP above {baseline}. Max +{maxBoostDisplay}%. Also pays {baseFloobits} Floobits",
     # ── Strategy-Warping Effects ──
     "alchemy": "+{perFgBonusFP} bonus FP per FG by your roster's K. FGs also count as roster TDs for other cards in your hand.",
@@ -1300,7 +1300,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
                 "isChanceEffect": True}
     # ── Meta: Advantage (no direct payout)
     if effectName == "advantage":
-        return {"isAdvantage": True}
+        return {"isAdvantage": True, "rollCount": 2}
     # ── Strategy-Warping: Opulence (FP per Floobits balance)
     if effectName == "fat_cat":
         floobitsPerFP = max(1, int(round((3 - rn * 0.02) / editionScale)))
