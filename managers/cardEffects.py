@@ -1205,7 +1205,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "garbage_time":
         return {"perPlayerFP": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "loyalty_bonus":
-        return {"perStreakFP": round((20.4 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
+        # Buff pass: favorite-team-win-streak fan card read ~6 FP in normal play.
+        # Raised per-streak-game value so a hot favorite team pays off properly.
+        return {"perStreakFP": round((32.0 + rn * 1.0) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "windfall":
         # Windfall outputs floobits, not FP — leave untouched.
         return {"perPlayerFloobits": round((5 + rn * 0.20) * editionScale)}
@@ -1251,8 +1253,11 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
         return {"perTdFP": round((27 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1)}
     # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
     if effectName == "crescendo":
-        return {"baseFP": round((27.0 + rn * 0.42) * editionScale * _BAL_FP_MULT, 1),
-                "bonusFP": round((54.0 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
+        # Buff pass (pool diversity): guaranteed floor was ~17 FP, far under the
+        # prismatic band and the lowest of any chance card. Raised baseFP floor
+        # to ~49 (in line with scrappy/martyr) so a miss is still respectable.
+        return {"baseFP": round((75.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 1),
+                "bonusFP": round((90.0 + rn * 2.4) * editionScale * _BAL_FP_MULT, 1),
                 "baseChance": 15, "chanceStep": 12,
                 "isChanceEffect": True}
     # ── Yardage chance: Traverse (end-of-game roll scaled by yards)
@@ -1334,13 +1339,17 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
                 "enhancedFP": round((120 + rn * 2.04) * editionScale * _BAL_FP_MULT, 1),
                 "isChanceEffect": True}
     if effectName == "stockpiler":
-        return {"perSwapXMult": round((0.084 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2)}
+        # Buff pass: rewards hoarding unused swaps; per-swap mult was too small to
+        # make the "patience" build competitive. ~0.065 -> ~0.10 per unused swap.
+        return {"perSwapXMult": round((0.13 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "hometown_hero":
         # Floobits output — left alone
         return {"rewardFloobits": int(round((15 + rn * 0.6) * editionScale))}
     if effectName == "providence":
         # chanceBonus is a probability bump — not scaled by FP/FPx dials.
-        return {"baseMult": round(1 + 0.105 * editionScale * _BAL_FPX_MULT, 2),
+        # Buff pass: base mult was only +5%, leaving it weak in any hand without
+        # several chance cards. Raised to +15% so it carries its own weight.
+        return {"baseMult": round(1 + 0.30 * editionScale * _BAL_FPX_MULT, 2),
                 "chanceBonus": round(0.12 * editionScale, 2),
                 "isChanceAmplifier": True}
     if effectName == "house_money":
@@ -1370,7 +1379,9 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     if effectName == "stack":
         return {"rewardValue": round(1 + (0.315 + rn * 0.0168) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "backfield_buddies":
-        return {"rewardValue": round((0.315 + rn * 0.0168) * editionScale * _BAL_FPX_MULT, 2)}
+        # Buff pass: RB+WR same-team FPx delta was low for a holo; raised so the
+        # roster-pairing condition is worth building toward.
+        return {"rewardValue": round((0.52 + rn * 0.0168) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "eminence":
         # FPx delta per roster player ranked top-10 at their position (by
         # season FP/game). Whole-roster scope.
@@ -1606,8 +1617,8 @@ def _buildStreakParams(effectName, playerRating, editionScale):
         # Log-tapered streak — pays for showing up to Prognostications each
         # week. Trigger is fully under user control (no luck/skill).
         return {"rewardType": "fp",
-                "baseReward": round((15.0 + rn * 0.36) * editionScale * _BAL_FP_MULT, 1),
-                "coef": round((27.0 + rn * 0.90) * editionScale * _BAL_FP_MULT, 2),
+                "baseReward": round((30.0 + rn * 0.72) * editionScale * _BAL_FP_MULT, 1),
+                "coef": round((48.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 2),
                 "kStreak": 4,
                 # growthPerTick kept for legacy callers / detail template
                 "growthPerTick": 0}
