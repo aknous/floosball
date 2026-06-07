@@ -3787,6 +3787,46 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to award playoff bracket prizes: {e}")
 
+    def _awardShowcasePayouts(self) -> None:
+        """End-of-season Card Showcase payout: each user's featured showcase is
+        graded (F→S) and pays out flat Floobits. Guarded against double-payment
+        by a per-season transaction check. The showcase is season-scoped, so it
+        clears automatically — next season simply has no featured slots."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.models import CurrencyTransaction, ShowcaseSlot
+            from managers import showcaseManager
+            season = self.currentSeason.seasonNumber
+            txType = 'showcase_payout'
+            s = _gs()
+            try:
+                if s.query(CurrencyTransaction.id).filter(
+                        CurrencyTransaction.transaction_type == txType,
+                        CurrencyTransaction.season == season).first():
+                    logger.info("Showcase payouts already awarded — skipping")
+                    return
+                userIds = [r[0] for r in s.query(ShowcaseSlot.user_id).filter(
+                    ShowcaseSlot.season == season).distinct().all()]
+                cur = CurrencyRepository(s)
+                paid = 0
+                for userId in userIds:
+                    infos = showcaseManager.loadShowcaseCardInfos(s, userId, season)
+                    if not infos:
+                        continue
+                    result = showcaseManager.evaluate(infos, season)
+                    payout = result["payout"]
+                    if payout > 0:
+                        cur.addFunds(userId, payout, txType,
+                                     f"Showcase payout (grade {result['grade']})", season)
+                        paid += 1
+                s.commit()
+                logger.info(f"Showcase payouts awarded to {paid} users (S{season})")
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to award showcase payouts: {e}")
+
     async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate all playoff rounds.
 
@@ -4212,6 +4252,9 @@ class SeasonManager:
 
                 # Bracket challenge: final scoring + floobit prizes to top brackets.
                 self._awardPlayoffBracketPrizes()
+
+                # Card Showcase: grade each user's featured collection and pay out.
+                self._awardShowcasePayouts()
 
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)

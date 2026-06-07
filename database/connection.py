@@ -217,6 +217,27 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Card Showcase — seasonal 8-slot featured-card payout (vaulted cards).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS showcase_slots ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "slot_number INTEGER NOT NULL, "
+                "user_card_id INTEGER NOT NULL, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, slot_number))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_showcase_slots_user_season "
+                "ON showcase_slots (user_id, season)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured showcase_slots table")
+        except Exception:
+            conn.rollback()
+
         # Drop legacy coaches.team_id column (single-source-of-truth refactor).
         # The new code uses Team.coach_id exclusively. Important: do NOT
         # overwrite a Team.coach_id that already points at a real Coach row —

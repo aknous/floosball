@@ -7548,6 +7548,140 @@ def vaultCard(cardId: int, user: _User = Depends(_getCurrentUser)):
 
 
 # ============================================================================
+# THE SHOWCASE (seasonal collection payout)
+# ============================================================================
+
+
+def _buildShowcasePayload(session, cardManager, userId, currentSeason):
+    """Shared GET/PUT response: 8 slots (filled or null) + the live grade,
+    estimated payout, and named Active/Almost sets. The raw score is never
+    included — grade + payout + set names only."""
+    from database.models import ShowcaseSlot, UserCard
+    from managers import showcaseManager
+    from constants import SHOWCASE_SLOTS
+
+    rows = (
+        session.query(ShowcaseSlot)
+        .filter(ShowcaseSlot.user_id == userId, ShowcaseSlot.season == currentSeason)
+        .all()
+    )
+    bySlot = {r.slot_number: r for r in rows}
+    slots = []
+    infos = []
+    for slotNum in range(1, SHOWCASE_SLOTS + 1):
+        row = bySlot.get(slotNum)
+        cardData = None
+        if row:
+            uc = session.get(UserCard, row.user_card_id)
+            if uc and uc.card_template:
+                cardData = cardManager.serializeCard(uc, currentSeason)
+                tpl = uc.card_template
+                if tpl.player_id:
+                    stats = cardManager.buildPlayerSeasonStats(
+                        session, tpl.player_id, tpl.season_created, tpl.position)
+                    if stats:
+                        cardData["playerStats"] = stats
+                infos.append(showcaseManager.cardInfo(uc))
+        slots.append({"slotNumber": slotNum, "card": cardData})
+
+    score = showcaseManager.evaluate(infos, currentSeason)
+    return {
+        "slots": slots,
+        "slotCount": len([s for s in slots if s["card"]]),
+        "maxSlots": SHOWCASE_SLOTS,
+        "grade": score["grade"],
+        "estimatedPayout": score["payout"],
+        "activeSets": score["activeSets"],
+        "almostSets": score["almostSets"],
+        "season": currentSeason,
+    }
+
+
+@app.get("/api/cards/showcase")
+def getShowcase(user: _User = Depends(_getCurrentUser)):
+    """The user's seasonal Showcase: featured slots + live grade / payout / sets."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        return build_success_response(
+            _buildShowcasePayload(session, cardManager, user.id, currentSeason))
+    finally:
+        session.close()
+
+
+class ShowcaseSlotInput(BaseModel):
+    slotNumber: int
+    userCardId: int
+
+
+class SetShowcaseRequest(BaseModel):
+    slots: List[ShowcaseSlotInput]
+
+
+@app.put("/api/cards/showcase")
+def setShowcase(req: SetShowcaseRequest, user: _User = Depends(_getCurrentUser)):
+    """Replace the user's featured cards for the season. Only vaulted cards may
+    be featured. Send the full set of filled slots (empty slots omitted)."""
+    from database.connection import get_session
+    from database.models import ShowcaseSlot, UserCard
+    from managers.cardManager import CardManager
+    from constants import SHOWCASE_SLOTS
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    # Validate slot numbers + uniqueness
+    slotNums = [s.slotNumber for s in req.slots]
+    for n in slotNums:
+        if n < 1 or n > SHOWCASE_SLOTS:
+            raise HTTPException(status_code=400, detail=f"Invalid slot number: {n}")
+    if len(slotNums) != len(set(slotNums)):
+        raise HTTPException(status_code=400, detail="Duplicate slot numbers")
+    cardIds = [s.userCardId for s in req.slots]
+    if len(cardIds) != len(set(cardIds)):
+        raise HTTPException(status_code=400, detail="A card can't be featured in two slots")
+
+    session = get_session()
+    try:
+        # Every featured card must be owned by the user and vaulted
+        for s in req.slots:
+            uc = session.query(UserCard).filter_by(id=s.userCardId, user_id=user.id).first()
+            if not uc:
+                raise HTTPException(status_code=400, detail=f"Card {s.userCardId} not found")
+            if not getattr(uc, "vaulted", False):
+                raise HTTPException(status_code=400, detail="Only vaulted cards can be featured")
+
+        # Replace the whole selection for this season
+        session.query(ShowcaseSlot).filter(
+            ShowcaseSlot.user_id == user.id, ShowcaseSlot.season == currentSeason,
+        ).delete(synchronize_session=False)
+        for s in req.slots:
+            session.add(ShowcaseSlot(
+                user_id=user.id, season=currentSeason,
+                slot_number=s.slotNumber, user_card_id=s.userCardId,
+            ))
+        session.commit()
+        return build_success_response(
+            _buildShowcasePayload(session, cardManager, user.id, currentSeason))
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Set showcase failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update showcase")
+    finally:
+        session.close()
+
+
+# ============================================================================
 # EQUIPPED CARDS
 # ============================================================================
 
