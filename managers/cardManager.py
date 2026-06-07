@@ -1062,12 +1062,21 @@ class CardManager:
         for the season the card is from. A vaulted card drops its effect and
         becomes a keepsake, so the back shows who the player actually was that
         year. Returns None if no stats were recorded that season."""
-        from database.models import PlayerSeasonStats
+        from database.models import PlayerSeasonStats, Team
         row = session.query(PlayerSeasonStats).filter_by(
             player_id=playerId, season=season,
         ).first()
         if not row:
             return None
+        # Team the player actually suited up for that season (can differ from the
+        # card's current team after a trade / FA move).
+        teamName = None
+        teamColor = None
+        if row.team_id:
+            team = session.get(Team, row.team_id)
+            if team:
+                teamName = team.name
+                teamColor = team.color
         lines = []
         def add(label, value):
             lines.append({"label": label, "value": value})
@@ -1097,6 +1106,8 @@ class CardManager:
                 add("Avg", f"{k.get('fgAvg')} yd")
         return {
             "season": season,
+            "teamName": teamName,
+            "teamColor": teamColor,
             "fantasyPoints": row.fantasy_points or 0,
             "lines": lines,
         }
