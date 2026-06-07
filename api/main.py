@@ -7408,6 +7408,61 @@ def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+class LevelUpRequest(BaseModel):
+    offeringCardId: int
+
+
+@app.get("/api/cards/{cardId}/upgrade-info")
+def cardUpgradeInfo(cardId: int, user: _User = Depends(_getCurrentUser)):
+    """Tier, next-tier cost, and eligible same-effect duplicates to feed."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.getUpgradeInfo(session, user.id, cardId, currentSeason)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/{cardId}/level-up")
+def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurrentUser)):
+    """Level a card I->IV by spending Floobits + ONE same-effect duplicate."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.levelUpCard(session, user.id, cardId, req.offeringCardId,
+                                         currentSeason, currentWeek)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card level-up failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to level up card")
+    finally:
+        session.close()
+
+
 # ============================================================================
 # EQUIPPED CARDS
 # ============================================================================

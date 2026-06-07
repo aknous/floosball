@@ -212,7 +212,11 @@ CLASSIFICATION_VALUE_MULTIPLIERS = {
 
 
 def getCardValue(card, currentSeason: int) -> int:
-    """Get classification-aware value for a card. Used by The Combine operations."""
+    """Get classification- and tier-aware value for a card. Used by The Combine
+    operations and sell value. A leveled-up card is worth more: its tier's WORTH
+    is consumed when fed to the Combine (the tier isn't 'lost', it lifts the
+    result edition) and lifts sell value too."""
+    from constants import CARD_TIER_MULT
     isActive = card.card_template.season_created == currentSeason
     baseValue = getSellValue(card.card_template.edition, isActive=isActive)
     classification = card.card_template.classification or ""
@@ -220,7 +224,8 @@ def getCardValue(card, currentSeason: int) -> int:
     for tag, mult in CLASSIFICATION_VALUE_MULTIPLIERS.items():
         if tag in classification:
             multiplier *= mult
-    return max(1, int(baseValue * multiplier))
+    tierMult = CARD_TIER_MULT.get(getattr(card, "tier", 1) or 1, 1.0)
+    return max(1, int(baseValue * multiplier * tierMult))
 
 
 def computeRarityWeight(edition: str, playerRating: int) -> int:
@@ -542,6 +547,7 @@ class CardManager:
             "ratingStars": min(5, max(1, (template.player_rating - 60) // 8 + 1)),
             "position": template.position,
             "edition": template.edition,
+            "tier": getattr(userCard, "tier", 1) or 1,
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,
@@ -804,6 +810,108 @@ class CardManager:
             "resultEdition": resultEdition,
             "cardCount": len(cards),
         }
+
+    # ─── Card Upgrade Tiers (Level Up) ────────────────────────────────────────
+
+    @staticmethod
+    def _effectName(card) -> str:
+        return ((card.card_template.effect_config or {}).get("effectName") or "")
+
+    def _tierUpgradeCost(self, card, toTier: int) -> int:
+        """Floobit cost to level a card INTO toTier (2-4), edition-scaled."""
+        from constants import CARD_TIER_UPGRADE_COST, CARD_TIER_EDITION_COST_MULT
+        base = CARD_TIER_UPGRADE_COST.get(toTier)
+        if base is None:
+            return 0
+        edMult = CARD_TIER_EDITION_COST_MULT.get(card.card_template.edition, 1.0)
+        return int(round(base * edMult))
+
+    def getUpgradeInfo(self, session, userId: int, targetCardId: int,
+                       currentSeason: int) -> dict:
+        """Cost + eligible same-effect duplicates the UI can offer to feed."""
+        from database.repositories.card_repositories import UserCardRepository
+        from constants import CARD_TIER_MAX
+        cardRepo = UserCardRepository(session)
+        target = cardRepo.getByIds([targetCardId], userId)
+        if not target:
+            raise ValueError("Card not found or not owned")
+        target = target[0]
+        effect = self._effectName(target)
+        atMax = target.tier >= CARD_TIER_MAX
+        nextTier = target.tier + 1
+        # Eligible offerings: any OTHER owned card with the same effect.
+        offerings = [
+            c for c in cardRepo.getByUser(userId)
+            if c.id != target.id and self._effectName(c) == effect
+        ]
+        return {
+            "cardId": target.id,
+            "effectName": effect,
+            "tier": target.tier,
+            "maxTier": CARD_TIER_MAX,
+            "atMax": atMax,
+            "nextTier": None if atMax else nextTier,
+            "cost": None if atMax else self._tierUpgradeCost(target, nextTier),
+            "eligibleOfferings": [self.serializeCard(c, currentSeason) for c in offerings],
+        }
+
+    def levelUpCard(self, session, userId: int, targetCardId: int,
+                    offeringCardId: int, currentSeason: int,
+                    currentWeek: int = 0) -> dict:
+        """Level a card I->IV by consuming ONE same-effect duplicate + Floobits.
+
+        Same effect ⇒ same edition (effects are edition-locked), so the duplicate
+        is a free rarity gate. The duplicate is destroyed; the target gains +1 tier.
+        """
+        from database.models import CardUpgradeLog
+        from database.repositories.card_repositories import (
+            UserCardRepository, CurrencyRepository,
+        )
+        from constants import CARD_TIER_MAX
+
+        if targetCardId == offeringCardId:
+            raise ValueError("Target and offering must be different cards")
+
+        # Ownership + not-equipped-this-week (reuses Combine validation)
+        cards = self._validateUpgradeCards(session, userId,
+                                           [targetCardId, offeringCardId],
+                                           currentSeason, currentWeek)
+        byId = {c.id: c for c in cards}
+        target, offering = byId[targetCardId], byId[offeringCardId]
+
+        if target.tier >= CARD_TIER_MAX:
+            raise ValueError("Card is already at max tier")
+        if self._effectName(target) != self._effectName(offering):
+            raise ValueError("Offering must have the same effect as the target")
+
+        toTier = target.tier + 1
+        cost = self._tierUpgradeCost(target, toTier)
+
+        currencyRepo = CurrencyRepository(session)
+        result = currencyRepo.spendFunds(
+            userId, cost,
+            transactionType="card_level_up",
+            description=f"Leveled {self._effectName(target)} to tier {toTier}",
+            season=currentSeason,
+        )
+        if result is None:
+            raise ValueError("Insufficient Floobits")
+
+        target.tier = toTier
+        UserCardRepository(session).deleteBatch([offering])
+        session.add(CardUpgradeLog(
+            user_id=userId,
+            upgrade_type="level_up",
+            subject_user_card_id=target.id,
+            offering_user_card_ids=[offering.id],
+            # Level Up keeps the same template (only the instance's tier changes);
+            # point both at the target's template so the NOT NULL column is satisfied.
+            old_template_id=target.card_template_id,
+            new_template_id=target.card_template_id,
+            floobits_spent=cost,
+        ))
+        session.flush()
+        return self.serializeCard(target, currentSeason)
 
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 
