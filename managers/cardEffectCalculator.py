@@ -616,8 +616,10 @@ def _computeCardPass(
             CARD_TIER_MULT, CARD_TIER_DIVIDEND_FP, CARD_TIER_DIVIDEND_FLOOBITS,
         )
         prim = effectConfig.get("primary") or {}
-        isStructural = (prim.get("isAmplifier") or prim.get("isAdvantage")
-                        or prim.get("isChanceAmplifier"))
+        # Structural = produces NO own output (delivers value by mutating other
+        # cards or setting a flag). Chance amplifiers (providence, catalyst) DO
+        # have own output (FPx / Floobits), so they self-report and scale.
+        isStructural = prim.get("isAmplifier") or prim.get("isAdvantage")
         if isStructural:
             if effectConfig.get("outputType") == "floobits":
                 primary.floobits += CARD_TIER_DIVIDEND_FLOOBITS.get(tier, 0)
@@ -802,6 +804,11 @@ def calculateWeekCardBonuses(
         effectName = ec.get("effectName", "")
         if ec.get("isChanceAmplifier"):
             chanceAmp = ec.get("primary", {}).get("chanceBonus", 0)
+            # Tier scales the odds boost (Providence) too, matching its display.
+            t = getattr(getattr(eq, "user_card", None), "tier", 1) or 1
+            if t > 1 and chanceAmp:
+                from constants import CARD_TIER_MULT
+                chanceAmp = round(chanceAmp * CARD_TIER_MULT.get(t, 1.0), 3)
             ctx.chanceBonus += chanceAmp
         if ec.get("isChanceEffect"):
             chanceCardCount += 1

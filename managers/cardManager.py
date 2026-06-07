@@ -543,8 +543,9 @@ class CardManager:
             from managers.cardEffects import rebuildPrimaryParams
             tierMult = CARD_TIER_MULT.get(tier, 1.0)
             prim = effectConfig.get("primary") or {}
-            isStructural = (prim.get("isAmplifier") or prim.get("isAdvantage")
-                            or prim.get("isChanceAmplifier"))
+            # Structural = no own output. Chance amplifiers (providence, catalyst)
+            # have own output (FPx / Floobits) and scale, so they're NOT structural.
+            isStructural = prim.get("isAmplifier") or prim.get("isAdvantage")
             baseDetail = effectConfig.get("detail") or ""
             if isStructural:
                 # No own output — show the flat per-tier dividend it now produces.
@@ -560,38 +561,49 @@ class CardManager:
                 if note and baseDetail:
                     effectConfig["detail"] = baseDetail + note
             else:
-                # Rebuild the display params at editionScale x tierMult. The
-                # builders express outputs as base + delta*editionScale (FP /
-                # Floobits) and 1 + delta*editionScale (FPx), so this scales the
-                # amounts AND the FPx deltas correctly while leaving thresholds
-                # alone. Then derive the *Delta display keys (xMultDelta,
-                # rewardDelta, maxDelta, ...) the templates use, exactly as
-                # _buildEffectConfig does at seed time — without that, FPx cards
-                # show no change. (Upgradeable cards are current-season, so the
-                # rebuild matches the stored values — no drift.)
+                # Scale the STORED params (drift-free) by the builder's own
+                # per-key ratio. A rebuild at edScale vs edScale x tierMult tells
+                # us, per param, how it moves with tier: additive output params
+                # scale by ~tierMult; INVERSE params (e.g. fat_cat's floobitsPerFP,
+                # which goes DOWN as the card gets stronger) scale by their true
+                # ratio; thresholds/counts don't move (ratio 1, skipped). Mult-
+                # value keys scale the DELTA (keep the 1.0 base). Then derive the
+                # *Delta display keys the templates use (xMultDelta, rewardDelta...).
                 edScale = effectConfig.get("editionScale", 1.0)
-                scaled = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult)
-                if isinstance(scaled, dict):
-                    _FULL_MULT = {
-                        "xMultValue": "xMultDelta", "baseXMult": "baseXDelta",
-                        "baseMult": "baseDelta", "enhancedMult": "enhancedDelta",
-                        "maxMult": "maxDelta", "q4MultFactor": "q4MultDelta",
-                    }
-                    for fk, dk in _FULL_MULT.items():
-                        if isinstance(scaled.get(fk), (int, float)):
-                            scaled[dk] = round(scaled[fk] - 1, 2)
-                    if effectName in ("bandwagon", "stack", "backfield_buddies", "full_roster") \
-                            and isinstance(scaled.get("rewardValue"), (int, float)) and scaled["rewardValue"] >= 1.0:
-                        scaled["rewardDelta"] = round(scaled["rewardValue"] - 1, 2)
-                    if scaled.get("rewardType") == "mult" and isinstance(scaled.get("baseReward"), (int, float)) \
-                            and scaled["baseReward"] >= 1.0:
-                        scaled["baseRewardDelta"] = round(scaled["baseReward"] - 1, 2)
-                    scaled["posLabel"] = primary.get(
-                        "posLabel", POSITION_LABELS.get(template.position, "??"))
-                    _rebuildTemplates(scaled)
-                # If nothing in the text changed (e.g. Copycat copies dynamically,
-                # Odometer's detail shows yard thresholds not the FP), the tier
-                # boost would be invisible — spell out the multiplier instead.
+                baseR = rebuildPrimaryParams(effectName, template.player_rating, edScale) or {}
+                tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
+                MULT_VAL = {"xMultValue", "baseXMult", "baseMult", "enhancedMult", "maxMult", "q4MultFactor"}
+                rewardIsMult = effectName in ("bandwagon", "stack", "backfield_buddies", "full_roster")
+                scaled = dict(primary)
+                for k, bv in baseR.items():
+                    tv = tierR.get(k)
+                    sv = scaled.get(k)
+                    if isinstance(bv, (int, float)) and isinstance(tv, (int, float)) and isinstance(sv, (int, float)) and bv != tv:
+                        if k in MULT_VAL or (k == "rewardValue" and rewardIsMult) \
+                                or (k == "baseReward" and scaled.get("rewardType") == "mult" and sv >= 1.0):
+                            scaled[k] = round(1 + (sv - 1) * tierMult, 2)  # scale the FPx delta
+                        else:
+                            ratio = (tv / bv) if bv else tierMult           # inverse-safe
+                            scaled[k] = int(round(sv * ratio)) if isinstance(sv, int) else round(sv * ratio, 2)
+                    elif k == "gates" and isinstance(bv, list) and isinstance(scaled.get(k), list) and bv != tv:
+                        scaled[k] = [{**g, "fp": round(g.get("fp", 0) * tierMult, 1)} for g in scaled[k]]
+                _FULL_MULT = {
+                    "xMultValue": "xMultDelta", "baseXMult": "baseXDelta",
+                    "baseMult": "baseDelta", "enhancedMult": "enhancedDelta",
+                    "maxMult": "maxDelta", "q4MultFactor": "q4MultDelta",
+                }
+                for fk, dk in _FULL_MULT.items():
+                    if isinstance(scaled.get(fk), (int, float)):
+                        scaled[dk] = round(scaled[fk] - 1, 2)
+                if rewardIsMult and isinstance(scaled.get("rewardValue"), (int, float)) and scaled["rewardValue"] >= 1.0:
+                    scaled["rewardDelta"] = round(scaled["rewardValue"] - 1, 2)
+                if scaled.get("rewardType") == "mult" and isinstance(scaled.get("baseReward"), (int, float)) \
+                        and scaled["baseReward"] >= 1.0:
+                    scaled["baseRewardDelta"] = round(scaled["baseReward"] - 1, 2)
+                scaled["posLabel"] = primary.get("posLabel", POSITION_LABELS.get(template.position, "??"))
+                _rebuildTemplates(scaled)
+                # If nothing in the text changed (Copycat copies dynamically,
+                # Odometer lists yard thresholds), spell out the multiplier.
                 if (effectConfig.get("detail") or "") == baseDetail:
                     effectConfig["detail"] = (baseDetail + f" Tier {tier}: ×{tierMult:g} output.").strip()
 
