@@ -543,6 +543,7 @@ class CardManager:
             )
             from managers.cardEffects import rebuildPrimaryParams
             tierMult = CARD_TIER_MULT.get(tier, 1.0)
+            tierRoman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(tier, str(tier))
             prim = effectConfig.get("primary") or {}
             # Structural = no own output. Chance amplifiers (providence, catalyst)
             # have own output (FPx / Floobits) and scale, so they're NOT structural.
@@ -554,10 +555,10 @@ class CardManager:
                 divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(edition, {}).get(tier, 0)
                 divFP = CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
                 if outputType == "floobits" and divFloob:
-                    tierNote = f"Tier {tier}: +{divFloob} Floobits"
+                    tierNote = f"Tier {tierRoman}: +{divFloob} Floobits"
                 elif divFP:
                     fp = int(divFP) if float(divFP).is_integer() else divFP
-                    tierNote = f"Tier {tier}: +{fp} FP"
+                    tierNote = f"Tier {tierRoman}: +{fp} FP"
             else:
                 # Scale the STORED params (drift-free) by the builder's own
                 # per-key behavior. OUTPUT params are detected with a 2x probe
@@ -625,7 +626,7 @@ class CardManager:
                 # If nothing in the text changed (Copycat copies dynamically,
                 # Odometer lists yard thresholds), spell out the multiplier.
                 if (effectConfig.get("detail") or "") == baseDetail:
-                    tierNote = f"Tier {tier}: ×{tierMult:g} output"
+                    tierNote = f"Tier {tierRoman}: ×{tierMult:g} output"
 
         # Edition secondary bonuses removed — edition now determines effect tier only
         effectConfig.pop("secondary", None)
