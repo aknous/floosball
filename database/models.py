@@ -1184,6 +1184,7 @@ class UserCard(Base):
     acquired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     acquired_via: Mapped[str] = mapped_column(String(20), nullable=False)  # pack_standard, pack_premium, pack_elite, starter
     last_swap_grant_cycle: Mapped[int] = mapped_column(Integer, default=0)  # Tracks All-Pro swap bonus exhaustion per cycle
+    tier: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # Upgrade tier 1-4 (I-IV); leveled via same-effect duplicate + Floobits
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")

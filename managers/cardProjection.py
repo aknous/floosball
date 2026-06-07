@@ -1062,15 +1062,17 @@ def _wrapUserCardAsEquipped(userCard):
     return _FauxEquipped(userCard)
 
 
-def _wrapTemplateAsUserCard(template, fauxId: int = -1):
+def _wrapTemplateAsUserCard(template, fauxId: int = -1, tier: int = 1):
     """Wrap a CardTemplate in a UserCard-shaped object so projection logic
-    that expects userCard.card_template / userCard.id can run against
-    not-yet-owned templates (pack reveal, shop preview)."""
+    that expects userCard.card_template / userCard.id / userCard.tier can run
+    against not-yet-owned templates (pack reveal, shop preview). `tier` defaults
+    to 1 (not-yet-owned cards are tier I); pass a value to project an upgrade."""
     class _FauxUserCard:
-        __slots__ = ('id', 'card_template')
+        __slots__ = ('id', 'card_template', 'tier')
         def __init__(self, tpl):
             self.id = fauxId
             self.card_template = tpl
+            self.tier = tier
     return _FauxUserCard(template)
 
 

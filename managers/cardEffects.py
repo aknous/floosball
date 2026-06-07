@@ -177,6 +177,37 @@ def getEffectOutputType(effectName: str):
     if the effect's primary output is mixed/contextual."""
     return EFFECT_OUTPUT_TYPE.get(effectName)
 
+
+def tierScaledStrength(effectName: str, primary: dict, tierMult: float) -> dict:
+    """Tier-scaled STRENGTH params for amplifier/meta cards whose power lives in
+    a param that isn't editionScale-driven (so the normal tier scaling misses it).
+    Returns {paramKey: scaledValue} to override; used by both the calc (so the
+    effect actually strengthens) and serializeCard (so the description matches).
+      - conductor: boost % scales directly
+      - doubler/surveyor/sharpshooter: the count multiplier scales its DELTA
+      - catalyst: chance ramp gets steeper (fewer FP per 1%) with a higher cap
+    """
+    if not tierMult or tierMult == 1.0:
+        return {}
+    p = primary or {}
+    if effectName == "conductor":
+        return {"boostPct": int(round(p.get("boostPct", 20) * tierMult))}
+    if effectName == "doubler" and "tdMult" in p:
+        return {"tdMult": round(1 + (p["tdMult"] - 1) * tierMult, 2)}
+    if effectName == "surveyor" and "yardMult" in p:
+        return {"yardMult": round(1 + (p["yardMult"] - 1) * tierMult, 2)}
+    if effectName == "sharpshooter" and "fgMult" in p:
+        return {"fgMult": round(1 + (p["fgMult"] - 1) * tierMult, 2)}
+    if effectName == "catalyst":
+        out = {}
+        if "fpPer1Pct" in p:
+            out["fpPer1Pct"] = max(1, int(round(p["fpPer1Pct"] / tierMult)))
+        if "maxBoost" in p:
+            out["maxBoost"] = round(p["maxBoost"] * tierMult, 2)
+            out["maxBoostDisplay"] = int(round(out["maxBoost"] * 100))
+        return out
+    return {}
+
 # ─── Effect → Edition Tier Mapping ─────────────────────────────────────────
 # Each effect belongs to exactly one edition tier. Edition IS the rarity signal —
 # a Radiant card is exciting because it has a Radiant-tier effect, not because of
@@ -874,7 +905,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "eminence": "+{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
-    "advantage": "All chance cards roll for their bonus twice and keeps the better result",
+    "advantage": "All chance cards roll {rollCount}x for their bonus, keeping the best result",
     "catalyst": "+1% chance boost per {fpPer1Pct} roster FP above {baseline}. Max +{maxBoostDisplay}%. Also pays {baseFloobits} Floobits",
     # ── Strategy-Warping Effects ──
     "alchemy": "+{perFgBonusFP} bonus FP per FG by your roster's K. FGs also count as roster TDs for other cards in your hand.",
@@ -907,9 +938,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "loyalty": "+{perPlayerFP} FP per roster player still on roster from your first save this season.",
     "charmed": "+{perTriggerFP} FP per chance card that triggered this week.",
     "cornerstone": "+{perPlayerMult} FPx per roster player ranked #1 at their position. Max +{maxDelta} FPx. Active from week 3.",
-    "doubler": "Roster TDs count 2x for every other card's effect this week.",
-    "surveyor": "Roster yards count 1.5x for every other card's effect this week.",
-    "sharpshooter": "Roster FGs count 2x for every other card's effect this week.",
+    "doubler": "Roster TDs count {tdMult}x for every other card's effect this week.",
+    "surveyor": "Roster yards count {yardMult}x for every other card's effect this week.",
+    "sharpshooter": "Roster FGs count {fgMult}x for every other card's effect this week.",
 }
 
 # ─── Shared + Position-Exclusive Effect Pools ────────────────────────────────
@@ -1269,7 +1300,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
                 "isChanceEffect": True}
     # ── Meta: Advantage (no direct payout)
     if effectName == "advantage":
-        return {"isAdvantage": True}
+        return {"isAdvantage": True, "rollCount": 2}
     # ── Strategy-Warping: Opulence (FP per Floobits balance)
     if effectName == "fat_cat":
         floobitsPerFP = max(1, int(round((3 - rn * 0.02) / editionScale)))
