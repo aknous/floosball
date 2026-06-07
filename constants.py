@@ -494,11 +494,23 @@ THEMED_PACK_REROLL_COST_INCREMENT = 30
 CARD_TIER_MAX = 4
 # Single value multiplier on a card's OWN output (FP / FPx-delta / Floobits).
 CARD_TIER_MULT = {1: 1.0, 2: 1.15, 3: 1.32, 4: 1.5}
-# Structural cards produce no own output (isAmplifier / isAdvantage /
-# isChanceAmplifier) — leveling them adds a flat per-tier dividend instead.
-# FP for FP/FPx-side cards, Floobits for floobit-output ones (e.g. catalyst).
-CARD_TIER_DIVIDEND_FP = {1: 0.0, 2: 15.0, 3: 35.0, 4: 55.0}
-CARD_TIER_DIVIDEND_FLOOBITS = {1: 0, 2: 8, 3: 18, 4: 30}
+# Structural cards produce no own output (isAmplifier / isAdvantage) — leveling
+# them adds a flat per-tier dividend instead. Sized PER EDITION to land near that
+# edition's output band at max tier, so a fully-upgraded card is worth the cost
+# (a Diamond should pay Diamond-band FP, not a flat 55). FP for FP/FPx-side
+# cards, Floobits for floobit-output ones.
+CARD_TIER_DIVIDEND_FP = {
+    "base":        {1: 0, 2: 12, 3: 24, 4: 36},
+    "holographic": {1: 0, 2: 18, 3: 34, 4: 52},
+    "prismatic":   {1: 0, 2: 26, 3: 48, 4: 72},
+    "diamond":     {1: 0, 2: 34, 3: 60, 4: 90},
+}
+CARD_TIER_DIVIDEND_FLOOBITS = {
+    "base":        {1: 0, 2: 8,  3: 16, 4: 24},
+    "holographic": {1: 0, 2: 11, 3: 21, 4: 32},
+    "prismatic":   {1: 0, 2: 14, 3: 27, 4: 40},
+    "diamond":     {1: 0, 2: 18, 3: 34, 4: 50},
+}
 # Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
 # the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
 # a day-one rush (the same-effect duplicate requirement is the primary gate).

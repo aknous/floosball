@@ -535,6 +535,7 @@ class CardManager:
         # multiplied in the builders) while leaving thresholds/counts/chances
         # untouched, so detail/tagline/tooltip show the tiered numbers.
         # Structural (no-own-output) cards instead append their flat dividend.
+        tierNote = None  # distinct line shown under the description for tiered cards
         tier = getattr(userCard, "tier", 1) or 1
         if tier > 1:
             from constants import (
@@ -548,18 +549,15 @@ class CardManager:
             isStructural = prim.get("isAmplifier") or prim.get("isAdvantage")
             baseDetail = effectConfig.get("detail") or ""
             if isStructural:
-                # No own output — show the flat per-tier dividend it now produces.
-                divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(tier, 0)
-                divFP = CARD_TIER_DIVIDEND_FP.get(tier, 0.0)
+                # No own output — show the flat per-tier dividend (edition-banded).
+                edition = template.edition or "base"
+                divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(edition, {}).get(tier, 0)
+                divFP = CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
                 if outputType == "floobits" and divFloob:
-                    note = f" Tier {tier}: now also pays +{divFloob} Floobits."
+                    tierNote = f"Tier {tier}: +{divFloob} Floobits"
                 elif divFP:
                     fp = int(divFP) if float(divFP).is_integer() else divFP
-                    note = f" Tier {tier}: now also pays +{fp} FP."
-                else:
-                    note = ""
-                if note and baseDetail:
-                    effectConfig["detail"] = baseDetail + note
+                    tierNote = f"Tier {tier}: +{fp} FP"
             else:
                 # Scale the STORED params (drift-free) by the builder's own
                 # per-key ratio. A rebuild at edScale vs edScale x tierMult tells
@@ -605,7 +603,7 @@ class CardManager:
                 # If nothing in the text changed (Copycat copies dynamically,
                 # Odometer lists yard thresholds), spell out the multiplier.
                 if (effectConfig.get("detail") or "") == baseDetail:
-                    effectConfig["detail"] = (baseDetail + f" Tier {tier}: ×{tierMult:g} output.").strip()
+                    tierNote = f"Tier {tier}: ×{tierMult:g} output"
 
         # Edition secondary bonuses removed — edition now determines effect tier only
         effectConfig.pop("secondary", None)
@@ -626,6 +624,7 @@ class CardManager:
             "position": template.position,
             "edition": template.edition,
             "tier": getattr(userCard, "tier", 1) or 1,
+            "tierNote": tierNote,
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,

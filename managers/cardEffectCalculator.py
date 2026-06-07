@@ -621,10 +621,11 @@ def _computeCardPass(
         # have own output (FPx / Floobits), so they self-report and scale.
         isStructural = prim.get("isAmplifier") or prim.get("isAdvantage")
         if isStructural:
+            edition = template.edition or "base"
             if effectConfig.get("outputType") == "floobits":
-                primary.floobits += CARD_TIER_DIVIDEND_FLOOBITS.get(tier, 0)
+                primary.floobits += CARD_TIER_DIVIDEND_FLOOBITS.get(edition, {}).get(tier, 0)
             else:
-                primary.fpBonus += CARD_TIER_DIVIDEND_FP.get(tier, 0.0)
+                primary.fpBonus += CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
         else:
             m = CARD_TIER_MULT.get(tier, 1.0)
             primary.fpBonus *= m
