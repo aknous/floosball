@@ -1185,6 +1185,8 @@ class UserCard(Base):
     acquired_via: Mapped[str] = mapped_column(String(20), nullable=False)  # pack_standard, pack_premium, pack_elite, starter
     last_swap_grant_cycle: Mapped[int] = mapped_column(Integer, default=0)  # Tracks All-Pro swap bonus exhaustion per cycle
     tier: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # Upgrade tier 1-4 (I-IV); leveled via same-effect duplicate + Floobits
+    vaulted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Permanent collection — irreversible; can't equip/sell/combine
+    vaulted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When it was vaulted
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")

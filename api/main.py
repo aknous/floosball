@@ -7267,9 +7267,15 @@ def getCardCollection(
     edition: Optional[str] = Query(default=None),
     position: Optional[int] = Query(default=None),
     activeOnly: bool = Query(default=False),
+    vaulted: Optional[bool] = Query(default=None),
+    sort: str = Query(default="recent"),
     user: _User = Depends(_getCurrentUser),
 ):
-    """Get user's card collection with optional filters."""
+    """Get user's card collection with optional filters and sorting.
+
+    `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
+    `sort`: recent | rarity | rating | tier | name | position.
+    """
     from database.connection import get_session
     from database.repositories.card_repositories import UserCardRepository
     from managers.cardManager import CardManager
@@ -7279,6 +7285,9 @@ def getCardCollection(
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    # Rarity order for sorting (ascending index → descending value when reversed)
+    _EDITION_RANK = {"base": 0, "holographic": 1, "prismatic": 2, "diamond": 3}
 
     session = get_session()
     try:
@@ -7299,9 +7308,32 @@ def getCardCollection(
                 continue
             if activeOnly and tpl.season_created != currentSeason:
                 continue
+            if vaulted is not None and bool(getattr(card, "vaulted", False)) != vaulted:
+                continue
             data = cardManager.serializeCard(card, currentSeason)
             data["isEquipped"] = card.id in equippedCardIds
             result.append(data)
+
+        # Sort. Default "recent" = newest first (highest id). All sorts keep a
+        # stable secondary order by id so ties are deterministic.
+        def _num(d, *keys):
+            for k in keys:
+                v = d.get(k)
+                if isinstance(v, (int, float)):
+                    return v
+            return 0
+        if sort == "rarity":
+            result.sort(key=lambda d: (_EDITION_RANK.get(d.get("edition"), 0), _num(d, "id")), reverse=True)
+        elif sort == "rating":
+            result.sort(key=lambda d: (_num(d, "playerRating", "rating"), _num(d, "id")), reverse=True)
+        elif sort == "tier":
+            result.sort(key=lambda d: (_num(d, "tier"), _num(d, "id")), reverse=True)
+        elif sort == "name":
+            result.sort(key=lambda d: ((d.get("playerName") or "").lower(), _num(d, "id")))
+        elif sort == "position":
+            result.sort(key=lambda d: (_num(d, "position"), -_num(d, "id")))
+        else:  # "recent"
+            result.sort(key=lambda d: _num(d, "id"), reverse=True)
 
         return build_success_response({"cards": result, "currentSeason": currentSeason})
     finally:
@@ -7459,6 +7491,50 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
             raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
         logger.error(f"Card level-up failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to level up card")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# THE VAULT (permanent collection)
+# ============================================================================
+
+
+@app.post("/api/cards/{cardId}/vault")
+def vaultCard(cardId: int, user: _User = Depends(_getCurrentUser)):
+    """Permanently move a card into the Vault. IRREVERSIBLE — a vaulted card can
+    no longer be equipped, sold, or used in The Combine; it persists across
+    seasons and counts toward collection achievements."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+    from managers import achievementManager as _am
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.vaultCard(session, user.id, cardId, currentSeason, currentWeek)
+        # Vaulting can complete collection achievements (Hometown Hero, Full
+        # Spectrum, etc.) — keep Curator's unique-template count in sync too.
+        try:
+            _am.syncCuratorProgress(session, user.id, currentSeason)
+        except Exception:
+            pass
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card vault failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to vault card")
     finally:
         session.close()
 
@@ -7749,6 +7825,8 @@ def setEquippedCards(
             userCard = session.query(UserCard).filter_by(id=c.userCardId, user_id=user.id).first()
             if not userCard:
                 raise HTTPException(status_code=400, detail=f"Card {c.userCardId} not found")
+            if getattr(userCard, "vaulted", False):
+                raise HTTPException(status_code=400, detail="Vaulted cards can't be equipped")
             template = session.query(CardTemplate).filter_by(id=userCard.card_template_id).first()
             if not template or template.season_created != currentSeason:
                 raise HTTPException(status_code=400, detail=f"Card {c.userCardId} is not active this season")

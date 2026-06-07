@@ -656,6 +656,7 @@ class CardManager:
             "edition": template.edition,
             "tier": getattr(userCard, "tier", 1) or 1,
             "tierNote": tierNote,
+            "vaulted": bool(getattr(userCard, "vaulted", False)),
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,
@@ -711,6 +712,11 @@ class CardManager:
         if equippedIds:
             raise ValueError(f"Cannot sell equipped cards: {list(equippedIds)}")
 
+        # Vaulted cards are permanent — they can't be sold.
+        vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+        if vaultedIds:
+            raise ValueError(f"Cannot sell vaulted cards: {vaultedIds}")
+
         # Calculate total and sell (Rookie classification = 2x sell value)
         totalFloobits = 0
         for card in cards:
@@ -747,6 +753,11 @@ class CardManager:
             foundIds = {c.id for c in cards}
             missingIds = [cid for cid in cardIds if cid not in foundIds]
             raise ValueError(f"Cards not found or not owned: {missingIds}")
+
+        # Vaulted cards are permanent — can't be Combined or fed to a Level Up.
+        vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+        if vaultedIds:
+            raise ValueError(f"Cannot use vaulted cards: {vaultedIds}")
 
         equippedRows = session.query(EquippedCard).filter(
             EquippedCard.user_card_id.in_(cardIds),
@@ -1021,6 +1032,30 @@ class CardManager:
         ))
         session.flush()
         return self.serializeCard(target, currentSeason)
+
+    # ─── Card Vault (permanent collection) ────────────────────────────────────
+
+    def vaultCard(self, session, userId: int, cardId: int, currentSeason: int,
+                  currentWeek: int = 0) -> dict:
+        """Permanently move a card into the user's Vault. IRREVERSIBLE — vaulted
+        cards can no longer be equipped, sold, or Combined; they persist forever
+        and drive collection achievements. Can't vault an equipped card."""
+        from datetime import datetime
+        from database.repositories.card_repositories import UserCardRepository, EquippedCardRepository
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds([cardId], userId)
+        if not cards:
+            raise ValueError("Card not found or not owned")
+        card = cards[0]
+        if getattr(card, "vaulted", False):
+            raise ValueError("Card is already vaulted")
+        equippedIds = EquippedCardRepository(session).getEquippedCardIds(userId, currentSeason, currentWeek)
+        if card.id in equippedIds:
+            raise ValueError("Unequip the card before vaulting it")
+        card.vaulted = True
+        card.vaulted_at = datetime.utcnow()
+        session.flush()
+        return self.serializeCard(card, currentSeason)
 
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 

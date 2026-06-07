@@ -202,6 +202,21 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Card Vault — permanent, irreversible collection (drives collection
+        # achievements; vaulted cards can't equip/sell/combine).
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vaulted BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vaulted")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vaulted_at DATETIME"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vaulted_at")
+        except Exception:
+            conn.rollback()
+
         # Drop legacy coaches.team_id column (single-source-of-truth refactor).
         # The new code uses Team.coach_id exclusively. Important: do NOT
         # overwrite a Team.coach_id that already points at a real Coach row —
