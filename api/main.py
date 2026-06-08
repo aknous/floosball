@@ -7499,7 +7499,8 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
                                          currentSeason, currentWeek)
         # Card-upgrade achievements (Artificer tiers, Ascendant, Overclocked).
         try:
-            _am.onCardLeveledUp(session, user.id, result.get("tier", 1), currentSeason)
+            _am.onCardLeveledUp(session, user.id, result.get("tier", 1), currentSeason,
+                                edition=result.get("edition"))
         except Exception:
             pass
         session.commit()

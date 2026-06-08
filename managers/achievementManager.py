@@ -769,10 +769,11 @@ def onWeeklyPickemPodium(session: Session, userId: int, currentSeason: int) -> L
     return unlocked
 
 
-def onCardLeveledUp(session: Session, userId: int, toTier: int, currentSeason: int) -> List[UserAchievement]:
+def onCardLeveledUp(session: Session, userId: int, toTier: int, currentSeason: int,
+                    edition: str = None) -> List[UserAchievement]:
     """Card-upgrade hooks (seasonal): Artificer tiers count level-ups; Ascendant
-    fires on reaching max tier. Secret Overclocked fires at three max-tier cards
-    in one season."""
+    fires on reaching max tier. Secrets: Overclocked (three max-tier cards in one
+    season) and Crown Jewel (a Diamond taken to max tier)."""
     from constants import CARD_TIER_MAX
     unlocked = []
     for key in ("artificer_i", "artificer_ii", "artificer_iii"):
@@ -783,6 +784,11 @@ def onCardLeveledUp(session: Session, userId: int, toTier: int, currentSeason: i
         u = recordProgress(session, userId, "ascendant", absolute=1, currentSeason=currentSeason)
         if u:
             unlocked.append(u)
+        # Secret: a Diamond card taken all the way to max tier.
+        if edition == "diamond":
+            s = unlockSecret(session, userId, "crown_jewel")
+            if s:
+                unlocked.append(s)
         # Secret: three max-tier cards minted this season.
         maxCount = (
             session.query(UserCard.id)
