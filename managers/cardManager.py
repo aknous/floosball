@@ -484,6 +484,9 @@ class CardManager:
         # Rookie classification doubles sell value
         if classification and "rookie" in classification:
             sellValue *= 2
+        # Upgraded cards are worth more to sell, matching their Combine value.
+        from constants import CARD_TIER_MULT as _CTM
+        sellValue = max(1, int(sellValue * _CTM.get(getattr(userCard, "tier", 1) or 1, 1.0)))
 
         # Derive category from effect name if missing from effectConfig (legacy cards)
         from managers.cardEffects import EFFECT_CATEGORY
@@ -726,6 +729,8 @@ class CardManager:
             classification = card.card_template.classification or ""
             if "rookie" in classification:
                 cardValue *= 2
+            from constants import CARD_TIER_MULT as _CTM
+            cardValue = max(1, int(cardValue * _CTM.get(getattr(card, "tier", 1) or 1, 1.0)))
             totalFloobits += cardValue
 
         currencyRepo.addFunds(
