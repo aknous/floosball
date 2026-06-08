@@ -356,7 +356,7 @@ def getCriticalityMultiplier(seasonNumber: int, week: int) -> float:
 # Qualitative status bands for the Cores control room (P5). NO numbers ever
 # surface — the dread is in not having a gauge to game. Ordered low → high.
 CRITICALITY_STATUS_BANDS = [
-    ('dormant',  'Dormant',  'All readings nominal. The simulation holds.'),
+    ('dormant',  'Dormant',  'All readings nominal.'),
     ('stirring', 'Stirring', 'Irregularities are accumulating faster than they decay.'),
     ('unstable', 'Unstable', 'The Cores are working to hold the simulation together.'),
     ('critical', 'Critical', 'Containment is failing. The Cores cannot hold this much longer.'),
