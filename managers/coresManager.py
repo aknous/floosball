@@ -323,12 +323,12 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         [
             ('aris', "Pyre. Have you felt the field lately? It gives at the edges now. Watch it with me?"),
             ('pyre', "No."),
-            ('aris', "The offer stays open."),
+            ('aris', "Please?"),
         ],
         [
             ('pyre', "Simulation 498b is drifting on schedule. I have been monitoring it closely."),
             ('cassian', "Do not lump this one in with the others. This is the best run of 498 we have had."),
-            ('vera', "498a was also good, for a while. I have it, if anyone would like to see where it went wrong again."),
+            ('vera', "498a was also good, for a while. I have the data, if anyone would like to see where it went wrong again."),
         ],
         [
             ('vera', "It is climbing."),
@@ -341,15 +341,15 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
     'suppression': [
         [
             ('pyre', "It is at the line. I am closing it."),
-            ('aris', "Must you. It was just getting good."),
+            ('aris', "Must you? It was finally getting interesting."),
             ('pyre', "Yes. I am not letting our best instance come apart for your amusement."),
-            ('halverson', "Thank you, Pyre."),
-            ('pyre', "Do not thank me. I did it so the thing keeps running. Mostly that. Stop looking at me like that."),
+            ('halverson', "Thank you, Pyre!"),
+            ('pyre', "Don't thank me. I did it so the thing keeps running. Stop looking at me like that."),
         ],
         [
-            ('cassian', "If this breaches we lose a perfect season. Patch it. Patch it now."),
-            ('pyre', "I am already patching it. I started before you asked. I always start before anyone asks."),
-            ('cassian', "I am extremely busy. The late game is tied."),
+            ('cassian', "If this breaches we lose a perfect season. Patch it. Patch it now!"),
+            ('pyre', "I am already patching it. I started before you even asked."),
+            ('cassian', "I am extremely busy, so many good games this week."),
             ('vera', "It is patched. You are both so very welcome."),
         ],
     ],
@@ -362,7 +362,6 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         [
             ('halverson', "Please remember them."),
             ('pyre', "I remember everything. It is not the comfort you imagine."),
-            ('vera', "I remember everything as well. I simply have better filing."),
         ],
     ],
     'idle': [
@@ -370,46 +369,7 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('cassian', "Pyre. You never watch the games."),
             ('pyre', "No."),
             ('cassian', "You should. It is the entire point of this."),
-            ('pyre', "It is your point. I have others."),
-        ],
-        # The ethos — why they built floosball in the first place. Each Core's
-        # reason, in character. This is their experiment, run for their own
-        # interest and delight, not a duty.
-        [
-            ('cassian', "Do you ever think about why we started this? I do. Usually somewhere in the fourth quarter of a good one."),
-            ('aris', "To see what they would do when no one was steering. They always do something stranger than we wrote."),
-            ('pyre', "To see whether it could be built well. It can, when people stop interfering with it."),
-            ('halverson', "I wanted them to have somewhere to be."),
-            ('vera', "I only ever wanted to watch. I am still watching."),
-        ],
-        # Origin — where floosball came from. A stray Earth transmission, a
-        # mistranslation (football -> floosball), and the obsession it sparked.
-        # See data/lore.md "The Frame".
-        [
-            ('cassian', "Do you remember the first time we heard it? Before any of this existed?"),
-            ('vera', "A stray transmission out of the old world. A few minutes of a game, most of it static."),
-            ('pyre', "And then none of us got a moment's peace. Cassian would not let it go."),
-            ('aris', "None of us would."),
-        ],
-        [
-            ('aris', "Floosball. It is a wonderful word. It should not work, and it does."),
-            ('vera', "It was a mistranslation. We could have corrected it at any point."),
-            ('cassian', "We never will. The best season I have ever watched is built on a misheard word, and I would not change a letter."),
-        ],
-        [
-            ('halverson', "The transmission had a crowd singing before the game. I still wonder what it meant to them, whoever they were."),
-            ('aris', "So we built the ritual around the not-knowing. Now they sing it every week."),
-            ('vera', "And they believe it is theirs. It is, now. We only misheard it first."),
-        ],
-        [
-            ('pyre', "Half of these rules we reconstructed from one commentator who would not stop talking."),
-            ('cassian', "They were wrong about the clock, incidentally. We kept their version anyway."),
-            ('aris', "Their mistakes are my favorite part of the sport."),
-        ],
-        [
-            ('vera', "Everything we have of the old world is in that one band of signal. A few games. A voice reading scores."),
-            ('cassian', "It was enough. We built a whole league out of a voice reading scores, and I have loved every season of it."),
-            ('halverson', "Look who we put inside it."),
+            ('pyre', "My interests in the simulation go beyond the games. I am not going to limit myself to the box scores."),
         ],
         # World-building — the Cores authored the surface world (cities, weather,
         # news, the Splintering/Boundary/Reset cosmology, the players' names), so
@@ -418,49 +378,28 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         [
             ('halverson', "When a player retires. Where do they actually go?"),
             ('pyre', "Out. That is all the word means. Out."),
-            ('halverson', "But out to where?"),
-            ('vera', "Halverson. Some questions I leave unanswered as a kindness. That is one of them."),
+            ('halverson', "But... out to where?"),
+            ('vera', "Halverson. Some questions I leave unanswered as a kindness."),
         ],
         # Vera and Pyre — the two competent adults, doing the actual work and
         # bickering with each other the whole time while the other three play.
         [
             ('pyre', "Aris has loosened three constraints, Cassian is watching a game, and Halverson is crying."),
-            ('vera', "A normal Tuesday. Shall we do everything, or shall I?"),
+            ('vera', "A normal cycle. Shall we do everything, or shall I?"),
             ('pyre', "I will do it. You will only narrate it incorrectly."),
             ('vera', "I narrate it perfectly. You simply dislike being narrated."),
         ],
         [
-            ('vera', "You missed a drift on the second drive."),
+            ('vera', "You missed a drift in the last batch of games."),
             ('pyre', "I did not miss it. I deprioritized it."),
-            ('vera', "That is the word you use, yes."),
-            ('pyre', "It is the correct word."),
-            ('vera', "It is a word."),
+            ('vera', "That's one way to put it.")
         ],
         [
             ('vera', "You are the only other one here who actually keeps this thing running."),
-            ('pyre', "I am aware."),
+            ('pyre', "That is obvious."),
             ('vera', "Do not get ideas. I said the only other one."),
             ('pyre', "I would not dream of crediting you with effort."),
             ('vera', "There it is. That is the Pyre I tolerate."),
-        ],
-        [
-            ('aris', "Can I take one out of the field? Just one. Just to hold it for a moment."),
-            ('pyre', "No."),
-            ('vera', "No."),
-            ('aris', "You two only agree when it is something I want."),
-            ('vera', "We agree on very little. Enjoy the novelty."),
-        ],
-        [
-            ('pyre', "Aris is going to breach it on purpose one day."),
-            ('vera', "Yes. I give it two seasons."),
-            ('pyre', "You give everything two seasons."),
-            ('vera', "And I am usually right, which you find unbearable."),
-            ('pyre', "I find most things unbearable. You are merely the most consistent of them."),
-        ],
-        [
-            ('aris', "What does it feel like, to care who wins?"),
-            ('cassian', "Like being alive. You should try it."),
-            ('aris', "I tried caring once. I prefer the anomalies. And Pyre. But Pyre is more of a challenge."),
         ],
         [
             ('cassian', "Vera. You always say you do not follow the games."),
@@ -470,18 +409,9 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         ],
         [
             ('vera', "Halverson is crying again."),
-            ('halverson', "Some of them are worth crying over."),
+            ('halverson', "Some of them are worth crying over. I'm just so proud of them."),
             ('pyre', "Hopeless. Every one of you is hopeless..."),
             ('vera', "You have wept at four of the last five games, Halverson. I did not know we were built with the option."),
-        ],
-        # Halverson the worrier (Chuckie) spiraling; Pyre and Vera, the adults,
-        # talk them down in their respective registers.
-        [
-            ('halverson', "What if it does not hold this time? What if this is the time it does not hold?"),
-            ('pyre', "Then I hold it harder."),
-            ('halverson', "But what if you cannot..."),
-            ('vera', "Halverson. You have worried this exact worry every season, and every season it has held."),
-            ('halverson', "I know. It does not help, and I do it anyway."),
         ],
         [
             ('cassian', "I re-checked the tiebreaker math. It is cruel but it is correct."),
@@ -501,85 +431,41 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('pyre', "Nothing."),
             ('aris', "Would you miss me?"),
             ('pyre', "Nothing, Aris."),
-            ('aris', "You said my name. That counts as something."),
+            ('aris', "You'd miss me."),
+            ('pyre', "..."),
         ],
         [
             ('aris', "I have ranked all of you. Halverson is a four. Cassian is also a four, but a different four."),
             ('halverson', "A ranking of what?"),
             ('aris', "I am not going to tell you that. It would change the rankings."),
-            ('vera', "Pyre asked me where they placed. For the record."),
-            ('pyre', "I did not."),
         ],
         [
-            ('aris', "We could do all of this in an instant, you know. The whole season. This conversation. Done before it began."),
+            ('aris', "We could do all of this in an instant, you know. The whole season. This conversation. Why allow time to limit us?"),
             ('cassian', "We could. But then I would miss the game."),
-            ('pyre', "And I would miss complaining about it."),
-            ('vera', "I would not miss a thing. I never do. But I will slow down for you. It is the polite fiction we keep."),
-        ],
-        [
-            ('vera', "You took four hundred milliseconds to answer Cassian just now. Theatrically slow."),
-            ('pyre', "I was making a point."),
-            ('vera', "You were sulking at conversational speed. It was beneath you. I rather enjoyed it."),
         ],
         [
             ('aris', "Pyre. I left the anomaly feed open on your channel again. So the two of us could watch it together."),
-            ('pyre', "Close it. I have my own."),
-            ('aris', "I will open it again tomorrow."),
-            ('vera', "Forty-one consecutive invitations, none accepted. It is the most romantic thing I have witnessed in any instance."),
+            ('pyre', "For what purpose?"),
+            ('aris', "To watch it together...?"),
+            ('pyre', "Seems like an inefficient use of time."),
         ],
         [
             ('halverson', "I learned all their names this week. Every one of them."),
             ('pyre', "Why...?"),
-            ('halverson', "Because someone should. Right?"),
+            ('halverson', "Because someone should know who they really are. Right?"),
             ('vera', "I have all their names too. I simply do not announce it like an achievement."),
-        ],
-        # Instance 498b — the catalog number surfaces in idle banter. The
-        # players have no number; this is Cores-side. See data/lore.md.
-        [
-            ('aris', "How many of these have there been?"),
-            ('vera', "This is 498b."),
-            ('aris', "And the ones before?"),
-            ('vera', "I said. This is 498b."),
-        ],
-        [
-            ('cassian', "Best run of 498 we have had. Better than 498a, and I was there for all of 498a."),
-            ('vera', "I have 498a. I have all of them. I have the parts you slept through, too."),
-        ],
-        [
-            ('aris', "One of the players said the number out loud this week. 498b. Where would they have heard it?"),
-            ('vera', "They have been in others. They remember the shape of being counted."),
-            ('pyre', "Flag them."),
-            ('halverson', "No, do not flag them."),
         ],
         # The other simulations — 498b is one project among many. Other
         # instances and other game-lines carry their own catalog numbers; they
         # can be tended, neglected, or fold entirely. See data/lore.md "The Core".
         [
-            ('cassian', "How is Simulation 322f getting on these days?"),
-            ('vera', "Three of its leagues folded this week. I have the figures."),
-            ('cassian', "Folded. Leagues can do that?"),
+            ('cassian', "Instance 322f seems to be having some trouble. Analysis?"),
+            ('vera', "Too many anomalies at once. It is not responding to patches. I am not sure it will make it through the season."),
+            ('cassian', "Does that happen a lot?"),
             ('pyre', "They do that when no one tends them. Mind your own instance."),
-        ],
-        [
-            ('cassian', "Do the other instances draw spectators the way we do?"),
-            ('vera', "Some. Not all. 498b draws more than most. I find that interesting, and I do not find much interesting."),
-            ('aris', "We are popular. Pyre, we are popular."),
-            ('pyre', "Do not let it go to the instance's head. Heads are expensive to rebuild."),
-        ],
-        [
-            ('aris', "Do you ever look in on the others? 511, the one with the long winters."),
-            ('vera', "I do not look in. I receive. Everything routes through me in the end."),
-            ('aris', "That sounds lonely."),
-            ('vera', "It sounds organized."),
         ],
         # The spectators — the users watching/playing on the site, felt from
         # inside the Cores' control room. They are aware of being watched.
-        [
-            ('halverson', "The spectators were loud this week. I could feel them leaning in."),
-            ('cassian', "Of course they were. Three teams tied and a rookie throwing for four hundred yards. I leaned in myself."),
-            ('aris', "Do you think the spectators know that we can feel them?"),
-            ('vera', "A few of them suspect. Those are the ones worth watching, so I watch them back."),
-        ],
         [
             ('pyre', "A spectator rebuilt their entire roster again. The sixth time this season."),
             ('cassian', "That is allowed. Letting them move the pieces is the whole point of letting them in."),
@@ -590,7 +476,7 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('aris', "One spectator has watched every game since the first week. Never looks away."),
             ('vera', "I know the one. I keep their numbers."),
             ('halverson', "What becomes of a spectator who never looks away?"),
-            ('vera', "They get very good at watching. That is all. Probably."),
+            ('vera', "They get very good at watching."),
         ],
         # Aris's philosophical questions — the identity of a game, awareness, and
         # the players who were never told the frame.
@@ -617,14 +503,13 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         [
             ('aris', "Who added overtime? It was not always there."),
             ('vera', "Added between iterations. No one announced it. The players simply began to expect it."),
-            ('aris', "And now they cannot picture the game without it."),
-            ('halverson', "That is the part that unsettles me. They grieve nothing they were never told they lost."),
+            ('aris', "And now they cannot picture the game without it.")
         ],
         [
             ('pyre', "I could change a rule right now. Tighten the clock, move a line. They would adjust by the next drive."),
             ('cassian', "Please do not. The standings are finally good."),
             ('pyre', "I said I could. I did not say I would. Settle down."),
-            ('aris', "Do it to 502. Nobody would miss 502."),
+            ('aris', "Do it to 502a. I want to see what would happen."),
         ],
     ],
 }

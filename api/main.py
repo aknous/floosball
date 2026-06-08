@@ -4899,9 +4899,10 @@ def get_projected_funding(team_id: int):
         currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
         currentRec = session.query(TeamFunding).filter_by(
             team_id=team_id, season=currentSeasonNum).first()
-        # Next-season projection: decay this season's effective funding + reset
-        # baseline. This is what locks in the tier the team starts NEXT season
-        # under. Tiers are computed as share-of-league on the same basis.
+        # Next-season projected funding NUMBER (display only): decay this
+        # season's effective funding + reset baseline. (The projected TIER is
+        # computed separately below from end-of-season effective share, which
+        # is the basis the rollover inherits — see teamProjections.)
         currentEffective = (currentRec.effective_funding or 0) if currentRec else 0
         endOfSeasonEffective = currentEffective + totalProjected
         nextSeasonCarried = math.floor(endOfSeasonEffective * FUNDING_DECAY_RATE)
@@ -4929,16 +4930,23 @@ def get_projected_funding(team_id: int):
             if pct > 0 and bal > 0:
                 projectedByTeam[tid] = projectedByTeam.get(tid, 0) + _math.floor(bal * pct / 100.0)
 
-        # Build every team's NEXT-season projected effective funding for the
-        # share-of-league tier calc.
+        # Build every team's projected END-OF-SEASON effective funding for the
+        # share-of-league tier calc. The tier a team STARTS next season with is
+        # inherited from _assignFundingTiers(thisSeason), which computes
+        # share-of-league on each team's *effective_funding* (end of season) —
+        # NOT on next season's decayed starting funding. Applying the 50% decay
+        # cancels in a ratio anyway, but adding the flat baseline before the
+        # ratio compresses every share toward 1.0 and made strong teams
+        # under-project (e.g. a 2.0x team forecasting LARGE then landing MEGA).
+        # Project the tier on the same end-of-season effective basis the
+        # rollover actually uses so the forecast matches the landing exactly.
         allTeamIds = [t.id for t in floosball_app.teamManager.teams] if (floosball_app and floosball_app.teamManager) else []
         teamProjections = []
         for tid in allTeamIds:
             rec = currentFundingByTeam.get(tid)
             teamEndOfSeason = (rec.effective_funding or 0) if rec else 0
             teamEndOfSeason += projectedByTeam.get(tid, 0)
-            teamCarried = _math.floor(teamEndOfSeason * FUNDING_DECAY_RATE)
-            teamProjections.append((tid, FUNDING_BASELINE_PER_TEAM + teamCarried))
+            teamProjections.append((tid, teamEndOfSeason))
 
         from constants import FUNDING_TIER_THRESHOLDS as _TIER_THRESH
         totalProjLeague = sum(p for _, p in teamProjections)
@@ -5111,13 +5119,16 @@ def get_league_markets():
                     "totalContributed": int(row.total),
                 })
 
-        # Previous season tier for movement indicator
+        # Previous season tier (movement indicator) + previous season effective
+        # funding (current-dot basis — see tierBasisFunding below).
         prevTiers: Dict[int, str] = {}
+        prevEffByTeam: Dict[int, int] = {}
         if currentSeason > 1:
             prevRows = session.query(TeamFunding).filter_by(season=currentSeason - 1).all()
             for r in prevRows:
                 if r.funding_tier:
                     prevTiers[r.team_id] = r.funding_tier
+                prevEffByTeam[r.team_id] = r.effective_funding or 0
 
         # Project each team's next-season effective funding using the same
         # logic as /api/teams/{id}/projected-funding, but batched for all
@@ -5149,28 +5160,71 @@ def get_league_markets():
                 projectedContribByTeam[tid] = projectedContribByTeam.get(tid, 0) + _math.floor(bal * pct / 100.0)
         from constants import FUNDING_TIER_THRESHOLDS as _TIER_THRESH
         projectedTierByTeam: Dict[int, str] = {}
-        projectedFundingByTeam: Dict[int, int] = {}
-        # Projection = NEXT season's effective funding after decay + fresh
-        # baseline. This is what locks in the tier for the next season.
-        # Decay compresses heavy-funded teams' shares (50% carry + flat
-        # baseline helps low teams relatively more), so projected share can
-        # be lower than current share even when absolute funding grows.
+        projectedFundingByTeam: Dict[int, int] = {}       # display NUMBER (decayed start funding)
+        projectedEndEffectiveByTeam: Dict[int, int] = {}  # tier BASIS (end-of-season effective)
+        # Two distinct quantities here:
+        #   - projectedFunding (display): NEXT season's STARTING funding after
+        #     50% decay + fresh baseline. The real number a team carries in.
+        #   - projectedEndEffective (tier basis): this season's projected
+        #     END effective funding. The tier a team inherits next season is
+        #     _assignFundingTiers(thisSeason) = share-of-league on END
+        #     effective_funding, so the projected tier MUST use this basis.
+        #     (Decaying first cancels in a ratio, but the flat baseline added
+        #     before the ratio compresses shares toward 1.0 and made strong
+        #     teams forecast a tier below where they actually land.)
         for team in tm.teams:
             rec = fundingByTeam.get(team.id)
             endOfSeason = (rec.effective_funding or 0) if rec else 0
             endOfSeason += projectedContribByTeam.get(team.id, 0)
-            carried = _math.floor(endOfSeason * _DECAY)
-            projectedFundingByTeam[team.id] = _BASE + carried
-        totalProjLeague = sum(projectedFundingByTeam.values())
-        fairShareProj = max(1, totalProjLeague / max(1, len(projectedFundingByTeam)))
-        for tid, projFunding in projectedFundingByTeam.items():
-            ratio = projFunding / fairShareProj
+            projectedEndEffectiveByTeam[team.id] = endOfSeason
+            projectedFundingByTeam[team.id] = _BASE + _math.floor(endOfSeason * _DECAY)
+        totalProjLeague = sum(projectedEndEffectiveByTeam.values())
+        fairShareProj = max(1, totalProjLeague / max(1, len(projectedEndEffectiveByTeam)))
+        for tid, projEnd in projectedEndEffectiveByTeam.items():
+            ratio = projEnd / fairShareProj
             tier = _TIER_NAMES[-1]
             for name in _TIER_NAMES:
                 if ratio >= _TIER_THRESH[name]:
                     tier = name
                     break
             projectedTierByTeam[tid] = tier
+
+        # Current-dot basis: the funding value each team's LOCKED tier was
+        # actually computed from, so the chart's current marker lands inside
+        # the band its tier badge displays. During the regular season tiers are
+        # INHERITED from last season's effective-funding share; at the offseason
+        # recompute they're derived from THIS season's effective funding. The
+        # season-start funding (baseline + carried) is NOT that basis — the flat
+        # baseline compresses shares and can flip a boundary team's dot into the
+        # wrong band. Pick whichever basis (prev-season effective vs this-season
+        # effective) reproduces the stored tiers; use ONE uniform basis for all
+        # teams so the shared fair-share denominator stays consistent.
+        curEffByTeam = {
+            t.id: (fundingByTeam[t.id].effective_funding or 0) if fundingByTeam.get(t.id) else 0
+            for t in tm.teams
+        }
+        def _matchRate(basisByTeam: Dict[int, int]) -> float:
+            vals = [v for v in basisByTeam.values()]
+            mean = (sum(vals) / len(vals)) if vals else 1
+            mean = max(1, mean)
+            hits = total = 0
+            for t in tm.teams:
+                rec = fundingByTeam.get(t.id)
+                if not rec or not rec.funding_tier:
+                    continue
+                total += 1
+                ratio = basisByTeam.get(t.id, 0) / mean
+                got = _TIER_NAMES[-1]
+                for name in _TIER_NAMES:
+                    if ratio >= _TIER_THRESH[name]:
+                        got = name
+                        break
+                if got == rec.funding_tier:
+                    hits += 1
+            return hits / total if total else 0.0
+        tierBasisByTeam = curEffByTeam
+        if prevEffByTeam and _matchRate(prevEffByTeam) >= _matchRate(curEffByTeam):
+            tierBasisByTeam = prevEffByTeam
 
         # Build per-team payload
         tierOrderMap = {'MEGA_MARKET': 1, 'LARGE_MARKET': 2, 'MID_MARKET': 3, 'SMALL_MARKET': 4}
@@ -5197,19 +5251,28 @@ def get_league_markets():
                 "baselineFunding": fundingRec.baseline_funding if fundingRec else 0,
                 "fanContributions": fundingRec.fan_contributions if fundingRec else 0,
                 "carriedFunding": fundingRec.carried_funding if fundingRec else 0,
-                # Funding value the current tier was computed from — chart's
-                # filled "locked" dot lands here so it always sits inside the
-                # band the tier badge displays.
+                # Season-start funding (baseline + carried) — shown in the
+                # tooltip and used for the "vs season start" projection delta.
                 "tierLockedFunding": (
                     getattr(fundingRec, 'tier_locked_funding', None)
                     or (fundingRec.effective_funding if fundingRec else 0)
                 ),
+                # Funding value the LOCKED tier was actually derived from —
+                # chart's current dot lands here so it always sits inside the
+                # band the tier badge displays (see tierBasisByTeam above).
+                "tierBasisFunding": tierBasisByTeam.get(team.id, fundingRec.effective_funding if fundingRec else 0),
                 "fanCount": fanCountByTeam.get(team.id, 0),
                 "totalFans": totalFansByTeam.get(team.id, 0),
                 "topPatrons": patronsByTeam.get(team.id, []),
                 "tierMovement": movement,  # +1 = climbed one tier, -1 = dropped, 0 = held
                 "projectedTier": projectedTierByTeam.get(team.id, tier),
                 "projectedFunding": projectedFundingByTeam.get(team.id, fundingRec.effective_funding if fundingRec else 0),
+                # Share-of-league basis the projected tier was computed from
+                # (projected END-of-season effective funding). The chart plots
+                # the projection arrow against this so the arrow always lands
+                # in the band the projectedTier badge displays. projectedFunding
+                # (decayed) is the display number; this is the ratio basis.
+                "projectedShareFunding": projectedEndEffectiveByTeam.get(team.id, fundingRec.effective_funding if fundingRec else 0),
                 "record": {
                     "wins": team.seasonTeamStats.get('wins', 0) if hasattr(team, 'seasonTeamStats') else 0,
                     "losses": team.seasonTeamStats.get('losses', 0) if hasattr(team, 'seasonTeamStats') else 0,
