@@ -960,10 +960,12 @@ class CardManager:
         effect = self._effectName(target)
         atMax = target.tier >= CARD_TIER_MAX
         nextTier = target.tier + 1
-        # Eligible offerings: any OTHER owned card with the same effect.
+        # Eligible offerings: any OTHER owned card with the same effect that
+        # isn't vaulted (vaulted cards are permanent and can't be fed/consumed).
         offerings = [
             c for c in cardRepo.getByUser(userId)
-            if c.id != target.id and self._effectName(c) == effect
+            if c.id != target.id and not getattr(c, "vaulted", False)
+            and self._effectName(c) == effect
         ]
         return {
             "cardId": target.id,
