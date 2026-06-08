@@ -2267,6 +2267,7 @@ class SeasonManager:
                         breakdownDicts = [{
                             "slotNumber": b.slotNumber,
                             "edition": b.edition,
+                            "tier": b.tier,
                             "playerId": b.playerId,
                             "playerName": b.playerName,
                             "effectName": b.effectName,
