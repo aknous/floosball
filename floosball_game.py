@@ -1,5 +1,6 @@
 import enum
 import logging
+logger = logging.getLogger(__name__)
 import random as _random
 from random import randint
 from random_batch import batched_randint, batched_random, batched_choice
@@ -10,6 +11,7 @@ import math
 import statistics
 from random import choice
 from time import sleep
+from typing import Dict, Optional
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
@@ -29,12 +31,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from constants import (
     GAME_MAX_PLAYS, PLAYS_TO_FOURTH_QUARTER, PLAYS_TO_THIRD_QUARTER, FOURTH_QUARTER_START,
-    RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER, FIELD_LENGTH,
+    RATING_SCALE_MIN, RATING_RANGE, PERCENTAGE_MULTIPLIER,
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
-    QUARTER_SECONDS, KNEEL_DRAIN_SECONDS, SPIKE_CLOCK_THRESHOLD,
-    TIMEOUT_CLOCK_THRESHOLD, FG_SNAP_DISTANCE, FG_MIN_ATTEMPT_PROB, YARDS_TO_FIRST_DOWN,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
+    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
@@ -76,13 +77,77 @@ class PlayType(enum.Enum):
     ExtraPoint = 'Extra Point'
     Spike = 'Spike'
     Kneel = 'Kneel'
+
+
+# Layer 1 universal micro-glitch pool. **PURE FLAVOR** — no mechanical
+# impact. Fires for any anomalous player from Stirring up. The user
+# reads these and thinks "huh, that's curious." Subtle. Generic.
+_LAYER_1_MICRO_GLITCHES = [
+    "{player} was momentarily in two positions at once.",
+    "{player} stepped through a peculiar gap in the geometry of the simulation.",
+    "{player}'s shadow is lagging oddly behind them.",
+    "{player} occupied a space that does not entirely reside in this dimension.",
+    "{player}'s movement seemed to skip a frame.",
+    "{player} moved through a path that did not exist a moment earlier.",
+    "{player} seems to be glitching around the field.",
+    "{player} stuttered in place while the simulation recalculated their trajectory.",
+    "{player} arrived at the ball a frame before the ball did.",
+    "{player} teleported half a stride forward, somehow skipping the space in between.",
+    "{player} briefly rendered at a slightly lower resolution than everyone around them.",
+    "{player}'s jersey shimmered faintly, like heat coming off asphalt.",
+    "{player} seemed to flicker in and out of existence during the play.",
+]
+
+# Layer 2 personality-flavored glitch pool. **STILL PURE FLAVOR** — no
+# mechanical impact. Fires for players at Erratic state and above. The
+# user reads these and thinks "okay, something weird is happening here."
+# More pronounced than Layer 1: the simulation is visibly failing
+# around the player, not just nudging.
+_LAYER_2_GLITCHES = [
+    "{player}'s textures peeled away, leaving a bare wireframe sprinting down the field.",
+    "{player} is no longer following the field's geometry.",
+    "{player}'s velocity exceeded the limits the simulation was designed to handle.",
+    "{player} clipped through a couple defenders in their path.",
+    "{player} stretched across half the field before collapsing back into a single body.",
+    "{player} flickered violently between positions, unable to settle on just one.",
+    "{player} left a trail of afterimages that lingered after the play ended.",
+    "{player} fragmented into a cloud of pixels momentarily before snapping back together.",
+    "{player}'s body seemed to briefly corrupt into a tangle of geometry not recognizable as a person.",
+    "{player} dissolved into static and reassembled several yards away.",
+    "{player}'s limbs rotated in directions that should not be possible.",
+    "{player} legs clipped through the turf during the play and all you could see was their torso sliding around the field.",
+    "{player} inverted briefly and ran across the underside of the field.",
+    "{player} seemed to momentarily exist in multiple places at once.",
+    "{player} looked like they were running through the air.",
+]
+
+# Layer 3 glitch pools — these fire ALONGSIDE a real yardage change (the
+# simulation warps the play around a rampant/awakened player). Surge = the
+# glitch gains them ground; Stumble = a modest hiccup that costs a little.
+# Still involuntary — NOT the deliberate Control powers (a later season).
+_LAYER_3_SURGE_GLITCHES = [
+    "{player} dissolved into static and reassembled several yards downfield.",
+    "{player} clipped through a defender who never finished rendering.",
+    "{player} skipped across a seam in the field, gaining ground that wasn't there.",
+    "{player} phased forward as the simulation snapped them ahead of the play.",
+    "{player} pulled away faster than the engine could redraw the defense.",
+    "{player} stepped through the tackle as though the rules were only a suggestion.",
+]
+_LAYER_3_STUMBLE_GLITCHES = [
+    "{player} stuttered as the simulation dropped a frame, losing a step.",
+    "{player}'s footing glitched against terrain that wasn't quite there.",
+    "{player} briefly desynced from the field and stumbled before recovering.",
+    "{player} snagged on a seam in the geometry and lost a little ground.",
+    "{player} flickered mid-stride and came down a step short.",
+]
     
 class PassType(enum.Enum):
-    short = 1
-    medium = 2
-    long = 3
-    hailMary = 4
+    short = 1     # 0-4 air yards   (screen, quick hitch)
+    medium = 2    # 5-8 air yards   (short crossing, hitch)
+    long = 3      # 9-14 air yards  (over-the-middle, deep curl)
+    hailMary = 4  # endzone / max QB throw distance
     throwAway = 5
+    deep = 6      # 15+ air yards   (go route, post, deep cross)
 
 class GameStatus(enum.Enum):
     Scheduled = 1
@@ -416,6 +481,56 @@ throwAwayCoverageList = [
                     '{} finds no one open, throws it away',
                 ]
 
+# ── Context-aware incompletes — args: (passer.name, receiver.name) ──
+# Bad throw to a wide-open receiver: the QB simply missed an open target.
+overthrowOpenList = [
+                    '{} misses a wide-open {}, incomplete',
+                    '{} sails it past a wide-open {}, incomplete',
+                    '{} had {} open and missed the throw, incomplete',
+                    '{} leaves an open {} waiting, throw is off the mark',
+                    '{} airmails it to {} with nobody near, incomplete',
+                ]
+# Bad throw forced into coverage: errant ball into a tight window.
+forcedCoverageList = [
+                    '{} forces it into coverage for {}, incomplete',
+                    '{} tries to squeeze it to a blanketed {}, broken up',
+                    '{} throws into traffic for {}, knocked away',
+                    '{} forces it to {} in a tight window, no good',
+                    '{} airs it into coverage for {}, incomplete',
+                ]
+# Accurate throw to a covered receiver, broken up at the catch point.
+coverageBreakupList = [
+                    '{} on target to {}, broken up in coverage',
+                    '{} hits {} in stride, knocked loose by the defender',
+                    '{} puts it on {}, but the defender knocks it away',
+                    '{} and {} nearly connect, broken up at the catch point',
+                ]
+
+# ── Context-aware interceptions — args: (passer.name, defender.name) ──
+# Picked off after forcing it into coverage (bad read / covered receiver).
+intoCoverageList = [
+                    '{} throws into coverage, {} steps in front for the pick',
+                    '{} forces it into traffic, picked off by {}',
+                    '{} never saw the defender, {} jumps the route',
+                    '{} throws into double coverage, {} comes down with it',
+                    '{} telegraphs it into coverage, {} with the interception',
+                ]
+# Picked off on an errant throw the QB sailed; the defender takes it.
+errantPickList = [
+                    '{} sails it, {} reels in the errant throw',
+                    '{} airmails it right to {}, intercepted',
+                    '{} loses it on the throw, picked off by {}',
+                    '{} floats one up for grabs, {} brings it in',
+                ]
+# Picked off on an on-target throw — the receiver was covered and the
+# defender stepped in. Stated by action, not judged.
+defPlayPickList = [
+                    '{} on target, but {} steps in front for the interception',
+                    '{} throws on target, {} jumps the route for the pick',
+                    '{} hits the window, but {} undercuts it for the pick',
+                    '{} puts it on the target, {} cuts in front for the interception',
+                ]
+
 passPlayBook = {
                     'Play1': {
                         'dropback': QbDropback.long,
@@ -597,6 +712,45 @@ passPlayBook = {
                             'rb': None
                         }
                     },
+                    # ── Deep shot plays (15+ air yards) ──────────────────
+                    # Used sparingly by aggressive coaches. Built around one
+                    # primary deep target with a checkdown option.
+                    'Play21': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': PassType.deep,
+                            'wr2': PassType.medium,
+                            'te': None,
+                            'rb': None
+                        }
+                    },
+                    'Play22': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': PassType.deep,
+                            'wr2': PassType.deep,
+                            'te': None,
+                            'rb': None
+                        }
+                    },
+                    'Play23': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': None,
+                            'wr2': PassType.deep,
+                            'te': PassType.medium,
+                            'rb': None
+                        }
+                    },
+                    'Play24': {
+                        'dropback': QbDropback.extraLong,
+                        'targets': {
+                            'wr1': PassType.deep,
+                            'wr2': PassType.short,
+                            'te': PassType.short,
+                            'rb': None
+                        }
+                    },
                 }
 
 def returnShortPassPlay():
@@ -609,12 +763,14 @@ def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
 class Game:
-    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None):
+    def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None, gameRules=None):
         self.id = None  # Integer ID assigned by SeasonManager
         self.seasonNumber = None  # Which season this game belongs to
         self.week = None  # Week number for regular season
         self.playoffRound = None  # Round number for playoffs (1=wildcard, 2=divisional, etc.)
         self.gameType = 'regular'  # 'regular' or 'playoff'
+        self.isFloosBowl = False  # True only for the cross-league final (drives the halftime show)
+        self.halftimeShowPauseSeconds = None  # Optional halftime-pause override (Floos Bowl show), set at creation
         self.gameNumber = None  # Game number within the week/round
         self.status = None
         self.personalityManager = personalityManager  # Layer 1/2/3 template firing
@@ -622,7 +778,38 @@ class Game:
         self.awayTeam : FloosTeam.Team = awayTeam
         self.awayScore = 0
         self.homeScore = 0
-        
+
+        # Rule book. Every football-rule decision the sim makes reads
+        # from this object (field length, downs per series, score
+        # values, FG mechanics, clock, etc.). Defaults to the standard
+        # ruleset; the Season passes its own instance in so all games
+        # share a consistent set, and so future Cores' rule patches can
+        # propagate to subsequent games.
+        if gameRules is not None:
+            self.gameRules = gameRules
+        else:
+            from game_rules import GameRules
+            self.gameRules = GameRules()
+
+        # Anomaly system — per-player attention + state snapshot loaded
+        # lazily on first play. Empty dicts means "not loaded yet"; an
+        # entry of 0 / 'stable' means "loaded, this player has nothing
+        # going on." Refreshed at the start of each game so mid-game DB
+        # churn isn't required.
+        self._anomalyAttention: Dict[int, float] = {}
+        self._anomalyState: Dict[int, str] = {}
+        self._anomalyAttentionLoaded: bool = False
+        # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
+        # if this game is happening inside an active Criticality window.
+        # Set when attention is loaded.
+        self._criticalityMultiplier: float = 1.0
+        # Per-game glitch hygiene: hard cap + cooldown so anomaly glitch
+        # lines stay rare and spaced out instead of flooding the play feed.
+        self._glitchCountThisGame: int = 0
+        self._lastGlitchPlayNumber: int = -10_000
+        # L3 stumbles (the negative glitch) are capped per team per game.
+        self._l3NegByTeam: Dict[str, int] = {}
+
         # Set up timing manager for game-level delays
         if timingManager is not None:
             self.timingManager = timingManager
@@ -644,12 +831,16 @@ class Game:
         self.currentQuarter = 0
         
         # Game clock system
-        self.gameClockSeconds = 900  # 15 minutes per quarter
+        self.gameClockSeconds = self.gameRules.quarterLengthSeconds  # 15 minutes per quarter
         self.clockRunning = False
         self.homeTimeoutsRemaining = 3
         self.awayTimeoutsRemaining = 3
         self.twoMinuteWarningShown = False
-        
+        # True from the instant the two-minute warning stops the clock until the
+        # next snap. Blocks teams from burning a timeout on the dead clock right
+        # after the warning (the warning already gave a free stop).
+        self._clockStoppedByWarning = False
+
         self.homePlaysTotal = 0
         self.awayPlaysTotal = 0
         self.home1stDownsTotal = 0
@@ -725,6 +916,9 @@ class Game:
         self.momentum = 0.0              # -100 to +100 (positive = home, negative = away)
         self.momentumStreak = 0          # consecutive events for same side, capped ±MAX_STREAK
         self.lastMomentumTeam = None     # team that last gained momentum
+        # Diagnostics (sampled in _applyMomentumEffect, dumped by _logPlayAnalytics)
+        self._peakAbsMomentum = 0.0
+        self._playsAbove30Mom = 0
 
         # Coaching gameplans (pre-game scouting, generated once per game)
         if GAMEPLAN_AVAILABLE:
@@ -1249,7 +1443,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         if kicker is None:
             return False
-        kickerMax = kicker.maxFgDistance - FG_SNAP_DISTANCE
+        kickerMax = kicker.maxFgDistance - self.gameRules.fgSnapDistance
         if self.yardsToEndzone > kickerMax:
             return False
         try:
@@ -1257,40 +1451,361 @@ class Game:
         except Exception:
             return False
 
-    def _logLateGameDecision(self, decision: str, **context) -> None:
-        """Append a structured entry for late-game FG/clock decisions to
-        logs/late_game_decisions.jsonl. Used for offline analysis of how
-        the decision logic plays out across many seasons. Never raises —
-        diagnostics must not break the game."""
+    def _logPressureCorrelation(self) -> None:
+        """Append one JSONL entry per team to logs/pressure_correlation.jsonl
+        capturing pressure level, game outcome, ELO delta, form state, and
+        roster resolve average. Used to look for correlation between market
+        expectation pressure and on-field outcomes. Never raises — diagnostic
+        must not break the game loop.
+        """
         try:
             import json as _json
             import os
             from datetime import datetime
-            entry = {
-                'ts': datetime.utcnow().isoformat() + 'Z',
-                'decision': decision,
+            from constants import (
+                EXPECTATION_SCALE_BY_TIER,
+                EXPECTATION_RELIEF_BY_TIER,
+                EXPECTATION_DELTA_CAP,
+                CHAMPIONSHIP_OVERFLOW_FACTOR,
+            )
+            try:
+                from api_response_builders import TeamResponseBuilder as _Trb
+            except Exception:
+                _Trb = None
+
+            def _scaledPressure(base, tier, streakAdd=0.0):
+                effective = base + streakAdd
+                delta = effective - 1.0
+                if delta > 0:
+                    ts = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+                    cap = min(delta, EXPECTATION_DELTA_CAP)
+                    overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+                    return 1.0 + cap * ts + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
+                rs = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+                return 1.0 + delta * rs
+
+            def _rosterAttrAvg(team, attrName):
+                """Generic roster average for a player.attributes value or method.
+                Returns None if no roster players carry the attr.
+                """
+                roster = getattr(team, 'rosterDict', None) or {}
+                vals = []
+                for p in roster.values():
+                    if p is None:
+                        continue
+                    attrs = getattr(p, 'attributes', None)
+                    if attrs is None:
+                        continue
+                    val = getattr(attrs, attrName, None)
+                    if val is None:
+                        continue
+                    try:
+                        v = val() if callable(val) else val
+                        vals.append(float(v))
+                    except Exception:
+                        continue
+                return round(sum(vals) / len(vals), 3) if vals else None
+
+            def _rosterResolveAvg(team):
+                return _rosterAttrAvg(team, 'adversityResolve')
+
+            def _rosterPressureHandlingAvg(team):
+                return _rosterAttrAvg(team, 'pressureHandling')
+
+            for team, opp, score, oppScore, preElo, prePressure, preTier, preStreak, preStreakP in (
+                (self.homeTeam, self.awayTeam, self.homeScore, self.awayScore,
+                 getattr(self, '_preGameHomeElo', 1500),
+                 getattr(self, '_preGameHomePressureMod', 1.0),
+                 getattr(self, '_preGameHomeTier', 'UNKNOWN'),
+                 getattr(self, '_preGameHomeStreak', 0),
+                 getattr(self, '_preGameHomeStreakP', 0.0)),
+                (self.awayTeam, self.homeTeam, self.awayScore, self.homeScore,
+                 getattr(self, '_preGameAwayElo', 1500),
+                 getattr(self, '_preGameAwayPressureMod', 1.0),
+                 getattr(self, '_preGameAwayTier', 'UNKNOWN'),
+                 getattr(self, '_preGameAwayStreak', 0),
+                 getattr(self, '_preGameAwayStreakP', 0.0)),
+            ):
+                preEloOpp = (getattr(self, '_preGameAwayElo', 1500)
+                             if team is self.homeTeam
+                             else getattr(self, '_preGameHomeElo', 1500))
+                won = score > oppScore
+                tied = score == oppScore
+                formState = None
+                try:
+                    if _Trb is not None:
+                        formState = _Trb.computeFormState(team)
+                except Exception:
+                    formState = None
+                entry = {
+                    'ts': datetime.utcnow().isoformat() + 'Z',
+                    'season': getattr(self, 'seasonNumber', None),
+                    'week': getattr(self, 'week', None),
+                    'gameId': getattr(self, 'id', None),
+                    'gameType': getattr(self, 'gameType', None),
+                    'playoffRound': getattr(self, 'playoffRound', None),
+                    'team': team.name,
+                    'opponent': opp.name,
+                    'tier': preTier,
+                    'pressureBase': round(prePressure, 3),
+                    'pressureScaled': round(_scaledPressure(prePressure, preTier, preStreakP), 3),
+                    'priorSeasonPressure': round(getattr(team, 'priorSeasonPressure', 1.0), 3),
+                    'inSeasonPressure': round(getattr(team, 'inSeasonPressure', 1.0), 3),
+                    'preGameWinStreak': preStreak,
+                    'streakPressure': round(preStreakP, 3),
+                    'won': won,
+                    'tied': tied,
+                    'score': score,
+                    'opponentScore': oppScore,
+                    'preEloDiff': round(preElo - preEloOpp, 1),
+                    'preElo': round(preElo, 1),
+                    'formState': formState,
+                    'rosterResolveAvg': _rosterResolveAvg(team),
+                    'rosterPressureHandlingAvg': _rosterPressureHandlingAvg(team),
+                }
+                os.makedirs('logs', exist_ok=True)
+                with open('logs/pressure_correlation.jsonl', 'a') as f:
+                    f.write(_json.dumps(entry) + '\n')
+        except Exception:
+            pass
+
+    def _tallyCoachArchetype(self, key: str) -> None:
+        """Increment a per-game counter for which coach-personality branch
+        was taken in the situational mods. Surfaced in sim_analytics for
+        offline analysis. Never raises.
+        """
+        try:
+            if not hasattr(self, '_coachArchetypeCounts'):
+                self._coachArchetypeCounts = {}
+            self._coachArchetypeCounts[key] = self._coachArchetypeCounts.get(key, 0) + 1
+        except Exception:
+            pass
+
+    def _logPlayAnalytics(self) -> None:
+        """Append one JSONL entry per game to logs/sim_analytics.jsonl
+        aggregating per-play data so an offline analyzer can answer:
+          - how often do long runs / deep passes go for TDs
+          - YAC distribution
+          - rushing vs passing yards
+          - interception rate, by pass tier
+
+        Never raises — diagnostic must not break the game loop.
+        """
+        try:
+            import json as _json
+            import os
+
+            agg = {
                 'season': getattr(self, 'seasonNumber', None),
                 'week': getattr(self, 'week', None),
                 'gameId': getattr(self, 'id', None),
-                'gameType': getattr(self, 'gameType', None),
-                'quarter': self.currentQuarter,
-                'secondsRemaining': self.gameClockSeconds,
-                'down': self.down,
-                'yardsToFirstDown': self.yardsToFirstDown,
-                'yardsToEndzone': self.yardsToEndzone,
-                'offenseAbbr': getattr(self.offensiveTeam, 'abbr', None),
-                'defenseAbbr': getattr(self.defensiveTeam, 'abbr', None),
+                'home': self.homeTeam.abbr,
+                'away': self.awayTeam.abbr,
                 'homeScore': self.homeScore,
                 'awayScore': self.awayScore,
-                'offTimeoutsRemaining': (
-                    self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
-                    else self.awayTimeoutsRemaining
-                ),
-                **context,
+                # Play counts
+                'totalPlays': 0,
+                'runPlays': 0,
+                'passAttempts': 0,
+                'passCompletions': 0,
+                'passByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Touchdowns
+                'runTd': 0,
+                'passTd': 0,
+                'runTd30plus': 0,
+                'passTd30plus': 0,
+                'passTdByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'compByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'dropByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'incompleteByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'throwAways': 0,
+                'throwAwayByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Diagnostic sums (avg = sum/count). 'thrownByTier' = balls
+                # actually launched (excludes sacks & throwaways).
+                'thrownByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'tqSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'opennessSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'catchProbSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'contactProbSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'secureProbSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'covDefSumByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Turnovers
+                'interceptions': 0,
+                'intByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                'fumblesLost': 0,
+                # Sacks (a sack is a pass play that ended before the throw)
+                'sacks': 0,
+                'sackYards': 0,  # negative yards lost to sacks (positive int — magnitude)
+                'sackByTier': {'short': 0, 'medium': 0, 'long': 0, 'deep': 0, 'hailMary': 0},
+                # Yardage
+                'totalRushYards': 0,
+                'totalPassYards': 0,
+                'totalAirYards': 0,
+                'totalYac': 0,
+                'longestRun': 0,
+                'longestPass': 0,
+                # Big plays
+                'runs20plus': 0,
+                'runs30plus': 0,
+                'passes20plus': 0,
+                'passes30plus': 0,
+                'passes40plus': 0,
+                # Coach archetype counters (per situational-mods entry)
+                'coachArchetypes': dict(getattr(self, '_coachArchetypeCounts', {}) or {}),
+                # Momentum analytics — read by analyze_momentum.py
+                'finalAbsMomentum': round(abs(self.momentum), 1),
+                'peakAbsMomentum': round(getattr(self, '_peakAbsMomentum', 0.0), 1),
+                'playsAbove30Mom': getattr(self, '_playsAbove30Mom', 0),
+                'bigPlays': 0,            # filled in feed scan
+                'momentumShifts': 0,      # filled in feed scan
+                'homeQ1': getattr(self, 'homeScoreQ1', 0),
+                'homeQ2': getattr(self, 'homeScoreQ2', 0),
+                'homeQ3': getattr(self, 'homeScoreQ3', 0),
+                'homeQ4': getattr(self, 'homeScoreQ4', 0),
+                'homeOT': getattr(self, 'homeScoreOT', 0),
+                'awayQ1': getattr(self, 'awayScoreQ1', 0),
+                'awayQ2': getattr(self, 'awayScoreQ2', 0),
+                'awayQ3': getattr(self, 'awayScoreQ3', 0),
+                'awayQ4': getattr(self, 'awayScoreQ4', 0),
+                'awayOT': getattr(self, 'awayScoreOT', 0),
+                'preGameHomeWinProb': round(getattr(self, 'preGameHomeWinProbability', 0.5), 3),
+                # Disposition / mental stack snapshots — read by
+                # analyze_disposition.py. Each phase is the avg starter
+                # overallRating after that modifier ran (baseline is
+                # post-league-compression but pre-fatigue).
+                'home_avgBaseline':         round(self._avgStarterSnapshot(self.homeTeam, 'baseline'), 2),
+                'home_avgAfterFatigue':     round(self._avgStarterSnapshot(self.homeTeam, 'afterFatigue'), 2),
+                'home_avgAfterDisposition': round(self._avgStarterSnapshot(self.homeTeam, 'afterDisposition'), 2),
+                'home_avgAfterCap':         round(self._avgStarterSnapshot(self.homeTeam, 'afterCap'), 2),
+                'home_avgEndGame':          round(self._avgStarterCurrentRating(self.homeTeam), 2),
+                'home_dispositionLabel':    getattr(self.homeTeam, '_dispositionLabel', None),
+                'home_dispositionMult':     round(getattr(self.homeTeam, '_dispositionMultiplier', 1.0), 4),
+                'home_formState':           getattr(self.homeTeam, '_dispositionFormState', None),
+                'away_avgBaseline':         round(self._avgStarterSnapshot(self.awayTeam, 'baseline'), 2),
+                'away_avgAfterFatigue':     round(self._avgStarterSnapshot(self.awayTeam, 'afterFatigue'), 2),
+                'away_avgAfterDisposition': round(self._avgStarterSnapshot(self.awayTeam, 'afterDisposition'), 2),
+                'away_avgAfterCap':         round(self._avgStarterSnapshot(self.awayTeam, 'afterCap'), 2),
+                'away_avgEndGame':          round(self._avgStarterCurrentRating(self.awayTeam), 2),
+                'away_dispositionLabel':    getattr(self.awayTeam, '_dispositionLabel', None),
+                'away_dispositionMult':     round(getattr(self.awayTeam, '_dispositionMultiplier', 1.0), 4),
+                'away_formState':           getattr(self.awayTeam, '_dispositionFormState', None),
             }
+
+            for item in self.gameFeed:
+                play = item.get('play') if isinstance(item, dict) else None
+                if play is None or not hasattr(play, 'playType'):
+                    continue
+                if getattr(play, 'isBigPlay', False):
+                    agg['bigPlays'] += 1
+                if getattr(play, 'isMomentumShift', False):
+                    agg['momentumShifts'] += 1
+                pt = getattr(play, 'playType', None)
+                ptName = pt.name if pt and hasattr(pt, 'name') else None
+
+                if ptName == 'Run':
+                    agg['totalPlays'] += 1
+                    agg['runPlays'] += 1
+                    yd = int(getattr(play, 'yardage', 0) or 0)
+                    agg['totalRushYards'] += yd
+                    agg['longestRun'] = max(agg['longestRun'], yd)
+                    if yd >= 20:
+                        agg['runs20plus'] += 1
+                    if yd >= 30:
+                        agg['runs30plus'] += 1
+                    if getattr(play, 'isTd', False):
+                        agg['runTd'] += 1
+                        if yd >= 30:
+                            agg['runTd30plus'] += 1
+
+                elif ptName == 'Pass':
+                    agg['totalPlays'] += 1
+                    agg['passAttempts'] += 1
+                    passType = getattr(play, 'passType', None)
+                    ptName2 = passType.name if passType and hasattr(passType, 'name') else None
+                    # Throwaways and sacks fall back to intendedPassTier so they
+                    # still get bucketed under the play's designed tier.
+                    if ptName2 in agg['passByTier']:
+                        tierName = ptName2
+                    else:
+                        tierName = getattr(play, 'intendedPassTier', None)
+                    if tierName in agg['passByTier']:
+                        agg['passByTier'][tierName] += 1
+                    isComplete = getattr(play, 'isPassCompletion', False)
+                    isInt = getattr(play, 'isInterception', False)
+                    isSack = getattr(play, 'isSack', False)
+                    isDrop = getattr(play, 'passIsDropped', False)
+                    isThrowAway = (ptName2 == 'throwAway')
+                    if isInt:
+                        agg['interceptions'] += 1
+                        if tierName in agg['intByTier']:
+                            agg['intByTier'][tierName] += 1
+                    if isSack:
+                        agg['sacks'] += 1
+                        if tierName in agg['sackByTier']:
+                            agg['sackByTier'][tierName] += 1
+                        # Sack play.yardage is stored negative (loss); record
+                        # the magnitude so we can compute Net Yards Per Attempt.
+                        sackYd = int(getattr(play, 'yardage', 0) or 0)
+                        if sackYd < 0:
+                            agg['sackYards'] += -sackYd
+                    if isDrop and tierName in agg['dropByTier']:
+                        agg['dropByTier'][tierName] += 1
+                    if isThrowAway:
+                        agg['throwAways'] += 1
+                        if tierName in agg['throwAwayByTier']:
+                            agg['throwAwayByTier'][tierName] += 1
+                    # Incomplete = pass attempt, not sacked, not throwaway,
+                    # not caught, not picked, not dropped (true missed throw).
+                    if (not isSack and not isThrowAway and not isComplete
+                            and not isInt and not isDrop):
+                        if tierName in agg['incompleteByTier']:
+                            agg['incompleteByTier'][tierName] += 1
+                    # Per-tier diagnostic sums — only counted on actual throws
+                    # (not sacks or throwaways) since that's where the model
+                    # produced contact/secure/catch probabilities.
+                    if not isSack and not isThrowAway and tierName in agg['thrownByTier']:
+                        insights2 = getattr(play, 'insights', None) or {}
+                        passI = insights2.get('pass', {}) if isinstance(insights2, dict) else {}
+                        if 'throwQuality' in passI:
+                            agg['thrownByTier'][tierName] += 1
+                            agg['tqSumByTier'][tierName] += passI.get('throwQuality', 0) or 0
+                            agg['opennessSumByTier'][tierName] += passI.get('rcvOpenness', 0) or 0
+                            agg['catchProbSumByTier'][tierName] += passI.get('catchProbability', 0) or 0
+                            agg['contactProbSumByTier'][tierName] += passI.get('contactProbability', 0) or 0
+                            agg['secureProbSumByTier'][tierName] += passI.get('secureProbability', 0) or 0
+                            agg['covDefSumByTier'][tierName] += passI.get('catchDefCoverage', 0) or 0
+                    if isComplete:
+                        agg['passCompletions'] += 1
+                        if tierName in agg['compByTier']:
+                            agg['compByTier'][tierName] += 1
+                        yd = int(getattr(play, 'yardage', 0) or 0)
+                        agg['totalPassYards'] += yd
+                        agg['longestPass'] = max(agg['longestPass'], yd)
+                        insights = getattr(play, 'insights', None) or {}
+                        passInsight = insights.get('pass', {}) if isinstance(insights, dict) else {}
+                        airYards = int(passInsight.get('airYards', 0) or 0)
+                        yac = int(passInsight.get('yac', 0) or 0)
+                        agg['totalAirYards'] += airYards
+                        agg['totalYac'] += yac
+                        if yd >= 20:
+                            agg['passes20plus'] += 1
+                        if yd >= 30:
+                            agg['passes30plus'] += 1
+                        if yd >= 40:
+                            agg['passes40plus'] += 1
+                        if getattr(play, 'isTd', False):
+                            agg['passTd'] += 1
+                            if tierName in agg['passTdByTier']:
+                                agg['passTdByTier'][tierName] += 1
+                            if yd >= 30:
+                                agg['passTd30plus'] += 1
+
+                if getattr(play, 'isFumbleLost', False):
+                    agg['fumblesLost'] += 1
+
             os.makedirs('logs', exist_ok=True)
-            with open('logs/late_game_decisions.jsonl', 'a') as f:
-                f.write(_json.dumps(entry) + '\n')
+            with open('logs/sim_analytics.jsonl', 'a') as f:
+                f.write(_json.dumps(agg) + '\n')
         except Exception:
             pass
 
@@ -1430,6 +1945,10 @@ class Game:
             return
         if not self.clockRunning:
             return
+        # The two-minute warning already stopped the clock for free — don't
+        # waste a timeout on the dead clock before a snap runs.
+        if self._clockStoppedByWarning:
+            return
         secs = self.gameClockSeconds
         # Determine if the defensive team is trailing
         defIsHome = (self.defensiveTeam == self.homeTeam)
@@ -1445,25 +1964,33 @@ class Game:
         defTimeouts = self.homeTimeoutsRemaining if defIsHome else self.awayTimeoutsRemaining
         if defTimeouts <= 0:
             return
-        # Time window: Q4/OT up to 5 min; Q2 up to 60 sec
+        # Time window: a defense burns timeouts to get the ball back, which only
+        # pays off close to the end. Inside 2:00 for a one-score game; extended
+        # to 3:00 only when down multiple scores (genuinely needs the clock).
+        # Calling them at 4-5 min in a tight game is the "no coach does that" case.
         isEndGame = self.currentQuarter == 4 or self.currentQuarter >= 5
-        threshold = 300 if isEndGame else 60
+        multiScore = deficit >= 9
+        if isEndGame:
+            threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
+        else:
+            threshold = 60  # Q2 end-of-half
         if secs > threshold:
+            return
+        # Don't waste a timeout right before the free two-minute-warning stop.
+        if (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                and self.gameRules.timeoutClockThreshold < secs
+                <= self.gameRules.timeoutClockThreshold + 15):
             return
         defCoach = getattr(self.defensiveTeam, 'coach', None)
         defGameIQ = self._coachClockIQ(defCoach)
         # Urgency-based timeout probability
-        if isEndGame and secs <= TIMEOUT_CLOCK_THRESHOLD:
-            # Under 2 min: high urgency (original behavior)
-            toChance = 0.5 + 0.5 * defGameIQ
-        elif isEndGame:
-            # 2-5 min: scale by time urgency and deficit size
-            urgency = (300 - secs) / 180  # 0→1 as time decreases toward 2 min
-            deficitScale = min(1.0, deficit / 14)
-            toChance = urgency * deficitScale * (0.3 + 0.5 * defGameIQ)
+        if secs <= self.gameRules.timeoutClockThreshold:
+            # Inside 2:00 — high urgency to get the ball back
+            toChance = (0.5 + 0.5 * defGameIQ) if isEndGame else (0.4 + 0.4 * defGameIQ)
         else:
-            # Q2: moderate urgency
-            toChance = 0.4 + 0.4 * defGameIQ
+            # 2-3 min, multi-score only — urgency builds toward the 2-min mark
+            urgency = max(0.0, (180 - secs) / 60)
+            toChance = (0.25 + 0.45 * defGameIQ) * urgency
         if _random.random() >= toChance:
             return
         # Call timeout
@@ -1492,7 +2019,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         if not kicker:
             return 0.0
-        fgDist = self.yardsToEndzone + FG_SNAP_DISTANCE
+        fgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
         baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
         normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
         fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
@@ -1508,7 +2035,7 @@ class Game:
         The kicker's in-game performance also shifts the threshold — recent misses
         make coaches more cautious, while a perfect day builds trust.
         """
-        baseThreshold = FG_MIN_ATTEMPT_PROB  # 0.20
+        baseThreshold = self.gameRules.fgMinAttemptProb  # 0.20
 
         # ── Coach aggressiveness ──
         # aggrNorm: -1 (conservative) to +1 (aggressive)
@@ -1542,7 +2069,7 @@ class Game:
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
         coach = getattr(self.offensiveTeam, 'coach', None)
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -1688,7 +2215,7 @@ class Game:
                     return
 
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxDistance = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
         inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold
@@ -1766,7 +2293,7 @@ class Game:
         elif scoreDiff < 0 and inFieldGoalRange:
             deficit = abs(scoreDiff)
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
-            if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD:
+            if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold:
                 gameIQ = self._coachClockIQ(coach)
                 if deficit <= 3:
                     # FG ties or wins — chip shots are automatic, longer FGs nearly so
@@ -1789,7 +2316,7 @@ class Game:
                     # As time dwindles, FG becomes pointless — below 45 sec, no one kicks
                     secs = self.gameClockSeconds
                     if secs >= 45:
-                        timeFactor = (secs - 45) / (TIMEOUT_CLOCK_THRESHOLD - 45)
+                        timeFactor = (secs - 45) / (self.gameRules.timeoutClockThreshold - 45)
                         # Bad coaches (low IQ) more likely to settle; good coaches go for TD
                         fgChance = timeFactor * max(0.0, 0.35 - 0.3 * gameIQ)
                         if _random.random() < fgChance:
@@ -2028,61 +2555,58 @@ class Game:
                 return
 
     def _getBasePlayWeights(self) -> dict:
-        """Return raw down/distance base weights before any modifier layers."""
+        """Return raw down/distance base weights before any modifier layers.
+        Tuned to land roughly 60/40 pass/run across a typical drive, which
+        is the NFL-realistic split. Previously was running 85/15 in games
+        with extended trailing — the base 1st-down and 2nd-and-medium
+        weights were too pass-heavy, compounding with situational pushes
+        to extinguish the run game.
+        """
         ytg = self.yardsToFirstDown
         if self.down == 1:
-            return {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 15.0}
+            # 1st down: balanced 50/50 base. Most plays happen here, so
+            # this is the biggest lever on overall pass/run ratio.
+            return {'run': 50.0, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
-                return {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0}
+                # 2nd & short — run preferred (was already).
+                return {'run': 58.0, 'short': 28.0, 'medium': 10.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 9:
-                return {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 15.0}
+                # 2nd & medium — closer to balanced, was 35/65 too pass-heavy.
+                return {'run': 45.0, 'short': 20.0, 'medium': 25.0, 'long': 9.0, 'deep': 1.0}
             else:
-                return {'run': 20.0, 'short': 20.0, 'medium': 30.0, 'long': 30.0}
+                # 2nd & long — obvious passing situation.
+                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
         else:
             if ytg <= 3:
-                return {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0}
+                # 3rd & short — run is the percentage call.
+                return {'run': 60.0, 'short': 32.0, 'medium': 4.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 5:
-                return {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0}
+                # 3rd & medium-short — was 20% run, bump to 25%.
+                return {'run': 25.0, 'short': 45.0, 'medium': 21.0, 'long': 9.0, 'deep': 0.0}
             elif ytg <= 12:
-                return {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 25.0}
+                # 3rd & medium-long — still mostly pass but a draw is realistic.
+                return {'run': 12.0, 'short': 15.0, 'medium': 48.0, 'long': 23.0, 'deep': 2.0}
             else:
-                return {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 70.0}
+                # 3rd & extra long — almost always pass.
+                return {'run': 6.0, 'short': 10.0, 'medium': 15.0, 'long': 61.0, 'deep': 8.0}
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""
-        ytg = self.yardsToFirstDown
-        if self.down == 1:
-            weights = {'run': 40.0, 'short': 25.0, 'medium': 20.0, 'long': 15.0}
-        elif self.down == 2:
-            if ytg <= 4:
-                weights = {'run': 55.0, 'short': 30.0, 'medium': 10.0, 'long': 5.0}
-            elif ytg <= 9:
-                weights = {'run': 35.0, 'short': 20.0, 'medium': 30.0, 'long': 15.0}
-            else:
-                weights = {'run': 20.0, 'short': 20.0, 'medium': 30.0, 'long': 30.0}
-        else:  # down == 3
-            if ytg <= 3:
-                weights = {'run': 55.0, 'short': 35.0, 'medium': 5.0, 'long': 5.0}
-            elif ytg <= 5:
-                weights = {'run': 20.0, 'short': 45.0, 'medium': 25.0, 'long': 10.0}
-            elif ytg <= 12:
-                weights = {'run': 10.0, 'short': 15.0, 'medium': 50.0, 'long': 25.0}
-            else:
-                weights = {'run': 5.0, 'short': 10.0, 'medium': 15.0, 'long': 70.0}
+        weights = dict(self._getBasePlayWeights())
 
         weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
-        # moving. Avoid deep passes (incomplete = clock stop) and medium-deep
-        # routes that risk turnover or sideline catches.
+        # moving. Avoid downfield passes (incomplete = clock stop).
         if self._isFgDrainMode():
             weights['run'] = weights.get('run', 0) * 3.0
             weights['short'] = weights.get('short', 0) * 1.0
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
+            weights['deep'] = weights.get('deep', 0) * 0.05
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
@@ -2099,51 +2623,148 @@ class Game:
         clockIQ = self._coachClockIQ(coach)
         sit = 0.4 + 0.6 * clockIQ
 
-        if q == 4 and scoreDiff < 0:
-            if secs < 120:
-                weights['run'] *= 1 + (0.1 - 1) * sit       # optimal: ×0.1
-                weights['short'] *= 1 + (1.3 - 1) * sit     # optimal: ×1.3
-                weights['medium'] *= 1 + (1.8 - 1) * sit    # optimal: ×1.8
-                weights['long'] *= 1 + (2.5 - 1) * sit      # optimal: ×2.5
-            elif secs < 300:
-                weights['run'] *= 1 + (0.3 - 1) * sit
-                weights['medium'] *= 1 + (1.5 - 1) * sit
-                weights['long'] *= 1 + (1.8 - 1) * sit
+        def _mul(key, m):
+            weights[key] = weights.get(key, 0) * (1 + (m - 1) * sit)
+
+        def _flat(key, m):
+            weights[key] = weights.get(key, 0) * m
+
+        # Coach attributes normalized to [0, 1] for personality math.
+        # Raw normalization yields [-1, +1] around neutral (80); shift+scale
+        # to [0, 1] so median coaches land at 0.5 and the trailing/leading
+        # archetypes actually fire across the population (not just elites).
+        if coach:
+            adaptRaw = (coach.adaptability - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+            aggrRaw  = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+            adapt = max(0.0, min(1.0, (adaptRaw + 1.0) / 2.0))
+            aggr  = max(0.0, min(1.0, (aggrRaw + 1.0) / 2.0))
+        else:
+            adapt = aggr = 0.5
+
+        # ── Q4 LAST 2 MIN trailing — universal desperation, no coach modulation ──
+        # When the clock is genuinely out, every coach throws downfield.
+        if q == 4 and scoreDiff < 0 and secs < 120:
+            _mul('run', 0.1)
+            _mul('short', 1.3)
+            _mul('medium', 1.8)
+            _mul('long', 2.5)
+            _mul('deep', 3.0)
+
+        # ── TRAILING (Q3+ with time, not desperation mode) — coach identity ──
+        # Disciplined coaches (high adapt, low aggr) sustain drives via short/
+        # medium. Aggressive-undisciplined coaches panic into deep shots — the
+        # shutout pattern: chuck deep, miss, drives die, deficit compounds.
+        # Same direction (more pass) but quality of pass selection differs.
+        elif scoreDiff < -7 and (q == 3 or (q == 4 and secs >= 120)):
+            deficit = abs(scoreDiff)
+            if deficit <= 14:
+                deficitTier = 0.4
+            elif deficit <= 21:
+                deficitTier = 0.7
             else:
-                weights['run'] *= 1 + (0.6 - 1) * sit
-                weights['medium'] *= 1 + (1.2 - 1) * sit
-                weights['long'] *= 1 + (1.3 - 1) * sit
+                deficitTier = 1.0
 
-        if q == 4 and scoreDiff > 0:
-            weights['run'] *= 1 + (1.6 - 1) * sit
-            weights['long'] *= 1 + (0.3 - 1) * sit
-            weights['medium'] *= 1 + (0.7 - 1) * sit
+            # Disciplined response — shift toward sustainable routes
+            discipline = adapt * (1 - aggr * 0.4)
+            shiftDisciplined = discipline * deficitTier
+            _flat('short',  1 + shiftDisciplined * 0.5)
+            _flat('medium', 1 + shiftDisciplined * 0.3)
+            _flat('long',   1 - shiftDisciplined * 0.3)
+            _flat('deep',   1 - shiftDisciplined * 0.5)
+            _flat('run',    1 - shiftDisciplined * 0.3)
 
-        if q == 3 and scoreDiff < -10:
-            weights['run'] *= 1 + (0.7 - 1) * sit
-            weights['medium'] *= 1 + (1.2 - 1) * sit
-            weights['long'] *= 1 + (1.4 - 1) * sit
+            # Panic response — additional deep/long bias for the un-adaptive
+            # aggressive coach. Drives die faster, deficit compounds.
+            panic = aggr * (1 - adapt) * deficitTier
+            _flat('deep', 1 + panic * 0.7)
+            _flat('long', 1 + panic * 0.4)
+            _flat('run',  1 - panic * 0.4)
+
+            self._tallyCoachArchetype(
+                'trailing_disciplined' if discipline > panic else 'trailing_panic'
+            )
+
+        # ── LEADING (Q3+ with significant lead) — coach archetype ──
+        # Killer (high aggr + high adapt) presses the throat. Clock-killer
+        # (low aggr + high adapt) drains the clock professionally. Reckless
+        # (high aggr + low adapt) keeps chucking deep, sets up the comeback.
+        # Cruise (low both) coasts on the default playbook.
+        elif scoreDiff > 7 and (q == 3 or q == 4):
+            if scoreDiff <= 14:
+                leadTier = 0.4
+            elif scoreDiff <= 21:
+                leadTier = 0.7
+            else:
+                leadTier = 1.0
+
+            killerMode = aggr * (0.5 + adapt * 0.5)
+            clockKill  = (1 - aggr) * adapt
+
+            if killerMode > 0.45:
+                # Press the advantage — maintain attack, slight deep pullback
+                _flat('deep',   1 - leadTier * 0.3)
+                _flat('medium', 1 + leadTier * 0.1)
+                _flat('long',   1 + leadTier * 0.1)
+                self._tallyCoachArchetype('leading_killer')
+            elif clockKill > 0.35:
+                # Drain the clock with runs and quick passes
+                _flat('run',    1 + leadTier * 0.6)
+                _flat('deep',   1 - leadTier * 0.8)
+                _flat('long',   1 - leadTier * 0.5)
+                _flat('medium', 1 - leadTier * 0.2)
+                self._tallyCoachArchetype('leading_clockkill')
+            elif aggr > 0.5:
+                # Reckless leader — keeps chucking, opens door for comeback
+                _flat('deep', 1 + leadTier * 0.3)
+                _flat('long', 1 + leadTier * 0.2)
+                _flat('run',  1 - leadTier * 0.2)
+                self._tallyCoachArchetype('leading_reckless')
+            else:
+                # Cruise control — no adjustment, vulnerable to comeback
+                self._tallyCoachArchetype('leading_cruise')
+
+        # ── PROTECTING A ONE-SCORE LEAD late in Q4/OT ──
+        # The big-lead branch above only fires at 8+. A 1-7 point lead in the
+        # final minutes is exactly when a real coach runs the ball in-bounds to
+        # bleed clock and force the opponent to spend timeouts — incompletions
+        # would stop your own clock. Ramps as the clock winds down; coach-scaled
+        # via _mul so poor clock managers protect less.
+        elif 0 < scoreDiff <= 7 and q >= 4:
+            if secs <= 120:
+                protectUrgency = 1.0
+            elif secs <= 300:
+                protectUrgency = 0.6
+            else:
+                protectUrgency = 0.0
+            if protectUrgency > 0:
+                _mul('run',    1 + 0.7 * protectUrgency)
+                _mul('short',  1 + 0.2 * protectUrgency)
+                _mul('medium', 1 - 0.1 * protectUrgency)
+                _mul('long',   1 - 0.5 * protectUrgency)
+                _mul('deep',   1 - 0.7 * protectUrgency)
 
         # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
         if q == 2 and scoreDiff < 0 and secs < 120:
-            weights['run'] *= 1 + (0.3 - 1) * sit        # cut runs significantly
-            weights['short'] *= 1 + (1.2 - 1) * sit      # slight short boost
-            weights['medium'] *= 1 + (1.4 - 1) * sit     # moderate medium boost
-            weights['long'] *= 1 + (1.6 - 1) * sit       # less extreme than Q4
+            _mul('run', 0.3)
+            _mul('short', 1.2)
+            _mul('medium', 1.4)
+            _mul('long', 1.6)
+            _mul('deep', 2.0)            # shot before halftime
 
         # Q2 end-of-half: leading team milks clock into halftime
         if q == 2 and scoreDiff > 0 and secs < 120:
-            weights['run'] *= 1 + (1.4 - 1) * sit        # run-heavy
-            weights['long'] *= 1 + (0.5 - 1) * sit       # avoid risky deep shots
+            _mul('run', 1.4)
+            _mul('long', 0.5)
+            _mul('deep', 0.3)
 
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
-            weights['run'] *= 1.3; weights['long'] *= 0.2
+            _flat('run', 1.3); _flat('long', 0.2); _flat('deep', 0.1)
         elif self.yardsToEndzone <= 25:
-            weights['long'] *= 0.5
+            _flat('long', 0.5); _flat('deep', 0.3)
 
         if self.yardsToSafety <= 5:
-            weights['run'] *= 1.4; weights['short'] *= 0.7; weights['long'] *= 0.1
+            _flat('run', 1.4); _flat('short', 0.7); _flat('long', 0.1); _flat('deep', 0.05)
 
         return weights
 
@@ -2160,25 +2781,35 @@ class Game:
 
         if defPassRating < 70:
             boost = 1 + 0.3 * max(0.0, adaptNorm) * (70 - defPassRating) / 10
-            for k in ('short', 'medium', 'long'):
-                weights[k] *= boost
+            for k in ('short', 'medium', 'long', 'deep'):
+                if k in weights:
+                    weights[k] *= boost
 
         return weights
 
     def _applyCoachMods(self, weights: dict, coach) -> dict:
-        """Apply coach personality multipliers to the weight distribution."""
+        """Apply coach personality multipliers to the weight distribution.
+        Deep shots scale most aggressively with the aggressiveness attribute —
+        elite-aggressive coaches (90+) take shots ~3x more often than neutral.
+        """
         if coach is None:
             return weights
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         offMindNorm = (coach.offensiveMind - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
 
+        weights['deep']   = weights.get('deep', 0) * max(0.1, 1 + 1.8 * aggrNorm)
         weights['long']   *= max(0.2, 1 + 0.5 * aggrNorm)
         weights['medium'] *= max(0.5, 1 + 0.15 * aggrNorm)
-        weights['run']    *= max(0.5, 1 - 0.2 * aggrNorm)
-        weights['short']  *= max(0.5, 1 - 0.1 * aggrNorm)
+        # Run/short nerf softened: was 0.2/0.5 and 0.1/0.5 — combined with
+        # the pass-heavy base that produced 85/15 splits in games where a
+        # team was trailing and the coach was aggressive. New floors keep
+        # run viable even for max-aggressive coaches.
+        weights['run']    *= max(0.65, 1 - 0.12 * aggrNorm)
+        weights['short']  *= max(0.65, 1 - 0.08 * aggrNorm)
 
         weights['medium'] *= max(0.5, 1 + 0.3 * offMindNorm)
         weights['long']   *= max(0.5, 1 + 0.2 * offMindNorm)
+        weights['deep']   = weights.get('deep', 0) * max(0.5, 1 + 0.3 * offMindNorm)
         weights['short']  *= max(0.5, 1 - 0.1 * offMindNorm)
 
         return weights
@@ -2194,6 +2825,7 @@ class Game:
             'short':  ['Play8', 'Play10', 'Play11', 'Play12', 'Play14'],
             'medium': ['Play3', 'Play6', 'Play7', 'Play13', 'Play15', 'Play16', 'Play17'],
             'long':   ['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'],
+            'deep':   ['Play21', 'Play22', 'Play23', 'Play24'],
         }
         pool = pools[tier]
 
@@ -2225,8 +2857,9 @@ class Game:
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
         playCall = _random.choices(
-            ['run', 'short', 'medium', 'long'],
-            weights=[weights['run'], weights['short'], weights['medium'], weights['long']]
+            ['run', 'short', 'medium', 'long', 'deep'],
+            weights=[weights['run'], weights['short'], weights['medium'],
+                     weights['long'], weights.get('deep', 0)]
         )[0]
 
         self.play.insights['playCall'] = playCall
@@ -2282,7 +2915,7 @@ class Game:
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
-                drainableSeconds = toadKneels * 4 + freeKneels * KNEEL_DRAIN_SECONDS
+                drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
                 if drainableSeconds >= self.gameClockSeconds:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'kneel',
@@ -2302,7 +2935,7 @@ class Game:
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 30):
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
                 if self.yardsToEndzone <= kickerMax:
                     despThreshold = self._coachFgThreshold(coach)
@@ -2359,7 +2992,7 @@ class Game:
                     and self.gameClockSeconds <= 30
                     and not self._isGarbageTime(scoreDiff)):
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                kickerMax = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+                kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 if self.yardsToEndzone <= kickerMax:
                     winFgProb = self._estimateFgProbability()
                     if winFgProb >= 0.75:
@@ -2399,10 +3032,23 @@ class Game:
             # Urgency scales with remaining time — almost always spike under 30s,
             # less likely at 90s+ (sometimes better to just run a play)
             secs = self.gameClockSeconds
+            # Down gate: spiking forfeits a down, so it's a 1st/2nd-down tool.
+            # On 3rd down it's only defensible to stop the clock for a tying/
+            # winning FG that's in range AND would be the last play (no time
+            # left for another snap) — spike on 3rd, kick on 4th. Never when a
+            # TD is still needed or a play still fits (that just burns the down
+            # into a 4th-down must-score).
+            spikeKicker = self.offensiveTeam.rosterDict.get('k')
+            spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
+            spikeFgException = (self.down == 3 and -3 <= scoreDiff <= 0
+                                and self.yardsToEndzone <= spikeKickerMax
+                                and secs <= 20)
+            spikeDownOK = self.down <= 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
-                    and secs <= SPIKE_CLOCK_THRESHOLD
+                    and secs <= self.gameRules.spikeClockThreshold
                     and timeoutsLeft == 0 and scoreDiff <= 0
+                    and spikeDownOK
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
@@ -2418,31 +3064,38 @@ class Game:
                     }
                     self.play.spike()
                     return
-            # Call timeout (offense): trailing/tied, clock running, timeouts available
-            # Q4/OT: expanded window to 5 min — urgency scales with deficit and time
-            # Q2: standard 2-min window
+            # Call timeout (offense): trailing/tied, clock running, timeouts left.
+            # The offense controls its own tempo with hurry-up, so spending a
+            # timeout to stop the clock only matters inside the final two minutes
+            # — extended to 3:00 only when down multiple scores. Calling them at
+            # 4-5 min is the "no coach does that" case the window used to allow.
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
+            multiScore = scoreDiff <= -9
+            toWindow = (180 if (self.currentQuarter >= 4 and multiScore)
+                        else self.gameRules.timeoutClockThreshold)
+            twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
+                              and self.gameRules.timeoutClockThreshold < secs
+                              <= self.gameRules.timeoutClockThreshold + 15)
             if (isLateGame and scoreDiff <= 0 and self.clockRunning
-                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)):
-                toWindow = 300 if self.currentQuarter >= 4 else TIMEOUT_CLOCK_THRESHOLD
-                if secs <= toWindow:
-                    if secs <= TIMEOUT_CLOCK_THRESHOLD:
-                        # Under 2 min: high urgency (original behavior)
-                        toChance = 0.5 + 0.5 * gameIQ
-                    else:
-                        # 2-5 min (Q4/OT): scale by deficit — bigger hole = more urgent
-                        # Tied games get 0.5 floor — still urgent enough to manage clock
-                        deficitScale = max(0.5, min(1.0, abs(scoreDiff) / 16))
-                        toChance = (0.2 + 0.5 * gameIQ) * deficitScale
-                    if _random.random() < toChance:
-                        self.play.insights['clockMgmt'] = {
-                            'decision': 'timeout',
-                            'reason': 'Stop clock while trailing/tied',
-                            'clockRemaining': secs,
-                            'timeoutsLeft': timeoutsLeft,
-                            'coachClockIQ': round(gameIQ, 2),
-                        }
-                        self._callTimeout(isHome)
+                    and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
+                    and not twoMinImminent and not self._clockStoppedByWarning
+                    and secs <= toWindow):
+                if secs <= self.gameRules.timeoutClockThreshold:
+                    # Inside 2:00 — high urgency
+                    toChance = 0.5 + 0.5 * gameIQ
+                else:
+                    # 2-3 min, multi-score only — urgency builds toward 2:00
+                    urgency = max(0.0, (180 - secs) / 60)
+                    toChance = (0.2 + 0.45 * gameIQ) * urgency
+                if _random.random() < toChance:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'timeout',
+                        'reason': 'Stop clock while trailing/tied',
+                        'clockRemaining': secs,
+                        'timeoutsLeft': timeoutsLeft,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self._callTimeout(isHome)
                 # fall through — still need to call a play
 
         # Overtime
@@ -2488,12 +3141,12 @@ class Game:
 
         # End-of-half / end-of-game FG attempts — compute kicker range once
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - FG_SNAP_DISTANCE) if kicker else 0
+        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
 
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if self.currentQuarter == 2 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
+        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
             if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -2503,7 +3156,7 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if self.currentQuarter == 4 and self.gameClockSeconds < TIMEOUT_CLOCK_THRESHOLD and self.down == 4:
+        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
             if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 canAdvance = self.gameClockSeconds >= 30
                 if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -2617,9 +3270,9 @@ class Game:
         self.offensiveTeam = defense
         self.defensiveTeam = offense
         self.yardsToEndzone = yards
-        self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+        self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
-        self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+        self.yardsToFirstDown = self.gameRules.firstDownDistance
 
 
     def formatPlayText(self):
@@ -2812,25 +3465,56 @@ class Game:
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
                 interceptorName = interceptor.name if interceptor else self.play.defense.abbr
-                text = choice(interceptionList).format(self.play.passer.name, interceptorName)
+                # Pick the flavor from how the throw came about: forced into
+                # coverage, a sailed errant ball, or a good throw a DB jumped.
+                passI = self.play.insights.get('pass', {}) if isinstance(self.play.insights, dict) else {}
+                tq = passI.get('throwQuality')
+                actOpen = passI.get('rcvActualOpenness', passI.get('rcvOpenness'))
+                badThrow = tq is not None and tq < 50
+                covered = actOpen is not None and actOpen < 45
+                if covered and badThrow:
+                    intList = intoCoverageList      # forced it into traffic
+                elif covered:
+                    intList = defPlayPickList        # good throw, DB made the play
+                elif badThrow:
+                    intList = errantPickList         # sailed it to the defender
+                else:
+                    intList = interceptionList       # generic
+                text = choice(intList).format(self.play.passer.name, interceptorName)
             else:
-                if self.play.passType is PassType.short:
-                    if self.play.passIsDropped:
-                        text = choice(shortDropList).format(self.play.passer.name, self.play.receiver.name)
-                    else:
-                        text = choice(shortIncompleteList).format(self.play.passer.name, self.play.receiver.name)
-                elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
-                    if self.play.passIsDropped:
-                        text = choice(deepDropList).format(self.play.passer.name, self.play.receiver.name)
-                    else:
-                        text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
-                elif self.play.passType is PassType.throwAway:
-                    protDiff = self.play.insights.get('pass', {}).get('protectionDiff', 0)
+                # Classify the incompletion: did the QB miss an open man, force
+                # it into coverage, or did the defense break up an on-target ball?
+                passI = self.play.insights.get('pass', {}) if isinstance(self.play.insights, dict) else {}
+                tq = passI.get('throwQuality')
+                actOpen = passI.get('rcvActualOpenness', passI.get('rcvOpenness'))
+                badThrow = tq is not None and tq < 50
+                covered = actOpen is not None and actOpen < 45
+                wideOpen = actOpen is not None and actOpen >= 60
+
+                if self.play.passType is PassType.throwAway:
+                    protDiff = passI.get('protectionDiff', 0)
                     taList = throwAwayPressureList if protDiff < -5 else throwAwayCoverageList
                     text = choice(taList).format(self.play.passer.name)
-                else:
-                    if self.play.passIsDropped:
+                elif self.play.passIsDropped:
+                    # Drops keep their tier-specific flavor.
+                    if self.play.passType is PassType.short:
+                        text = choice(shortDropList).format(self.play.passer.name, self.play.receiver.name)
+                    elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
+                        text = choice(deepDropList).format(self.play.passer.name, self.play.receiver.name)
+                    else:
                         text = choice(midDropList).format(self.play.passer.name, self.play.receiver.name)
+                elif badThrow and wideOpen:
+                    text = choice(overthrowOpenList).format(self.play.passer.name, self.play.receiver.name)
+                elif badThrow and covered:
+                    text = choice(forcedCoverageList).format(self.play.passer.name, self.play.receiver.name)
+                elif covered:
+                    text = choice(coverageBreakupList).format(self.play.passer.name, self.play.receiver.name)
+                else:
+                    # Generic tier incomplete — good throw, open-ish, just didn't connect.
+                    if self.play.passType is PassType.short:
+                        text = choice(shortIncompleteList).format(self.play.passer.name, self.play.receiver.name)
+                    elif self.play.passType is PassType.long or self.play.passType is PassType.hailMary:
+                        text = choice(deepIncompleteList).format(self.play.passer.name, self.play.receiver.name)
                     else:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
@@ -3082,34 +3766,6 @@ class Game:
                 # Don't overwrite clutchPlayerName if already set (clutch wins display priority)
                 if not play.clutchPlayerName:
                     play.clutchPlayerName = topFaller[0]
-
-        # Diagnostic: log clutch/choke tagging so defensive (and offensive)
-        # plays can be reviewed offline. Only fires when something actually
-        # got tagged.
-        if clutchPerformers or chokePerformers:
-            offNames = {n for n, _ in offInvolved}
-            defNames = {n for n, _ in defInvolved}
-            self._logLateGameDecision(
-                'clutchChokeTag',
-                branch='outcome',
-                playType=play.playType.name if play.playType else None,
-                isClutchOutcome=bool(isClutchOutcome),
-                isChokeOutcome=bool(isChokeOutcome),
-                clutchPerformers=clutchPerformers,
-                chokePerformers=chokePerformers,
-                clutchOffense=[n for n in clutchPerformers if n in offNames],
-                clutchDefense=[n for n in clutchPerformers if n in defNames],
-                chokeOffense=[n for n in chokePerformers if n in offNames],
-                chokeDefense=[n for n in chokePerformers if n in defNames],
-                gamePressure=round(play.gamePressure, 1),
-                yardage=play.yardage,
-                isTd=bool(getattr(play, 'isTd', False)),
-                isInterception=bool(getattr(play, 'isInterception', False)),
-                isSack=bool(getattr(play, 'isSack', False)),
-                isFumbleLost=bool(getattr(play, 'isFumbleLost', False)),
-                isFgGood=bool(getattr(play, 'isFgGood', False)),
-                scoreDiff=scoreDiff,
-            )
 
     def _accumulateOffenseStats(self, team, score):
         """Accumulate a team's offensive stats into season totals after a game."""
@@ -3367,7 +4023,7 @@ class Game:
 
         # Initialize clock for Q1
         self.currentQuarter = 1
-        self.gameClockSeconds = 900
+        self.gameClockSeconds = self.gameRules.quarterLengthSeconds
         self.clockRunning = False
         
         # Store ELO ratings for use in win probability calculations
@@ -3407,28 +4063,86 @@ class Game:
             player.gameAttributes = copy.deepcopy(player.attributes)
             player.reset_game_stats()
 
+        # League compression — pull every player's leaf attributes
+        # toward the league mean so the 95-vs-65 gap doesn't auto-win
+        # plays. Runs RIGHT AFTER the deepcopy so all downstream
+        # modifiers (funding morale, fatigue, disposition, soft cap)
+        # stack on the compressed baseline. Profile ratings stay
+        # untouched; only gameAttributes is compressed.
+        self._applyLeagueCompression(self.homeTeam)
+        self._applyLeagueCompression(self.awayTeam)
+
         # Apply funding morale modifiers (small pregame confidence/determination nudge)
         self._applyFundingMorale(self.homeTeam)
         self._applyFundingMorale(self.awayTeam)
 
+        # Diagnostic snapshot at game start — captures the effective scaled
+        # pressure modifier each team carries into this game. Regular-season
+        # base sits at 1.0 across the board, so this confirms whether market-
+        # tier scaling fires for non-playoff games (it shouldn't when delta=0).
+        try:
+            from managers.teamManager import logPressureDiag
+            seasonNum = getattr(self, 'seasonNumber', None)
+            weekNum = getattr(self, 'gameWeek', None) or getattr(self, 'weekNumber', None)
+            ctx = "game_start"
+            if not getattr(self, 'isRegularSeasonGame', True):
+                ctx = f"playoff_game_r{getattr(self, 'playoffRound', '?')}"
+            logPressureDiag(self.homeTeam, ctx, season=seasonNum, week=weekNum)
+            logPressureDiag(self.awayTeam, ctx, season=seasonNum, week=weekNum)
+        except Exception:
+            pass  # Diagnostic logging must never break the game loop
+
+        # Snapshot pre-game ELO + pressure modifier for the correlation log
+        # written at game end. Stored on the game instance so we can compute
+        # ELO delta and have a record of conditions entering the game.
+        try:
+            self._preGameHomeElo = getattr(self.homeTeam, 'elo', 1500)
+            self._preGameAwayElo = getattr(self.awayTeam, 'elo', 1500)
+            self._preGameHomePressureMod = getattr(self.homeTeam, 'pressureModifier', 1.0)
+            self._preGameAwayPressureMod = getattr(self.awayTeam, 'pressureModifier', 1.0)
+            self._preGameHomeTier = getattr(self.homeTeam, 'fundingTier', 'UNKNOWN')
+            self._preGameAwayTier = getattr(self.awayTeam, 'fundingTier', 'UNKNOWN')
+            self._preGameHomeStreak = getattr(self.homeTeam, 'currentWinStreak', 0)
+            self._preGameAwayStreak = getattr(self.awayTeam, 'currentWinStreak', 0)
+            self._preGameHomeStreakP = getattr(self.homeTeam, 'streakPressure', 0.0)
+            self._preGameAwayStreakP = getattr(self.awayTeam, 'streakPressure', 0.0)
+        except Exception:
+            pass
+
+        # Snapshot each player's baseline overallRating BEFORE any pre-game
+        # modifiers fire so we can enforce a soft floor below. Without this,
+        # fatigue + form state + context multipliers compound into ~25%
+        # reductions on unlucky stacks and a 90-rated player can effectively
+        # play at 67, with no visible explanation to the user. The floor
+        # gives the worst-felt outcomes a hard limit.
+        self._snapshotBaselineRatings(self.homeTeam)
+        self._snapshotBaselineRatings(self.awayTeam)
+
         # Apply fatigue penalties (accumulated over the season)
         self._applyFatigue(self.homeTeam)
         self._applyFatigue(self.awayTeam)
+        self._snapshotMentalPhase(self.homeTeam, 'afterFatigue')
+        self._snapshotMentalPhase(self.awayTeam, 'afterFatigue')
 
-        # Apply form-state rating modifier — the trap-game / Cinderella
-        # mechanic. Hot-but-vulnerable teams play slightly worse, struggling
-        # teams with backbone play slightly better. Runs after fatigue so the
-        # multipliers compose cleanly.
-        self._applyFormState(self.homeTeam)
-        self._applyFormState(self.awayTeam)
+        # Single combined team-disposition modifier. Replaces the prior
+        # split between form state and matchup context, which both fired
+        # on overlapping inputs (discipline, attitude, ELO) and stacked
+        # to double-count the same underlying signal. Capped at ±10% so
+        # the aggregate stays in "this is football, not a debuff system"
+        # territory. Produces one narrative label per team
+        # ("Hot Streak" / "Trap-Game Risk" / "Cinderella Push" / etc.).
+        self._applyTeamDisposition()
+        self._snapshotMentalPhase(self.homeTeam, 'afterDisposition')
+        self._snapshotMentalPhase(self.awayTeam, 'afterDisposition')
 
-        # Per-matchup contextual modifiers stacked on top of form state:
-        #   - trap game (heavy favorite + low discipline)
-        #   - playoff push (late-season bubble team + positive determination)
-        #   - clinched coast (clinched playoffs + low discipline)
-        # Lets a COMPLACENT team's trap-game game be a real upset, a
-        # RESOLUTE team's late-season urgency be a real push, etc.
-        self._applyContextModifiers()
+        # Enforce the soft floor — scale a player's attributes back up if
+        # the compounded modifiers dropped their overall rating more than
+        # MENTAL_FLOOR_RATIO permits. Preserves attribute *proportions*
+        # so a power-back stays power-heavy, etc.
+        self._enforceMentalSoftCap(self.homeTeam)
+        self._enforceMentalSoftCap(self.awayTeam)
+        self._snapshotMentalPhase(self.homeTeam, 'afterCap')
+        self._snapshotMentalPhase(self.awayTeam, 'afterCap')
 
         x = batched_randint(0,1)
         if x == 0:
@@ -3456,8 +4170,21 @@ class Game:
             'timeRemaining': self.formatTime(self.gameClockSeconds)
         })
         
-        # Main game loop - run until game is over
+        # Main game loop - run until game is over. The MAX_OT_PERIODS
+        # cap is a backstop against indefinite stalemate (each OT period
+        # is 10 game-minutes — going past 5 means we've already simulated
+        # nearly an extra full game's worth of OT). Without the cap a
+        # genuinely-deadlocked sim could spin forever.
+        MAX_OT_PERIODS = 5
         while not self.isGameOver():
+            if (self.currentQuarter >= 5
+                    and getattr(self, 'otPeriod', 0) > MAX_OT_PERIODS
+                    and self.homeScore == self.awayScore):
+                logger.warning(
+                    f"[GAME] OT cap reached ({MAX_OT_PERIODS} periods) — accepting tie. "
+                    f"{self.awayTeam.name} {self.awayScore} - {self.homeScore} {self.homeTeam.name}"
+                )
+                break
             # Format and add previous play to feed BEFORE quarter transitions
             # This ensures Q4 plays appear before OT events
             lastPlayFormatted = getattr(self, '_pendingPossessionChange', False)
@@ -3476,6 +4203,26 @@ class Game:
                     self.gameFeed.insert(0, {'play': self.play})
                     self.broadcastGameState(includeLastPlay=True)
                     lastPlayFormatted = True
+                    # The play was executed inside playCaller() but the
+                    # post-play turnover handler (lines ~3985+) never got to
+                    # run because the inner possession loop broke on
+                    # pre-snap clock expiry. Apply the turnover side-effects
+                    # here so possession actually flips, otherwise the next
+                    # quarter starts with the fumbling team still on offense.
+                    if self.play.isFumbleLost or self.play.isInterception:
+                        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+                        self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
+                        if self.offensiveTeam is self.homeTeam:
+                            self.homeTurnoversTotal += 1
+                        elif self.offensiveTeam is self.awayTeam:
+                            self.awayTurnoversTotal += 1
+                        # Spot the ball for the recovering team. Mirror the
+                        # main turnover-handler's positioning calc.
+                        recoverYards = (self.yardsToSafety + self.play.yardage)
+                        if recoverYards <= 0:
+                            recoverYards = 1
+                        self.turnover(self.offensiveTeam, self.defensiveTeam, recoverYards)
+                        self._pendingPossessionChange = True
                 elif getattr(self.play, 'playText', None):
                     # Already formatted (e.g. TD broadcast) — just mark as done
                     lastPlayFormatted = True
@@ -3487,7 +4234,7 @@ class Game:
                 
                 # Defensive check: If still in OT and clock is still 0 after advanceQuarter, force reset
                 if self.currentQuarter >= 5 and self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
-                    self.gameClockSeconds = 600  # Force clock reset to prevent infinite loop
+                    self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Force clock reset to prevent infinite loop
                 
                 if oldQuarter == 2:
                     # Halftime
@@ -3504,7 +4251,11 @@ class Game:
                         'timeRemaining': '0:00'
                     })
                     if self.timingManager:
-                        await self.timingManager.waitForHalftime()
+                        # Floos Bowl runs a longer, admin-configurable halftime
+                        # so the halftime show has room to play.
+                        halftimeOverride = (getattr(self, 'halftimeShowPauseSeconds', None)
+                                            if getattr(self, 'isFloosBowl', False) else None)
+                        await self.timingManager.waitForHalftime(overrideSeconds=halftimeOverride)
 
                     # Halftime gameplan adjustments
                     if GAMEPLAN_AVAILABLE:
@@ -3525,9 +4276,12 @@ class Game:
                         adjustOffensiveGameplan(self.awayOffGameplan, awayCoach, awayOffStats)
                         adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats)
 
-                    # Halftime dampens momentum toward neutral
+                    # Halftime dampens momentum toward neutral. Streak is
+                    # halved (truncated toward zero) rather than wiped — a
+                    # team that genuinely owned the half keeps a tapered
+                    # cascade going into Q3 instead of starting flat.
                     self.momentum *= 0.5
-                    self.momentumStreak = 0
+                    self.momentumStreak = int(self.momentumStreak / 2)
                     if abs(self.momentum) < 0.5:
                         self.momentum = 0.0
 
@@ -3697,7 +4451,7 @@ class Game:
             # Start new possession if needed
             if self.down == 0 or self.down > 4:
                 self.down = 1
-                self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+                self.yardsToFirstDown = self.gameRules.firstDownDistance
                 self.yardsToEndzone = 80
                 self.yardsToSafety = 20
 
@@ -3720,20 +4474,25 @@ class Game:
                         self.leagueHighlights.insert(0, {'play': self.play})
                     self.gameFeed.insert(0, {'play': self.play})
 
+                    # Anomaly roll — fires Layer 1 micro-glitches for
+                    # players who've accumulated enough attention. Pure
+                    # flavor for v1; stat outputs unchanged.
+                    self._maybeFireAnomalies()
+
                     # Broadcast comprehensive game state (replaces playComplete, scoreUpdate, gameStateUpdate)
                     self.broadcastGameState(includeLastPlay=True)
 
                 # Reset flag after first iteration
                 lastPlayFormatted = False
 
-                # Create new play
-                self.play = Play(self)
-                
                 # Between-plays timing
                 if self.timingManager:
                     await self.timingManager.waitBetweenPlays()
 
-                # After the delay: broadcast possession change with new ball position
+                # After the delay: broadcast possession change with new ball position.
+                # Runs BEFORE new Play() construction because an onside recovery here
+                # flips possession again — constructing the Play first would freeze
+                # stale offense/defense/yardLine onto the play that actually executes.
                 if getattr(self, '_pendingPossessionChange', False):
                     if getattr(self, '_pendingKickoff', False):
                         kickingTeam = self.defensiveTeam
@@ -3775,7 +4534,7 @@ class Game:
                             else:
                                 # Receiving team keeps ball — move to their 40 instead of their 20
                                 self.yardsToEndzone = 60
-                                self.yardsToSafety = FIELD_LENGTH - self.yardsToEndzone
+                                self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
                                 onsideFailEvent = {
                                     'text': f'{receivingTeam.abbr} recovers at their own 40!',
                                     'quarter': self.currentQuarter,
@@ -3802,12 +4561,30 @@ class Game:
                             )
 
                         self._pendingKickoff = False
+                        # Clock is stopped after every kickoff until the receiving
+                        # team snaps (shouldClockRun restarts it on the first
+                        # in-bounds play). The TD scoring branches don't reset
+                        # clockRunning the way the FG branch does, so without this
+                        # the receiving team would wrongly burn a late-game timeout
+                        # on an already-stopped clock right after a score + kickoff.
+                        self.clockRunning = False
                         if self.timingManager:
                             await self.timingManager.waitAfterKickoff()
                     else:
                         # Punt/turnover: immediate possession-change broadcast
                         self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
                     self._pendingPossessionChange = False
+
+                    # Recompute yardLine for the post-kickoff offense — an onside
+                    # recovery may have flipped possession and moved the ball to
+                    # midfield, leaving the earlier yardLine stale.
+                    if self.yardsToEndzone > 50:
+                        self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100-self.yardsToEndzone))
+                    else:
+                        self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                # Create new play (after any possession flip from onside recovery)
+                self.play = Play(self)
 
                 # POST-PLAY: Defense can call timeout to stop the clock
                 self._timeoutCalled = False
@@ -3827,6 +4604,10 @@ class Game:
                 self.playCaller()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
+
+                # A snap has now been committed — the post-warning dead-clock
+                # window is over (timeouts allowed again on the next stoppage).
+                self._clockStoppedByWarning = False
 
                 # Tempo intent is captured on every play so the play insights
                 # always show the offense's intent (hurry-up / burn / neutral),
@@ -3977,6 +4758,12 @@ class Game:
                 # Check for two-minute warning
                 self.checkTwoMinuteWarning()
 
+                # Layer 3 anomaly — a rampant/awakened ball-carrier's play can
+                # glitch and the yardage changes for real. Runs after the play
+                # resolves but before the outcome is applied, so the adjusted
+                # yardage flows through field position, downs, and stats.
+                self._maybeApplyL3Glitch()
+
                 # Momentum: sack (only if not also a fumble — fumbles get turnover momentum)
                 if self.play.isSack and not self.play.isFumbleLost:
                     self._applyMomentumEvent(MOMENTUM_SACK, self.defensiveTeam)
@@ -4096,7 +4883,7 @@ class Game:
                         if self.yardsToEndzone < 10:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
-                            self.yardsToFirstDown = YARDS_TO_FIRST_DOWN
+                            self.yardsToFirstDown = self.gameRules.firstDownDistance
                         self.yardsToSafety += self.play.yardage
                         self.yardsToEndzone -= self.play.yardage
                         self.play.playResult = PlayResult.FirstDown
@@ -4203,11 +4990,20 @@ class Game:
                             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
                             self.clockRunning = False  # Clock stops after turnover on downs
                             self.formatPlayText()
-                            if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
-                                self.highlights.insert(0, {'play': self.play})
-                                self.leagueHighlights.insert(0, {'play': self.play})
-                            self.gameFeed.insert(0, {'play': self.play})
-                            self.broadcastGameState(includeLastPlay=True)
+                            # Kneel and spike branches above (line ~4451) already
+                            # inserted and broadcast this play before falling
+                            # through to the down-advancement section. Skip the
+                            # re-insert here when that happened, otherwise the
+                            # same Play object lands in gameFeed twice — once
+                            # tagged "FourthDown" originally, once after this
+                            # branch mutated playResult to "TurnoverOnDowns".
+                            # Both render identically (same object reference).
+                            if not lastPlayFormatted:
+                                if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
+                                    self.highlights.insert(0, {'play': self.play})
+                                    self.leagueHighlights.insert(0, {'play': self.play})
+                                self.gameFeed.insert(0, {'play': self.play})
+                                self.broadcastGameState(includeLastPlay=True)
                             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
                             self._pendingPossessionChange = True
                             lastPlayFormatted = True
@@ -4271,7 +5067,19 @@ class Game:
                                             }
                                         })
         else:
-            # Tie game (should only happen in OT time expiration)
+            # Tie game. The main loop only exits with tied scores via two
+            # paths: (a) the OT-period cap below force-stops a no-score
+            # stalemate, or (b) some still-unidentified state transition
+            # set status=Final while tied. Log the second case loudly
+            # — every other tied-finalize means the bug recurred.
+            logger.warning(
+                f"[GAME] Tied finalize: {self.awayTeam.name} {self.awayScore} - "
+                f"{self.homeScore} {self.homeTeam.name} | quarter={self.currentQuarter} "
+                f"otPeriod={getattr(self, 'otPeriod', 0)} clock={self.gameClockSeconds} "
+                f"otFirstPossComplete={getattr(self, 'otFirstPossComplete', None)} "
+                f"otSecondPossComplete={getattr(self, 'otSecondPossComplete', None)} "
+                f"totalPlays={self.totalPlays}"
+            )
             self.winningTeam = self.homeTeam  # Arbitrary - treat as home team win
             self.losingTeam = self.awayTeam
             self.gameDict['score'] = '{0} - {1} (TIE)'.format(self.homeScore, self.awayScore)
@@ -4317,6 +5125,16 @@ class Game:
                 break
         # Player postgame processing: sync stats, update confidence/determination, compute derived stats
         self._processPlayerPostgame()
+
+        # Per-team correlation log: pressure level, outcome, ELO delta,
+        # form state, roster resolve average. Written to logs/pressure_correlation.jsonl
+        # for offline analysis of how pressure relates to outcomes/metrics.
+        self._logPressureCorrelation()
+
+        # Per-game play analytics — aggregates TDs, INTs, yardage, big plays
+        # by tier so we can tune the pass/run distributions post-hoc.
+        # Written to logs/sim_analytics.jsonl.
+        self._logPlayAnalytics()
 
         # Postgame personality reactions — winners go positive, losers go negative.
         # Inserted into gameFeed as cutaway-style entries so they render alongside
@@ -4447,8 +5265,36 @@ class Game:
         earlyGameScale = {1: 0.3, 2: 0.5, 3: 0.7, 4: 1.0, 5: 1.0}
         pressure *= earlyGameScale.get(self.currentQuarter, 1.0)
 
-        # Apply the team pressure modifier (playoff importance, Floosbowl, etc.)
-        pressure = pressure * self.offensiveTeam.pressureModifier
+        # Apply the team pressure modifier (playoff importance, Floosbowl,
+        # prior-season expectations, in-season elimination state, etc.) with
+        # market-tier expectation scaling layered on top: big markets amplify
+        # high-expectation deltas, small markets amplify the relief side.
+        # Streak pressure (built from consecutive wins) is added to the base
+        # modifier before scaling so it gets the same market amplification.
+        from constants import (
+            EXPECTATION_SCALE_BY_TIER,
+            EXPECTATION_RELIEF_BY_TIER,
+            EXPECTATION_DELTA_CAP,
+            CHAMPIONSHIP_OVERFLOW_FACTOR,
+        )
+        pressureMod = self.offensiveTeam.pressureModifier
+        streakAdd = getattr(self.offensiveTeam, 'streakPressure', 0.0)
+        effective = pressureMod + streakAdd
+        delta = effective - 1.0
+        tier = getattr(self.offensiveTeam, 'fundingTier', None)
+        if delta > 0:
+            tierScale = EXPECTATION_SCALE_BY_TIER.get(tier, 1.0)
+            # Soften scaling above the championship band so MEGA Floos Bowl
+            # doesn't auto-cap pressure at 100 on every play. Cap portion
+            # gets full market amplification; overflow gets a weaker factor
+            # (default 1.0 — overflow added unscaled).
+            cap = min(delta, EXPECTATION_DELTA_CAP)
+            overflow = max(0.0, delta - EXPECTATION_DELTA_CAP)
+            scaledDelta = cap * tierScale + overflow * CHAMPIONSHIP_OVERFLOW_FACTOR
+        else:
+            reliefScale = EXPECTATION_RELIEF_BY_TIER.get(tier, 1.0)
+            scaledDelta = delta * reliefScale
+        pressure = pressure * (1.0 + scaledDelta)
 
         return min(100, pressure)  # Cap at 100
 
@@ -4467,12 +5313,23 @@ class Game:
         if abs(self.momentum) < 0.5:
             self.momentum = 0.0
 
-    def _scoreGapDampener(self):
-        """Reduce momentum gains in blowouts. Returns 0.2-1.0."""
+    def _scoreGapDampener(self, benefitingTeam=None):
+        """Reduce momentum gains in blowouts — but only for the team that's
+        already ahead. The trailing team's comeback push generates momentum
+        at full value (in fact the narrative needs it to). Returns 0.2-1.0
+        when benefitingTeam is the leader, 1.0 when it's the trailing team
+        or the game is tied. Pass None for legacy callers that want the
+        symmetric blowout-decay behavior (used by _decayMomentum)."""
         scoreDiff = abs(self.homeScore - self.awayScore)
         if scoreDiff <= 14:
             return 1.0
-        elif scoreDiff <= 21:
+        if benefitingTeam is not None:
+            leadingTeam = self.homeTeam if self.homeScore > self.awayScore else (
+                self.awayTeam if self.awayScore > self.homeScore else None
+            )
+            if benefitingTeam is not leadingTeam:
+                return 1.0
+        if scoreDiff <= 21:
             return 0.7
         elif scoreDiff <= 28:
             return 0.4
@@ -4551,8 +5408,10 @@ class Game:
         else:
             streakInertia = 1.0
 
-        # Dampening
-        gapDamp = self._scoreGapDampener()
+        # Dampening — gap damp is asymmetric: only the leading team's
+        # piling-on is muted, the trailing team's comeback momentum hits
+        # at full value regardless of deficit.
+        gapDamp = self._scoreGapDampener(benefitingTeam)
         mentalResist = self._mentalResistance(resistingTeam)
 
         # Cascade multiplier — scale down in blowouts so piling-on streaks flatten out
@@ -4560,7 +5419,25 @@ class Game:
         streakBonus = MOMENTUM_CASCADE_STEP * (abs(self.momentumStreak) - 1) * gapDamp
         cascadeMultiplier = min(1.0 + streakBonus, MOMENTUM_MAX_CASCADE)
 
-        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia
+        # Late-game amplifier: events inside Q4 two-minute warning (or in any
+        # OT period) carry more narrative weight than the raw math gives them.
+        # A 1.3x bump small enough not to distort typical games, big enough
+        # that closing-minute swings feel as heavy as they read.
+        inTwoMinute = (self.currentQuarter == 4 and self.gameClockSeconds < 120)
+        inOvertime = self.currentQuarter >= 5
+        lateGameMultiplier = 1.3 if (inTwoMinute or inOvertime) else 1.0
+
+        # Comeback urgency: a team trailing by 10+ in Q3 or later plays
+        # with measurable desperation — momentum events for the trailing
+        # side hit 1.15x. Pairs with the asymmetric gap dampener to keep
+        # comeback narratives alive; underdogs were winning ~10pp below
+        # pre-game WP without this push.
+        benefitingScore = self.homeScore if benefitingTeam is self.homeTeam else self.awayScore
+        opposingScore = self.awayScore if benefitingTeam is self.homeTeam else self.homeScore
+        deficit = opposingScore - benefitingScore
+        comebackUrgency = 1.15 if (self.currentQuarter >= 3 and deficit >= 10) else 1.0
+
+        finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier * comebackUrgency
 
         if benefitingTeam is self.homeTeam:
             self.momentum += finalDelta
@@ -4574,7 +5451,14 @@ class Game:
 
     def _applyMomentumEffect(self):
         """Apply small per-play confidence/determination nudges based on momentum."""
-        if abs(self.momentum) < MOMENTUM_NEUTRAL_ZONE:
+        # Diagnostic sampling — once per play call, regardless of neutral zone
+        absMom = abs(self.momentum)
+        if absMom > self._peakAbsMomentum:
+            self._peakAbsMomentum = absMom
+        if absMom >= 30.0:
+            self._playsAbove30Mom += 1
+
+        if absMom < MOMENTUM_NEUTRAL_ZONE:
             return
 
         effectMagnitude = MOMENTUM_EFFECT_BASE * (abs(self.momentum) / 50.0)
@@ -4593,8 +5477,12 @@ class Game:
                 player.updateInGameConfidence(effectMagnitude * 0.6)
                 player.updateInGameDetermination(effectMagnitude * 0.4)
 
-        # Slight drag on suffering team
-        dragMagnitude = effectMagnitude * 0.5
+        # Slight drag on suffering team. Was 0.5x the benefiting team's
+        # boost, but post-instrumentation showed favorites winning at
+        # +13pp over pre-game WP and underdogs at -10pp — the drag was
+        # compounding the favorite's advantage into a death spiral. 0.3x
+        # leaves the drag detectable without crushing the trailing team.
+        dragMagnitude = effectMagnitude * 0.3
         for player in suffering.rosterDict.values():
             if player is not None:
                 player.updateInGameConfidence(-dragMagnitude * 0.6)
@@ -4615,6 +5503,211 @@ class Game:
             if player is not None and player.gameAttributes is not None:
                 player.updateInGameConfidence(modifier * 0.6)
                 player.updateInGameDetermination(modifier * 0.4)
+
+    def _snapshotBaselineRatings(self, team):
+        """Record each rostered player's pre-modifier overallRating so the
+        soft cap can enforce a floor relative to it AND the per-game stats
+        snapshot can surface the modifier breakdown. Stored as a transient
+        attribute on the player object.
+
+        NOTE: must use updateInGameRating() — updateRating() writes to
+        attributes.overallRating (baseline), not gameAttributes.overallRating
+        (the in-game value the modifier stack mutates).
+        """
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            # Refresh derived rating first so the baseline is current.
+            try:
+                player.updateInGameRating()
+            except Exception:
+                pass
+            player._preGameBaselineRating = player.gameAttributes.overallRating
+            # Initialize the snapshot bucket. Subsequent _snapshotMentalPhase
+            # calls fill in intermediate values after each modifier stage so
+            # _buildMentalBreakdown can compute per-stage deltas.
+            player._mentalSnapshots = {
+                'baseline': player.gameAttributes.overallRating,
+                'afterFatigue': None,
+                'afterDisposition': None,
+                'afterCap': None,
+            }
+
+    def _snapshotMentalPhase(self, team, key):
+        """Record the current overallRating under `key` on each player's
+        _mentalSnapshots dict. Called after every modifier stage so the
+        per-game breakdown can attribute rating drift back to each phase.
+
+        NOTE: must use updateInGameRating() — updateRating() refreshes the
+        baseline attributes.overallRating, not gameAttributes.overallRating
+        (which is what the modifier stack mutates and what we want to read).
+        """
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            snaps = getattr(player, '_mentalSnapshots', None)
+            if snaps is None:
+                continue
+            try:
+                player.updateInGameRating()
+            except Exception:
+                pass
+            snaps[key] = player.gameAttributes.overallRating
+
+    def _buildMentalBreakdown(self, player) -> Optional[dict]:
+        """Compute the per-stage modifier deltas for surfacing in the box
+        score. Two stages now: fatigue + disposition (the combined form +
+        context multiplier), then the soft cap. Returns None if no
+        snapshots were captured (e.g., bench player who never got mutated).
+        """
+        snaps = getattr(player, '_mentalSnapshots', None)
+        if not snaps:
+            return None
+        baseline = snaps.get('baseline')
+        if not baseline:
+            return None
+        afterFatigue = snaps.get('afterFatigue') or baseline
+        afterDisposition = snaps.get('afterDisposition') or afterFatigue
+        afterCap = snaps.get('afterCap') or afterDisposition
+        return {
+            'baseline': int(baseline),
+            'final': int(afterCap),
+            'totalDelta': int(afterCap - baseline),
+            'fatigue': int(afterFatigue - baseline),
+            'disposition': int(afterDisposition - afterFatigue),
+            'cap': int(afterCap - afterDisposition),
+        }
+
+    def _avgStarterSnapshot(self, team, snapshotKey: str) -> float:
+        """Mean overallRating of starters at a given snapshot phase.
+        Used by analytics to see how each modifier stage shifted the
+        roster average. Returns 0.0 if no players carry the snapshot.
+        """
+        total = 0.0
+        n = 0
+        for player in team.rosterDict.values():
+            if player is None:
+                continue
+            snaps = getattr(player, '_mentalSnapshots', None)
+            if not snaps:
+                continue
+            val = snaps.get(snapshotKey)
+            if val is None:
+                continue
+            total += val
+            n += 1
+        return total / n if n else 0.0
+
+    def _avgStarterCurrentRating(self, team) -> float:
+        """Mean current overallRating of starters — sample at game end to
+        capture drift from momentum/clutch/choke/per-play fatigue."""
+        total = 0.0
+        n = 0
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            try:
+                player.updateInGameRating()
+            except Exception:
+                pass
+            total += player.gameAttributes.overallRating
+            n += 1
+        return total / n if n else 0.0
+
+    def _applyLeagueCompression(self, team):
+        """Pull every rostered player's in-game attributes toward the
+        league mean by LEAGUE_COMPRESSION_FACTOR. A 95-rated star
+        effectively plays as ~90.5; a 65-rated reserve plays as ~69.5.
+        Closes the auto-win gap between stars and scrubs without
+        erasing skill order.
+
+        Profile ratings (player.attributes) stay untouched — only the
+        live gameAttributes copy is compressed, so the player page
+        still reads 95. Downstream modifiers (fatigue, disposition,
+        soft cap) stack on the compressed baseline.
+
+        Set LEAGUE_COMPRESSION_FACTOR to 1.0 in constants to disable.
+        """
+        from constants import LEAGUE_COMPRESSION_FACTOR, LEAGUE_COMPRESSION_MEAN
+        factor = LEAGUE_COMPRESSION_FACTOR
+        if factor >= 0.999:
+            return  # disabled
+        mean = LEAGUE_COMPRESSION_MEAN
+        # Physical attrs that drive most on-field outcomes, plus the
+        # four game-formula intangibles. Locker-room attrs (attitude,
+        # resilience, selfBelief) are intentionally NOT compressed —
+        # their wide range is the source of personality variance.
+        attrs = (
+            'speed', 'power', 'agility', 'hands', 'reach',
+            'armStrength', 'accuracy', 'legStrength',
+            'focus', 'discipline', 'instinct', 'creativity',
+        )
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            for attr in attrs:
+                val = getattr(player.gameAttributes, attr, None)
+                if val is None:
+                    continue
+                compressed = mean + (val - mean) * factor
+                # Stay within the engine's expected 30-100 envelope.
+                compressed = max(30, min(100, round(compressed)))
+                setattr(player.gameAttributes, attr, compressed)
+            # Recompute derived ratings from the compressed leaves so
+            # skillRating, xFactor, overallRating all reflect the curve.
+            try:
+                player.gameAttributes.calculateIntangibles()
+                player.gameAttributes.calculateSkills()
+                player.updateInGameRating()
+            except Exception:
+                pass
+
+    def _enforceMentalSoftCap(self, team):
+        """Scale a player's gameAttributes back up uniformly if the
+        compounded pre-game mental/form/context modifiers dropped their
+        overall rating below baseline × MENTAL_FLOOR_RATIO. Without this,
+        unlucky modifier stacks can drop a star ~25% in effective rating
+        with no surface signal, which reads as 'sim is broken' to users.
+
+        The scaling preserves attribute proportions — a power-back stays
+        power-heavy, a route-runner stays route-runner. The cap doesn't
+        remove the systems; it just bounds the worst-felt aggregate outcome.
+        """
+        from constants import MENTAL_FLOOR_RATIO
+        for player in team.rosterDict.values():
+            if player is None or player.gameAttributes is None:
+                continue
+            baseline = getattr(player, '_preGameBaselineRating', None)
+            if not baseline or baseline <= 0:
+                continue
+            # Refresh derived overall first so we compare apples to apples.
+            try:
+                player.updateInGameRating()
+            except Exception:
+                pass
+            current = player.gameAttributes.overallRating
+            floor = baseline * MENTAL_FLOOR_RATIO
+            if current >= floor or current <= 0:
+                continue
+            # Uniform scale on the leaf attributes so derived ratings rise
+            # proportionally on the next recompute.
+            scale = floor / current
+            for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                         'accuracy', 'legStrength', 'reach',
+                         'focus', 'discipline', 'instinct'):
+                val = getattr(player.gameAttributes, attr, 0)
+                if val:
+                    setattr(player.gameAttributes, attr,
+                            min(100, round(val * scale)))
+            try:
+                player.updateInGameRating()
+            except Exception:
+                pass
+            logger.debug(
+                f"Mental soft cap engaged: {player.name} "
+                f"baseline={baseline} pre-cap={current} "
+                f"post-cap={player.gameAttributes.overallRating}"
+            )
 
     def _applyTeamRatingMult(self, team, multiplier):
         """Apply a uniform attribute multiplier to all rostered players, then
@@ -4638,14 +5731,107 @@ class Game:
             player.gameAttributes.calculateSkills()
 
     def _applyFormState(self, team):
-        """
-        Apply the team's current form state as a uniform multiplier on each
-        rostered player's in-game attributes. Drives the trap-game effect
-        for COMPLACENT teams, the Cinderella boost for RESOLUTE teams, and
-        in-between for the other states.
+        """Deprecated. Use _applyTeamDisposition (combines form + context
+        into one capped multiplier with a single narrative label).
+        Kept as a no-op so older call-sites don't break."""
+        return
 
-        Regression-to-mean: teams stuck in the same state for 3+ weeks have
-        an increasing chance per game to have their modifier halved.
+    # Narrative labels for the combined team disposition. Picked by
+    # _pickDispositionLabel based on form state + which context factors
+    # fired. Designed so a low-discipline favored team gets ONE explanation
+    # ("Trap-Game Risk") instead of stacked "Complacent" + "Trap game".
+    _DISPOSITION_FORM_LABELS = {
+        'HOT_STREAK':  'Hot Streak',
+        'GETTING_HOT': 'Building Momentum',
+        'STEADY':      'Steady',
+        'SHAKY':       'Shaky',
+        'COOLING_OFF': 'Cooling Off',
+        'COMPLACENT':  'Complacent',
+        'SPIRALING':   'Spiraling',
+        'RESOLUTE':    'Resolute',
+        'UNKNOWN':     'Steady',
+    }
+
+    # Friendly fallback label for each context factor, used when form is
+    # neutral (STEADY / UNKNOWN) but a context modifier still fired. The
+    # composite labels above (Trap-Game Risk, Cinderella Push) take
+    # precedence when form + context share a root signal.
+    #
+    # Naming philosophy: evoke the state, don't describe the mechanism.
+    # "Buy-In" / "Adrift" let users infer the coach connection from the
+    # supporting data (coach attitude, team mood, etc.) without the label
+    # spelling out the cause.
+    _DISPOSITION_CTX_LABELS = {
+        'Trap game':             'Trap-Game Risk',
+        'Underdog hunger':       'Underdog Push',
+        'Clinched coast':        'Coasting',
+        'Playoff push':          'Playoff Push',
+        'Playing for the coach': 'Buy-In',
+        'Disengaged from coach': 'Adrift',
+    }
+
+    def _pickDispositionLabel(self, formState, ctxReasons, multiplier):
+        """Choose the single narrative label that best explains the
+        combined disposition. Direction of the net delta drives the
+        choice — a Complacent team with a partial Playoff Push offset
+        is still net Complacent, so the label should say so.
+
+        Priority:
+          1. Compound labels for shared-root signals (Trap-Game Risk,
+             Cinderella Push).
+          2. Form-state label if its direction matches the net delta.
+          3. Dominant context factor whose direction matches the net.
+          4. Form-state label as a final fallback.
+        """
+        from constants import FORM_STATE_RATING_MULT
+        ctxLabels = [r['label'] for r in ctxReasons]
+
+        if formState == 'COMPLACENT' and 'Trap game' in ctxLabels:
+            return 'Trap-Game Risk'
+        if formState == 'RESOLUTE' and 'Underdog hunger' in ctxLabels:
+            return 'Cinderella Push'
+
+        formLabel = self._DISPOSITION_FORM_LABELS.get(formState, 'Steady')
+        netDelta = multiplier - 1.0
+
+        # Neutral net — use form's narrative identity (e.g. Hot Streak
+        # at multiplier 1.0 still wants a label) or 'Steady'.
+        if abs(netDelta) < 0.005:
+            return formLabel
+
+        isDrag = netDelta < 0
+        formMult = FORM_STATE_RATING_MULT.get(formState, 1.0)
+        formDrag = formMult < 1.0
+        formBoost = formMult > 1.0
+
+        # Form direction matches net direction — form is the dominant
+        # explanation, use its label.
+        if isDrag and formDrag:
+            return formLabel
+        if (not isDrag) and formBoost:
+            return formLabel
+
+        # Net direction is driven by context — pick the first context
+        # factor whose direction matches the net.
+        wantKind = 'drag' if isDrag else 'boost'
+        for r in ctxReasons:
+            if r.get('kind') == wantKind:
+                return self._DISPOSITION_CTX_LABELS.get(r['label'], formLabel)
+
+        return formLabel
+
+    def _applyTeamDisposition(self):
+        """Combined team-disposition modifier. Replaces the prior split
+        between _applyFormState (form-state multiplier) and
+        _applyContextModifiers (matchup-context multiplier) — both were
+        team-wide, both keyed on overlapping inputs (discipline, attitude,
+        ELO), and stacking them double-counted the same underlying signal.
+
+        Now: compute both, multiply them, cap aggregate at ±10%, pick one
+        narrative label, apply once. Each team carries _dispositionLabel
+        and _dispositionMultiplier afterward so the box-score breakdown
+        can explain *why* a player's rating moved without surfacing two
+        rows that share a root cause.
         """
         try:
             from api_response_builders import TeamResponseBuilder
@@ -4653,36 +5839,70 @@ class Game:
         except Exception:
             return
 
-        formState = TeamResponseBuilder.computeFormState(team)
-        multiplier = FORM_STATE_RATING_MULT.get(formState, 1.0)
-        if multiplier == 1.0:
-            return
+        def resolve(team, opponent):
+            formState = TeamResponseBuilder.computeFormState(team)
+            formMult = FORM_STATE_RATING_MULT.get(formState, 1.0)
+            # Regression-to-mean: teams stuck in the same form state for
+            # 3+ weeks have a rising chance per game to have their form
+            # contribution halved. Preserves the prior _applyFormState
+            # behaviour now that form is folded into disposition.
+            weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
+            if weeksHeld >= 3 and formMult != 1.0:
+                weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
+                if _random.random() < weakenChance:
+                    formMult = 1.0 + (formMult - 1.0) * 0.5
+                    logging.debug(
+                        f"_disposition: {team.abbr} {formState} held "
+                        f"{weeksHeld} weeks → form softened to {formMult:.3f}"
+                    )
 
-        weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
-        if weeksHeld >= 3:
-            weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
-            if _random.random() < weakenChance:
-                multiplier = 1.0 + (multiplier - 1.0) * 0.5
-                logging.debug(
-                    f"_applyFormState: {team.abbr} {formState} (held "
-                    f"{weeksHeld} weeks) weakened {weakenChance:.0%} → "
-                    f"multiplier {multiplier:.3f}"
-                )
+            ctxMult, ctxReasons = self._computeContextMultiplier(team, opponent)
 
-        self._applyTeamRatingMult(team, multiplier)
+            # No aggregate cap on disposition — the wider swings are the
+            # drama generator. A truly COMPLACENT team in a trap game
+            # needs enough mechanical weight to actually lose to an
+            # underdog with hunger; capping at ±10% flattens exactly the
+            # season variance the mental sim is meant to produce. The
+            # soft floor at MENTAL_FLOOR_RATIO × baseline (15%) still
+            # prevents the absolute worst aggregate outcomes downstream.
+            combined = formMult * ctxMult
+            label = self._pickDispositionLabel(formState, ctxReasons, combined)
+            return combined, label, formState, ctxReasons
 
-    def _computeContextMultiplier(self, team, opponent) -> float:
+        homeMult, homeLabel, homeForm, homeReasons = resolve(self.homeTeam, self.awayTeam)
+        awayMult, awayLabel, awayForm, awayReasons = resolve(self.awayTeam, self.homeTeam)
+
+        self.homeTeam._dispositionMultiplier = homeMult
+        self.homeTeam._dispositionLabel = homeLabel
+        self.homeTeam._dispositionFormState = homeForm
+        self.homeTeam._contextReasons = homeReasons
+
+        self.awayTeam._dispositionMultiplier = awayMult
+        self.awayTeam._dispositionLabel = awayLabel
+        self.awayTeam._dispositionFormState = awayForm
+        self.awayTeam._contextReasons = awayReasons
+
+        self._applyTeamRatingMult(self.homeTeam, homeMult)
+        self._applyTeamRatingMult(self.awayTeam, awayMult)
+
+    def _computeContextMultiplier(self, team, opponent):
         """Combined per-matchup contextual multiplier covering:
           - trap game: heavy favorite + low team discipline → coasts
           - playoff push: late season + on bubble + positive determination
                           → urgency boost (scales harder toward season end)
           - clinched coast: late season + clinched + low discipline → coasts
+          - play-hard-for-coach: leader/toxic coach colors game-day effort
+
+        Returns (multiplier, reasons) where reasons is a list of
+        {'label': str, 'kind': 'boost'|'drag'} for each factor that fired.
+        Surfaced in the per-player box-score breakdown so users can see
+        *why* matchup context moved a player off their baseline.
         """
         if not self.isRegularSeasonGame:
-            return 1.0
+            return 1.0, []
         starters = [p for p in team.rosterDict.values() if p is not None]
         if not starters:
-            return 1.0
+            return 1.0, []
         teamElo = getattr(team, 'elo', 1500) or 1500
         oppElo = getattr(opponent, 'elo', 1500) or 1500
         avgDiscipline = sum(p.attributes.discipline for p in starters) / len(starters)
@@ -4692,30 +5912,24 @@ class Game:
         ) / len(starters)
 
         multiplier = 1.0
+        reasons = []
 
-        # Trap game — heavy favorite (ELO advantage ≥ 100) with low discipline
-        # plays down to the underdog. Discipline 80+ = no trap; 60 = full trap.
-        # Magnitude bumped again (was 3-5.5%) — multi-season diagnostics still
-        # showed near-zero lift over 1,280 fires. Stronger now so the
-        # mechanic produces measurable upset pressure rather than washing
-        # out vs ELO advantage.
         if teamElo - oppElo >= 100:
             trapScale = max(0.0, min(1.0, (80 - avgDiscipline) / 20))
             if trapScale > 0:
-                trapMag = 0.05 + 0.03 * trapScale  # 5-8%
+                trapMag = 0.05 + 0.03 * trapScale
                 multiplier *= 1.0 - trapMag
+                reasons.append({'label': 'Trap game', 'kind': 'drag'})
                 logging.debug(
                     f"_context: {team.abbr} trap-game vs {opponent.abbr} "
                     f"(ELO+{teamElo-oppElo}, disc {avgDiscipline:.1f}) "
                     f"× {1.0 - trapMag:.3f}"
                 )
-        # Underdog hunger — heavy underdog (ELO deficit ≥ 100) with positive
-        # collective determination plays above their level. Magnitude
-        # bumped to match the strengthened trap-game.
         elif oppElo - teamElo >= 100 and avgDetMod > 0:
-            detFactor = min(1.0, avgDetMod / 3)  # +3 modifier = full effect
-            hungerMag = 0.05 + 0.02 * detFactor  # 5-7%
+            detFactor = min(1.0, avgDetMod / 3)
+            hungerMag = 0.05 + 0.02 * detFactor
             multiplier *= 1.0 + hungerMag
+            reasons.append({'label': 'Underdog hunger', 'kind': 'boost'})
             logging.debug(
                 f"_context: {team.abbr} underdog-hunger vs {opponent.abbr} "
                 f"(ELO-{oppElo-teamElo}, detMod {avgDetMod:+.2f}) "
@@ -4728,64 +5942,52 @@ class Game:
             eliminated = bool(getattr(team, 'eliminated', False))
 
             if clinched:
-                # Clinched coasters: low discipline → going through motions.
-                # Magnitude scales toward season end. Bumped again — multi-
-                # season data showed 3-6% wasn't enough to break out of
-                # the noise floor on a sample of 1,280 fires.
                 if avgDiscipline < 75:
-                    coastMag = 0.05 + (week - 24) * 0.01  # wk24: 5%, wk28: 9%
+                    coastMag = 0.05 + (week - 24) * 0.01
                     multiplier *= 1.0 - coastMag
+                    reasons.append({'label': 'Clinched coast', 'kind': 'drag'})
                     logging.debug(
                         f"_context: {team.abbr} clinched-coast wk{week} "
                         f"(disc {avgDiscipline:.1f}) × {1.0 - coastMag:.3f}"
                     )
             elif not eliminated:
-                # On bubble — playoff push if collective determination is
-                # positive (drive to win expressed). Urgency scales with how
-                # close to season end (week 24: 0.2x, week 28: 1.0x). Captures
-                # both 'cusp-push' (weeks 24-26) and 'win-and-in' (week 28).
                 if avgDetMod > 0:
                     urgencyFactor = min(1.0, (week - 23) / 5)
                     detFactor = min(1.0, avgDetMod / 3)
                     pushMag = 0.02 + 0.03 * urgencyFactor * detFactor
                     multiplier *= 1.0 + pushMag
+                    reasons.append({'label': 'Playoff push', 'kind': 'boost'})
                     logging.debug(
                         f"_context: {team.abbr} playoff-push wk{week} "
                         f"(detMod {avgDetMod:+.2f}, urgency {urgencyFactor:.1f}) "
                         f"× {1.0 + pushMag:.3f}"
                     )
 
-        # Play-hard-for-the-coach: leader-coaches (90+) get a small lift from
-        # players who buy in; toxic-coaches (≤70) get a small drag from a
-        # disengaged room. Effect is small (±2% at the extremes) — coach
-        # personality colors the whole season elsewhere via attitude
-        # contagion / drift; this is just the day-of expression.
         coach = getattr(team, 'coach', None)
         coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
         if coachAttitude >= 90:
-            coachMag = 0.01 + (coachAttitude - 90) / 1000  # 1.0% .. 2.0%
+            coachMag = 0.01 + (coachAttitude - 90) / 1000
             multiplier *= 1.0 + coachMag
+            reasons.append({'label': 'Playing for the coach', 'kind': 'boost'})
             logging.debug(
                 f"_context: {team.abbr} play-hard-for-coach (coach att "
                 f"{coachAttitude}) × {1.0 + coachMag:.3f}"
             )
         elif coachAttitude <= 70:
-            coachMag = 0.01 + (70 - coachAttitude) / 1000  # 1.0% .. 2.0%
+            coachMag = 0.01 + (70 - coachAttitude) / 1000
             multiplier *= 1.0 - coachMag
+            reasons.append({'label': 'Disengaged from coach', 'kind': 'drag'})
             logging.debug(
                 f"_context: {team.abbr} disengaged-from-coach (coach att "
                 f"{coachAttitude}) × {1.0 - coachMag:.3f}"
             )
 
-        return multiplier
+        return multiplier, reasons
 
     def _applyContextModifiers(self):
-        """Stack per-matchup contextual modifiers (trap game, playoff push,
-        clinched coast) on top of the form-state modifier."""
-        homeMult = self._computeContextMultiplier(self.homeTeam, self.awayTeam)
-        awayMult = self._computeContextMultiplier(self.awayTeam, self.homeTeam)
-        self._applyTeamRatingMult(self.homeTeam, homeMult)
-        self._applyTeamRatingMult(self.awayTeam, awayMult)
+        """Deprecated. Folded into _applyTeamDisposition. Kept as a no-op
+        so older call-sites don't break during the transition."""
+        return
 
     def _applyFatigue(self, team):
         """Reduce in-game attributes based on accumulated player fatigue."""
@@ -4892,6 +6094,86 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
+                # Per-player pre-game mental modifier breakdown — always
+                # included when snapshots exist, even if every stage netted
+                # zero. "Nothing is dragging this player" is itself useful
+                # context for users trying to understand a stat line.
+                breakdown = self._buildMentalBreakdown(p)
+                if breakdown:
+                    result['mentalBreakdown'] = breakdown
+                # Mindset numbers — both pre-game baseline and the live
+                # in-game value. The drift between them is the LARGEST
+                # invisible driver of "my star had a bad game": every
+                # play applies _mentalDrift which amplifies drift 25×,
+                # so a -3 confidence drop is ~-4.5 effective rating per
+                # play. Surfacing pre-game and current together lets
+                # users see whether the bad performance came from a
+                # pre-game state or a mid-game collapse.
+                try:
+                    cnfBase = round(getattr(p.attributes, 'confidenceModifier', 0) or 0, 2)
+                    detBase = round(getattr(p.attributes, 'determinationModifier', 0) or 0, 2)
+                    cnfNow = round(getattr(p.gameAttributes, 'confidenceModifier', 0) or 0, 2)
+                    detNow = round(getattr(p.gameAttributes, 'determinationModifier', 0) or 0, 2)
+                    result['confidenceModifier'] = cnfBase
+                    result['determinationModifier'] = detBase
+                    result['confidenceInGame'] = cnfNow
+                    result['determinationInGame'] = detNow
+                    result['confidenceDrift'] = round(cnfNow - cnfBase, 2)
+                    result['determinationDrift'] = round(detNow - detBase, 2)
+                except Exception:
+                    pass
+                # Season-average FP coming into this game — the reference
+                # users actually care about when judging "performed like
+                # they should". Per-game stats hold this game; season
+                # totals hold prior games only.
+                try:
+                    gp = max(0, getattr(p, 'gamesPlayed', 0) or 0)
+                    seasonFp = p.seasonStatsDict.get('fantasyPoints', 0) or 0
+                    if gp > 0:
+                        result['seasonAvgFP'] = round(seasonFp / gp, 1)
+                        result['seasonGP'] = gp
+                except Exception:
+                    pass
+                # Pressure exposure — biggest invisible driver of
+                # "good player choked in a big moment". pressureHandling
+                # is the player's per-play stochastic over/underperform
+                # disposition; team.pressureModifier is the game-day
+                # stakes multiplier (market expectations + in-season
+                # urgency, championship games hit 2.5).
+                try:
+                    result['pressureHandling'] = int(getattr(
+                        p.attributes, 'pressureHandling', 0) or 0)
+                    pTeam = getattr(p, 'team', None)
+                    if pTeam is not None:
+                        result['teamPressureModifier'] = round(
+                            getattr(pTeam, 'pressureModifier', 1.0) or 1.0, 2)
+                except Exception:
+                    pass
+                # Static mental/personality attributes — surfaced as
+                # status badges in the breakdown panel so users can
+                # read a player's profile at a glance. Each badge maps
+                # to a tier label on the frontend.
+                try:
+                    for attr in ('attitude', 'resilience', 'selfBelief',
+                                 'discipline', 'focus', 'instinct', 'creativity'):
+                        val = getattr(p.attributes, attr, None)
+                        if val is not None:
+                            result[attr] = int(val)
+                except Exception:
+                    pass
+                # Single narrative label for the team's combined disposition
+                # ("Hot Streak", "Trap-Game Risk", "Cinderella Push", etc.).
+                # Replaces the prior split between formStateLabel +
+                # contextReasons — those two fields stacked separately in
+                # the UI and double-explained the same effect.
+                try:
+                    pTeam = getattr(p, 'team', None)
+                    if pTeam is not None:
+                        label = getattr(pTeam, '_dispositionLabel', None)
+                        if label:
+                            result['dispositionLabel'] = label
+                except Exception:
+                    pass
                 # Include defense stats if any are non-zero
                 defStats = p.gameStatsDict.get('defense', {})
                 if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
@@ -5314,7 +6596,7 @@ class Game:
             self.play.awayWinProbability = newAwayWp
             self.play.homeWpa = round(homeWpa, 2)
             self.play.awayWpa = round(awayWpa, 2)
-            self.play.isBigPlay = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+            self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
 
             # Momentum: big play bonus (team that benefited from WPA swing)
             if self.play.isBigPlay:
@@ -5344,6 +6626,25 @@ class Game:
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
                 'scoreChange': getattr(self.play, 'scoreChange', False),
+                # Anomaly attachments — null when no glitch fired on
+                # this play. When present, the frontend should render
+                # glitchText distinctly (italic, dim) below playText.
+                'glitchText': getattr(self.play, 'glitchText', None),
+                'glitchPlayerId': getattr(self.play, 'glitchPlayerId', None),
+                'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
+                'glitchLayer': getattr(self.play, 'glitchLayer', None),
+                'glitchYardDelta': getattr(self.play, 'glitchYardDelta', None),
+                # Participant IDs — used by the frontend highlights feed
+                # to filter "plays involving players the user cares
+                # about." Null when the role didn't apply to this play.
+                'passerId':   getattr(getattr(self.play, 'passer', None),   'id', None),
+                'receiverId': getattr(getattr(self.play, 'receiver', None), 'id', None),
+                'runnerId':   getattr(getattr(self.play, 'runner', None),   'id', None),
+                'kickerId':   getattr(getattr(self.play, 'kicker', None),   'id', None),
+                'tacklerId':       getattr(getattr(self.play, 'tackledBy', None),       'id', None),
+                'sackerId':        getattr(getattr(self.play, 'sackedBy', None),        'id', None),
+                'interceptorId':   getattr(getattr(self.play, 'interceptedBy', None),   'id', None),
+                'forcedFumblerId': getattr(getattr(self.play, 'forcedFumbleBy', None),  'id', None),
                 'homeTeamScore': getattr(self.play, 'homeTeamScore', None),
                 'awayTeamScore': getattr(self.play, 'awayTeamScore', None),
                 'offensiveTeam': self.play.offense.abbr if hasattr(self.play, 'offense') else self.offensiveTeam.abbr,
@@ -5409,6 +6710,7 @@ class Game:
             'homeWpa': round(homeWpa, 2),
             'awayWpa': round(awayWpa, 2),
             'isHalftime': getattr(self, 'isHalftime', False),
+            'isFloosBowl': getattr(self, 'isFloosBowl', False),
             'isOvertime': self.currentQuarter > 4 if hasattr(self, 'currentQuarter') else False,
             'isUpsetAlert': isUpsetAlert,
             'homeTimeouts': self.homeTimeoutsRemaining,
@@ -5461,7 +6763,7 @@ class Game:
             if 'homeWpa' not in self.gameFeed[0]:
                 self.gameFeed[0]['homeWpa'] = round(homeWpa, 2)
                 self.gameFeed[0]['awayWpa'] = round(awayWpa, 2)
-                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 10.0 or abs(awayWpa) >= 10.0)
+                self.gameFeed[0]['isBigPlay'] = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
                 self.gameFeed[0]['isClutchPlay'] = getattr(self.play, 'isClutchPlay', False)
                 self.gameFeed[0]['isChokePlay'] = getattr(self.play, 'isChokePlay', False)
                 self.gameFeed[0]['isMomentumShift'] = getattr(self.play, 'isMomentumShift', False)
@@ -5497,9 +6799,9 @@ class Game:
             target = 7
             return ('setupFG', max(8, secs - target))
 
-        if (q >= 4) and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0 and not garbageTime:
+        if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
-        if q == 2 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff <= 0:
+        if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:
             return ('hurryUp', 15)  # End-of-half trailing or tied
         if q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
             return ('hurryUp', 15 if scoreDiff <= -8 else 25)  # Mid-late deficit
@@ -5510,8 +6812,8 @@ class Game:
             return ('burnClock', 40)  # Late Q3 with two-score lead
         if q >= 4 and scoreDiff > 8:
             return ('burnClock', 40)  # Q4/OT comfortable lead
-        if q >= 4 and secs <= TIMEOUT_CLOCK_THRESHOLD and scoreDiff > 0:
-            return ('burnClock', 38)  # Q4/OT any lead under 2:00
+        if q >= 4 and scoreDiff > 0 and secs <= 300:
+            return ('burnClock', 38)  # Q4/OT any lead inside 5:00 — protect it
         return ('neutral', DEFAULT_BASE)
 
     def recordTempoIntent(self) -> None:
@@ -5686,7 +6988,7 @@ class Game:
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
         self.yardsToEndzone = 2
-        self.yardsToSafety = FIELD_LENGTH - 2
+        self.yardsToSafety = self.gameRules.fieldLength - 2
         self.down = 1
         self.yardsToFirstDown = 2
 
@@ -5763,7 +7065,7 @@ class Game:
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
         self.yardsToEndzone = 15
-        self.yardsToSafety = FIELD_LENGTH - 15
+        self.yardsToSafety = self.gameRules.fieldLength - 15
         self.down = 1
         self.yardsToFirstDown = 15
 
@@ -5859,10 +7161,11 @@ class Game:
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
-        if not self.twoMinuteWarningShown and self.gameClockSeconds <= TIMEOUT_CLOCK_THRESHOLD:
+        if not self.twoMinuteWarningShown and self.gameClockSeconds <= self.gameRules.timeoutClockThreshold:
             if self.currentQuarter == 2 or self.currentQuarter == 4:
                 self.twoMinuteWarningShown = True
                 self.clockRunning = False
+                self._clockStoppedByWarning = True
                 # Two-minute warning is like a free timeout
                 self.gameFeed.insert(0, {'event': {
                     'text': 'Two-Minute Warning',
@@ -5879,12 +7182,12 @@ class Game:
         """Transition to next quarter"""
         if self.currentQuarter == 1:
             self.currentQuarter = 2
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.isHalftime = False
             # Reset timeouts for second half
             self.homeTimeoutsRemaining = 3
@@ -5892,13 +7195,13 @@ class Game:
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 3:
             self.currentQuarter = 4
-            self.gameClockSeconds = 900
+            self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:
                 self.currentQuarter = 5
-                self.gameClockSeconds = 600  # 10 minute OT
+                self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # 10 minute OT
                 self.isOvertime = True
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
@@ -5909,7 +7212,7 @@ class Game:
             # Additional OT periods - reset clock if game is still tied
             if self.homeScore == self.awayScore:
                 self.otPeriod += 1
-                self.gameClockSeconds = 600  # Another 10 minute OT period
+                self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Another 10 minute OT period
                 self.twoMinuteWarningShown = False
                 self.homeTimeoutsRemaining = 2
                 self.awayTimeoutsRemaining = 2
@@ -6275,6 +7578,361 @@ class Game:
             )
             broadcaster.broadcast_sync(self.id, event)
 
+    # ── Anomaly system hooks ───────────────────────────────────────────
+    # Per-play roll for the user-attention-driven simulation-criticality
+    # layer. v1 only fires Layer 1 universal micro-glitches (pure play-
+    # text injection, no stat-output changes). Personality-keyed and
+    # signature abilities land in follow-up commits.
+
+    def _loadAnomalyAttention(self) -> None:
+        """Snapshot every active player's attention score + state for
+        this season, plus this game's Criticality multiplier.
+
+        Called lazily on the first play of the game. The snapshot is
+        held in memory for the rest of the game — DB churn would be
+        prohibitive at per-play frequency.
+        """
+        try:
+            from database.connection import get_session
+            from database.models import PlayerAttention, AnomalyState
+            from managers.anomalyManager import getCriticalityMultiplier
+            session = get_session()
+            try:
+                attnRows = session.query(PlayerAttention).filter_by(
+                    season=self.seasonNumber or 0,
+                ).all()
+                self._anomalyAttention = {
+                    r.player_id: float(r.score) for r in attnRows
+                }
+                stateRows = session.query(AnomalyState).filter_by(
+                    season=self.seasonNumber or 0,
+                ).all()
+                self._anomalyState = {
+                    r.player_id: r.state for r in stateRows
+                }
+            finally:
+                session.close()
+            self._criticalityMultiplier = getCriticalityMultiplier(
+                self.seasonNumber or 0, self.week or 0,
+            )
+        except Exception as e:
+            # Anomaly system is purely additive — if anything fails,
+            # play out the game as if no one had any attention.
+            self._anomalyAttention = {}
+            self._anomalyState = {}
+            self._criticalityMultiplier = 1.0
+            try:
+                from logger_config import get_logger
+                get_logger("floosball.anomaly").debug(
+                    f"Anomaly attention load failed: {e}"
+                )
+            except Exception:
+                pass
+        self._anomalyAttentionLoaded = True
+
+    def _maybeFireAnomalies(self) -> None:
+        """Roll for Layer 1 / Layer 2 cosmetic glitches.
+
+        Pure flavor — no stat or field-state changes. Mechanical impact
+        lives in Layer 3 (signature abilities at Awakened state).
+
+        Layer 1 (subtle, generic) can fire on any play, including
+        incompletions and sacks — the line reads as "the player
+        glitched, and that's why the play resolved the way it did."
+        Layer 2 (more pronounced) is gated to plays where the
+        candidate's role succeeded — a receiver who actually caught
+        it, a tackler who actually tackled. On failed plays at
+        higher states, Layer 2 falls back to Layer 1 so the louder
+        flavor doesn't get attached to nothing happening.
+        """
+        if not self._anomalyAttentionLoaded:
+            self._loadAnomalyAttention()
+        if not self._anomalyAttention:
+            return
+        p = self.play
+        if p is None:
+            return
+        # If Layer 3 already glitched this play (a real yardage warp), don't
+        # stack a cosmetic L1/L2 line on top of it.
+        if getattr(p, '_l3Fired', False):
+            return
+        # Skip deliberate clock kills — nothing to glitch.
+        playType = getattr(p, 'playType', None)
+        playTypeName = getattr(playType, 'name', None) or str(playType or '')
+        if playTypeName in ('Kneel', 'Spike'):
+            return
+
+        from constants import (ANOMALY_GLITCH_PROB_SCALE, ANOMALY_GLITCH_PROB_CAP,
+                               ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
+                               ANOMALY_L2_WEIGHT_ERRATIC, ANOMALY_L2_WEIGHT_RAMPANT)
+        # Per-game hygiene: stop once we've hit the per-game cap, and keep
+        # glitches spaced by a cooldown so they never cluster in the feed.
+        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+            return
+        playNum = getattr(p, 'playNumber', None)
+        if (playNum is not None
+                and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
+            return
+
+        # Gather every primary actor — offensive ball-mover plus the
+        # defenders who altered the play. Order doesn't matter; we
+        # shuffle so neither side has a structural firing advantage.
+        candidates = []
+        for attr in ('receiver', 'runner', 'passer',
+                     'tackledBy', 'sackedBy', 'interceptedBy', 'forcedFumbleBy'):
+            actor = getattr(p, attr, None)
+            if actor is not None and getattr(actor, 'id', None) is not None:
+                candidates.append(actor)
+        if not candidates:
+            return
+        _random.shuffle(candidates)
+
+        for player in candidates:
+            attention = self._anomalyAttention.get(player.id, 0.0)
+            if attention <= 0:
+                continue
+            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier)
+            if _random.random() < prob:
+                # Pick the layer based on the player's state:
+                #   stable / stirring  -> Layer 1 (subtle, "huh")
+                #   erratic / rampant  -> 60% Layer 2, 40% Layer 1
+                #   awakened           -> 80% Layer 2, 20% Layer 1
+                #                         (Layer 3 ability fires separately,
+                #                         once per game, not per play)
+                #   cleansed           -> Layer 1 only (drained of weight)
+                # Cumulative layer roll: the player's state is the CEILING.
+                #   stirring / stable / cleansed -> L1 (cosmetic micro)
+                #   erratic                       -> L1 or L2
+                #   rampant / awakened            -> L1 or L2 (L3 game-impacting
+                #                                    added at these states in P2)
+                state = self._anomalyState.get(player.id, 'stable')
+                if state == 'erratic':
+                    layer = 'personality' if _random.random() < ANOMALY_L2_WEIGHT_ERRATIC else 'micro'
+                elif state in ('rampant', 'awakened'):
+                    layer = 'personality' if _random.random() < ANOMALY_L2_WEIGHT_RAMPANT else 'micro'
+                else:
+                    layer = 'micro'
+
+                # Layer 2 only fires if the candidate's role succeeded
+                # on this play — otherwise the louder "the simulation
+                # is failing around them" framing reads dissonant on a
+                # failed catch / failed run. Fall back to Layer 1.
+                if layer == 'personality' and not self._candidateSucceeded(player, p):
+                    layer = 'micro'
+
+                self._injectAnomalyLine(player, layer=layer)
+                self._glitchCountThisGame += 1
+                if playNum is not None:
+                    self._lastGlitchPlayNumber = playNum
+                # One anomaly per play. Multiple Awakened players on
+                # the field don't stack glitch lines.
+                return
+
+    def _candidateSucceeded(self, player, play) -> bool:
+        """Did this candidate's role produce a positive outcome for
+        their side on this play?
+
+        Defensive actors are only populated when their action succeeded
+        (tackledBy / sackedBy / interceptedBy / forcedFumbleBy all
+        imply success by their presence).
+
+        Offensive actors succeeded if the play had positive yardage
+        and didn't end as a turnover.
+        """
+        for attr in ('tackledBy', 'sackedBy', 'interceptedBy', 'forcedFumbleBy'):
+            if player is getattr(play, attr, None):
+                return True
+        yardage = getattr(play, 'yardage', 0) or 0
+        if yardage <= 0:
+            return False
+        if (getattr(play, 'isInterception', False)
+                or getattr(play, 'isFumbleLost', False)
+                or getattr(play, 'isTurnover', False)):
+            return False
+        return True
+
+    def _injectAnomalyLine(self, player, layer: str = 'micro') -> None:
+        """Append a glitch line to the play's text + log the AnomalyEvent.
+
+        layer:
+          - 'micro'       — Layer 1 generic pool, subtle, "huh that's curious"
+          - 'personality' — Layer 2 pool, more pronounced, "something is wrong"
+
+        Mechanics:
+          - `play.glitchText` — the new field, holds the glitch line so
+            frontend renderers can style it distinctly from the main
+            play text (italic, dim, etc.).
+          - `play.glitchPlayerId` / `play.glitchPlayerName` — attribution
+            for hover or click-through.
+          - `play.glitchLayer` — 'micro' or 'personality' so the frontend
+            can style L2 louder than L1.
+          - `play.playText` — also gets the line appended with a newline,
+            so feeds that read playText alone still surface the glitch.
+        """
+        if self.play is None:
+            return
+        if layer == 'personality':
+            pool = _LAYER_2_GLITCHES
+        else:
+            pool = _LAYER_1_MICRO_GLITCHES
+        line = _random.choice(pool).format(player=player.name)
+        try:
+            self.play.glitchText = line
+            self.play.glitchPlayerId = player.id
+            self.play.glitchPlayerName = player.name
+            self.play.glitchLayer = layer
+            existing = getattr(self.play, 'playText', '') or ''
+            if existing:
+                self.play.playText = f"{existing}\n{line}"
+            else:
+                self.play.playText = line
+        except Exception:
+            pass
+        # Best-effort persistence — failure here doesn't affect the game.
+        try:
+            from database.connection import get_session
+            from database.models import AnomalyEvent
+            session = get_session()
+            try:
+                evt = AnomalyEvent(
+                    player_id=player.id,
+                    season=self.seasonNumber or 0,
+                    week=self.week or 0,
+                    game_id=self.id,
+                    play_number=getattr(self.play, 'playNumber', None),
+                    layer=layer,
+                    ability=None,
+                    play_text=line,
+                    during_thinning=(self._criticalityMultiplier > 1.0),
+                )
+                session.add(evt)
+                session.commit()
+            finally:
+                session.close()
+        except Exception:
+            pass
+
+    def _maybeApplyL3Glitch(self) -> None:
+        """Layer 3 — a rampant/awakened ball-carrier's play glitches and the
+        YARDAGE changes for real (involuntary, not the deliberate Control
+        powers). Runs after the play resolves but before the outcome is
+        applied, so the adjusted yardage flows through field position, downs,
+        and stats consistently.
+
+        Skewed heavily positive. A positive "surge" can extend a drive (and,
+        near the goal line, occasionally score) — that's the splashy upside.
+        A negative "stumble" is modest and tightly fenced: it only fires on
+        short, down-advancing plays (never on a play that earned a first down
+        or TD, never on 4th down), is floored so it can't cause a safety, is
+        capped per team, and is suppressed in a tight late game — so a glitch
+        can never cost a team possession, points, or a game. No turnovers.
+        """
+        if not self._anomalyAttentionLoaded:
+            self._loadAnomalyAttention()
+        if not self._anomalyAttention:
+            return
+        p = self.play
+        if p is None:
+            return
+        playType = getattr(p, 'playType', None)
+        if playType not in (PlayType.Run, PlayType.Pass):
+            return
+        # Forward-progress, non-turnover plays only — excludes incompletions,
+        # sacks, runs for loss, fumbles, and interceptions.
+        if (getattr(p, 'isFumbleLost', False) or getattr(p, 'isInterception', False)
+                or getattr(p, 'isSack', False)):
+            return
+        baseYardage = getattr(p, 'yardage', 0) or 0
+        if baseYardage <= 0:
+            return
+        carrier = p.runner if playType is PlayType.Run else getattr(p, 'receiver', None)
+        if carrier is None or getattr(carrier, 'id', None) is None:
+            return
+        if self._anomalyState.get(carrier.id, 'stable') not in ('rampant', 'awakened'):
+            return
+        if self._anomalyAttention.get(carrier.id, 0.0) <= 0:
+            return
+
+        from constants import (ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
+                               ANOMALY_L3_TRIGGER_PROB, ANOMALY_L3_HELP_CHANCE,
+                               ANOMALY_L3_POS_YARDS, ANOMALY_L3_NEG_YARDS,
+                               ANOMALY_L3_MAX_NEG_PER_TEAM, ANOMALY_L3_LATE_QUARTER,
+                               ANOMALY_L3_CLOSE_MARGIN)
+        # Per-game hygiene: shared cap + cooldown with the cosmetic layers.
+        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+            return
+        playNum = getattr(p, 'playNumber', None)
+        if (playNum is not None
+                and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
+            return
+        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier:
+            return
+
+        helpful = _random.random() < ANOMALY_L3_HELP_CHANCE
+        if helpful:
+            newYardage = baseYardage + _random.randint(*ANOMALY_L3_POS_YARDS)
+            ability, pool = 'glitch_surge', _LAYER_3_SURGE_GLITCHES
+        else:
+            # Stumble guardrails: never touch a first down / TD, never on 4th
+            # down, never cause a safety, cap per team, skip a tight late game.
+            team = self.offensiveTeam.name
+            if baseYardage >= self.yardsToEndzone or baseYardage >= self.yardsToFirstDown:
+                return
+            if self.down >= 4:
+                return
+            if self._l3NegByTeam.get(team, 0) >= ANOMALY_L3_MAX_NEG_PER_TEAM:
+                return
+            if (self.currentQuarter >= ANOMALY_L3_LATE_QUARTER
+                    and abs(self.homeScore - self.awayScore) <= ANOMALY_L3_CLOSE_MARGIN):
+                return
+            loss = _random.randint(*ANOMALY_L3_NEG_YARDS)
+            # Floor the loss so it can never drop the offense into a safety.
+            loss = min(loss, max(0, (self.yardsToSafety + baseYardage) - 1))
+            if loss <= 0:
+                return
+            newYardage = baseYardage - loss
+            ability, pool = 'glitch_stumble', _LAYER_3_STUMBLE_GLITCHES
+            self._l3NegByTeam[team] = self._l3NegByTeam.get(team, 0) + 1
+
+        p.yardage = newYardage
+        line = _random.choice(pool).format(player=carrier.name)
+        try:
+            p.glitchText = line
+            p.glitchPlayerId = carrier.id
+            p.glitchPlayerName = carrier.name
+            p.glitchLayer = 'signature'
+            p.glitchYardDelta = newYardage - baseYardage
+            p._l3Fired = True
+        except Exception:
+            pass
+        self._glitchCountThisGame += 1
+        if playNum is not None:
+            self._lastGlitchPlayNumber = playNum
+
+        # Best-effort persistence — failure here doesn't affect the game.
+        try:
+            from database.connection import get_session
+            from database.models import AnomalyEvent
+            session = get_session()
+            try:
+                evt = AnomalyEvent(
+                    player_id=carrier.id,
+                    season=self.seasonNumber or 0,
+                    week=self.week or 0,
+                    game_id=self.id,
+                    play_number=playNum,
+                    layer='signature',
+                    ability=ability,
+                    play_text=line,
+                    during_thinning=(self._criticalityMultiplier > 1.0),
+                )
+                session.add(evt)
+                session.commit()
+            finally:
+                session.close()
+        except Exception:
+            pass
+
 
 class Play():
     def __init__(self, game:Game):
@@ -6329,7 +7987,11 @@ class Play():
         # a clock indicator next to each play in the feed.
         self.clockStopped = False
         self.targetSideline = False  # True when play caller targets sideline routes
-        self.down = 0                    # Pre-play down (for clutch/choke 4th down checks)
+        # NOTE: do NOT initialize self.down here — line 7488 above already
+        # captures the pre-play down from game.down at construction time.
+        # An earlier `self.down = 0` here was overwriting that and shipping
+        # every play to the frontend with down=0, breaking down/distance
+        # rendering across the play feed (most visibly on punts).
         self.gamePressure = 0            # Snapshot of game pressure at play time
         self.keyPressureMod = 0.0        # The key player's pressure modifier
         self.qbPressureMod = 0.0         # QB-specific pressure modifier (pass plays)
@@ -6352,6 +8014,13 @@ class Play():
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
+        # Anomaly system attachments — populated when a glitch fires on this
+        # play. None / empty when no anomaly happened.
+        self.glitchText = None          # The glitch flavor line
+        self.glitchPlayerId = None      # Player whose anomaly triggered
+        self.glitchPlayerName = None
+        self.glitchLayer = None         # 'micro' (L1) / 'personality' (L2) / 'signature' (L3)
+        self.glitchYardDelta = None     # L3 only: signed yards the glitch added (+) or cost (-)
         self.insights = {}              # Play insights dict — populated during execution
 
     def _captureBlitzer(self, scheme, defGameplanObj):
@@ -6739,7 +8408,7 @@ class Play():
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
                 100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds
+                self.game.currentQuarter, self.game.gameClockSeconds,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
@@ -6781,12 +8450,17 @@ class Play():
             self.runner.attributes.discipline
         )
         
-        # ── Yardage calculation ──
-        # Single-sample model: one Gaussian draw for base yards + breakaway chance
+        # ── Three-gate yardage model ──
+        # Gate 1: The Line — RB power + blocker vs front-7 run defense
+        # Gate 2: Second Level — RB agility/vision vs LB-S box (tackling)
+        # Gate 3: Open Field — RB speed vs deep coverage/safety angles
+        # Most runs end at Gate 1 or 2 (4-9 yds). Clearing all three is rare
+        # and produces the 30+ yard scamper.
         gapQuality = selectedGap['actualQuality']
         gapType = selectedGap['type']
 
-        # RB composite rating weighted by gap type (power inside, agility outside)
+        # Gap-weighted hybrid rating (kept from old model — informs Gate 1
+        # since gap selection drives line-of-scrimmage matchup style)
         if gapType == 'A-gap':
             rbRating = (self.runner.attributes.power * 1.5 + self.runner.attributes.agility * 0.5) / 2
         elif gapType == 'B-gap':
@@ -6796,38 +8470,60 @@ class Play():
         else:  # bounce
             rbRating = self.runner.attributes.agility
 
-        # Mental drift: RB in rhythm hits holes harder, frustrated RB is tentative
-        rbRating += self._mentalDrift(self.runner) / 15
+        rbMental = self._mentalDrift(self.runner) / 15
 
-        # Offensive rating: RB skill + TE blocking + pressure modifier
-        offRating = (rbRating * 0.6) + (blockerRating * 0.4) + runnerPressureMod
+        # GATE 1 — Line of scrimmage (power)
+        linePower = (self.runner.attributes.power * 1.4 +
+                     rbRating * 0.6 +
+                     blockerRating * 0.7) / 2.7
+        linePower += rbMental + runnerPressureMod
+        gapBonus = (gapQuality - 50) / 4
+        lineMatchup = linePower - effectiveRunDef + gapBonus
+        # Gate-1 floor lifted from 20% → 35% so weak-blocking offenses
+        # against strong run defenses aren't pinned at an 80% stuff rate.
+        # That floor was killing trailing teams' drives and contributing
+        # to the bimodal score distribution. Big-play tails (gates 2/3)
+        # unaffected — housecall potential preserved.
+        gate1Chance = max(40, min(85, 45 + lineMatchup * 1.2))
 
-        # Gap quality bonus: clean hole = better yards (±2.5 range)
-        qualityBonus = (gapQuality - 50) / 20
+        # GATE 2 — Second level (agility/vision vs box tackling)
+        secondLevel = (self.runner.attributes.agility * 1.3 +
+                       self.runner.attributes.vision * 0.5 +
+                       self.runner.attributes.playMakingAbility * 0.2) / 2
+        secondLevel += rbMental + runnerPressureMod
+        # LB-S box: blend of run defense (LB) and coverage (S) ratings
+        secondLevelDef = effectiveRunDef * 0.55 + self.defense.defensePassCoverageRating * 0.45
+        gate2Chance = max(6, min(45, 15 + (secondLevel - secondLevelDef) * 1.3))
 
-        # Skill differential determines mean yardage
-        # Baseline 4.0 for even matchups, divisor 10.0 compresses mismatch spread
-        diff = offRating + qualityBonus - effectiveRunDef
-        runMean = 4.0 + (diff / 10.0)
-        runMean = max(-1, min(5.5, runMean))
+        # GATE 3 — Open field (speed vs safety angles)
+        openField = (self.runner.attributes.speed * 1.7 +
+                     self.runner.attributes.playMakingAbility * 0.3) / 2
+        openField += rbMental
+        openFieldDef = self.defense.defensePassCoverageRating * 0.95
+        gate3Chance = max(8, min(55, 22 + (openField - openFieldDef) * 1.2))
 
-        runStdDev = 3.0
-        maxYards = min(12, self.yardsToEndzone + 3)
-        runYardages = np.arange(-3, maxYards + 1)
-        runCurve = np.exp(-((runYardages - runMean) ** 2) / (2 * runStdDev ** 2))
-        runCurve /= np.sum(runCurve)
-        self.yardage = int(np.random.choice(runYardages, p=runCurve))
+        if batched_randint(1, 100) > gate1Chance:
+            # Stuffed at the line — -2 to 2 yards
+            self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
+        else:
+            # Through the line: 2-6 baseline yards (avg 3.5)
+            self.yardage = max(2, min(7, int(np.random.normal(3.5, 1.0))))
+            if batched_randint(1, 100) > gate2Chance:
+                # Wrapped up at second level: 1-5 more yards (avg 3)
+                self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
+            else:
+                # Broke through: 5-12 more yards (avg 8)
+                self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
+                if batched_randint(1, 100) > gate3Chance:
+                    # Chased down by deep coverage: 6-20 more yards (avg 11)
+                    self.yardage += max(4, min(22, int(np.random.normal(11.0, 4.0))))
+                else:
+                    # Housecall — exponential tail (housecall avg ~20)
+                    remaining = self.yardsToEndzone - self.yardage
+                    self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
+
+        self.yardage = min(self.yardage, self.yardsToEndzone)
         baseYards = self.yardage
-
-        # Breakaway: if RB got 6+ yards, chance to hit open field
-        if self.yardage >= 6 and self.yardage < self.yardsToEndzone:
-            speedRating = (self.runner.attributes.speed * 2 +
-                          self.runner.attributes.agility +
-                          self.runner.attributes.playMakingAbility) / 4
-            breakChance = max(2, min(15, (speedRating - 60) * 0.25 + 2))
-            if batched_randint(1, 100) <= breakChance:
-                remaining = self.yardsToEndzone - self.yardage
-                self.yardage += min(remaining, int(np.random.exponential(8)))
 
         # Fumble check
         fumbleRoll = batched_randint(1, 100)
@@ -6901,7 +8597,10 @@ class Play():
             'blockerName': blocker.name if blocker else None,
             'blockingVsDefense': round(blockerRating - effectiveRunDef, 1),
             'effectiveRunDef': round(effectiveRunDef),
-            'offenseVsDefense': round(offRating + qualityBonus - effectiveRunDef, 1),
+            'lineMatchup': round(lineMatchup, 1),
+            'gate1Chance': round(gate1Chance, 1),
+            'gate2Chance': round(gate2Chance, 1),
+            'gate3Chance': round(gate3Chance, 1),
             'baseYards': baseYards,
             'fumbleRisk': round(100 - fumbleThreshold),
             'isFumble': self.isFumble,
@@ -7006,6 +8705,25 @@ class Play():
         detDrift = player.gameAttributes.determinationModifier - baseDet
         return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
 
+    def _defenderMentalMod(self, defender):
+        """Combined mental swing for a defender on a single resolution.
+        Mirrors the pressureMod + mentalDrift/15 pattern used on offense so
+        defenders are equally subject to clutch/choke and in-game flow state.
+        Returns a rating delta (typically ±0 to ±8) to add onto the defender's
+        effective rating for the gate being resolved.
+        """
+        if defender is None or not hasattr(defender, 'attributes'):
+            return 0.0
+        try:
+            pressureMod = defender.attributes.getPressureModifier(self.game.gamePressure)
+        except Exception:
+            pressureMod = 0.0
+        try:
+            drift = self._mentalDrift(defender) / 15
+        except Exception:
+            drift = 0.0
+        return pressureMod + drift
+
     def calculateReceiverOpenness(self, receiver, defensePassCoverage: int) -> float:
         """
         Stage 1: Calculate how open a receiver is on a scale of 0-100.
@@ -7092,60 +8810,82 @@ class Play():
         # Sort by perceived openness (what QB thinks they see)
         sortedTargets = sorted(perceivedTargets, key=lambda t: t['openness'], reverse=True)
         
-        # QB makes decision based on perceived openness
+        # QB makes decision based on perceived openness. Thresholds loosened
+        # so QBs more often throw to tight windows — real NFL throwaway rate
+        # is ~3-5% of attempts, not the 12% the old strict thresholds produced.
         for target in sortedTargets:
             perceivedOpenness = target['openness']
-            
+
             # Discipline check using perceived openness
             if qbDiscipline >= 90:
-                # Elite discipline: only throw to open receivers (60+) or throw away
-                if perceivedOpenness >= 60 or batched_randint(1, 100) <= 20:
+                # Elite: prefers 50+ openness, otherwise frequently throws
+                # to next-best read instead of stalling.
+                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50:
                     return (target, False)
             elif qbDiscipline >= 75:
-                # Good discipline: prefer open, sometimes throw to partial (40+)
-                if perceivedOpenness >= 40 or batched_randint(1, 100) <= 30:
+                # Good: throws to 30+ openness or rolls to throw anyway.
+                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70:
                     return (target, False)
             elif qbDiscipline >= 60:
-                # Average discipline: will throw to most receivers
-                if perceivedOpenness >= 25 or batched_randint(1, 100) <= 50:
+                # Average: throws to 15+, mostly forces it otherwise.
+                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85:
                     return (target, False)
             else:
                 # Low discipline: throws to anyone, risky
-                if batched_randint(1, 100) <= 70:
+                if batched_randint(1, 100) <= 95:
                     return (target, False)
-        
-        # No suitable receiver found - throw away or force it
+
+        # No suitable receiver found - force throw to the most-open target
+        # unless QB has decent discipline AND every target is buried.
+        # Calibrated so ~3-5% of attempts end in throwaway (NFL benchmark).
         if mustThrow:
-            # Desperation: QB must attempt a throw (4th down trailing, time expiring)
             return (sortedTargets[0], False)
-        if qbDiscipline >= 80:
-            return (None, True)  # Throw away
-        elif batched_randint(1, 100) <= qbDiscipline:
-            return (None, True)  # Throw away based on discipline
-        else:
-            # Force throw to what QB thinks is least covered
-            return (sortedTargets[0], False)
+        topOpenness = sortedTargets[0]['openness'] if sortedTargets else 0
+        # Disciplined QBs (80+) bail when no target is reasonably open.
+        # openness < 50 is the trigger — even a moderately covered top read
+        # is enough to throw away rather than force it. Below-80 discipline
+        # QBs always force the throw (they don't have the patience to bail).
+        if qbDiscipline >= 80 and topOpenness < 50:
+            return (None, True)
+        # Otherwise force the throw to the most-open option.
+        return (sortedTargets[0], False)
     
-    def calculateThrowQuality(self, passType, qbAccuracy: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
+    def calculateThrowQuality(self, passType, qbAccuracy: int, qbArmStrength: int, qbXFactor: int, rushDifferential: float, qbPressureMod: float) -> float:
         """
         Stage 3: Calculate throw quality (0-100) based on QB skill, pass type, and pressure.
-        Higher quality = easier to catch, less likely to be intercepted
-        Returns throw quality rating (0-100)
+
+        Short passes are accuracy-dominant; deep passes are arm-dominant. A
+        weak-armed QB can be surgical underneath but struggles to drive the
+        ball downfield — gunslingers are the inverse. Combined with the per-tier
+        difficulty multiplier, this creates real QB archetypes.
         """
-        # Base accuracy from QB
-        baseAccuracy = (qbAccuracy + qbXFactor) / 2 + qbPressureMod
+        # Per-tier weighted blend of accuracy and arm strength.
+        tierWeights = {
+            PassType.short:    {'acc': 0.95, 'arm': 0.05},
+            PassType.medium:   {'acc': 0.80, 'arm': 0.20},
+            PassType.long:     {'acc': 0.60, 'arm': 0.40},
+            PassType.deep:     {'acc': 0.40, 'arm': 0.60},
+            PassType.hailMary: {'acc': 0.20, 'arm': 0.80},
+        }
+        w = tierWeights.get(passType, tierWeights[PassType.medium])
+        skillBlend = qbAccuracy * w['acc'] + qbArmStrength * w['arm']
+        baseAccuracy = (skillBlend + qbXFactor) / 2 + qbPressureMod
 
         # Mental state: QB in rhythm throws sharper, rattled QB throws errant
         # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale
         mentalEffect = self._mentalDrift(self.passer) / 15
         baseAccuracy += mentalEffect
 
-        # Pass type difficulty modifier
+        # Pass type difficulty multiplier — modestly steeper than the old curve.
+        # Combined with the arm-strength weighting above, weak-armed QBs on
+        # deep balls land in the bad-throw bucket, but average QBs can still
+        # complete intermediate routes at NFL-realistic rates.
         passTypeDifficulty = {
-            PassType.short: 1.0,     # Easiest
-            PassType.medium: 0.85,   # Moderate
-            PassType.long: 0.7,      # Hardest
-            PassType.hailMary: 0.45  # Last-ditch heave — accuracy degraded
+            PassType.short:    1.00,
+            PassType.medium:   0.92,
+            PassType.long:     0.80,
+            PassType.deep:     0.65,
+            PassType.hailMary: 0.42,
         }
         difficultyMod = passTypeDifficulty.get(passType, 0.85)
 
@@ -7160,94 +8900,146 @@ class Play():
 
         return max(5, min(100, throwQuality))
     
-    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float) -> dict:
+    def calculateCatchProbability(self, throwQuality: float, receiverHands: int, receiverReach: int, receiverOpenness: float, defensePassCoverage: int, receiverPressureMod: float, passType=None, receiverActualOpenness: float = None) -> dict:
         """
-        Two-phase catch model:
+        Two-phase catch model with hard floors that prevent attribute compounding:
+
         Phase 1 (Contact): Can the receiver physically get their hands on the ball?
             - Good throws are easy to reach; bad throws require high reach
-            - Defenders in coverage can deflect/disrupt
+            - Coverage applies in two layers: openness-gated disruption AND a
+              baseline pressure that scales with defensive coverage rating, so
+              good defenses always cost completion percentage (mirrors the run
+              game's "stuff floor" — defense can never be locked out).
         Phase 2 (Secure): Given contact, does the receiver catch the ball?
             - Primarily hands-driven
             - Contested catches and bad throws are harder to secure
+
+        Compared to the prior version: tighter top-end caps (contact 92 / secure 95)
+        and a coverage baseline component that always applies — so mature defenses
+        actually slow mature offenses, instead of being zeroed out whenever the
+        receiver is open.
         """
         adjustedHands = receiverHands + receiverPressureMod
 
         # PHASE 1: Contact — can the receiver get their hands on it?
+        # Top-end lightly compressed so elite throws aren't quite automatic.
         if throwQuality >= 70:
-            # Good throw — hits the receiver, reach barely matters
-            baseContact = 90 + (throwQuality - 70) * 0.33  # 90-100
-            reachFactor = receiverReach * 0.05  # 3-5 bonus
+            baseContact = 85 + (throwQuality - 70) * 0.45  # 85-99
+            reachFactor = receiverReach * 0.05
         elif throwQuality >= 50:
-            # Decent throw — slightly off, reach helps
-            baseContact = 55 + (throwQuality - 50) * 1.75  # 55-90
-            reachFactor = (receiverReach - 60) * 0.4  # 0-16
+            baseContact = 53 + (throwQuality - 50) * 1.6   # 53-85
+            reachFactor = (receiverReach - 60) * 0.4
         else:
-            # Bad throw — way off target, reach is critical
-            baseContact = 10 + throwQuality * 0.9  # 10-55
-            reachFactor = (receiverReach - 60) * 0.7  # 0-28
+            baseContact = 10 + throwQuality * 0.85         # 10-52
+            reachFactor = (receiverReach - 60) * 0.7
 
-        # Defenders in coverage can deflect/disrupt before receiver reaches
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 20
-        contactProb = min(98, max(5, baseContact + reachFactor - coverageDisruption))
+        # Tier-scaled coverage disruption: short throws are quick-release, so
+        # defenders have little time to make a play; deep throws give DBs more
+        # window to converge. This is the lever that keeps trailing-team offenses
+        # viable — short passes should be reliable even against tight coverage,
+        # so teams can sustain drives in catch-up mode.
+        tierDisruptionMult = {
+            PassType.short:    0.40,
+            PassType.medium:   0.75,
+            PassType.long:     1.00,
+            PassType.deep:     1.15,
+            PassType.hailMary: 1.30,
+        } if passType is not None else None
+        tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18 * tierMult
+        # Baseline coverage pressure: always applies, scales modestly with
+        # defensive rating. Anchored at 70 (league-average) so elite defenses
+        # cost a couple contact points; weak defenses refund a bit. Light touch
+        # to keep the structural lever without crushing baseline completion.
+        coverageBaseline = (defensePassCoverage - 70) * 0.1
+        contactProb = min(96, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
-        baseSecure = adjustedHands * 0.85 + 10
+        baseSecure = adjustedHands * 0.95 + 8
 
-        # Contested catches are harder to secure
         if receiverOpenness < 40:
             contestPenalty = (40 - receiverOpenness) * 0.35
             baseSecure -= contestPenalty
 
-        # Bad throws are harder to secure even when reached
         if throwQuality < 50:
             throwDifficulty = (50 - throwQuality) * 0.35
             baseSecure -= throwDifficulty
 
-        secureProb = min(97, max(15, baseSecure))
+        secureProb = min(96, max(15, baseSecure))
 
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
 
-        # INT probability — bad throws to covered receivers get picked
-        intProb = 0
-        if throwQuality < 50 and receiverOpenness < 50:
-            intProb = ((50 - throwQuality) / 10) * ((50 - receiverOpenness) / 50) * (defensePassCoverage / 100) * 12
+        # INT probability — three independent paths, any of which can pick a
+        # pass (they don't have to co-occur the way the old single-gate model
+        # required):
+        #   1. Bad read — QB throws into coverage. Scales with how covered the
+        #      receiver ACTUALLY is (not how open the QB thought they were), so
+        #      low-vision QBs who target covered receivers get punished here.
+        #   2. Bad throw — an errant ball sails into traffic. The trigger is
+        #      throw quality (independent of the read), but a defender still has
+        #      to be near the target to capitalize: a bad throw to a wide-open
+        #      receiver falls incomplete (and reach may still bail it out), it
+        #      doesn't get picked out of empty space.
+        #   3. Defender's play — an above-average DB jumps a contested throw on
+        #      his own, even when the read and throw were fine.
+        # Combined as independent risks (probabilistic OR) so they stack but
+        # stay bounded. No per-tier multiplier: deep throws already pick more
+        # because their throw quality runs lower.
+        intOpenness = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
+        cov = defensePassCoverage
+        covFactor = cov / 100
+        openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
+        throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
+        # Proximity: how reachable the ball is for a defender. Full effect when
+        # the receiver is blanketed, fades toward zero once he's wide open
+        # (≥75). The floor is tier-dependent: a short throw can be genuinely
+        # uncontested, but a deep ball always has a safety in the area, so even
+        # an "open" deep receiver leaves a pickable window. This restores the
+        # deep > short INT gradient without a blanket per-tier multiplier.
+        proximityFloor = {
+            PassType.short:    0.00,
+            PassType.medium:   0.05,
+            PassType.long:     0.20,
+            PassType.deep:     0.35,
+            PassType.hailMary: 0.50,
+        }.get(passType, 0.10) if passType is not None else 0.0
+        proximity = max(proximityFloor, min(1.0, (75 - intOpenness) / 55))
+
+        pBadRead = openGap * covFactor * INT_BAD_READ_K
+        pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
+        pDefPlay = max(0.0, (cov - 70) / 30) * openGap * INT_DEF_PLAY_K
+
+        intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
+        intProb = intFrac * 100
 
         # Drop probability — receiver gets hands on it but doesn't secure
-        # Only a fraction of non-secured contacts are visible "drops" (rest are deflections)
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
-        dropProb = nonsecuredContact * 0.5
+        dropProb = nonsecuredContact * 0.3
 
         return {
-            'contactProb': round(min(98, max(5, contactProb)), 1),
-            'secureProb': round(min(97, max(15, secureProb)), 1),
+            'contactProb': round(contactProb, 1),
+            'secureProb': round(secureProb, 1),
             'catchProb': round(min(95, max(3, catchProb)), 1),
             'intProb': round(min(25, max(0, intProb)), 1),
             'dropProb': round(min(30, max(0, dropProb)), 1),
         }
     
-    def calculatePassYardage(self, passType, throwQuality: float) -> int:
+    def calculatePassYardage(self, passType) -> int:
         """
-        Calculate air yards using Gaussian distribution based on pass type and throw quality.
-        Better throws travel farther and more accurately.
+        Air yards follow the pass tier's Gaussian distribution. Throw quality
+        affects catch probability, not how far the ball travels — the QB throws
+        to a target at the route's depth, quality is only about placement.
         """
-        # Base mean and std dev for each pass type - BOOSTED for better offense
         passTypeParams = {
-            PassType.short: {'mean': 3.5, 'stdDev': 1.5},
-            PassType.medium: {'mean': 11, 'stdDev': 3.5},
-            PassType.long: {'mean': 22, 'stdDev': 5},
-            PassType.hailMary: {'mean': 50, 'stdDev': 10}
+            PassType.short:    {'mean': 3,    'stdDev': 1.0},
+            PassType.medium:   {'mean': 6.5,  'stdDev': 2.0},
+            PassType.long:     {'mean': 15,   'stdDev': 3.5},
+            PassType.deep:     {'mean': 24,   'stdDev': 4.5},
+            PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
-        
-        params = passTypeParams.get(passType, {'mean': 11, 'stdDev': 3.5})
-        
-        # Adjust mean based on throw quality (better throws travel intended distance)
-        qualityFactor = max(0.7, throwQuality / 70)  # was 75, now easier threshold
-        adjustedMean = params['mean'] * qualityFactor
-        
-        # Sample from Gaussian
-        airYards = int(np.random.normal(adjustedMean, params['stdDev']))
-        
+        params = passTypeParams.get(passType, passTypeParams[PassType.medium])
+        airYards = int(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
 
     def passPlay(self, playKey):
@@ -7271,6 +9063,13 @@ class Play():
             t == PassType.hailMary
             for t in passPlayBook[playKey]['targets'].values()
         )
+        # Pre-assign intended pass tier from dropback depth so sack analytics
+        # can attribute tier even when the play never reaches target selection.
+        _dropbackTierMap = {0: 'short', 2: 'medium', 4: 'long', 6: 'deep'}
+        if self._isHailMaryPlay:
+            self.intendedPassTier = 'hailMary'
+        else:
+            self.intendedPassTier = _dropbackTierMap.get(passPlayBook[playKey]['dropback'].value, 'medium')
         self.passBlockers = []  # Track who's blocking for insights
 
         if passPlayBook[playKey]['targets']['te'] is None:
@@ -7296,17 +9095,19 @@ class Play():
             scheme = getDefensiveScheme(
                 defGameplan, self.game.down, self.game.yardsToFirstDown,
                 100 - self.game.yardsToEndzone, offScoreDiff,
-                self.game.currentQuarter, self.game.gameClockSeconds
+                self.game.currentQuarter, self.game.gameClockSeconds,
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         self._captureBlitzer(scheme, defGameplanObj)
+
         passRusher = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
         if passRusher:
             deAttrs = passRusher.attributes.getDefensiveAttributes(passRusher.position)
             basePassRush = deAttrs.get('passRush', self.defense.defensePassRushRating)
+            basePassRush += self._defenderMentalMod(passRusher)
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
@@ -7464,6 +9265,7 @@ class Play():
                     if assignedDefender:
                         defAttrs = assignedDefender.attributes.getDefensiveAttributes(assignedDefender.position)
                         individualCoverage = defAttrs.get('coverage', effectivePassDef)
+                        individualCoverage += self._defenderMentalMod(assignedDefender)
 
                         # Coverage type modifies how individual coverage applies
                         if GAMEPLAN_AVAILABLE and coverageType is not None:
@@ -7481,6 +9283,7 @@ class Play():
                                 if safetyPlayer:
                                     sAttrs = safetyPlayer.attributes.getDefensiveAttributes(safetyPlayer.position)
                                     safetyPlayReading = sAttrs.get('playReading', 70)
+                                    safetyPlayReading += self._defenderMentalMod(safetyPlayer)
                                 # Better safety play-reading → more man-like (stronger)
                                 manWeight = 0.4 + (safetyPlayReading - 60) / 100
                                 manWeight = max(0.3, min(0.7, manWeight))
@@ -7595,6 +9398,7 @@ class Play():
                 throwQuality = self.calculateThrowQuality(
                     self.passType,
                     self.passer.gameAttributes.accuracy,
+                    self.passer.gameAttributes.armStrength,
                     self.passer.gameAttributes.xFactor,
                     self.rushDifferential,
                     qbPressureMod
@@ -7626,6 +9430,12 @@ class Play():
                 self.insights['pass']['rcvHands'] = self.receiver.gameAttributes.hands
                 self.insights['pass']['rcvReach'] = getattr(self.receiver.gameAttributes, 'reach', 0)
                 self.insights['pass']['rcvRouteRunning'] = self.selectedTarget.get('routeQuality', self.receiver.gameAttributes.routeRunning)
+                self.insights['pass']['rcvOpenness'] = round(self.selectedTarget.get('openness', 0))
+                # Actual (not QB-perceived) openness — drives the context-aware
+                # incomplete/INT narration the same way the INT model judges it.
+                self.insights['pass']['rcvActualOpenness'] = round(
+                    self.selectedTarget.get('actualOpenness', self.selectedTarget.get('openness', 0))
+                )
 
                 # STAGE 4: Calculate catch probability and outcome
                 # Use individual defender coverage if available
@@ -7633,15 +9443,19 @@ class Play():
                 if coveringDefender:
                     defAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
                     catchDefCoverage = defAttrs.get('coverage', self.defense.defensePassCoverageRating)
+                    catchDefCoverage += self._defenderMentalMod(coveringDefender)
                 else:
                     catchDefCoverage = self.defense.defensePassCoverageRating
+                self.insights['pass']['catchDefCoverage'] = round(catchDefCoverage)
                 catchProbs = self.calculateCatchProbability(
                     throwQuality,
                     self.receiver.gameAttributes.hands,
                     getattr(self.receiver.gameAttributes, 'reach', 70),
                     self.selectedTarget['openness'],
                     catchDefCoverage,
-                    receiverPressureMod
+                    receiverPressureMod,
+                    passType=self.passType,
+                    receiverActualOpenness=self.selectedTarget.get('actualOpenness', self.selectedTarget['openness']),
                 )
 
                 # Choke boosts only in high-pressure situations (Q4 close games, etc.)
@@ -7696,79 +9510,97 @@ class Play():
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     
                     # Calculate air yards based on throw quality
-                    passYards = self.calculatePassYardage(self.passType, throwQuality)
+                    passYards = self.calculatePassYardage(self.passType)
                     passYards = min(passYards, self.yardsToEndzone)
                     
-                    # STAGE 5: Calculate YAC (similar to running play breakaway)
+                    # ── Three-gate YAC model ──
+                    # Gate A: Slip the first defender (WR agility vs covering CB tackling)
+                    # Gate B: Open field (WR speed vs deep safety help)
+                    # Sideline routes still cap YAC via discipline (receiver heads
+                    # for the boundary instead of upfield).
                     yac = 0
                     if passYards < self.yardsToEndzone:
-                        receiverYACRating = (self.receiver.gameAttributes.agility + 
-                                           self.receiver.gameAttributes.speed + 
-                                           self.receiver.gameAttributes.playMakingAbility) / 3
-                        
-                        # YAC potential based on field position and sideline targeting
-                        # Receiver discipline affects YAC cap on sideline routes
+                        # Bad throws can't be caught in stride — limits all YAC.
+                        if throwQuality >= 80:
+                            throwYacMult = 1.0
+                        elif throwQuality >= 60:
+                            throwYacMult = 0.75
+                        elif throwQuality >= 40:
+                            throwYacMult = 0.45
+                        else:
+                            throwYacMult = 0.20
+
+                        # Sideline cap from receiver discipline (heads for boundary).
                         if self.targetSideline:
                             rcvDisc = self.receiver.attributes.discipline
                             if rcvDisc >= 85:
-                                yacCap = 5        # Elite: gets out ASAP
-                                decayMult = 2.0   # Very steep — minimal YAC
+                                sidelineCap = 5
                             elif rcvDisc >= 75:
-                                yacCap = 8        # Good: balances getting out with some YAC
-                                decayMult = 1.6
+                                sidelineCap = 8
                             elif rcvDisc >= 70:
-                                yacCap = 10       # Average: tries a bit more
-                                decayMult = 1.3
+                                sidelineCap = 12
                             else:
-                                yacCap = 12       # 60-69: tries to stretch it
-                                decayMult = 1.1
+                                sidelineCap = 16
                         else:
-                            yacCap = 15
-                            decayMult = 1.0
+                            sidelineCap = 99
 
-                        # Throw quality affects YAC — bad throws can't be caught in stride
-                        if throwQuality >= 80:
-                            throwYacMult = 1.0     # Caught in stride
-                        elif throwQuality >= 60:
-                            throwYacMult = 0.7     # Had to adjust
-                        elif throwQuality >= 40:
-                            throwYacMult = 0.4     # Reaching/stretching
+                        # Covering defender tackling rating — falls back to team
+                        # coverage if no individual matchup is available.
+                        if coveringDefender:
+                            covAttrs = coveringDefender.attributes.getDefensiveAttributes(coveringDefender.position)
+                            slipDef = covAttrs.get('tackling', catchDefCoverage)
+                            slipDef += self._defenderMentalMod(coveringDefender)
                         else:
-                            throwYacMult = 0.15    # Lucky to hold on
-                        yacCap = max(1, int(yacCap * throwYacMult))
+                            slipDef = catchDefCoverage
 
-                        yacMaxYards = min(yacCap, self.yardsToEndzone - passYards)
+                        # Per-tier YAC ceilings. Short routes have the most open
+                        # field opportunity (screens, slants); deeper routes are
+                        # caught with defenders converging, so the chase-down
+                        # outcome caps tighter. Mirrors the run game's bounded
+                        # gate yardage — no stage can produce unbounded YAC.
+                        yacCaps = {
+                            PassType.short:    {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 8,  'housecallMean': 12},
+                            PassType.medium:   {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 10, 'housecallMean': 12},
+                            PassType.long:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 12, 'housecallMean': 14},
+                            PassType.deep:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 15, 'housecallMean': 14},
+                            PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
+                        }
+                        caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
 
-                        if yacMaxYards > 0:
-                            yacYardages = np.arange(0, yacMaxYards + 1)
+                        # GATE A — slip the first tackler (agility).
+                        # Coefficient softened from 1.3 to 0.9 to compress
+                        # attribute-delta amplification on mature rosters.
+                        slipPower = (self.receiver.gameAttributes.agility * 1.3 +
+                                     self.receiver.gameAttributes.playMakingAbility * 0.5 +
+                                     self.receiver.gameAttributes.routeRunning * 0.2) / 2
+                        slipPower += receiverPressureMod
+                        slipExec = (4 if throwQuality >= 75 else 0) + (4 if self.selectedTarget['openness'] >= 70 else 0)
+                        gateAChance = max(8, min(45, 22 + (slipPower - slipDef) * 0.9 + slipExec))
 
-                            # YAC decay rate based on receiver vs defense
-                            yacOffense = receiverYACRating + receiverPressureMod
-                            yacDefense = catchDefCoverage
-                            yacDecayRate = max(0.10, 0.18 + 0.005 * (yacDefense - yacOffense))
-                            yacDecayRate *= decayMult
+                        # GATE B — open field (speed vs deep coverage).
+                        rcvSpeed = (self.receiver.gameAttributes.speed * 1.7 +
+                                    self.receiver.gameAttributes.playMakingAbility * 0.3) / 2
+                        openFieldDef = self.defense.defensePassCoverageRating * 0.95
+                        gateBChance = max(6, min(35, 20 + (rcvSpeed - openFieldDef) * 0.9))
 
-                            # Exponential decay curve for YAC
-                            yacCurve = np.exp(-yacDecayRate * yacYardages)
-                            yacCurve /= np.sum(yacCurve)
+                        def _capYac(gain, hardCap):
+                            gain = int(gain * throwYacMult)
+                            return max(0, min(gain, hardCap, sidelineCap, self.yardsToEndzone - passYards - yac))
 
-                            yac = int(np.random.choice(yacYardages, p=yacCurve))
-
-                        # YAC breakaway — receiver beats last defender
-                        if yac >= 7 and (passYards + yac) < self.yardsToEndzone:
-                            rcvSpeed = (self.receiver.gameAttributes.speed * 2 +
-                                       self.receiver.gameAttributes.agility +
-                                       self.receiver.gameAttributes.playMakingAbility) / 4
-                            # Execution bonus: good throw + open receiver = easier breakaway
-                            execBonus = 0
-                            if throwQuality >= 75:
-                                execBonus += 5
-                            if self.selectedTarget['openness'] >= 70:
-                                execBonus += 5
-                            breakChance = max(3, min(25, (rcvSpeed - 60) * 0.3 + 3 + execBonus))
-                            if batched_randint(1, 100) <= breakChance:
-                                remYards = self.yardsToEndzone - passYards - yac
-                                yac += min(remYards, int(np.random.exponential(10)))
+                        if batched_randint(1, 100) > gateAChance:
+                            # Tackled by covering defender — clamped 0-3 YAC
+                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))), caps['gateAFail'])
+                        else:
+                            # Slipped the tackle — clamped 2-6 YAC
+                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))), caps['gateAPass'])
+                            if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
+                                if batched_randint(1, 100) > gateBChance:
+                                    # Safety angles WR off — clamped per tier
+                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))), caps['gateBFail'])
+                                else:
+                                    # Housecall — exponential tail, bounded by remaining field
+                                    remYards = self.yardsToEndzone - passYards - yac
+                                    yac += min(remYards, max(8, int(np.random.exponential(caps['housecallMean']) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
@@ -7864,16 +9696,24 @@ class Play():
                         if hasattr(primaryTackler, 'attributes'):
                             defAttrs = primaryTackler.attributes.getDefensiveAttributes(primaryTackler.position)
                             defStripAbility = defAttrs.get('tackling', 70)
+                            defStripAbility += self._defenderMentalMod(primaryTackler)
                         if (defStripAbility + batched_randint(-5, 5)) >= (rcvFumbleResist + batched_randint(-5, 5)):
+                            # Ball is out. Credit the forced fumble regardless of
+                            # who recovers, then run a recovery contest so the
+                            # offense can fall on it — same as a run fumble,
+                            # instead of every strip being an automatic turnover.
                             self.isFumble = True
-                            self.receiver.updateInGameConfidence(-.02)
-                            self.defense.updateInGameConfidence(.02)
-                            self.defense.gameDefenseStats['fumRec'] += 1
-                            self.isFumbleLost = True
                             self.forcedFumbleBy = primaryTackler
                             if hasattr(primaryTackler, 'stat_tracker'):
                                 primaryTackler.stat_tracker.add_forced_fumble(isReg)
-                            self.playResult = PlayResult.Fumble
+                            rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
+                            if (self.defense.defensePassCoverageRating + batched_randint(-5, 5)) >= \
+                               (self.receiver.gameAttributes.overallRating + rcvRecoveryMod + batched_randint(-5, 5)):
+                                self.receiver.updateInGameConfidence(-.02)
+                                self.defense.updateInGameConfidence(.02)
+                                self.defense.gameDefenseStats['fumRec'] += 1
+                                self.isFumbleLost = True
+                                self.playResult = PlayResult.Fumble
 
                     # Track long completions
                     if self.yardage >= 20:
@@ -7913,30 +9753,3 @@ class Play():
         # success rates over many seasons. Use the play-level flag (not
         # self.passType) so sacks — which short-circuit before passType is set
         # — are still counted.
-        if getattr(self, '_isHailMaryPlay', False):
-            if self.isSack:
-                outcome = 'sack'
-            elif self.isInterception:
-                outcome = 'interception'
-            elif self.isPassCompletion:
-                if self.yardage >= self.yardsToEndzone:
-                    outcome = 'touchdown'
-                else:
-                    outcome = 'completionShort'
-            elif getattr(self, 'passIsDropped', False):
-                outcome = 'dropped'
-            else:
-                outcome = 'incomplete'
-            try:
-                self.game._logLateGameDecision(
-                    'hailMaryAttempt',
-                    branch='hailMaryOutcome',
-                    outcome=outcome,
-                    yardsGained=self.yardage,
-                    yardsToEndzone=self.yardsToEndzone,
-                    qbAccuracy=getattr(self.passer.gameAttributes, 'accuracy', None) if self.passer else None,
-                    qbName=self.passer.name if self.passer else None,
-                )
-            except Exception:
-                pass
-

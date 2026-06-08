@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from database.models import GmVote, GmVoteResult, GmFaBallot, User
+from database.models import GmVote, GmVoteResult, GmFaBallot, User, Season
 
 
 class GmVoteRepository:
@@ -18,7 +18,7 @@ class GmVoteRepository:
 
     def castVote(self, userId: int, teamId: int, season: int,
                  voteType: str, costPaid: int,
-                 targetPlayerId: int = None) -> GmVote:
+                 targetPlayerId: int = None, direction: str = "yea") -> GmVote:
         vote = GmVote(
             user_id=userId,
             team_id=teamId,
@@ -26,8 +26,38 @@ class GmVoteRepository:
             vote_type=voteType,
             target_player_id=targetPlayerId,
             cost_paid=costPaid,
+            direction=direction,
         )
         self.session.add(vote)
+        self.session.flush()
+        return vote
+
+    def getUserDirectionOnTarget(self, userId: int, teamId: int, season: int,
+                                 voteType: str, targetPlayerId: int = None) -> Optional[str]:
+        """The direction ('yea'/'nay') of this user's existing vote(s) on a
+        target, or None if they have none — enforces single-direction per target."""
+        row = (
+            self.session.query(GmVote.direction)
+            .filter_by(user_id=userId, team_id=teamId, season=season,
+                       vote_type=voteType, target_player_id=targetPlayerId)
+            .first()
+        )
+        return row[0] if row else None
+
+    def withdrawMostRecentVote(self, userId: int, teamId: int, season: int,
+                               voteType: str, targetPlayerId: int = None) -> Optional[GmVote]:
+        """Delete the user's most-recent vote on a target and return it so the
+        caller can refund cost_paid (read it BEFORE commit). None if no match."""
+        vote = (
+            self.session.query(GmVote)
+            .filter_by(user_id=userId, team_id=teamId, season=season,
+                       vote_type=voteType, target_player_id=targetPlayerId)
+            .order_by(GmVote.created_at.desc(), GmVote.id.desc())
+            .first()
+        )
+        if vote is None:
+            return None
+        self.session.delete(vote)
         self.session.flush()
         return vote
 
@@ -59,37 +89,69 @@ class GmVoteRepository:
             perTarget[key] = perTarget.get(key, 0) + 1
         return {"total": total, "perType": perType, "perTarget": perTarget}
 
+    def getTotalVotesCastForTeam(self, teamId: int, season: int) -> int:
+        """Total raw vote count cast on a team this season (any type/target).
+
+        Used as the denominator for majority-based thresholds: a fire/
+        resign/cut decision needs more than half of the team's cast votes
+        to pass. This way the bar scales with how engaged fans actually
+        are this season — quiet teams pass things on a few votes, hot
+        teams need a real consensus.
+        """
+        return int(
+            self.session.query(func.count(GmVote.id))
+            .filter_by(team_id=teamId, season=season)
+            .scalar() or 0
+        )
+
     def getVoteTallies(self, teamId: int, season: int) -> List[Dict]:
-        """Aggregate votes by (vote_type, target_player_id) for a team."""
+        """Aggregate votes by (vote_type, target_player_id), split by direction.
+
+        `votes` is the NET tally (votesFor - votesAgainst) so existing
+        threshold / probability consumers stay correct under yea/nay; the raw
+        sides are also returned as votesFor / votesAgainst.
+        """
         rows = (
             self.session.query(
                 GmVote.vote_type,
                 GmVote.target_player_id,
+                GmVote.direction,
                 func.count(GmVote.id).label("vote_count"),
             )
             .filter_by(team_id=teamId, season=season)
-            .group_by(GmVote.vote_type, GmVote.target_player_id)
+            .group_by(GmVote.vote_type, GmVote.target_player_id, GmVote.direction)
             .all()
         )
-        return [
-            {
+        agg: Dict = {}
+        for r in rows:
+            key = (r.vote_type, r.target_player_id)
+            entry = agg.setdefault(key, {
                 "voteType": r.vote_type,
                 "targetPlayerId": r.target_player_id,
-                "votes": r.vote_count,
-            }
-            for r in rows
-        ]
+                "votesFor": 0,
+                "votesAgainst": 0,
+            })
+            if (r.direction or "yea") == "nay":
+                entry["votesAgainst"] += r.vote_count
+            else:
+                entry["votesFor"] += r.vote_count
+        out = []
+        for entry in agg.values():
+            entry["votes"] = entry["votesFor"] - entry["votesAgainst"]
+            out.append(entry)
+        return out
 
     def recordResult(self, teamId: int, season: int, voteType: str,
                      totalVotes: int, threshold: int, probability: float,
                      outcome: str, targetPlayerId: int = None,
-                     details: str = None) -> GmVoteResult:
+                     details: str = None, votesAgainst: int = 0) -> GmVoteResult:
         result = GmVoteResult(
             team_id=teamId,
             season=season,
             vote_type=voteType,
             target_player_id=targetPlayerId,
             total_votes=totalVotes,
+            votes_against=votesAgainst,
             threshold=threshold,
             success_probability=probability,
             outcome=outcome,
@@ -111,6 +173,53 @@ class GmVoteRepository:
             )
             .scalar()
         ) or 0
+
+    def getTeamFanCount(self, teamId: int, season: int = None) -> int:
+        """Active fans of a team — used as the GM vote threshold.
+
+        Prefers the per-team snapshot taken at front-office open (week 22).
+        That snapshot freezes the count, so a fan who creates an account
+        and logs in for the first time AFTER voting opens doesn't shift
+        the threshold mid-resolution.
+
+        Fall-back order:
+          1. season.front_office_fan_snapshot[teamId] — if the snapshot
+             was taken this season, use it.
+          2. Live count of users with favorite_team_id == teamId AND
+             last_login_at >= season.start_date — used pre-week-22 (the
+             threshold is still moving as fans log in).
+          3. Plain count of favorite-team users — used when season
+             metadata is missing.
+        """
+        if season is not None:
+            seasonRow = self.session.get(Season, season)
+            if seasonRow is not None:
+                # Frozen snapshot — preferred once front office has opened.
+                snapshotJson = getattr(seasonRow, 'front_office_fan_snapshot', None)
+                if snapshotJson:
+                    try:
+                        snapshot = json.loads(snapshotJson)
+                        if str(teamId) in snapshot:
+                            return int(snapshot[str(teamId)])
+                    except Exception:
+                        pass
+                # Live "active fans this season" — used before the snapshot
+                # is taken (pre-week-22).
+                if seasonRow.start_date is not None:
+                    return int(
+                        self.session.query(func.count(User.id))
+                        .filter(
+                            User.favorite_team_id == teamId,
+                            User.last_login_at >= seasonRow.start_date,
+                        )
+                        .scalar() or 0
+                    )
+        # Last-resort fallback: every fan with this favorite team.
+        return int(
+            self.session.query(func.count(User.id))
+            .filter(User.favorite_team_id == teamId)
+            .scalar() or 0
+        )
 
     def getResults(self, teamId: int, season: int) -> List[GmVoteResult]:
         return (

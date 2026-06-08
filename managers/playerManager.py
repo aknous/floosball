@@ -3,7 +3,7 @@ PlayerManager - Manages player lifecycle, lists, and organization
 Replaces the scattered player-related global variables and functions in floosball.py
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 from logger_config import get_logger
@@ -293,9 +293,24 @@ class PlayerManager:
             if not loaded_players:
                 logger.warning("No valid players could be loaded from database")
                 return False
-            
-            # Set loaded players as active players
-            self.activePlayers = loaded_players
+
+            # Split by service_time. Retired players belong on retiredPlayers,
+            # not activePlayers — without this, the Retired tab is empty after
+            # a server restart until a runtime retirement re-populates it.
+            # Hall of Fame members are a subset of retired and also belong on
+            # the hallOfFame list (which the /api/players?status=hof endpoint
+            # reads). Without this routing the HoF tab is empty after restart.
+            from floosball_player import PlayerServiceTime as _PST
+            self.activePlayers = []
+            self.retiredPlayers = []
+            self.hallOfFame = []
+            for p in loaded_players:
+                if getattr(p, 'serviceTime', None) == _PST.Retired:
+                    self.retiredPlayers.append(p)
+                    if getattr(p, 'is_hof', False):
+                        self.hallOfFame.append(p)
+                else:
+                    self.activePlayers.append(p)
 
             # Persist any backfilled seasonsPlayed/serviceTime values
             try:
@@ -372,6 +387,10 @@ class PlayerManager:
             player.drafting_team_id = getattr(db_player, 'drafting_team_id', None)
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
+            player.is_hof = bool(getattr(db_player, 'is_hof', False))
+            player.mvpAwards = list(getattr(db_player, 'mvp_awards', None) or [])
+            player.allProSeasons = list(getattr(db_player, 'all_pro_seasons', None) or [])
+            player.leagueChampionships = list(getattr(db_player, 'league_championships', None) or [])
             
             # Load tier if present
             if db_player.tier:
@@ -712,23 +731,80 @@ class PlayerManager:
                     self.activePlayers.append(player)
                     self.addToPositionList(player)
     
+    def isNameInUse(self, name: str) -> bool:
+        """True if `name` is already attached to an active player or any
+        Coach row (assigned or pool). Used by name-pool readers to skip
+        polluted entries — defensive guard against the same name showing
+        up on a player after living simultaneously in unused_names.
+        """
+        # In-memory active player check is the cheapest path.
+        for p in self.activePlayers:
+            if getattr(p, 'name', None) == name:
+                return True
+        # Coach check: scan rostered coaches (in-memory on Team objects)
+        # AND the unassigned pool (DB) so we catch both cases.
+        teamMgr = None
+        try:
+            teamMgr = self.serviceContainer.getService('team_manager')
+        except Exception:
+            pass
+        if teamMgr:
+            for team in getattr(teamMgr, 'teams', []):
+                coach = getattr(team, 'coach', None)
+                if coach and getattr(coach, 'name', None) == name:
+                    return True
+        if DATABASE_AVAILABLE and USE_DATABASE and self.db_session is not None:
+            try:
+                from database.models import Coach as DBCoach
+                if self.db_session.query(DBCoach).filter(DBCoach.name == name).first():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def popUniqueName(self) -> Optional[str]:
+        """Pop a name from unusedNames, skipping any already attached to a
+        live player or coach. Polluted names are dropped from the pool
+        rather than put back — they're not actually 'unused', and leaving
+        them in would just defer the same collision to a later draw.
+        Returns None when the pool is empty.
+        """
+        from random import randint
+        skipped: List[str] = []
+        try:
+            while self.unusedNames:
+                idx = randint(0, len(self.unusedNames) - 1)
+                candidate = self.unusedNames.pop(idx)
+                if not self.isNameInUse(candidate):
+                    return candidate
+                skipped.append(candidate)
+            return None
+        finally:
+            if skipped:
+                logger.warning(
+                    f"Name pool had {len(skipped)} polluted entr"
+                    f"{'y' if len(skipped) == 1 else 'ies'} dropped during draw: "
+                    f"{', '.join(repr(n) for n in skipped[:5])}"
+                    f"{'...' if len(skipped) > 5 else ''}"
+                )
+
     def createPlayer(self, position: FloosPlayer.Position, physicalSeed: int = None, mentalSeed: int = None) -> Optional[FloosPlayer.Player]:
         """Create a single player of specified position"""
         from random import randint
-        
-        if not self.unusedNames:
-            logger.warning("No more unused names available")
+        import numpy as np
+
+        name = self.popUniqueName()
+        if name is None:
+            logger.warning("No usable unused names available")
             return None
         
-        # Use same logic as original: pick random index and pop
-        nameIndex = randint(0, len(self.unusedNames) - 1)
-        name = self.unusedNames.pop(nameIndex)
-        
-        # Generate default seeds if not provided
+        # Generate default seeds if not provided. Uses the same Gaussian
+        # distribution as the league-balanced rookie class so one-off
+        # player creations match the compressed talent curve.
         if physicalSeed is None:
-            physicalSeed = randint(60, 100)
+            physicalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
         if mentalSeed is None:
-            mentalSeed = randint(60, 100)
+            mentalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
         
         # Create player based on position with dual seeds
         player = None
@@ -1046,70 +1122,76 @@ class PlayerManager:
     def computeRetirementRisk(self, player) -> str:
         """Classify a player's end-of-season retirement risk.
 
-        Mirrors the probability bands in seasonManager._processRosteredPlayerContracts
-        so the fan-facing 'retirement watch' matches what will actually happen. Returns:
-          - 'forced'      — hard cap, always retires regardless of contract
-          - 'very_likely' — age 15+ past longevity, expiring contract (90%)
-          - 'likely'      — age 10+ past longevity (65% contract-end / 25% mid-contract),
-                            OR age 15+ mid-contract (70%)
-          - 'possible'    — age 7+ past longevity (5-10% bands)
-          - 'safe'        — not yet eligible to retire
+        Retirements only fire for players whose contract expires this offseason
+        (termRemaining == 1) — mid-contract aging players are NOT eligible and
+        return 'safe'. Once Front Office opens and the retirement roll happens,
+        flagged players return 'retiring' (locked-in). Returns:
+          - 'retiring'    — decision is locked, player WILL retire this offseason
+          - 'very_likely' — age 15+ past longevity on walk year (90% to retire)
+          - 'likely'      — age 10+ past longevity on walk year (65%)
+          - 'possible'    — age 7+ past longevity on walk year (5%)
+          - 'safe'        — not yet eligible, or contract doesn't expire this offseason
         """
         from constants import (
-            RETIREMENT_FORCED_SEASONS, RETIREMENT_HIGH_AGE_SEASONS,
+            RETIREMENT_HIGH_AGE_SEASONS,
             RETIREMENT_MID_AGE_SEASONS, RETIREMENT_EARLY_AGE_SEASONS,
         )
+        # Locked-in retirement (set during _evaluateRetirementCandidates when
+        # the GM window opens) overrides any predictive tier.
+        if getattr(player, 'willRetire', False):
+            return 'retiring'
+
         seasons = getattr(player, 'seasonsPlayed', 0) or 0
         attrs = getattr(player, 'attributes', None)
         longevity = getattr(attrs, 'longevity', 99) if attrs else 99
         termRemaining = getattr(player, 'termRemaining', 1) or 0
 
-        # Hard cap: no one plays past this regardless of contract
-        if seasons >= RETIREMENT_FORCED_SEASONS:
-            return 'forced'
         # Must be past longevity before any retirement check fires
         if seasons <= longevity:
             return 'safe'
+        # Retirements only happen at end of contract — mid-contract aging vets
+        # are locked in for another year, so don't surface them as at-risk.
+        if termRemaining > 1:
+            return 'safe'
 
-        expiring = termRemaining <= 1  # walk year or already expired
         if seasons > RETIREMENT_HIGH_AGE_SEASONS:
-            return 'very_likely' if expiring else 'likely'  # 90% / 70%
+            return 'very_likely'   # 90%
         if seasons > RETIREMENT_MID_AGE_SEASONS:
-            return 'likely' if expiring else 'possible'     # 65% / 25%
+            return 'likely'        # 65%
         if seasons >= RETIREMENT_EARLY_AGE_SEASONS:
-            return 'possible'                                # 5% / 10%
+            return 'possible'      # 5%
         return 'safe'
 
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
-        """Promote retired player to Hall of Fame"""
+        """Promote retired player to Hall of Fame. HoFers stay on the
+        retiredPlayers list too — load-from-DB routes them into both lists
+        so this in-game path must mirror that to stay consistent."""
         if player not in self.retiredPlayers:
             logger.warning(f"Cannot promote {player.name} - not in retired players")
             return
-        
+        if player in self.hallOfFame:
+            return
+
         logger.info(f"Promoting {player.name} to Hall of Fame")
-        
-        # Move from retired to HoF
-        self.retiredPlayers.remove(player)
         self.hallOfFame.append(player)
-        
-        # Could publish event here for achievements/notifications
-        # self.serviceContainer.getService('eventManager').publish('playerHofInduction', player)
+        player.is_hof = True
     
     def sortPlayersByPosition(self) -> None:
         """Sort players and assign tiers (replaces sortPlayers function)"""
         logger.debug("Sorting players and assigning tiers")
         
-        # Assign player tiers for realistic distribution:
-        # S (~2-3%): Superstar/Generational
-        # A (~8-10%): Great/Franchise  
-        # B (~25-30%): Good
-        # C (~40-45%): Average
-        # D (~15-20%): Bad
-        tierS = 93  # Top ~2-3%
-        tierA = 87  # Next ~8-10%
-        tierB = 77  # Next ~25-30%
-        tierC = 69  # Next ~40-45%
-        # Below 69 = Tier D (~15-20%)
+        # Tier thresholds aligned 1:1 with the UI star bands in
+        # frontend Components/Stars.tsx::calcStars so a "4-star player" in the
+        # UI is always TierA for contract / scouting / classification purposes.
+        # The old thresholds (S≥93, A≥87, B≥77, C≥69) created a gap where
+        # rating 84-86 showed as 4 stars but contracted as TierB — leading to
+        # 1-year deals for visually high-rated players.
+        # Star bands: 1★ 60-67 / 2★ 68-75 / 3★ 76-83 / 4★ 84-91 / 5★ 92-100
+        tierS = 92  # 5★
+        tierA = 84  # 4★
+        tierB = 76  # 3★
+        tierC = 68  # 2★
+        # Below 68 → TierD (1★)
         
         for player in self.activePlayers:
             if player.playerRating >= tierS:
@@ -1166,28 +1248,35 @@ class PlayerManager:
         return [p for p in self.freeAgents if p.position == position]
     
     def getPlayerById(self, playerId: int) -> Optional[FloosPlayer.Player]:
-        """Find player by ID across all lists"""
-        # Search active players
-        for player in self.activePlayers:
-            if player.id == playerId:
-                return player
-        
-        # Search retired players
-        for player in self.retiredPlayers:
-            if player.id == playerId:
-                return player
-        
-        # Search hall of fame
-        for player in self.hallOfFame:
-            if player.id == playerId:
-                return player
-        
-        # Search free agents
-        for player in self.freeAgents:
-            if player.id == playerId:
-                return player
-        
-        return None
+        """Find a player by ID via an O(1) id→player index.
+
+        Previously this linear-scanned four lists on every call; the fantasy
+        snapshot calls it per-user × per-roster-player, which made building the
+        leaderboard O(users × roster × allPlayers). The index is rebuilt only
+        when the total player population changes (stable within a snapshot, and
+        only shifts on draft/retirement/FA churn between weeks)."""
+        return self._ensurePlayerIndex().get(playerId)
+
+    def _ensurePlayerIndex(self) -> Dict[int, "FloosPlayer.Player"]:
+        """Return the id→player map, rebuilding it if the population changed.
+
+        Last-list-wins ordering matches the old linear-scan precedence
+        (active → retired → HoF → free agents)."""
+        total = (len(self.activePlayers) + len(self.retiredPlayers)
+                 + len(self.hallOfFame) + len(self.freeAgents))
+        if getattr(self, '_playerByIdCount', None) != total or not hasattr(self, '_playerById'):
+            idx: Dict[int, "FloosPlayer.Player"] = {}
+            for player in self.freeAgents:
+                idx[player.id] = player
+            for player in self.hallOfFame:
+                idx[player.id] = player
+            for player in self.retiredPlayers:
+                idx[player.id] = player
+            for player in self.activePlayers:  # active wins on id collision
+                idx[player.id] = player
+            self._playerById = idx
+            self._playerByIdCount = total
+        return self._playerById
     
     def getStatistics(self) -> Dict[str, int]:
         """Get player statistics for monitoring"""
@@ -1363,6 +1452,10 @@ class PlayerManager:
                     db_player.drafting_team_id = getattr(player, 'drafting_team_id', None)
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
+                    db_player.is_hof = bool(getattr(player, 'is_hof', False))
+                    db_player.mvp_awards = list(getattr(player, 'mvpAwards', None) or [])
+                    db_player.all_pro_seasons = list(getattr(player, 'allProSeasons', None) or [])
+                    db_player.league_championships = list(getattr(player, 'leagueChampionships', None) or [])
 
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
@@ -1743,7 +1836,7 @@ class PlayerManager:
             self.name_repo.add_names_batch(self.unusedNames)
             self.db_session.commit()
             
-            logger.info(f"Saved {len(self.unusedNames)} unused names to database")
+            logger.debug(f"Saved {len(self.unusedNames)} unused names to database")
         except Exception as e:
             logger.error(f"Failed to save unused names to database: {e}")
             self.db_session.rollback()
@@ -1781,36 +1874,117 @@ class PlayerManager:
         for player in hofCandidates:
             self.promoteToHallOfFame(player)
     
+    # Hall of Fame scoring weights. Tuned so a single MVP alone falls short
+    # (player needs supporting accolades), and current record holders are
+    # the marquee criterion.
+    HOF_POINTS_MVP = 12
+    HOF_POINTS_CHAMPIONSHIP = 10
+    HOF_POINTS_ALL_PRO = 4
+    HOF_POINTS_CAREER_RECORD = 18
+    HOF_POINTS_SEASON_RECORD = 6
+    HOF_POINTS_GAME_RECORD = 2
+    HOF_POINTS_LONG_CAREER = 4       # 10+ seasons
+    HOF_POINTS_IRON_MAN = 4          # 14+ seasons (cumulative on top of LONG_CAREER)
+    HOF_INDUCT_THRESHOLD = 22
+
+    # Positive record keys per category — negative-stat records like
+    # 'ints' / 'fumbles' shouldn't earn HoF credit.
+    _HOF_POSITIVE_RECORD_KEYS = {
+        'passing':   {'yards', 'tds', 'comps'},
+        'rushing':   {'yards', 'tds'},
+        'receiving': {'yards', 'tds', 'receptions'},
+        'kicking':   {'fgs', 'fgYards'},
+        'fantasy':   {'qb', 'rb', 'wr', 'te', 'k'},
+    }
+
+    def _countCurrentRecordsHeld(self, playerId: int) -> Dict[str, int]:
+        """Return how many positive records this player currently holds at
+        each scope. Returns {'game': n, 'season': n, 'career': n}. Silently
+        zero'd if the records manager isn't available."""
+        out = {'game': 0, 'season': 0, 'career': 0}
+        try:
+            recordsManager = self.serviceContainer.getService('records_manager')
+            if recordsManager is None:
+                return out
+            records = recordsManager.getRecords() or {}
+            players = records.get('players', {}) or {}
+            for category, scopes in players.items():
+                positiveKeys = self._HOF_POSITIVE_RECORD_KEYS.get(category, set())
+                if not positiveKeys or not isinstance(scopes, dict):
+                    continue
+                for scope, entries in scopes.items():
+                    if scope not in out or not isinstance(entries, dict):
+                        continue
+                    for key, entry in entries.items():
+                        if key not in positiveKeys or not isinstance(entry, dict):
+                            continue
+                        if entry.get('id') == playerId and (entry.get('value') or 0) > 0:
+                            out[scope] += 1
+        except Exception as e:
+            logger.debug(f"HoF record-holder check failed for player {playerId}: {e}")
+        return out
+
+    def _computeHofPoints(self, player) -> Tuple[int, Dict[str, Any]]:
+        """Score a player against the HoF criteria. Returns (points, breakdown).
+        Breakdown is surfaced in the induction highlight so users see *why*."""
+        mvps = len(getattr(player, 'mvpAwards', None) or [])
+        rings = len(getattr(player, 'leagueChampionships', None) or [])
+        allPros = len(getattr(player, 'allProSeasons', None) or [])
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        records = self._countCurrentRecordsHeld(getattr(player, 'id', 0))
+
+        pts = 0
+        pts += mvps * self.HOF_POINTS_MVP
+        pts += rings * self.HOF_POINTS_CHAMPIONSHIP
+        pts += allPros * self.HOF_POINTS_ALL_PRO
+        pts += records['career'] * self.HOF_POINTS_CAREER_RECORD
+        pts += records['season'] * self.HOF_POINTS_SEASON_RECORD
+        pts += records['game']   * self.HOF_POINTS_GAME_RECORD
+        if seasons >= 10:
+            pts += self.HOF_POINTS_LONG_CAREER
+        if seasons >= 14:
+            pts += self.HOF_POINTS_IRON_MAN
+
+        return pts, {
+            'mvps': mvps, 'championships': rings, 'allPros': allPros,
+            'seasons': seasons,
+            'careerRecords': records['career'],
+            'seasonRecords': records['season'],
+            'gameRecords':   records['game'],
+        }
+
     def inductHallOfFame(self) -> None:
-        """Induct newly retired players into Hall of Fame (matches original inductHallOfFame function)"""
-        if len(self.newlyRetiredPlayers) > 0:
-            for player in self.newlyRetiredPlayers:
-                # HoF criteria from original: TierS players or TierA players with championships
-                if player.playerTier.value == 5:  # TierS
-                    self.hallOfFame.append(player)
-                    # Add highlight if season context is available
-                    seasonManager = self.serviceContainer.getService('season_manager')
-                    if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
-                        highlight = {
-                            'event': {
-                                'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
-                            }
-                        }
-                        seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
-                elif player.playerTier.value == 4 and hasattr(player, 'leagueChampionships') and len(player.leagueChampionships):  # TierA with championships
-                    self.hallOfFame.append(player)
-                    # Add highlight if season context is available  
-                    seasonManager = self.serviceContainer.getService('season_manager')
-                    if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
-                        highlight = {
-                            'event': {
-                                'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
-                            }
-                        }
-                        seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
-            
-            # Clear newly retired list
-            self.newlyRetiredPlayers.clear()
+        """Score each newly-retired player against the HoF criteria. Induct
+        anyone clearing HOF_INDUCT_THRESHOLD. The signature legacy criteria
+        (TierS auto / TierA with championship) are now subsumed by the
+        points system."""
+        if not self.newlyRetiredPlayers:
+            return
+
+        for player in self.newlyRetiredPlayers:
+            pts, breakdown = self._computeHofPoints(player)
+            if pts < self.HOF_INDUCT_THRESHOLD:
+                logger.debug(
+                    f"HoF: {player.name} retires with {pts}pts — below threshold ({breakdown})"
+                )
+                continue
+
+            self.hallOfFame.append(player)
+            player.is_hof = True
+            logger.info(
+                f"HoF induction: {player.name} ({pts}pts) — {breakdown}"
+            )
+
+            seasonManager = self.serviceContainer.getService('season_manager')
+            if seasonManager and seasonManager.currentSeason and hasattr(seasonManager.currentSeason, 'leagueHighlights'):
+                highlight = {
+                    'event': {
+                        'text': f'{player.name} has been inducted into the Floosball Hall of Fame'
+                    }
+                }
+                seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
+
+        self.newlyRetiredPlayers.clear()
     
     def calculatePerformanceRatings(self, currentWeek: int) -> None:
         """
@@ -2456,6 +2630,11 @@ class PlayerManager:
                         break
                 if not targetPlayer:
                     continue
+                # Don't re-sign a player this team just released this offseason
+                # (cut by fan vote, or expired and not kept) even if fans ranked
+                # them on the FA ballot.
+                if self._leftThisTeamThisOffseason(targetPlayer, team):
+                    continue
                 # Find open roster slot matching player's position
                 openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
                 if not openSlot:
@@ -2727,6 +2906,10 @@ class PlayerManager:
                             break
                     if not targetPlayer:
                         continue
+                    # Skip a player this team just released this offseason (cut
+                    # or let walk) even if fans ranked them on the FA ballot.
+                    if self._leftThisTeamThisOffseason(targetPlayer, team):
+                        continue
                     openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
                     if not openSlot:
                         continue
@@ -2883,8 +3066,13 @@ class PlayerManager:
         
         # Generate physical and mental seeds separately for variety
         # Using mean 78 and higher stdDev for more realistic distribution
+        # Tighter distribution so the league has fewer extreme stars
+        # and fewer scrubs — compresses the rating gap that drives the
+        # "dominant team" problem. stdDev was 10 → 7. Most seeds now
+        # fall in 71-85 (one stdDev band) instead of 68-88, so the
+        # league talent ceiling drops without erasing top players.
         meanPlayerSkill = 78
-        stdDevPlayerSkill = 10
+        stdDevPlayerSkill = 7
         physicalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
         physicalSeeds = np.clip(physicalSeeds, 60, 100).tolist()
         mentalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, numOfPlayers)
@@ -3157,8 +3345,14 @@ class PlayerManager:
         Current rating is always exact — it's what they are right now. Potential
         attributes are blurred into ±range based on effective scouting (coach
         scouting + funding tier bonus). Higher scouting = tighter range.
+
+        The range center is shifted by a deterministic-but-unguessable
+        per-attribute offset so the midpoint of [low, high] doesn't trivially
+        reveal the true potential. Offset is bounded to keep the true value
+        inside the displayed range.
         """
         from constants import SCOUTING_BANDS
+        import hashlib as _hashlib
         # Pick the range size from the band table
         rangeSize = 15
         for threshold, size in SCOUTING_BANDS:
@@ -3166,14 +3360,23 @@ class PlayerManager:
                 rangeSize = size
                 break
 
-        def blur(exact: int) -> dict:
+        def blur(exact: int, attrName: str) -> dict:
             if exact is None:
                 return {"low": None, "high": None, "exact": None}
             if rangeSize == 0:
                 return {"low": exact, "high": exact, "exact": exact}
-            # Center the range on exact, clip 60-100
-            low = max(60, exact - rangeSize)
-            high = min(100, exact + rangeSize)
+            # Deterministic per-(player, attribute) offset within ±rangeSize/2
+            # so the midpoint is shifted but the true value remains inside
+            # the range. Stable across refreshes — users can't average out
+            # the noise by polling.
+            seed = int(_hashlib.md5(
+                f"scout:{rookie.id}:{attrName}".encode()
+            ).hexdigest()[:8], 16)
+            half = rangeSize // 2
+            offset = (seed % (2 * half + 1)) - half if half > 0 else 0
+            center = exact + offset
+            low = max(60, center - rangeSize)
+            high = min(100, center + rangeSize)
             return {"low": low, "high": high, "exact": None}
 
         attrs = getattr(rookie, 'attributes', None)
@@ -3185,7 +3388,7 @@ class PlayerManager:
                         'potentialSkillRating'):
                 val = getattr(attrs, name, None)
                 if val:
-                    potentials[name] = blur(val)
+                    potentials[name] = blur(val, name)
 
         return {
             "playerId": rookie.id,
@@ -3311,77 +3514,6 @@ class PlayerManager:
         logger.info(f"Rating history: snapshotted {snapshots} new entries for season {season}")
         return snapshots
 
-    def seedInitialProspects(self, prospectsPerTeam: int = 3) -> int:
-        """One-time: populate every team's prospect pipeline with a starter class.
-
-        Without this, a fresh league starts with every pipeline empty and it
-        takes 3+ seasons before prospects become gameplay-relevant. Seeding
-        a few prospects per team at league init means the rebuild/development
-        path is immediately usable — fans can scout, promote, and plan
-        from Week 1.
-
-        Idempotent guard: skips teams that already have any prospects, so
-        this can be called on resumes without duplicating pipelines.
-        """
-        import numpy as np
-        from random import randint
-        teamManager = self.serviceContainer.getService('team_manager')
-        if not teamManager:
-            return 0
-
-        # Roster-shape weighted distribution — WR twice since teams start with 2
-        positionWeights = {
-            FloosPlayer.Position.QB: 1,
-            FloosPlayer.Position.RB: 1,
-            FloosPlayer.Position.WR: 2,
-            FloosPlayer.Position.TE: 1,
-            FloosPlayer.Position.K: 1,
-        }
-        weightedPositions = []
-        for pos, weight in positionWeights.items():
-            weightedPositions.extend([pos] * weight)
-
-        # Ratings: mirror the rookie class distribution (mean 78, std 10, clipped 60-100)
-        meanSkill, stdDev = 78, 10
-
-        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
-        seeded = 0
-        for team in teamManager.teams:
-            # Idempotent: if team already has prospects, skip
-            if getattr(team, 'prospects', None):
-                continue
-            if not hasattr(team, 'prospects'):
-                team.prospects = []
-
-            for _ in range(prospectsPerTeam):
-                physicalSeed = int(np.clip(np.random.normal(meanSkill, stdDev), 60, 100))
-                mentalSeed = int(np.clip(np.random.normal(meanSkill, stdDev), 60, 100))
-                pos = weightedPositions[randint(0, len(weightedPositions) - 1)]
-                player = self.createPlayer(pos, physicalSeed, mentalSeed)
-                if not player:
-                    continue
-                player.id = nextPlayerId
-                nextPlayerId += 1
-                player.seasonsPlayed = 0
-                player.is_prospect = True
-                player.is_upcoming_rookie = False
-                player.is_undrafted = False
-                player.drafting_team_id = team.id
-                player.prospect_seasons = 0
-                player.team = 'Prospect'
-                team.prospects.append(player)
-                if player not in self.activePlayers:
-                    self.activePlayers.append(player)
-                self.addToPositionList(player)
-                # Assign jersey number now so promoted prospects don't show #0.
-                team.assignPlayerNumber(player)
-                seeded += 1
-
-        # Assign tiers now that ratings are settled
-        self.sortPlayersByPosition()
-        logger.info(f"Seeded {seeded} initial prospects across {len(teamManager.teams)} teams")
-        return seeded
-
     def _advanceProspectWindow(self) -> dict:
         """Increment prospect_seasons on every prospect; release washouts to the FA pool.
 
@@ -3428,6 +3560,23 @@ class PlayerManager:
             logger.info(f"Prospect window: released {len(released)} washouts, {retained} prospects retained")
         return {"released": released, "retained": retained}
 
+    def _leftThisTeamThisOffseason(self, player, team) -> bool:
+        """True if this player was just released by THIS team this offseason —
+        cut by fan vote, or expired and not re-signed.
+
+        Both exits stamp the player identically: previousTeam = the team's name
+        and freeAgentYears = 0. So a year-0 free agent whose previous team is
+        this one walked out the door this offseason, and the team shouldn't
+        auto-re-sign them right back in the same FA draft (the fans either voted
+        them out or chose not to keep them). Other teams may still sign them;
+        only the team that let them go is blocked, and only for this draft — next
+        offseason their freeAgentYears is >= 1, so the block lifts on its own.
+        """
+        return (
+            getattr(player, 'previousTeam', None) == team.name
+            and getattr(player, 'freeAgentYears', 1) == 0
+        )
+
     def _attemptRosterFill(self, team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
                           freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
                           eventLog=None) -> bool:
@@ -3467,19 +3616,33 @@ class PlayerManager:
             return True
 
         # Build candidates: for each open position, best FA + best prospect.
-        candidates = []  # list of (slot, player, kind) where kind ∈ {'fa', 'prospect'}
+        # A team may not re-sign a player it just released this offseason (cut by
+        # fan vote, or expired and not kept), so the best *signable* FA skips
+        # those. Fall back to allowing them only if there's nothing else on the
+        # board — a roster hole the sim can't run with is worse than overriding
+        # the fans for a single slot.
         prospects = getattr(team, 'prospects', []) or []
-        for posVal, slot in firstOpenSlotByPos.items():
-            # Best FA at this position
-            faList = POS_TO_FALIST.get(posVal, [])
-            if faList:
-                candidates.append((slot, faList[0], 'fa'))
-            # Best prospect at this position
-            posProspects = [p for p in prospects if p.position.value == posVal]
-            if posProspects:
-                best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
-                candidates.append((slot, best, 'prospect'))
 
+        def _gather(applyReleaseBlock):
+            cands = []  # (slot, player, kind) where kind ∈ {'fa', 'prospect'}
+            for posVal, slot in firstOpenSlotByPos.items():
+                faList = POS_TO_FALIST.get(posVal, [])
+                if applyReleaseBlock:
+                    bestFa = next(
+                        (p for p in faList if not self._leftThisTeamThisOffseason(p, team)),
+                        None,
+                    )
+                else:
+                    bestFa = faList[0] if faList else None
+                if bestFa is not None:
+                    cands.append((slot, bestFa, 'fa'))
+                posProspects = [p for p in prospects if p.position.value == posVal]
+                if posProspects:
+                    best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
+                    cands.append((slot, best, 'prospect'))
+            return cands
+
+        candidates = _gather(applyReleaseBlock=True) or _gather(applyReleaseBlock=False)
         if not candidates:
             return False  # open slots exist but no FAs or prospects to fill them
 

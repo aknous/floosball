@@ -54,6 +54,13 @@ FG_MIN_ATTEMPT_PROB = 0.20      # Coaches attempt FG if estimated make probabili
 YARDS_TO_FIRST_DOWN = 10        # Standard yards needed for a first down
 CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for late-game strategy
 
+# Interception model — three independent pick paths in calculateCatchProbability.
+# Each K scales one path's contribution before they combine as independent
+# risks. Tuned so league INT rate lands near the NFL ~2.3% per attempt.
+INT_BAD_READ_K = 0.22    # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.26   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.08    # above-average DB jumps a contested throw
+
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
 CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
@@ -70,10 +77,10 @@ MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
 MOMENTUM_EFFECT_BASE = 0.005           # Per-play confidence/determination nudge at momentum=50
 MOMENTUM_EFFECT_CAP = 0.01             # Hard cap on per-play nudge magnitude
-MOMENTUM_NEUTRAL_ZONE = 10             # Abs momentum below this = no gameplay effect
+MOMENTUM_NEUTRAL_ZONE = 5              # Abs momentum below this = no gameplay effect
 MOMENTUM_SHIFT_THRESHOLD = 14          # Min abs delta for momentum shift highlight (against-the-grain only)
 MOMENTUM_CROSS_ZERO_THRESHOLD = 8      # Min abs delta when crossing zero for highlight
-MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it
+MOMENTUM_DISPLAY_THRESHOLD = 5         # Min abs momentum to broadcast a team as having it (matches NEUTRAL_ZONE so UI never lies about mechanical impact)
 
 # Momentum event deltas (raw, before dampening)
 MOMENTUM_TD = 20
@@ -103,6 +110,82 @@ WEEKLY_LEADERBOARD_PRIZES = {1: 30, 2: 20, 3: 15}
 WEEKLY_LEADERBOARD_TOP_PCT_PRIZE = 5
 WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 
+# ── Supporter income (fan loyalty dividends) — feature/fan-income ──────────────
+# A non-fantasy, IDLE Floobit path: back a team, earn passively, claim on login.
+# Tenure (weeks backing the current favorite team) drives a loyalty multiplier;
+# team performance nudges the weekly dividend. The guaranteed base stays small —
+# real profit is concentrated in the contingent milestone payouts (the CLINCH_* /
+# FLOOSBOWL_WIN rewards above, scaled by loyalty in a later phase), so only
+# long-tenure fans of great teams come out ahead of what they fund. All tunable;
+# validate against fantasy income with a sim-check.
+# Activity gate: "idle" means doesn't watch games, NOT abandoned the account.
+# A fan who hasn't logged in within this many REAL days is frozen — no tenure
+# tick, no dividend — until they return (so dormant accounts don't rack up
+# Floobits). A sim-season plays out in ~1 real week, so 14 days ≈ "sign in about
+# once every season or two" is enough to keep earning. Tunable.
+SUPPORTER_ACTIVITY_WINDOW_DAYS = 14
+SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is active
+SUPPORTER_WIN_BONUS = 4               # base bonus the weeks your team wins
+# Win-quality add-ons, stacked onto the win bonus (the whole dividend is then
+# multiplied by Tenure × Funding, so great weeks for long-haul patrons pay big).
+# Most are read straight off the game (scores, quarter scores, playoff flag).
+SUPPORTER_SHUTOUT_BONUS = 3           # opponent held to 0
+SUPPORTER_BLOWOUT_MARGIN = 21        # win by >= this (3 scores) is a blowout
+SUPPORTER_BLOWOUT_BONUS = 2           # added on a blowout win
+SUPPORTER_COMEBACK_BONUS = 3          # won after trailing at the end of Q3
+SUPPORTER_STREAK_BONUS_PER_WIN = 1    # +1 per win in the streak beyond the first (a lone win adds 0)...
+SUPPORTER_STREAK_BONUS_CAP = 6        # ...capped here (a 7+ win streak maxes it)
+SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added on an upset win (beat a higher-ELO opponent — same rule as the UPSET badge / house_money card)
+# Playoff wins pay more, scaled by round (1=Rd1, 2=Rd2, 3=League Championship,
+# 4=Floos Bowl). Keyed by round number = week - 28.
+SUPPORTER_PLAYOFF_WIN_BONUS = {1: 4, 2: 6, 3: 8, 4: 12}
+SUPPORTER_TEAM_CHANGE_TENURE_KEEP = 0.5  # fraction of tenure kept on a team change (soft reset)
+# Patron rank — your share of your team's funding, applied ON TOP of loyalty.
+# Percentile thresholds (top X% of a team's contributors this season); the single
+# biggest backer is always the Patron. Frames as recognition/status, and the
+# combined ceiling (top loyalty × top patron = 2.0 × 1.5 = 3.0) keeps even the
+# best corner only mildly profitable. (maxPercentile, multiplier, label) ascending.
+SUPPORTER_PATRON_TIERS = [
+    (0.10, 1.5,  'Patron'),      # top 10% (or the biggest backer)
+    (0.25, 1.3,  'Benefactor'),  # top 25%
+    (0.50, 1.15, 'Backer'),      # top half
+]
+# Loyalty tiers by supporter_weeks (persists across seasons; ~28 wks = 1 season).
+# (minWeeks, multiplier, label), descending — first match from the top wins.
+# Gaps WIDEN as you climb (28 → 56 → 84 wks between tiers) so each tier is a
+# bigger commitment than the last and the top tier is a genuine long-hauler.
+SUPPORTER_LOYALTY_TIERS = [
+    (168, 2.0,  'Lifer'),     # ~6 seasons
+    (84,  1.5,  'Faithful'),  # ~3 seasons
+    (28,  1.25, 'Regular'),   # ~1 season
+    (0,   1.0,  'New Fan'),
+]
+# Weeks of tenure one season represents (matches the tier spacing above). Used by
+# the one-time tenure backfill to convert seasons-as-a-fan into supporter_weeks.
+SUPPORTER_WEEKS_PER_SEASON = 28
+
+# ── Spectator income (the cheer bar) — feature/fan-income ──────────────────────
+# The ACTIVE non-fantasy path: watch live games, fill a segmented bar, get paid
+# per segment. Server-validated (fill is credited only for plays that actually
+# happened in a game you're heartbeating, so you can't earn faster than the game
+# plays) and hard-capped per game + per week, so idling/botting nets little.
+SPECTATOR_FILL_PER_PLAY = 1.0          # bar fill per witnessed play
+SPECTATOR_FILL_PER_POINT = 0.6         # bonus fill per point scored while watching (TDs/FGs fill faster)
+SPECTATOR_SEGMENT_SIZE = 18.0          # fill needed to complete a segment (~18 plays)
+SPECTATOR_SEGMENT_PAYOUT = 3           # Floobits per completed segment
+SPECTATOR_RALLY_FILL = 5.0             # a (free) rally adds this much
+SPECTATOR_REACTION_FILL = 1.0          # a reaction adds this (diminishing, capped/game)
+SPECTATOR_REACTION_CAP_PER_GAME = 8    # max reaction-fill events credited per game
+SPECTATOR_SUPPORTED_TEAM_MULT = 1.5    # watching your favorite team fills faster
+SPECTATOR_HEARTBEAT_WINDOW_SEC = 60    # must claim/heartbeat within this to count as "present" (rally/reaction gate)
+SPECTATOR_MAX_PLAYS_PER_HEARTBEAT = 12 # legacy heartbeat: cap plays credited per beat (claim model caps to real progress instead)
+SPECTATOR_WEEKLY_PAYOUT_CAP = 60       # max Floobits/week from spectating
+# Big plays — any play that flashes the field / posts a big-play WPA highlight
+# (WPA swing >= 7). Bonus fill on TOP of the per-play fill; worth more when your
+# own supported team is the one making it.
+SPECTATOR_BIG_PLAY_FILL = 4.0          # bonus fill per witnessed big play
+SPECTATOR_OWN_BIG_PLAY_MULT = 2.0      # multiplier when YOUR team makes the big play
+
 SEASON_LEADERBOARD_PRIZES = {1: 200, 2: 125, 3: 75}
 SEASON_LEADERBOARD_TOP_PCT_PRIZE = 25
 SEASON_LEADERBOARD_TOP_PCT = 0.25
@@ -110,9 +193,39 @@ SEASON_LEADERBOARD_TOP_PCT = 0.25
 ROSTER_SWAP_COST = 15          # Base cost per swap (escalates per slot)
 ROSTER_SWAP_COST_INCREMENT = 15  # Additional cost per previous swap in the same slot
 
-# Weekly FP → Floobits conversion (participation reward)
-WEEKLY_FP_FLOOBIT_RATE = 0.15   # 15% of weekly FP converted to Floobits
-WEEKLY_FP_FLOOBIT_CAP = 40      # Max Floobits earned from FP conversion per week
+# Minimum player count required to lock a roster. /remove also enforces
+# this floor — caps the "gut your roster to ride Drought/Hedge/Home Alone
+# unbounded" exploit without taking partial-roster flexibility off the
+# table. Auto-lock at game start picks up anyone meeting the floor.
+# Next-season raises this to 3 — combined with the no-duplicate-effects
+# rule it forces real roster construction instead of letting players
+# coast on a kicker plus one scorer.
+ROSTER_MIN_PLAYERS = 3
+
+# Weekly FP → Floobits conversion (participation reward).
+# Tapering power curve: F = round(SCALE * FP^EXPONENT), no hard cap. Big
+# weeks always pay more than small weeks, but with diminishing returns so
+# the system can't run away. Tunable knobs:
+#   SCALE     — overall payout scale (raises floor + ceiling together)
+#   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
+# Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
+# then bumped ~33% across the board in v0.16.1 — payouts felt too thin
+# relative to pack prices. Shape (exponent) unchanged so the high-end
+# taper still prevents runaway whales while floors and middle play
+# benefit too. Sample profile (default):
+#   100 FP →  16 F
+#   500 FP →  54 F
+#  1000 FP →  93 F
+#  3000 FP → 217 F
+WEEKLY_FP_FLOOBIT_SCALE = 0.43
+WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
+# Endowment (income_boost powerup) replaces the curve with a flatter one.
+# Less taper = monster weeks pay more; low weeks pay roughly the same.
+# Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
+# at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
+# proportionally with the standard curve.
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.27
+WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -133,9 +246,75 @@ FUNDING_TIER_THRESHOLDS = {
     'MID_MARKET':   0.85,  # within ±15% of average
     'SMALL_MARKET': 0.0,   # below 85% of average — genuinely fallen behind the pack
 }
-FUNDING_DEV_BONUS = {'MEGA_MARKET': 2, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
-FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.015, 'LARGE_MARKET': 0.005, 'MID_MARKET': -0.005, 'SMALL_MARKET': -0.015}
-FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.20}
+# Market-tier compression: keep the flavor (MEGA still feels prestigious,
+# SMALL still feels scrappy), but shrink the mechanical advantages so
+# tier doesn't compound into a runaway gap year over year. Dev / morale
+# / fatigue benefits roughly halved from the original spread.
+FUNDING_DEV_BONUS = {'MEGA_MARKET': 1, 'LARGE_MARKET': 1, 'MID_MARKET': 0, 'SMALL_MARKET': -1}
+FUNDING_MORALE_MODIFIER = {'MEGA_MARKET': 0.0075, 'LARGE_MARKET': 0.0025, 'MID_MARKET': -0.0025, 'SMALL_MARKET': -0.0075}
+FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.30, 'LARGE_MARKET': 0.15, 'MID_MARKET': 0.0, 'SMALL_MARKET': -0.10}
+
+# ---- Market Expectation Scaling ----
+# Bigger markets carry heavier "expectations to win" pressure on top of
+# whatever the team's prior performance has earned. Smaller markets are more
+# forgiving when the team underperforms (less media spotlight, less fan
+# rage). Applied at game time as an asymmetric scalar on the delta of
+# team.pressureModifier from baseline (1.0):
+#   - positive delta (high expectations from prior playoff success, etc.)
+#     is scaled up for big markets — MEGA's win-it-all expectations weigh
+#     more than a SMALL team's same on-paper expectation.
+#   - negative delta (low expectations from a bad prior season) is scaled
+#     up for SMALL markets — small markets disengage and stop watching, big
+#     markets keep the spotlight on even during a rebuild.
+# Effect at game time:
+#   delta = team.pressureModifier - 1.0
+#   if delta > 0:  scaled = delta * EXPECTATION_SCALE[tier]
+#   else:          scaled = delta * (2.0 - EXPECTATION_SCALE[tier])
+#   effectivePressureMod = 1.0 + scaled
+EXPECTATION_SCALE_BY_TIER = {
+    'MEGA_MARKET':  1.5,
+    'LARGE_MARKET': 1.2,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 0.7,
+}
+
+# Relief side: when the team's prior baseline is below 1.0 (bad season last
+# year, eliminated mid-season, etc.), how much that relief gets amplified by
+# market tier. Big markets keep the spotlight on even during a rebuild
+# (less relief); small markets disengage entirely (much more relief).
+# Replaces the prior `(2 - tierScale)` inverse, which gave too narrow a
+# spread (LARGE 0.8, SMALL 1.3) — diagnostic showed LARGE/SMALL barely
+# differed from MID in the relief direction.
+EXPECTATION_RELIEF_BY_TIER = {
+    'MEGA_MARKET':  0.4,
+    'LARGE_MARKET': 0.65,
+    'MID_MARKET':   1.0,
+    'SMALL_MARKET': 1.6,
+}
+
+# Championship-band softening: delta above this threshold (i.e. baselines
+# above 2.0 — Floos Bowl 2.5, brink-of-elimination 2.0, deep playoff round
+# 1.9+) gets a much weaker market scale. Without softening, MEGA Floos Bowl
+# hits 3.25 which caps in-game pressure at 100 on every play. Overflow
+# portion of the delta uses CHAMPIONSHIP_OVERFLOW_FACTOR instead of the
+# full tier scale.
+EXPECTATION_DELTA_CAP = 1.0
+CHAMPIONSHIP_OVERFLOW_FACTOR = 1.0  # overflow unscaled — preserves nominal
+                                     # baseline so MEGA/MID/SMALL keep the
+                                     # right ordering at the top end.
+
+# ---- Streak Pressure ----
+# Pressure that builds as a team's consecutive-win streak grows. Active in
+# both regular season and playoffs — an undefeated team chasing a perfect
+# season feels the spotlight, and that spotlight follows them through the
+# postseason. Resets to 0 on any loss.
+#   streakPressure = min(CAP, max(0, streak - FLOOR) * PER_WIN)
+# Added to team.pressureModifier at game-time scaling, so market-tier
+# amplification applies (MEGA on a 10-win streak gets a heavier scaled
+# bump than SMALL on the same streak).
+STREAK_PRESSURE_FLOOR   = 3      # streaks 1-3 add nothing (normal hot start)
+STREAK_PRESSURE_PER_WIN = 0.10   # each win past the floor adds +0.10
+STREAK_PRESSURE_CAP     = 0.80   # caps at streak 11+ to avoid runaway
 
 # ---- Form-state Per-game Rating Multiplier ----
 # Applied to in-game player attributes at kickoff based on the team's current
@@ -150,17 +329,26 @@ FUNDING_FATIGUE_REDUCTION = {'MEGA_MARKET': 0.75, 'LARGE_MARKET': 0.35, 'MID_MAR
 #   0.96 ≈ -4% on attrs ≈ -3-4 rating points (COMPLACENT trap-game risk)
 #   0.95 ≈ -5% on attrs ≈ -4-5 rating points (SPIRALING broken / can't get out
 #         of own way)
+# Rubber-band tilt: COMPLACENT bites the dominant teams harder,
+# RESOLUTE lifts the gritty losers a bit more, and SPIRALING is
+# softened so a struggling team isn't trapped in a doom-loop. Nudges
+# are 1-2 points each — subtle on any single game, additive over a
+# season. Surfaces through the existing form-state badge; no new UI.
 FORM_STATE_RATING_MULT = {
     'HOT_STREAK':  1.00,   # Already winning — no extra boost
     'GETTING_HOT': 1.00,   # Was 1.02 — selection effect already gives these
                            # teams +14pp lift over expected, so no extra mult
     'STEADY':      1.00,
     'SHAKY':       0.985,  # Mild slip
-    'COOLING_OFF': 0.97,   # Active fade
-    'COMPLACENT':  0.93,   # Was 0.96 — old value moved results 0pp; bumped
-                           # so the trap-game effect actually bites elite teams
-    'SPIRALING':   0.95,   # Broken
-    'RESOLUTE':    1.03,   # Cinderella backbone
+    'COOLING_OFF': 0.96,   # Was 0.97 — slightly stronger fade
+    'COMPLACENT':  0.92,   # Was 0.93 — slightly more bite on elite teams
+    'SPIRALING':   0.99,   # Was 0.97 — disposition-analyzer data showed 28x
+                           # higher SPIRALING incidence on underdogs vs
+                           # favorites (39% vs 1.4%), so the multiplier was
+                           # double-counting the ELO signal. Cut to -1% so
+                           # the form badge still surfaces a real condition
+                           # without compounding the pre-game skill gap.
+    'RESOLUTE':    1.04,   # Was 1.03 — slightly stronger Cinderella lift
     'UNKNOWN':     1.00,
 }
 
@@ -184,25 +372,46 @@ SCOUTING_BANDS = [
     (65, 10),   # 65-79: ±10
     (0, 15),    # <65: ±15
 ]
-FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 10, 'LARGE_MARKET': 5, 'MID_MARKET': 0, 'SMALL_MARKET': -5}
+FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
 # ---- Retirement Risk Telegraphing ----
-# Surfaces during the season so fans can pre-vote replacements. Mirrors the actual
-# retirement chances used in seasonManager._processRosteredPlayerContracts.
-# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'forced'
-RETIREMENT_FORCED_SEASONS = 20      # Hard cap — no player plays past this
-RETIREMENT_HIGH_AGE_SEASONS = 15    # 70%+ chance band
-RETIREMENT_MID_AGE_SEASONS = 10     # 25-65% chance band
-RETIREMENT_EARLY_AGE_SEASONS = 7    # 5-10% chance band
+# Surfaces during the season so fans can pre-vote replacements. Mirrors the
+# actual retirement rolls in seasonManager._evaluateRetirementCandidates.
+# Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'retiring' (locked)
+# Retirements only fire for players whose contract expires this offseason.
+RETIREMENT_HIGH_AGE_SEASONS = 15    # 90% chance on walk year
+RETIREMENT_MID_AGE_SEASONS = 10     # 65% chance on walk year
+RETIREMENT_EARLY_AGE_SEASONS = 7    # 5% chance on walk year
 
 # ---- Player Fatigue ----
+# Accumulation rate is unchanged — fatigue gauge still climbs visibly
+# across the season for the fan UI. What changed: PHYSICAL_IMPACT is
+# softened so each fatigue point hits performance less hard. End-of-
+# season tired stars feel tired, not broken.
 BASE_FATIGUE_PER_WEEK = 0.0025      # 0.25% base fatigue gain per week
 FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
-FATIGUE_PHYSICAL_IMPACT = 1.0       # Full fatigue applied to physical attributes
-FATIGUE_MENTAL_IMPACT = 0.3         # 30% of fatigue applied to mental attributes
+FATIGUE_PHYSICAL_IMPACT = 0.6       # Was 1.0 — softened so fatigue is less punishing
+FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
+
+# Mental / form / fatigue modifiers can compound multiplicatively into a
+# heavy reduction on a high-rated player's effective rating. The soft floor
+# below caps that aggregate so a star never drops more than (1 - ratio) of
+# their baseline gameAttributes overall rating, even if every modifier
+# stacks negative. Trades off some narrative extremes for fewer
+# "great player had a nightmare game with no visible cause" outcomes.
+MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
+
+# League compression — at game start, every rostered player's in-game
+# attributes get pulled toward the league mean by this factor. A 95-rated
+# player effectively plays as ~90.5; a 65 plays as ~69.5. Closes the
+# auto-win gap without erasing skill order. Profile ratings stay
+# untouched; only `gameAttributes` is compressed. Set factor=1.0 to
+# disable.
+LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
+LEAGUE_COMPRESSION_MEAN = 80        # Center of the curve
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
@@ -246,11 +455,16 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Raises your weekly FP earnings cap to 65 Floobits for 4 weeks.",
+    "description": "Bumps your weekly FP-to-Floobits curve to a flatter taper for 4 weeks. Big weeks pay more; routine weeks roughly the same.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    "boostedCap": 65,
+    # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
+    # small dip on low-FP weeks for a meaningful bump on monster weeks
+    # (e.g. 500 FP: 67 F normal → 73 F endowment; 1000 FP: 121 → 142;
+    # 5000 FP: 474 → 653).
+    "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
+    "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
 }
 
 POWERUP_CATALOG = {
@@ -265,6 +479,71 @@ POWERUP_CATALOG = {
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
 SHOP_REROLL_COST_INCREMENT = 10  # Each reroll costs 10 more than the last
+
+# Themed pack rotation reroll — pricier than featured-card reroll because
+# the rotation pool now includes Grand (350F) and Exquisite (750F) packs.
+# Rerolling for an exquisite roll should be a real commitment.
+THEMED_PACK_REROLL_BASE_COST = 50
+THEMED_PACK_REROLL_COST_INCREMENT = 30
+
+# ---- Card Upgrade Tiers (Level Up) ----
+# Cards level I->IV (tier 1->4) by feeding ONE same-effect duplicate + Floobits.
+# Same effect ⇒ same edition (effects are edition-locked), so the duplicate is a
+# free rarity gate. Tier is per-instance, seasonal (expires with the card unless
+# vaulted). Tune all of the below via simcheck_cards_v3.
+CARD_TIER_MAX = 4
+# Single value multiplier on a card's OWN output (FP / FPx-delta / Floobits).
+CARD_TIER_MULT = {1: 1.0, 2: 1.15, 3: 1.32, 4: 1.5}
+# Structural cards produce no own output (isAmplifier / isAdvantage) — leveling
+# them adds a flat per-tier dividend instead. Sized PER EDITION to land near that
+# edition's output band at max tier, so a fully-upgraded card is worth the cost
+# (a Diamond should pay Diamond-band FP, not a flat 55). FP for FP/FPx-side
+# cards, Floobits for floobit-output ones.
+CARD_TIER_DIVIDEND_FP = {
+    "base":        {1: 0, 2: 12, 3: 24, 4: 36},
+    "holographic": {1: 0, 2: 18, 3: 34, 4: 52},
+    "prismatic":   {1: 0, 2: 26, 3: 48, 4: 72},
+    "diamond":     {1: 0, 2: 34, 3: 60, 4: 90},
+}
+CARD_TIER_DIVIDEND_FLOOBITS = {
+    "base":        {1: 0, 2: 8,  3: 16, 4: 24},
+    "holographic": {1: 0, 2: 11, 3: 21, 4: 32},
+    "prismatic":   {1: 0, 2: 14, 3: 27, 4: 40},
+    "diamond":     {1: 0, 2: 18, 3: 34, 4: 50},
+}
+# Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
+# the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
+# a day-one rush (the same-effect duplicate requirement is the primary gate).
+CARD_TIER_UPGRADE_COST = {2: 80, 3: 250, 4: 600}
+CARD_TIER_EDITION_COST_MULT = {
+    "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
+}
+
+# ─── Card Showcase (seasonal collection payout) ──────────────────────────────
+# An 8-slot showcase filled from the permanent Vault. Scored each season into a
+# letter grade (F→S) that pays out flat Floobits at season end, then clears.
+# Scoring is hidden (grade + named sets only) — see showcaseManager. All values
+# below are owner-approved starting points; tune via /simcheck before balancing.
+SHOWCASE_SLOTS = 8
+# Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
+SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
+SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
+# Recency: newer cards pay more. recency = max(FLOOR, 1 − STEP × seasonsOld).
+SHOWCASE_RECENCY_FLOOR = 0.25
+SHOWCASE_RECENCY_STEP = 0.25
+# Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
+SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
+# Set bonuses ADD into one multiplier: score = Σ cardPoints × (1 + Σ bonuses),
+# with the bonus sum capped here so stacked sets can't run away.
+SHOWCASE_MAX_SET_BONUS = 2.5
+# Score → grade (first threshold the score meets, scanning high to low).
+# Calibrated via tune_showcase.py Monte Carlo (recency-1.0 best-8 showcases):
+# casual≈D, regular≈C, dedicated≈B, whale≈A, top-few-%-whale≈S.
+SHOWCASE_GRADE_THRESHOLDS = [
+    ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
+]
+# Grade → flat Floobit payout at season end.
+SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 50, "C": 120, "B": 250, "A": 450, "S": 800}
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
@@ -306,10 +585,28 @@ GM_VOTE_BASE_MIN = {
     "hire_coach": 2,
 }
 
-# Per-user limits
+# Per-user GM limits.
+#
+# LEGACY: the per-season / per-type / per-target caps below are retired. The
+# single-vote model (one vote per fan per target, withdraw to change, flat
+# per-vote cost) replaced hard caps entirely, so nothing in the live vote path
+# reads these anymore. Kept defined only so any stray importer doesn't break.
 GM_VOTES_PER_SEASON = 20
-GM_VOTES_PER_TYPE = 8
-GM_VOTES_PER_TARGET = 5
+GM_VOTES_PER_TYPE = {
+    "fire_coach":     4,
+    "hire_coach":     4,
+    "resign_player":  8,
+    "cut_player":     8,
+    "sign_fa":        8,
+}
+GM_VOTES_PER_TYPE_DEFAULT = 4
+GM_VOTES_PER_TARGET = 4
+
+# Tribune secret achievement: cast this many GM votes in a single season. Under
+# single-vote a fan votes at most once per decision, so a season's ceiling is
+# roughly their team's slate (~6 roster calls plus the coach). 6 reads as
+# "voted on basically everything" while staying reachable across seasons.
+GM_TRIBUNE_VOTE_THRESHOLD = 6
 
 # Front Office voting window opens at this week. Before this, GM vote UIs show
 # a "convening..." state. Mirrors the frontend const GM_ACTIVE_WEEK in
@@ -350,8 +647,8 @@ GM_COACH_POOL_SIZE = 5
 # ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
 
 PICKEM_CORRECT_REWARD = 5           # (Legacy) Floobits per correct pick
-PICKEM_CLAIRVOYANT_THRESHOLD = 96    # Points threshold for Clairvoyant bonus (e.g. 12 games × 8 pts = all correct by Q1)
-PICKEM_CLAIRVOYANT_BONUS = 25       # Bonus Floobits when threshold is met
+PICKEM_CLAIRVOYANT_THRESHOLD = 80    # Points threshold for Clairvoyant bonus. Favorites pay <1.0x (0.5/winProb), so a perfect 12-game week scores ~83-103 and most great weeks land 70-90. Was 96 — unreachable, since even a flawless week often fell short. 80 makes a perfect week always clear it and lands ~top 8-13% of strong weeks.
+PICKEM_CLAIRVOYANT_BONUS = 35       # Bonus Floobits when threshold is met (was 25, bumped 40% in v0.16.1 economy pass)
 
 # Points-based system (v2)
 PICKEM_BASE_POINTS = 10              # Max points per correct pick (pre-game)
@@ -363,13 +660,18 @@ PICKEM_QUARTER_MULTIPLIERS = {       # Multiplier by game quarter at time of pic
     4: 0.2,   # Q4
     5: 0.1,   # OT
 }
-PICKEM_POINTS_TO_FLOOBITS = 0.5     # 1 point = 0.5 Floobits
-PICKEM_WEEKLY_PRIZES = {1: 15, 2: 10, 3: 5}
+PICKEM_POINTS_TO_FLOOBITS = 0.65    # 1 point = 0.65 Floobits (was 0.5, bumped 30% in v0.16.1 economy pass)
+PICKEM_WEEKLY_PRIZES = {1: 20, 2: 13, 3: 7}    # was {15, 10, 5}
 PICKEM_WEEKLY_TOP_PCT = 0.25
-PICKEM_WEEKLY_TOP_PCT_PRIZE = 3
-PICKEM_SEASON_PRIZES = {1: 75, 2: 50, 3: 25}
+PICKEM_WEEKLY_TOP_PCT_PRIZE = 4                 # was 3
+PICKEM_SEASON_PRIZES = {1: 100, 2: 65, 3: 33}  # was {75, 50, 25}
 PICKEM_SEASON_TOP_PCT = 0.25
-PICKEM_SEASON_TOP_PCT_PRIZE = 10
+PICKEM_SEASON_TOP_PCT_PRIZE = 13                # was 10
+
+# Playoff bracket challenge — floobit prizes by final rank (one-time/season).
+PLAYOFF_BRACKET_PRIZES = {1: 120, 2: 75, 3: 40}
+PLAYOFF_BRACKET_TOP_PCT = 0.25
+PLAYOFF_BRACKET_TOP_PCT_PRIZE = 15
 
 # Win-probability multiplier (applies at any pick time)
 PICKEM_UNDERDOG_MAX = 3.0           # Max multiplier for extreme underdogs
@@ -411,3 +713,86 @@ def calculateCertaintyMultiplier(quarter, homeWinProb):
     fullDecay = 1.0 - baseMult
     effectiveDecay = fullDecay * (PICKEM_MIN_DECAY_FRACTION + (1.0 - PICKEM_MIN_DECAY_FRACTION) * certainty)
     return round(1.0 - effectiveDecay, 2)
+
+
+# ─── Play Reactions ─────────────────────────────────────────────────────────────
+# Six reactions for plays + sideline quotes. UI renders SVG icons (no emoji).
+
+REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
+
+
+# ─── Anomaly System / The Criticality ──────────────────────────────────────────────
+# The anomaly system has three layers:
+#   Layer 1 — universal cosmetic micro-glitches (fires from Stirring up)
+#   Layer 2 — personality-flavored cosmetic glitches (fires from Erratic up)
+#   Criticality — the dramatic event: a Core takes control and the card-bonus
+#              math switches to that Core's signature equation
+#
+# Layer 1 + Layer 2 are PURE FLAVOR — no mechanical impact regardless of flag.
+# This flag gates ONLY the Criticality event itself. When False, the aggregate
+# can still climb to threshold and Core warnings/news still fire (visible
+# tease), but the trigger is suppressed and the math never swaps.
+#
+# Roadmap (full event DEFERRED — decided 2026-06-04):
+#   This season (shipping): False — the tease. Whispers, warnings, glitches, the
+#     instability dial, and the near-miss SUPPRESSION cycle + Cores dialogue. The
+#     full event never fires.
+#   A future season (deferred, NOT the next one): flip True — the payoff. A Core
+#     seizes the card-bonus math, the Reset purges the awakened, L4 control powers
+#     land. Pushed back beyond the upcoming season. Do NOT enable without an
+#     explicit go from the owner.
+ANOMALY_CRITICALITY_ENABLED = False
+
+# ── Glitch firing hygiene ─────────────────────────────────────────────────────
+# Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×
+# instability). Tuned DOWN hard from last season (was attention/1000 with no
+# per-game cap), which flooded game feeds with glitch lines. Now glitches are
+# rare, spaced by a cooldown, and hard-capped per game so each one reads as a
+# notable "huh" instead of wallpaper. (The league instability dial that scales
+# these with the suppression cycle lands in P3.)
+ANOMALY_GLITCH_PROB_SCALE = 3000.0   # higher = rarer (was effectively 1000)
+ANOMALY_GLITCH_PROB_CAP = 0.12       # per-candidate probability ceiling
+ANOMALY_GLITCH_MAX_PER_GAME = 3      # hard cap on glitch lines per game
+ANOMALY_GLITCH_COOLDOWN_PLAYS = 10   # minimum plays between glitch lines
+# Cumulative layer weights — a player's ladder state is the CEILING; each glitch
+# rolls a layer up to it. L1 = cosmetic micro, L2 = cosmetic personality.
+# (L3 = game-impacting, added at rampant+ in P2.)
+ANOMALY_L2_WEIGHT_ERRATIC = 0.35     # P(L2 vs L1) at erratic
+ANOMALY_L2_WEIGHT_RAMPANT = 0.50     # P(L2 vs L1) at rampant / awakened
+
+# ── L3 (game-impacting) glitch effects ────────────────────────────────────────
+# At rampant/awakened a ball-carrier's play can glitch and the YARDAGE changes
+# for real — involuntary, NOT the deliberate Control powers (those are a later
+# season). Skewed heavily positive. Negatives are modest "stumbles" that only
+# fire on short, down-advancing plays and never change possession or score —
+# no turnovers this season. All tunable.
+ANOMALY_L3_TRIGGER_PROB = 0.12       # chance per qualifying touch (then capped/cooled per game)
+ANOMALY_L3_HELP_CHANCE = 0.78        # P(bonus yards) vs a stumble
+ANOMALY_L3_POS_YARDS = (3, 12)       # bonus-yard range (can extend a drive; rarely score near the goal line)
+ANOMALY_L3_NEG_YARDS = (2, 5)        # stumble loss range (field position only)
+ANOMALY_L3_MAX_NEG_PER_TEAM = 1      # cap stumbles per team per game
+ANOMALY_L3_LATE_QUARTER = 4          # Q4+ counts as "late"
+ANOMALY_L3_CLOSE_MARGIN = 8          # within this margin in a late game → no stumbles
+
+REACTION_TARGET_TYPES = {"play", "sideline_quote"}
+
+# ── Offseason phase-rollback snapshots ────────────────────────────────────────
+# Only these phases make non-idempotent mutations (drafts compound picks), so a
+# mid-phase restart must roll the DB back to the phase-entry snapshot and re-run
+# the phase cleanly. Other phases resume via offseason_completed_steps alone.
+# Shared by seasonManager._snapshotDbForPhase (writer) and
+# run_api._restorePartialPhaseSnapshotIfNeeded (reader) — keep them in sync here.
+OFFSEASON_PARTIAL_PHASES = {'rookie_draft', 'fa_draft', 'training'}
+
+# Large, in-season, append-only tables that offseason phases provably never
+# write (no games/weeks/pick-ems happen during a draft). Excluded from the
+# phase-rollback snapshot so it stays small AND flat across seasons — these are
+# exactly the tables that grow every season. Everything not listed IS snapshotted
+# (safe direction: a missed table is merely copied, never silently un-rolled-back).
+OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
+    'game_player_stats',    # ~20MB at S14 — per-game per-player box scores
+    'weekly_card_bonuses',  # ~16MB — weekly fantasy card settlement
+    'weekly_player_fp',     # weekly fantasy points
+    'pick_em_picks',        # weekly pick-em selections
+    'games',                # game records
+}

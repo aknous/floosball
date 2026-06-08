@@ -183,8 +183,20 @@ STARTER_FLOOBITS = 100
 STARTER_CARD_COUNT = 5
 
 
-def _provisionStarterPack(session, user):
-    """Give a new user starter Floobits and 5 random base cards."""
+def _provisionStarterPack(session, user, currentSeason: Optional[int] = None):
+    """Give a new user starter Floobits and 5 random base cards.
+
+    Also marks `starter_pack_claimed_season` to the current season so the
+    in-shop "Claim Free Pack" offer is hidden — they've already been given
+    the equivalent at signup. The shop offer naturally re-enables next
+    season when the season number advances.
+
+    currentSeason can be passed explicitly when the caller knows it
+    (e.g. seasonManager during fresh-start reprovision); otherwise we
+    fall back to reading floosball_app.seasonManager.  This matters at
+    boot because seasonManager runs reprovision BEFORE the api.main
+    floosball_app reference is set.
+    """
     try:
         # Create currency record
         currency = UserCurrency(
@@ -235,6 +247,18 @@ def _provisionStarterPack(session, user):
                     acquired_via='starter',
                 )
                 session.add(card)
+
+        # Mark this season as already-claimed so the in-shop starter offer
+        # doesn't show for the rest of season N.
+        if currentSeason is None:
+            try:
+                from api import main as _apiMain
+                sm = getattr(getattr(_apiMain, 'floosball_app', None), 'seasonManager', None)
+                currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
+            except Exception:
+                currentSeason = None
+        if currentSeason is not None:
+            user.starter_pack_claimed_season = currentSeason
 
         session.flush()
         logger.info(f"Provisioned starter pack for user {user.id}: {STARTER_FLOOBITS} Floobits + cards")
@@ -367,10 +391,27 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                     logger.info(f"Updating user email: {user.email} -> {jwtEmail}")
                     user.email = jwtEmail
                     needsCommit = True
-            # Stamp last login
+            # Stamp last login + record today's DAU bucket. UserLoginDay
+            # has a unique (user_id, login_date) constraint so re-logins
+            # within the same day collapse into one row, but each new
+            # calendar day gets its own row — that's what makes the
+            # admin DAU chart historically stable.
             from datetime import datetime as _dt
-            user.last_login_at = _dt.utcnow()
+            now = _dt.utcnow()
+            user.last_login_at = now
             needsCommit = True
+            try:
+                from database.models import UserLoginDay
+                from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
+                stmt = _sqlite_insert(UserLoginDay).values(
+                    user_id=user.id,
+                    login_date=now.date(),
+                ).on_conflict_do_nothing(
+                    index_elements=['user_id', 'login_date']
+                )
+                session.execute(stmt)
+            except Exception as e:
+                logger.warning(f"Failed to record UserLoginDay for {user.id}: {e}")
             if needsCommit:
                 session.commit()
 

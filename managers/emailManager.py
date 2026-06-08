@@ -1,8 +1,19 @@
 """Email manager using Resend API."""
 
+import threading
+import time
+
 from logger_config import get_logger
 
 logger = get_logger("floosball.email")
+
+# Resend caps the free / hobby tier at 5 requests per second. Day / season
+# reports broadcast to every user in a tight loop, so without spacing the
+# tail of the batch gets rejected with "Too many requests." Pad slightly
+# above 200 ms to leave headroom for clock skew and request overhead.
+_RESEND_MIN_INTERVAL_S = 0.22
+_sendLock = threading.Lock()
+_lastSendAt = 0.0
 
 
 def _getResendConfig():
@@ -17,12 +28,27 @@ def _getResendConfig():
         return "", "Floosball <noreply@floosball.com>"
 
 
+def _throttle():
+    """Enforce >= _RESEND_MIN_INTERVAL_S between Resend calls. Sleeps the
+    calling thread until the next slot is available."""
+    global _lastSendAt
+    with _sendLock:
+        now = time.monotonic()
+        wait = _RESEND_MIN_INTERVAL_S - (now - _lastSendAt)
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        _lastSendAt = now
+
+
 def sendEmail(to: str, subject: str, html: str) -> bool:
     """Send an email via Resend. Returns True on success."""
     apiKey, emailFrom = _getResendConfig()
     if not apiKey:
         logger.debug("Resend API key not configured, skipping email")
         return False
+
+    _throttle()
 
     try:
         import resend

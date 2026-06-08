@@ -63,6 +63,59 @@ from database.connection import init_db, clear_db
 logger = get_logger("floosball.api_server")
 
 
+def _initSentry() -> None:
+    """Initialise Sentry error tracking when SENTRY_DSN is set. No-op when the
+    var is unset OR sentry-sdk isn't installed, so it's safe in every env."""
+    dsn = os.environ.get('SENTRY_DSN', '').strip()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+    except ImportError:
+        logger.warning("SENTRY_DSN is set but sentry-sdk is not installed — skipping.")
+        return
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.environ.get('SENTRY_ENVIRONMENT')
+        or os.environ.get('TIMING_MODE', 'production'),
+        traces_sample_rate=float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0.0')),
+        send_default_pii=False,
+    )
+    logger.info("Sentry error tracking enabled.")
+
+
+def _onSimTaskDone(task: asyncio.Task) -> None:
+    """Supervise the background simulation task.
+
+    The season loop is an infinite `while True`, so this task should never
+    finish on its own. If it does, something went wrong: log it loudly, report
+    to Sentry if configured, and force the process to exit so the platform (Fly)
+    restarts it — a clean restart resumes via the checkpoint / offseason-resume
+    logic rather than leaving the API quietly serving a frozen season. A
+    cancelled task is a normal shutdown, so ignore it.
+    """
+    if task.cancelled():
+        logger.info("Simulation task cancelled (shutdown).")
+        return
+    exc = task.exception()
+    if exc is None:
+        logger.critical("Simulation task exited unexpectedly with no error — forcing restart.")
+    else:
+        logger.critical(
+            "Simulation task died with an unhandled exception — forcing restart.",
+            exc_info=exc,
+        )
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(exc)
+            sentry_sdk.flush(timeout=2.0)
+        except Exception:
+            pass
+    # Hard-exit so the process supervisor restarts us; os._exit skips atexit /
+    # async teardown that could hang on a half-dead event loop.
+    os._exit(1)
+
+
 def _resolveTimingMode(modeStr: str) -> TimingMode:
     """Resolve a timing mode string to a TimingMode enum value."""
     modeStr = modeStr.lower().strip()
@@ -165,8 +218,128 @@ def parse_args():
             args['card_reset_current_season'] = True
         elif arg.startswith('--schedule-gap='):
             args['schedule_gap'] = int(arg.split('=')[1])
+        elif arg == '--spread-tiers':
+            # Dev-only: spread teams across all 4 funding tiers each season
+            # so single-user testing produces a realistic tier distribution
+            # for pressure diagnostic. Deterministic by team.id — same team
+            # gets the same tier every season.
+            os.environ['DEV_SPREAD_TIERS'] = '1'
+            logger.info("--spread-tiers active: teams will be assigned to all 4 tiers each season (deterministic by team.id)")
+        elif arg == '--shuffle-tiers':
+            # Dev-only: like --spread-tiers but randomizes the tier assignment
+            # each season (seeded by season number). Use when the deterministic
+            # bucket keeps your favorite team in the same tier and you want to
+            # see how the team performs across different tier conditions.
+            os.environ['DEV_SHUFFLE_TIERS'] = '1'
+            logger.info("--shuffle-tiers active: teams will be reshuffled across all 4 tiers each season")
 
     return args
+
+
+def _restorePartialPhaseSnapshotIfNeeded() -> None:
+    """If the previous run died inside a non-idempotent offseason phase
+    (rookie_draft, fa_draft, or training), roll the offseason-mutable tables
+    back to the phase-entry snapshot so the resume re-runs the phase from a
+    clean state instead of compounding partial picks. The snapshot holds only
+    those tables (see seasonManager._snapshotDbForPhase); the large in-season
+    history tables are left untouched since the phase never wrote them.
+
+    Reads simulation_state via a raw sqlite3 connection so this runs BEFORE
+    init_db() opens SQLAlchemy connections. Detection: in_offseason=True AND
+    offseason_phase ∈ {rookie_draft, fa_draft, training} AND that phase is
+    NOT present in offseason_completed_steps.
+    """
+    import os
+    import json
+    import shutil
+    import sqlite3
+
+    # Resolve DB path the same way as the rest of the app.
+    dbDir = os.environ.get('DATABASE_DIR', 'data')
+    if os.path.exists('/data') and os.path.isdir('/data'):
+        dbDir = '/data'
+    dbPath = os.path.join(dbDir, 'floosball.db')
+    if not os.path.exists(dbPath):
+        return  # No DB yet — nothing to restore.
+
+    from constants import OFFSEASON_PARTIAL_PHASES as PARTIAL_PHASES
+
+    try:
+        conn = sqlite3.connect(dbPath)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT current_season, in_offseason, offseason_phase, "
+            "offseason_completed_steps FROM simulation_state WHERE id = 1"
+        )
+        row = cur.fetchone()
+        conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"snapshot-restore probe: simulation_state read failed: {e}")
+        return
+
+    if not row:
+        return
+    seasonNum, inOffseason, phase, stepsEncoded = row
+    if not inOffseason or phase not in PARTIAL_PHASES:
+        return
+    completedSteps = set()
+    if stepsEncoded:
+        try:
+            completedSteps = set(json.loads(stepsEncoded))
+        except Exception:
+            pass
+    if phase in completedSteps:
+        # Phase already finished — nothing to roll back.
+        return
+
+    snapshotPath = os.path.join(dbDir, f"offseason_s{seasonNum}_{phase}.db")
+    if not os.path.exists(snapshotPath):
+        logger.warning(
+            f"snapshot-restore: partial-phase resume detected "
+            f"(season={seasonNum}, phase={phase}) but snapshot not found at "
+            f"{snapshotPath} — proceeding without rollback. Drafts may "
+            f"contain partial picks from the interrupted run."
+        )
+        return
+
+    backupPath = dbPath + '.preresume'
+    try:
+        shutil.copy2(dbPath, backupPath)
+    except OSError as e:
+        logger.error(f"snapshot-restore: could not preserve pre-rollback DB: {e}")
+        return
+
+    # Replace only the snapshotted (offseason-mutable) tables from the snapshot;
+    # the excluded in-season history tables in the live DB are left as-is, since
+    # the interrupted phase never wrote them. Going through sqlite3 (rather than a
+    # raw file swap) also recovers any post-crash WAL correctly.
+    try:
+        conn = sqlite3.connect(dbPath)
+        try:
+            conn.execute("ATTACH DATABASE ? AS snap", (snapshotPath,))
+            snapTables = [r[0] for r in conn.execute(
+                "SELECT name FROM snap.sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()]
+            try:
+                conn.execute("BEGIN")
+                for t in snapTables:
+                    conn.execute(f'DELETE FROM main."{t}"')
+                    conn.execute(f'INSERT INTO main."{t}" SELECT * FROM snap."{t}"')
+                conn.execute("COMMIT")
+            except sqlite3.Error:
+                conn.rollback()
+                raise
+            conn.execute("DETACH DATABASE snap")
+            logger.warning(
+                f"snapshot-restore: rolled back {len(snapTables)} tables "
+                f"(phase={phase}, season={seasonNum}) from {snapshotPath}. "
+                f"Pre-rollback DB preserved at {backupPath}."
+            )
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.error(f"snapshot-restore: table rollback failed: {e}")
 
 
 async def initialize_application(timing_mode: TimingMode, fresh_start: bool, schedule_gap: int = 60, card_reset: bool = False, card_reset_current_season: bool = False):
@@ -178,6 +351,10 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
         logger.info("Fresh start requested - clearing database")
         clear_db()
     else:
+        # If a previous run died mid-draft / mid-training, restore the
+        # snapshot taken at phase entry so the resume re-runs the phase
+        # from a clean state. Must happen BEFORE init_db() opens connections.
+        _restorePartialPhaseSnapshotIfNeeded()
         init_db()
         # Card reset: wipe card data so templates regenerate with new rules
         if card_reset:
@@ -226,17 +403,28 @@ async def initialize_application(timing_mode: TimingMode, fresh_start: bool, sch
         broadcaster.enable(ws_manager)
         logger.info("Game broadcasting enabled")
     
-    # Start the application in background
-    asyncio.create_task(floosball_app.runSimulation())
-    
+    # Start the simulation in the background, supervised: an unhandled exception
+    # in the season loop must surface (log + Sentry) and restart the process
+    # rather than silently freeze the season (see _onSimTaskDone). The task is
+    # stashed on the app so /health can report sim liveness.
+    simTask = asyncio.create_task(floosball_app.runSimulation())
+    simTask.add_done_callback(_onSimTaskDone)
+    floosball_app.simTask = simTask
+
+    # Periodic consistent DB backup (VACUUM INTO + rotation). Self-supervising;
+    # off-volume when BACKUP_DIR points off the primary volume.
+    from backup_manager import runBackupLoop
+    asyncio.create_task(runBackupLoop())
+
     logger.info("FloosballApplication initialized successfully")
     return floosball_app
 
 
 async def run_server():
     """Run the API server"""
+    _initSentry()
     args = parse_args()
-    
+
     logger.info("="*60)
     logger.info("Floosball API Server")
     logger.info("="*60)

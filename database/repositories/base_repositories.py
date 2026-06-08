@@ -172,9 +172,31 @@ class GameRepository:
         return game
     
     def save_player_stats(self, stats: GamePlayerStats):
-        """Save player stats for a game."""
+        """Save player stats for a game. Idempotent — if a row already
+        exists for this (game_id, player_id) (e.g. after a restart
+        replays a completed game), update it in place instead of
+        crashing on the UNIQUE constraint."""
+        existing = self.session.query(GamePlayerStats).filter_by(
+            game_id=stats.game_id,
+            player_id=stats.player_id,
+        ).first()
+        if existing is not None:
+            # Overwrite the fields. team_id should already match but
+            # update for safety. JSON stat blobs replace wholesale.
+            existing.team_id = stats.team_id
+            existing.passing_stats = stats.passing_stats
+            existing.rushing_stats = stats.rushing_stats
+            existing.receiving_stats = stats.receiving_stats
+            existing.kicking_stats = stats.kicking_stats
+            existing.defense_stats = stats.defense_stats
+            existing.fantasy_points = stats.fantasy_points
+            existing.q4_fantasy_points = stats.q4_fantasy_points
+            existing.q4_scoring_plays = stats.q4_scoring_plays
+            self.session.flush()
+            return existing
         self.session.add(stats)
         self.session.flush()
+        return stats
 
     def has_schedule(self, season: int) -> bool:
         """Return True if any game rows exist for this season (scheduled or final)."""

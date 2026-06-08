@@ -81,6 +81,15 @@ class EventType(Enum):
     # Achievements
     ACHIEVEMENT_UNLOCKED = "achievement_unlocked"
 
+    # Play reactions — user reactions to plays (and the sideline-quote personality events)
+    PLAY_REACTION_UPDATE = "play_reaction_update"
+
+    # Live in-game rally — fans cheering for a team mid-game
+    GAME_RALLY = "game_rally"
+
+    # Currency — passive grants (excludes user-initiated spends/refunds)
+    FLOOBITS_RECEIVED = "floobits_received"
+
     # System events
     ERROR = "error"
     INFO = "info"
@@ -261,6 +270,56 @@ class GameEvent:
             **gameState  # Spread all game state fields into the event
         }
 
+    @staticmethod
+    def gameRally(gameId: int, teamId: int, userId: int, username: str, tier: str,
+                  costPaid: int, confidenceDelta: float, determinationDelta: float,
+                  teamTotals: Dict[str, Any],
+                  feedMessage: Optional[str] = None) -> Dict[str, Any]:
+        """Broadcast a live in-game rally so every viewer sees the meter
+        tick up and the most recent contributor flash on screen.
+
+        teamTotals: { 'rallies': int, 'confidence': float,
+                      'determination': float, 'floobitsSpent': int }
+        feedMessage: present only when this rally crossed the surge
+        threshold and a play-feed message should be emitted.
+        """
+        return {
+            'event': EventType.GAME_RALLY.value,
+            'gameId': gameId,
+            'teamId': teamId,
+            'userId': userId,
+            'username': username,
+            'tier': tier,
+            'costPaid': costPaid,
+            'confidenceDelta': confidenceDelta,
+            'determinationDelta': determinationDelta,
+            'teamTotals': teamTotals,
+            'feedMessage': feedMessage,
+        }
+
+    @staticmethod
+    def playReactionUpdate(gameId: int, playNumber: int, targetType: str,
+                           reactions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Fired whenever a user adds, swaps, or removes a reaction on a play
+        or sideline quote. The full per-type aggregate is sent so the
+        frontend can replace its local copy without merging deltas.
+
+        reactions: {
+            'hype':  {'count': int, 'users': [{'id': int, 'username': str}, ...]},
+            'love':  {...},
+            ...
+        }
+        Only types with count > 0 are included.
+        """
+        return {
+            'event': EventType.PLAY_REACTION_UPDATE.value,
+            'gameId': gameId,
+            'playNumber': playNumber,
+            'targetType': targetType,
+            'reactions': reactions,
+        }
+
+
 class SeasonEvent:
     """Factory for creating season-related event messages"""
     
@@ -406,6 +465,28 @@ class AchievementEvent:
             'description': description,
             'rewardConfig': rewardConfig or {},
             'season': season,
+        }
+
+
+class CurrencyEvent:
+    """Factory for per-user currency events"""
+
+    @staticmethod
+    def received(amount: int, transactionType: str, description: Optional[str],
+                 balanceAfter: int, season: Optional[int], week: Optional[int]) -> Dict[str, Any]:
+        """Sent to a specific user when they receive a passive Floobits grant.
+
+        Excludes user-initiated grants (no surprise factor) and achievement
+        grants (which already trigger their own toast)."""
+        return {
+            'event': EventType.FLOOBITS_RECEIVED.value,
+            'timestamp': datetime.now().isoformat(),
+            'amount': amount,
+            'transactionType': transactionType,
+            'description': description or '',
+            'balanceAfter': balanceAfter,
+            'season': season,
+            'week': week,
         }
 
 
@@ -589,7 +670,8 @@ class GmEvent:
     def voteResolved(teamId: int, teamName: str, voteType: str,
                      outcome: str, targetPlayerName: str = None,
                      totalVotes: int = 0, threshold: int = 0,
-                     probability: float = 0.0, details: str = None) -> Dict[str, Any]:
+                     probability: float = 0.0, details: str = None,
+                     votesAgainst: int = 0) -> Dict[str, Any]:
         return {
             'event': EventType.GM_VOTE_RESOLVED.value,
             'timestamp': datetime.now().isoformat(),
@@ -598,7 +680,8 @@ class GmEvent:
             'voteType': voteType,
             'outcome': outcome,
             'targetPlayerName': targetPlayerName,
-            'totalVotes': totalVotes,
+            'totalVotes': totalVotes,   # 'yea' (for) count
+            'votesAgainst': votesAgainst,
             'threshold': threshold,
             'probability': probability,
             'details': details,

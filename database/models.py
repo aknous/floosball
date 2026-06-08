@@ -1,11 +1,12 @@
 """SQLAlchemy models for Floosball database."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -75,7 +76,13 @@ class Team(Base):
     top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
     playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
-    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id", use_alter=True, name="fk_teams_coach_id"), nullable=True)
+    # Single source of truth for "which coach does this team have".
+    # UNIQUE enforces the 1:1 invariant at the schema level — a Coach can be
+    # assigned to AT MOST one Team. Multiple teams pointing at the same
+    # coach_id (a bug class) is impossible. Multiple NULLs are allowed
+    # (a coachless team is fine). See migration in connection.py that
+    # backfills the constraint via unique index on existing prod DBs.
+    coach_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("coaches.id", use_alter=True, name="fk_teams_coach_id"), nullable=True, unique=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -103,12 +110,19 @@ class Team(Base):
 
 
 class Coach(Base):
-    """Coach table - represents a team's head coach."""
+    """Coach table - represents a team's head coach.
+
+    Note: there is intentionally no team_id column here. The single source
+    of truth for "what coach does this team have" is Team.coach_id. The
+    previous schema kept both directions (Team.coach_id + Coach.team_id)
+    which created a class of orphan-row bugs when the two diverged on a
+    failed write. The legacy column may still exist on older databases — the
+    inline migration in connection.py drops it on boot when present.
+    """
     __tablename__ = "coaches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     seasons_coached: Mapped[int] = mapped_column(Integer, default=0)
     offensive_mind: Mapped[int] = mapped_column(Integer, default=80)
     defensive_mind: Mapped[int] = mapped_column(Integer, default=80)
@@ -163,6 +177,17 @@ class Player(Base):
     # to retire after this season. Surfaces in UI so users see retirements
     # coming and can vote on replacements via FA ballot.
     will_retire: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Persisted Hall of Fame induction flag. Set when inductHallOfFame()
+    # accepts a newly-retired player. Without this, the in-memory
+    # hallOfFame list resets on every server restart and the HoF tab
+    # goes empty until brand-new retirees are inducted.
+    is_hof: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Career awards — same in-memory-only problem as is_hof. The player
+    # profile page reads these to render the awards section; without
+    # persistence they reset on every server restart.
+    mvp_awards: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    all_pro_seasons: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    league_championships: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -458,6 +483,12 @@ class TeamSeasonStats(Base):
     # games this team participated in. Drives the Highlight Reel card
     # projection (pays per favorite-team big play).
     big_plays: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Longest win-or-loss streak (abs value) this season. Persisted so
+    # the Gone Streaking card retains its season-long high after backend
+    # restarts — without this, peakStreak lives only on the in-memory
+    # Team object and resets to 0 every boot.
+    peak_streak: Mapped[int] = mapped_column(Integer, default=0)
     
     # Stats stored as JSON (detailed breakdown)
     offense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -495,6 +526,14 @@ class TeamFunding(Base):
     effective_funding: Mapped[int] = mapped_column(Integer, default=0)
     funding_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     tier_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Snapshot of the funding value the current tier was computed from.
+    # At season start = baseline + carried (the value _initializeTeamFunding
+    # ranks against). At offseason recompute = effective_funding at that
+    # moment (includes mid-season fan contributions). Markets chart uses
+    # this to position the filled "locked" dot so it always sits inside the
+    # tier band the badge displays — without it the dot can drift out of
+    # band as post-recompute contributions inflate effective_funding.
+    tier_locked_funding: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("team_id", "season", name="uq_team_funding_season"),
@@ -599,6 +638,10 @@ class GamePlayerStats(Base):
     
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
     q4_fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
+    # Count of TDs + FGs scored by this player during Q4/OT of this game.
+    # Drives the Walk Off card effect (pays per late-game scoring play
+    # by a roster player).
+    q4_scoring_plays: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game", back_populates="player_stats")
@@ -613,6 +656,93 @@ class GamePlayerStats(Base):
 
     def __repr__(self):
         return f"<GamePlayerStats(game_id={self.game_id}, player_id={self.player_id})>"
+
+
+class GameRally(Base):
+    """Live in-game fan rally — fans spend floobits during games to push
+    their team's collective confidence (and determination if trailing).
+
+    Records the individual rally action for audit + cumulative tracking.
+    The sim engine reads per-(game, team) totals to apply a real-time
+    bump on every per-play mental-drift calculation. Diminishing returns
+    on the cumulative rally count prevent unlimited stacking.
+    """
+    __tablename__ = "game_rallies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Tier: 'small' / 'medium' / 'large'
+    cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Bumps actually applied after diminishing returns + comeback weighting.
+    confidence_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    determination_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_game_rallies_game", "game_id"),
+        Index("idx_game_rallies_user", "user_id"),
+        Index("idx_game_rallies_game_team", "game_id", "team_id"),
+        Index("idx_game_rallies_game_user", "game_id", "user_id"),
+    )
+
+
+class SpectatorProgress(Base):
+    """Per-user cheer-bar state (feature/fan-income, Spectator).
+
+    The ACTIVE non-fantasy income path: watching live games fills a segmented
+    bar, each completed segment pays Floobits. bar_fill is the current partial
+    segment; the weekly counters bound the payout (reset when the week rolls).
+    Per-game witnessed-play tracking lives in memory (SpectatorManager), not
+    here — this row only persists the durable bar + the weekly cap.
+    """
+    __tablename__ = "spectator_progress"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    bar_fill: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Week marker the weekly counters belong to (season*100 + week); on change
+    # the weekly counters reset.
+    week_marker: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weekly_floobits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    weekly_segments: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_spectator_progress_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<GameRally(game={self.game_id}, user={self.user_id}, team={self.team_id}, tier={self.tier})>"
+
+
+class SupporterDividend(Base):
+    """Itemized UNCLAIMED Supporter dividends — one row per fan per week credited,
+    holding that week's amount + its bonus breakdown (base/win/upset/shutout/…
+    and the applied Tenure×Funding multiplier).
+
+    These rows represent only what's currently sitting in the pool: they're
+    deleted when the fan claims. So the table stays tiny (weeks since the last
+    claim) and the UI can show *why* the pool is what it is, without keeping a
+    full lifetime ledger. The authoritative pool total stays on
+    `users.supporter_unclaimed`; these rows are the breakdown of it.
+    """
+    __tablename__ = "supporter_dividends"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    breakdown_json: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "week", name="uq_supporter_dividend_week"),
+        Index("idx_supporter_dividends_user", "user_id"),
+    )
 
 
 class Championship(Base):
@@ -653,6 +783,16 @@ class Season(Base):
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
     mvp_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs
+    # Snapshot of per-team active fan counts taken when the Front Office
+    # opens (week 22). JSON object: {teamId: activeFanCount}. Used as the
+    # GM vote threshold so a fan who logs in for the first time after the
+    # voting window opens doesn't inflate the bar mid-vote.
+    front_office_fan_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Frozen playoff field for the bracket challenge, set when seeding locks.
+    # JSON: {"conferences": {confName: [{teamId, seed, winPct, scoreDiff, bye}]}}.
+    # The bracket projects matchups from this + a user's picks (re-seeding is
+    # deterministic once seeds are frozen).
+    playoff_seeds: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Indexes
@@ -718,6 +858,15 @@ class User(Base):
     # Vacancy fallback preference: prospect | fa | best_available (default)
     vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
+    # Supporter income (feature/fan-income): a non-fantasy, idle Floobit path.
+    # supporter_weeks = tenure backing the current favorite team (drives the
+    # loyalty multiplier; persists across seasons, soft-reset on a team change).
+    # supporter_unclaimed = accrued Floobits awaiting claim (the idle pool).
+    supporter_weeks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    supporter_unclaimed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Season number the user last claimed their free starter pack in.
+    # Resets each season — null means never claimed.
+    starter_pack_claimed_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -752,6 +901,10 @@ class FantasyRoster(Base):
     # Last week the user explicitly set their equipped-card slots via PUT. Used so an
     # intentional "unequip everything" doesn't get undone by the GET auto-carry-forward.
     last_equipped_set_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Snapshot of the original player_ids the user committed to on their first
+    # roster save. Used by the Loyalty card to reward keeping any of these
+    # players on roster. JSON list of integers.
+    initial_player_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -803,10 +956,18 @@ class FantasyRosterSwap(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     roster_id: Mapped[int] = mapped_column(Integer, ForeignKey("fantasy_rosters.id"), nullable=False)
     slot: Mapped[str] = mapped_column(String(10), nullable=False)
-    old_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
-    new_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    # old_player_id NULL = filling a previously-emptied slot (no prior occupant).
+    # new_player_id NULL = removing the current occupant without immediate replacement.
+    # Either, but not both, may be NULL.
+    old_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    new_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     swap_week: Mapped[int] = mapped_column(Integer, nullable=False)
     banked_fp: Mapped[float] = mapped_column(Float, default=0.0)
+    # Snapshot of the old player's swap-week FP at the moment of the swap.
+    # Used so the leaderboard's weekly FP doesn't drop when a user swaps
+    # post-games-end — the old player's current-week contribution is
+    # preserved here rather than being lost when they leave roster.players.
+    banked_week_fp: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -821,6 +982,56 @@ class FantasyRosterSwap(Base):
 
     def __repr__(self):
         return f"<FantasyRosterSwap(roster_id={self.roster_id}, slot='{self.slot}', old={self.old_player_id}, new={self.new_player_id})>"
+
+
+class UserLoginDay(Base):
+    """One row per (user, calendar date) the user logged in.
+
+    Lets the admin DAU chart count distinct users per day instead of
+    relying on User.last_login_at, which only stores each user's MOST
+    RECENT login — so when a user returns the next day, the previous
+    day's count silently drops by one. Inserts are UPSERT-ignore so a
+    user logging in multiple times in one day produces one row.
+    """
+    __tablename__ = "user_login_days"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    login_date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "login_date", name="uq_user_login_day"),
+    )
+
+
+class CoachCandidate(Base):
+    """A coach offered as a candidate to a specific team during a hire cycle.
+
+    Per-team coach hiring (replaces the shared coach pool):
+      - Generated lazily when a team needs a new coach (post-fire or
+        post-retirement) — 3 candidates per vacancy with a quality spread
+        (premium/solid/developmental) so users always have at least one
+        attractive option.
+      - GM hire_coach votes target the coach_id of one of these candidates.
+      - On hire resolution, the winning candidate becomes the team's coach;
+        the other rows are deleted and their coach names returned to the
+        unused-name pool. No cross-team contention.
+    """
+    __tablename__ = "coach_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    coach_id: Mapped[int] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)  # 0..2
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    team: Mapped["Team"] = relationship("Team")
+    coach: Mapped["Coach"] = relationship("Coach")
+
+    __table_args__ = (
+        Index("idx_coach_candidates_team_season", "team_id", "season"),
+    )
 
 
 class UnusedName(Base):
@@ -901,6 +1112,11 @@ class SimulationState(Base):
     # JSON array of completed step keys (e.g. ["frontoffice_decisions",
     # "training"]). Lets phase resume skip non-idempotent batch work.
     offseason_completed_steps: Mapped[Optional[str]] = mapped_column(Text)
+    # JSON snapshot of in-progress playoff bracket state (last completed round,
+    # surviving teams per league, accumulated free-agency/draft order). Written
+    # at the end of each playoff round so a mid-playoff restart resumes at the
+    # next unplayed round instead of replaying the bracket from Round 1.
+    playoff_state: Mapped[Optional[str]] = mapped_column(Text)
     total_seasons: Mapped[int] = mapped_column(Integer, default=20)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_saved: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -935,6 +1151,9 @@ class CardTemplate(Base):
     rarity_weight: Mapped[int] = mapped_column(Integer, nullable=False)
     sell_value: Mapped[int] = mapped_column(Integer, nullable=False)
     is_upgraded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Denormalized output type for themed-pack filtering.
+    # Values: "fp" | "fpx" | "floobits" | NULL (mixed/in-between).
+    output_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -965,6 +1184,10 @@ class UserCard(Base):
     acquired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     acquired_via: Mapped[str] = mapped_column(String(20), nullable=False)  # pack_standard, pack_premium, pack_elite, starter
     last_swap_grant_cycle: Mapped[int] = mapped_column(Integer, default=0)  # Tracks All-Pro swap bonus exhaustion per cycle
+    tier: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # Upgrade tier 1-4 (I-IV); leveled via same-effect duplicate + Floobits
+    vaulted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Permanent collection — irreversible; can't equip/sell/combine
+    vaulted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When it was vaulted
+    vault_position: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Manual sort order within the Vault (null = unset)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")
@@ -993,6 +1216,14 @@ class EquippedCard(Base):
     card_bonus_at_lock: Mapped[float] = mapped_column(Float, default=0.0)  # Card bonus snapshot at lock time
     streak_count: Mapped[int] = mapped_column(Integer, default=1)
     swap_bonus_active: Mapped[bool] = mapped_column(Boolean, default=False)  # All-Pro swap bonus tracking
+    # Streak peak-decay state. peak_output captures the in-streak output of
+    # the card the last week the streak was active; weeks_since_break counts
+    # cold weeks since then. Together they feed the decay tail formula:
+    # output = max(base, peak_output * decay**weeks_since_break) when streak
+    # is broken. Both reset to 0/null when a new streak starts. Only used by
+    # streak-type cards; ignored for other categories.
+    peak_output: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
+    weeks_since_break: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     user: Mapped["User"] = relationship("User")
@@ -1005,6 +1236,34 @@ class EquippedCard(Base):
 
     def __repr__(self):
         return f"<EquippedCard(user_id={self.user_id}, S{self.season}W{self.week}, slot={self.slot_number})>"
+
+
+class ShowcaseSlot(Base):
+    """A featured card in a user's seasonal Showcase (8 slots, vaulted cards only).
+
+    Season-scoped: a new season starts with no rows, so the showcase "clears"
+    automatically each season after the end-of-season payout. Only vaulted cards
+    may be featured (enforced at the API layer)."""
+    __tablename__ = "showcase_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1–8
+    user_card_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_cards.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    user_card: Mapped["UserCard"] = relationship("UserCard")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "slot_number", name="uq_showcase_slot"),
+        Index("idx_showcase_slots_user_season", "user_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<ShowcaseSlot(user_id={self.user_id}, S{self.season}, slot={self.slot_number})>"
 
 
 class WeeklyCardBonus(Base):
@@ -1143,12 +1402,47 @@ class PackType(Base):
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     cost: Mapped[int] = mapped_column(Integer, nullable=False)
     cards_per_pack: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Number of cards the user keeps from cards_per_pack revealed. Null/equal-to
+    # cards_per_pack = no selection (user keeps everything, e.g. starter pack).
+    cards_kept: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     guaranteed_rarity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     rarity_weights: Mapped[dict] = mapped_column(JSON, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    # Themed pack metadata. NULL on standard tiers (humble/grand/exquisite/starter).
+    # theme_type ∈ {"position", "team", "output"}; theme_value is the discriminator:
+    #   position → "QB" | "RB" | "WR" | "TE" | "K"
+    #   team     → stringified team id (e.g. "12")
+    #   output   → "fp" | "fpx" | "floobits"
+    theme_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    theme_value: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     def __repr__(self):
         return f"<PackType(name='{self.name}', cost={self.cost})>"
+
+
+class PendingPackOpening(Base):
+    """Pack opens where the user has paid + revealed cards but hasn't yet
+    chosen which to keep. Closed when user selects, or auto-closed (random
+    pick) by the stale-pending sweep on app startup.
+    """
+    __tablename__ = "pending_pack_openings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    pack_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("pack_types.id"), nullable=False)
+    # Revealed card-template ids the user is choosing from. Order is preserved;
+    # frontend references cards by index in this list when submitting selection.
+    revealed_template_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+    pack_type: Mapped["PackType"] = relationship("PackType")
+
+    __table_args__ = (
+        Index("idx_pending_pack_openings_user", "user_id"),
+    )
 
 
 class PackOpening(Base):
@@ -1174,6 +1468,41 @@ class PackOpening(Base):
         return f"<PackOpening(user_id={self.user_id}, pack='{self.pack_type_id}')>"
 
 
+class PlayReaction(Base):
+    """User reaction on a play (or its sideline-quote personality event)
+    within a live game. One row per (game, play, target_type, user). Reacting
+    again with the same type removes the row; reacting with a different type
+    swaps it. Public counts only — UI may surface usernames via the
+    relationship.
+    """
+    __tablename__ = "play_reactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    game_id: Mapped[int] = mapped_column(Integer, ForeignKey("games.id"), nullable=False)
+    # Stable sequence within a game (game.totalPlays at the time the play ran).
+    play_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'play' = the play row itself; 'sideline_quote' = the personality
+    # event attached to the play (player reaction quote on the sideline).
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False, default='play')
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    # One of: 'hype', 'love', 'wow', 'laugh', 'cry', 'mad'
+    reaction_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+    game: Mapped["Game"] = relationship("Game")
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "play_number", "target_type", "user_id",
+                         name="uq_play_reaction_user_target"),
+        Index("idx_play_reaction_game_play", "game_id", "play_number"),
+    )
+
+    def __repr__(self):
+        return (f"<PlayReaction(game={self.game_id} play={self.play_number} "
+                f"target={self.target_type} user={self.user_id} type={self.reaction_type})>")
+
+
 class FeaturedShopCard(Base):
     """Featured shop card — persisted per-user selection of cards for sale each season."""
     __tablename__ = "featured_shop_cards"
@@ -1193,6 +1522,32 @@ class FeaturedShopCard(Base):
 
     __table_args__ = (
         Index("idx_featured_shop_user_season", "user_id", "season"),
+    )
+
+
+class FeaturedPackRotation(Base):
+    """Per-user themed-pack rotation. Each user sees their own 3 themed packs
+    for a given (season, shop_day) cycle. Generated lazily on first read;
+    regenerated when the shop_day advances (every 7 in-game weeks) or when
+    the user rerolls. Once a pack is opened, its rotation row is marked
+    purchased=True and disappears from the shop view (mirrors FeaturedShopCard)."""
+    __tablename__ = "featured_pack_rotation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    shop_day: Mapped[int] = mapped_column(Integer, nullable=False)  # 1..4
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)  # 0..2
+    pack_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("pack_types.id"), nullable=False)
+    purchased: Mapped[bool] = mapped_column(Boolean, default=False)
+    generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    generated_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    user: Mapped["User"] = relationship("User")
+    pack_type: Mapped["PackType"] = relationship("PackType")
+
+    __table_args__ = (
+        Index("idx_pack_rotation_user_season_day", "user_id", "season", "shop_day"),
     )
 
 
@@ -1249,6 +1604,10 @@ class GmVote(Base):
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'yea' (support) or 'nay' (oppose). Only the threshold directives
+    # (fire_coach / cut_player / resign_player) carry 'nay'; hire_coach and the
+    # ranked ballots are always 'yea'. Existing rows default to 'yea'.
+    direction: Mapped[str] = mapped_column(String(8), nullable=False, default="yea")
     # Optional JSON payload for vote types that need structured data beyond a
     # single target_player_id — e.g. draft_rookie carries the ranked ballot here.
     details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1277,7 +1636,8 @@ class GmVoteResult(Base):
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     vote_type: Mapped[str] = mapped_column(String(20), nullable=False)
     target_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
-    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_votes: Mapped[int] = mapped_column(Integer, nullable=False)  # 'yea' (for) count
+    votes_against: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 'nay' count; net = total_votes - votes_against
     threshold: Mapped[int] = mapped_column(Integer, nullable=False)
     success_probability: Mapped[float] = mapped_column(Float, nullable=False)
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -1322,6 +1682,37 @@ class GmFaBallot(Base):
         return f"<GmFaBallot(user={self.user_id}, team={self.team_id}, season={self.season})>"
 
 
+class PlayoffBracket(Base):
+    """A user's playoff bracket-challenge entry for a season.
+
+    predictions JSON: {round_key: [teamId,...]} — teams the user picks to
+    advance PAST each round (round1 / round2 / league_championship /
+    floosbowl). The floosbowl list's single team is the predicted champion.
+    Scored per-advancer (see playoff_bracket.scoreBracket). One per user/season.
+    """
+    __tablename__ = "playoff_brackets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    predictions: Mapped[str] = mapped_column(Text, nullable=False)  # JSON {round_key: [teamId,...]}
+    points: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    correct_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", name="uq_playoff_bracket_user_season"),
+        Index("idx_playoff_brackets_season", "season"),
+    )
+
+    def __repr__(self):
+        return f"<PlayoffBracket(user={self.user_id}, season={self.season}, points={self.points})>"
+
+
 # ─── Pick-Em ("Prognostications") ────────────────────────────────────────────
 
 
@@ -1355,6 +1746,29 @@ class PickEmPick(Base):
 
     def __repr__(self):
         return f"<PickEmPick(user={self.user_id}, S{self.season}W{self.week}, game={self.game_index}, picked={self.picked_team_id})>"
+
+
+class FollowedPlayer(Base):
+    """Per-user watchlist — players the user has chosen to follow.
+
+    Drives the Players page 'Followed' filter and surfaces those players'
+    personality/off-day lines in the highlight feed alongside the user's
+    favorite team and fantasy roster.
+    """
+    __tablename__ = "followed_players"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "player_id", name="uq_followed_player_user"),
+        Index("idx_followed_players_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<FollowedPlayer(user={self.user_id}, player={self.player_id})>"
 
 
 class Achievement(Base):
@@ -1446,3 +1860,183 @@ class AppSetting(Base):
 
     def __repr__(self):
         return f"<AppSetting({self.key}={self.value!r})>"
+
+
+# ─── Anomaly system ─────────────────────────────────────────────────────────
+# User-attention-driven simulation-criticality layer. Players accumulate
+# "attention" from being equipped on cards, rostered in fantasy, followed,
+# etc. Past a threshold they enter a state ladder (stirring → erratic →
+# rampant → awakened). At awakened, they roll a signature ability that
+# fires in games. League-wide attention drives the Thinning event — one or
+# two rounds where anomalies spike league-wide. After a Thinning the Cores
+# fire a Reset which may purge awakened players permanently.
+
+
+class PlayerAttention(Base):
+    """Per-player per-season rolling attention score.
+
+    Mutated by the weekly aggregation tick. Decays 10%/week absent input.
+    Excess past the soft cap (100) accumulates into ``over_cap_carry``
+    which flows into the league aggregate toward the Thinning threshold.
+    """
+    __tablename__ = "player_attention"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    over_cap_carry: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    peak_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        UniqueConstraint('player_id', 'season', name='_player_attention_season_uc'),
+        Index('idx_attention_season_score', 'season', 'score'),
+    )
+
+    def __repr__(self):
+        return f"<PlayerAttention(player={self.player_id}, season={self.season}, score={self.score:.1f})>"
+
+
+class AnomalyState(Base):
+    """Per-player per-season state on the anomaly ladder.
+
+    Created when a player first crosses to stirring. State transitions
+    happen during the weekly tick. ``awakened`` is sticky — once reached,
+    the player stays awakened until purged in a Reset, even if their
+    attention later decays below the threshold.
+    """
+    __tablename__ = "anomaly_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'stable' | 'stirring' | 'erratic' | 'rampant' | 'awakened' | 'cleansed'
+    state: Mapped[str] = mapped_column(String(16), default='stable', nullable=False)
+    # Ability slug — only populated once the player has awakened.
+    ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # 'tremor' | 'disturbance' | 'breach' | 'singularity'
+    ability_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    awakened_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # How many seasons this player has carried an ability forward.
+    # Drives end-of-season tier decay.
+    seasons_carried: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_purged_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        UniqueConstraint('player_id', 'season', name='_anomaly_state_season_uc'),
+        Index('idx_anomaly_state_season_state', 'season', 'state'),
+    )
+
+    def __repr__(self):
+        return f"<AnomalyState(player={self.player_id}, s={self.season}, state={self.state}, ability={self.ability})>"
+
+
+class LeagueAnomalyState(Base):
+    """Singleton-per-season row tracking league-wide anomaly aggregate.
+
+    Aggregate is computed each weekly tick as sum of over-cap attention
+    across all players plus recent anomaly activity plus baseline pressure.
+    When it crosses ``threshold`` (randomized per season, hidden from users)
+    the Thinning fires.
+    """
+    __tablename__ = "league_anomaly_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    aggregate_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Hidden threshold for this season. Randomized in 600-1200 range.
+    threshold: Mapped[int] = mapped_column(Integer, default=900, nullable=False)
+    # How many Thinnings have fired this season.
+    thinnings_this_season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_thinning_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_reset_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Week through which the post-Reset suppression dampener is in effect.
+    suppression_window_ends_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Audit trail of every Core-issued rule patch this season (mirrors
+    # GameRules.patchHistory but persisted). Each entry includes the Core
+    # responsible, the news-text payload, the field touched, and old/new.
+    cores_patches_applied: Mapped[List[Dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<LeagueAnomalyState(season={self.season}, agg={self.aggregate_score:.1f}/{self.threshold})>"
+
+
+class LeagueNewsItem(Base):
+    """Persisted league-news feed item — Cores voice lines and anomaly state
+    transitions. WebSocket events for these are ephemeral; this table is the
+    fetch-on-load source for users who weren't connected when they fired.
+
+    Categories:
+        'cores'              — voice line from one of the Cores
+        'anomaly_transition' — player crossed into stirring/erratic/rampant/awakened
+    """
+    __tablename__ = "league_news_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Attribution (Cores items)
+    core: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    core_display_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    # Attribution (anomaly transitions)
+    player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
+    player_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    anomaly_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_league_news_season_week', 'season', 'week'),
+        Index('idx_league_news_created', 'created_at'),
+    )
+
+    def __repr__(self):
+        return f"<LeagueNewsItem(s={self.season}w{self.week} {self.category}/{self.event_type})>"
+
+
+class AnomalyEvent(Base):
+    """Every fired anomaly — universal micro-glitch, personality-keyed, or
+    signature ability — logged for analytics, replay, and audit.
+
+    Powers the highlights feed's glitch markers and feeds the player-profile
+    'Recent Anomalies' surface. In-memory ring buffer for hot reads, DB row
+    for persistence.
+    """
+    __tablename__ = "anomaly_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    week: Mapped[int] = mapped_column(Integer, nullable=False)
+    game_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    play_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 'micro' | 'personality' | 'signature'
+    layer: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Ability slug — only set when layer='signature'.
+    ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    # The glitch-flavored line that surfaced in the play feed.
+    play_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Whether this fired during a Thinning round (boosted intensity).
+    during_thinning: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        Index('idx_anomaly_event_season_week', 'season', 'week'),
+        Index('idx_anomaly_event_player', 'player_id'),
+    )
+
+    def __repr__(self):
+        return f"<AnomalyEvent(player={self.player_id}, layer={self.layer}, ability={self.ability})>"

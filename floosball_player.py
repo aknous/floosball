@@ -688,14 +688,20 @@ class PlayerAttributes:
 
 
     def getPlayerAttributes(self, position, physicalSeed = None, mentalSeed = None):
-        # Generate seeds if not provided
+        # Generate seeds if not provided. Switched from uniform randint
+        # to a Gaussian centered at 78 so the seed distribution itself
+        # is bell-shaped — players with no seed passed in (legacy paths,
+        # one-off creations) now match the league-balanced curve.
         if physicalSeed is None:
-            physicalSeed = randint(60, 100)
+            physicalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
         if mentalSeed is None:
-            mentalSeed = randint(60, 100)
-        
-        # Physical skills: use physicalSeed as center with tight variance
-        stdDev = 5
+            mentalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+
+        # Physical skills: tight variance around the seed. stdDev was 5
+        # → 3, narrowing the spread of attribute values around the
+        # player's overall talent level. Reduces the per-player gap
+        # between, say, a player's best and worst attribute.
+        stdDev = 3
         numSkills = 3
         skillValList = np.random.normal(physicalSeed, stdDev, numSkills)
         skillValList = np.clip(skillValList, 60, 100)
@@ -750,7 +756,10 @@ class PlayerAttributes:
         # volatility) — wider range produces real toxic teammates, fragile
         # players, and confidence-volatile players without breaking the
         # game-formula balance.
-        gameStdDev = 7
+        # gameStdDev tightened from 7 → 5 to match the narrower physical
+        # spread above. Keeps game-formula attrs (focus, instinct,
+        # creativity, discipline) closer to the player's seed.
+        gameStdDev = 5
         gamePool = np.random.normal(mentalSeed, gameStdDev, 4)
         gamePool = np.clip(gamePool, 60, 100).tolist()
 

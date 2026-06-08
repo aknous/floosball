@@ -124,6 +124,13 @@ def _grantReward(session: Session, userId: int, achievement: Achievement, ua: Us
         logger.warning(f"Failed to push achievement_unlocked event: {e}")
 
 
+# Soft cap on stashed pack rewards. Backend doesn't enforce — packs
+# queue freely. The frontend surfaces a Convert-to-Floobits button on
+# pending pack rows when the user is over this limit, letting users
+# decide whether to open the overflow pack now or trade it for Floobits.
+MAX_PENDING_PACK_REWARDS = 1
+
+
 def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
     """Apply a reward config: floobits credited immediately, packs/powerups queued as PendingReward."""
     floobits = int(cfg.get("floobits") or 0)
@@ -136,17 +143,40 @@ def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
         )
 
     now = datetime.utcnow()
-    for packSlug in cfg.get("packs") or []:
-        session.add(PendingReward(
+    packs = cfg.get("packs") or []
+    powerups = cfg.get("powerups") or []
+    # Diagnostic: trace each PendingReward the reward grant attempts. We had a
+    # production case (May 2026) where floobits credited and the user_achievement
+    # row got claimed_at set, but no PendingReward row appeared in the DB for
+    # tier-IV pack rewards. _applyReward and the surrounding _grantReward have
+    # no obvious failure path that would skip the insert while keeping the
+    # surrounding commits, so log enough to catch it in the act next time.
+    logger.info(
+        f"_applyReward user={userId} source={source} "
+        f"floobits={floobits} packs={packs} powerups={powerups}"
+    )
+    addedIds = []
+    for packSlug in packs:
+        pr = PendingReward(
             user_id=userId, kind="pack", slug=packSlug,
             source=source, available_at=now,
-        ))
-    for powerupSlug in cfg.get("powerups") or []:
-        session.add(PendingReward(
+        )
+        session.add(pr)
+        addedIds.append(("pack", packSlug, pr))
+    for powerupSlug in powerups:
+        pr = PendingReward(
             user_id=userId, kind="powerup", slug=powerupSlug,
             source=source, available_at=now,
-        ))
+        )
+        session.add(pr)
+        addedIds.append(("powerup", powerupSlug, pr))
     session.flush()
+    if addedIds:
+        # After flush, each PendingReward should have its primary key populated.
+        idSummary = ", ".join(
+            f"{kind}:{slug}#{pr.id}" for kind, slug, pr in addedIds
+        )
+        logger.info(f"_applyReward user={userId} source={source} flushed: {idSummary}")
 
 
 def processDeferredRewards(session: Session, userId: Optional[int] = None) -> int:
@@ -203,6 +233,65 @@ def processDeferredRewards(session: Session, userId: Optional[int] = None) -> in
         except Exception as e:
             logger.warning(f"Failed to push deferred achievement event: {e}")
     return count
+
+
+def convertOverCapPackStash(session: Session) -> int:
+    """At season start, find any user holding more than MAX_PENDING_PACK_REWARDS
+    unclaimed pack rewards and auto-convert the excess to Floobits at each
+    pack's shop cost. Keeps the oldest pack (created_at asc); converts the
+    rest. Mirrors the per-grant overflow logic in _applyReward — same cap,
+    same conversion math — but operates retroactively at season rollover.
+
+    Returns the number of pack rewards converted across all users.
+    """
+    from sqlalchemy import func as _sqlfunc
+    from database.models import PackType
+
+    # Find user_ids with > cap pending packs.
+    overCapUserIds = [
+        row[0] for row in
+        session.query(PendingReward.user_id)
+        .filter(PendingReward.kind == "pack",
+                PendingReward.claimed_at.is_(None))
+        .group_by(PendingReward.user_id)
+        .having(_sqlfunc.count(PendingReward.id) > MAX_PENDING_PACK_REWARDS)
+        .all()
+    ]
+    if not overCapUserIds:
+        return 0
+
+    currencyRepo = CurrencyRepository(session)
+    convertedTotal = 0
+    for userId in overCapUserIds:
+        rows = (
+            session.query(PendingReward)
+            .filter(PendingReward.user_id == userId,
+                    PendingReward.kind == "pack",
+                    PendingReward.claimed_at.is_(None))
+            .order_by(PendingReward.created_at.asc())
+            .all()
+        )
+        # Keep the oldest MAX_PENDING_PACK_REWARDS; convert the rest.
+        toConvert = rows[MAX_PENDING_PACK_REWARDS:]
+        for pr in toConvert:
+            packType = session.query(PackType).filter(PackType.name == pr.slug).first()
+            value = int(packType.cost) if packType and packType.cost else 0
+            if value > 0:
+                currencyRepo.addFunds(
+                    userId=userId, amount=value,
+                    transactionType="achievement",
+                    description=f"{pr.source} (season-start stash conversion: {pr.slug}→{value}F)",
+                )
+            session.delete(pr)
+            convertedTotal += 1
+        if toConvert:
+            logger.info(
+                f"convertOverCapPackStash user={userId}: "
+                f"converted {len(toConvert)} pack(s) to Floobits"
+            )
+    if convertedTotal:
+        session.flush()
+    return convertedTotal
 
 
 def sweepExpiredRewards(session: Session, currentSeason: int = 0) -> int:
@@ -358,7 +447,7 @@ REGULAR_SEASON_WEEKS = 28
 
 
 def getPendingRewards(session: Session, userId: int, currentSeason: int = 0,
-                      currentWeek: int = 0) -> List[Dict[str, Any]]:
+                      currentWeek: int = 0, isOffseason: bool = False) -> List[Dict[str, Any]]:
     """List unclaimed rewards for the user, with canDefer flag for late-season packs."""
     rows = session.query(PendingReward).filter(
         PendingReward.user_id == userId,
@@ -367,13 +456,19 @@ def getPendingRewards(session: Session, userId: int, currentSeason: int = 0,
 
     weeksLeft = max(0, REGULAR_SEASON_WEEKS - currentWeek) if currentWeek else REGULAR_SEASON_WEEKS
     lateSeason = weeksLeft <= DEFER_OFFER_WEEKS_REMAINING and currentWeek > 0
+    # Offseason is treated as deferral-eligible too — currentWeek resets to 0
+    # at offseason start, which would otherwise hide the option during the
+    # exact window when a user is most likely to come back and clean up
+    # unclaimed pack rewards.
+    deferEligible = lateSeason or isOffseason
 
     out = []
     for r in rows:
-        # Defer option only shown for packs, only when late-season, and only if not already deferred
+        # Defer option shown for any unclaimed reward during the eligible
+        # window (late regular season or offseason), as long as it hasn't
+        # already been deferred. Applies to packs and powerups.
         canDefer = (
-            r.kind == "pack"
-            and lateSeason
+            deferEligible
             and r.defer_until_season is None
             and currentSeason > 0
         )
@@ -404,6 +499,47 @@ def onPackOpened(session: Session, userId: int) -> Optional[UserAchievement]:
     return recordProgress(session, userId, "pack_popper")
 
 
+# Required paid pack names for the Anthology secret. Excludes the free
+# starter pack — the achievement is about deliberate purchasing breadth.
+# Keep in sync with the PackTypeRepository.seedDefaults() pack list.
+ANTHOLOGY_REQUIRED_PACK_NAMES = frozenset({
+    'humble', 'grand', 'exquisite',
+    'themed_pos_qb', 'themed_pos_rb', 'themed_pos_wr',
+    'themed_pos_te', 'themed_pos_k',
+    'themed_out_fp', 'themed_out_fpx', 'themed_out_floobits',
+    'themed_champion', 'themed_allpro',
+})
+
+
+def checkAnthology(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
+    """Anthology — secret unlocked when a user has purchased every paid
+    pack type in a single season. Champion + All-Pro packs require
+    season ≥ 2 to even appear in rotation, so this can't fire in season 1.
+    Called after each successful pack purchase commit.
+    """
+    if not currentSeason:
+        return None
+    from database.models import PackOpening, PackType, Season
+    seasonRow = session.query(Season).filter_by(season_number=currentSeason).first()
+    if not seasonRow or not seasonRow.start_date:
+        return None
+    rows = (
+        session.query(PackType.name)
+        .join(PackOpening, PackOpening.pack_type_id == PackType.id)
+        .filter(
+            PackOpening.user_id == userId,
+            PackOpening.cost > 0,
+            PackOpening.opened_at >= seasonRow.start_date,
+        )
+        .distinct()
+        .all()
+    )
+    purchasedNames = {name for (name,) in rows}
+    if ANTHOLOGY_REQUIRED_PACK_NAMES.issubset(purchasedNames):
+        return unlockSecret(session, userId, "anthology")
+    return None
+
+
 def onFantasyRosterSet(session: Session, userId: int) -> Optional[UserAchievement]:
     return recordProgress(session, userId, "field_general")
 
@@ -425,11 +561,12 @@ def onClairvoyant(session: Session, userId: int, currentSeason: int) -> Optional
     return recordProgress(session, userId, "sharp", currentSeason=currentSeason)
 
 
-def onFloobitsEarned(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
-    """Tycoon — track floobits earned this season. Queries CurrencyTransaction
-    for the season sum. Skips if season is 0 (e.g. admin grants outside a season)."""
+def onFloobitsEarned(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
+    """Tycoon tiers (I-IV) — track floobits earned this season. Queries
+    CurrencyTransaction for the season sum. Skips if season is 0
+    (e.g. admin grants outside a season)."""
     if not currentSeason:
-        return None
+        return []
     from database.models import CurrencyTransaction
     from sqlalchemy import func
     seasonEarned = session.query(func.coalesce(func.sum(CurrencyTransaction.amount), 0)).filter(
@@ -437,7 +574,11 @@ def onFloobitsEarned(session: Session, userId: int, currentSeason: int) -> Optio
         CurrencyTransaction.season == currentSeason,
         CurrencyTransaction.amount > 0,
     ).scalar() or 0
-    return recordProgress(session, userId, "tycoon", absolute=int(seasonEarned), currentSeason=currentSeason)
+    unlocked = []
+    for key in ("tycoon_i", "tycoon_ii", "tycoon_iii", "tycoon_iv"):
+        u = recordProgress(session, userId, key, absolute=int(seasonEarned), currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
 
 
 def syncCuratorProgress(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
@@ -451,6 +592,89 @@ def syncCuratorProgress(session: Session, userId: int, currentSeason: int) -> Op
         CardTemplate.season_created == currentSeason,
     ).distinct().count()
     return recordProgress(session, userId, "curator", absolute=uniqueCount, currentSeason=currentSeason)
+
+
+def syncCollectionAchievements(session: Session, userId: int) -> List[UserAchievement]:
+    """Recompute the permanent Vault collection achievements from the user's
+    vaulted cards. Called whenever the vault changes (vault / trash). These are
+    once-scope, so progress is authoritative (absolute) and never resets.
+
+    - Hometown Hero: vaulted cards of players on the user's favorite team
+    - Full Spectrum: all 4 editions of a single player vaulted
+    - Ice Cold I/II/III: vaulted Diamond count
+    - Archivist I/II/III: distinct players vaulted
+    - All-Pro Set: every All-Pro card from a single season vaulted
+    """
+    from database.models import User
+    completed: List[UserAchievement] = []
+
+    vaulted = (
+        session.query(UserCard, CardTemplate)
+        .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+        .filter(UserCard.user_id == userId, UserCard.vaulted == True)  # noqa: E712
+        .all()
+    )
+    if not vaulted:
+        return completed
+
+    user = session.get(User, userId)
+    favTeamId = getattr(user, "favorite_team_id", None) if user else None
+
+    homeTeamCount = 0
+    diamondCount = 0
+    players = set()
+    editionsByPlayer: Dict[int, set] = {}
+    allProBySeason: Dict[int, set] = {}
+    hasMaxTierVaulted = False
+    for _uc, tpl in vaulted:
+        players.add(tpl.player_id)
+        if favTeamId and tpl.team_id == favTeamId:
+            homeTeamCount += 1
+        if tpl.edition == "diamond":
+            diamondCount += 1
+        if (getattr(_uc, "tier", 1) or 1) >= 4:
+            hasMaxTierVaulted = True
+        editionsByPlayer.setdefault(tpl.player_id, set()).add(tpl.edition)
+        if tpl.classification and "all_pro" in tpl.classification:
+            allProBySeason.setdefault(tpl.season_created, set()).add(tpl.player_id)
+
+    fullSpectrum = 1 if any(len(eds) >= 4 for eds in editionsByPlayer.values()) else 0
+
+    # All-Pro Set: a season where the user has vaulted every All-Pro player's card.
+    allProSet = 0
+    for season, ownedPlayers in allProBySeason.items():
+        totalAllPro = (
+            session.query(CardTemplate.player_id)
+            .filter(
+                CardTemplate.season_created == season,
+                CardTemplate.classification.like("%all_pro%"),
+            ).distinct().count()
+        )
+        if totalAllPro > 0 and len(ownedPlayers) >= totalAllPro:
+            allProSet = 1
+            break
+
+    def _rec(key, value):
+        ua = recordProgress(session, userId, key, absolute=value)
+        if ua:
+            completed.append(ua)
+
+    if favTeamId:
+        _rec("hometown_hero", homeTeamCount)
+    _rec("full_spectrum", fullSpectrum)
+    _rec("all_pro_set", allProSet)
+    _rec("ice_cold_i", diamondCount)
+    _rec("ice_cold_ii", diamondCount)
+    _rec("ice_cold_iii", diamondCount)
+    _rec("archivist_i", len(players))
+    _rec("archivist_ii", len(players))
+    _rec("archivist_iii", len(players))
+    # Secret: enshrine a fully upgraded card.
+    if hasMaxTierVaulted:
+        s = unlockSecret(session, userId, "dynasty")
+        if s:
+            completed.append(s)
+    return completed
 
 
 def onDiamondOpened(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
@@ -499,6 +723,15 @@ def onSeasonPickemPointsTotal(session: Session, userId: int, totalSeasonPoints: 
     return unlocked
 
 
+def onPlayoffBracketScored(session: Session, userId: int, points: int, currentSeason: int) -> List[UserAchievement]:
+    """Bracketeer tiers (I–IV) — final playoff bracket points this season."""
+    unlocked = []
+    for key in ("bracketeer_i", "bracketeer_ii", "bracketeer_iii", "bracketeer_iv"):
+        u = recordProgress(session, userId, key, absolute=points, currentSeason=currentSeason)
+        if u: unlocked.append(u)
+    return unlocked
+
+
 def onSeasonFloobitsSpent(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
     """Magnate tiers (I–IV) — cumulative season floobits spent.
     Sums CurrencyTransaction negatives for this user this season."""
@@ -533,6 +766,43 @@ def onWeeklyPickemPodium(session: Session, userId: int, currentSeason: int) -> L
     for key in ("pundit_i", "pundit_ii", "pundit_iii", "pundit_iv"):
         u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
         if u: unlocked.append(u)
+    return unlocked
+
+
+def onCardLeveledUp(session: Session, userId: int, toTier: int, currentSeason: int,
+                    edition: str = None) -> List[UserAchievement]:
+    """Card-upgrade hooks (seasonal): Artificer tiers count level-ups; Ascendant
+    fires on reaching max tier. Secrets: Overclocked (three max-tier cards in one
+    season) and Crown Jewel (a Diamond taken to max tier)."""
+    from constants import CARD_TIER_MAX
+    unlocked = []
+    for key in ("artificer_i", "artificer_ii", "artificer_iii"):
+        u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
+        if u:
+            unlocked.append(u)
+    if toTier >= CARD_TIER_MAX:
+        u = recordProgress(session, userId, "ascendant", absolute=1, currentSeason=currentSeason)
+        if u:
+            unlocked.append(u)
+        # Secret: a Diamond card taken all the way to max tier.
+        if edition == "diamond":
+            s = unlockSecret(session, userId, "crown_jewel")
+            if s:
+                unlocked.append(s)
+        # Secret: three max-tier cards minted this season.
+        maxCount = (
+            session.query(UserCard.id)
+            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+            .filter(
+                UserCard.user_id == userId,
+                UserCard.tier >= CARD_TIER_MAX,
+                CardTemplate.season_created == currentSeason,
+            ).count()
+        )
+        if maxCount >= 3:
+            s = unlockSecret(session, userId, "overclocked")
+            if s:
+                unlocked.append(s)
     return unlocked
 
 

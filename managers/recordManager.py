@@ -938,6 +938,12 @@ class RecordManager:
                         })
             else:
                 winningTeam.seasonTeamStats['streak'] = 1
+            # Ratchet peakStreak so Gone Streaking sees the season-long high
+            # without depending on the startup backfill in connection.py.
+            winningTeam.seasonTeamStats['peakStreak'] = max(
+                winningTeam.seasonTeamStats.get('peakStreak', 0),
+                abs(winningTeam.seasonTeamStats['streak']),
+            )
 
             # Update losing streak (lines 1272-1279)
             if losingTeam.seasonTeamStats['streak'] >= 0:
@@ -951,7 +957,30 @@ class RecordManager:
                         })
             else:
                 losingTeam.seasonTeamStats['streak'] -= 1
-                
+            losingTeam.seasonTeamStats['peakStreak'] = max(
+                losingTeam.seasonTeamStats.get('peakStreak', 0),
+                abs(losingTeam.seasonTeamStats['streak']),
+            )
+
+            # Streak pressure: independent of seasonTeamStats['streak']
+            # (which is regular-season-only). currentWinStreak counts every
+            # consecutive win across regular season + playoffs. Resets on
+            # any loss. Drives team.streakPressure for the spotlight bump.
+            try:
+                from constants import (
+                    STREAK_PRESSURE_FLOOR,
+                    STREAK_PRESSURE_PER_WIN,
+                    STREAK_PRESSURE_CAP,
+                )
+                winningTeam.currentWinStreak = getattr(winningTeam, 'currentWinStreak', 0) + 1
+                losingTeam.currentWinStreak = 0
+                for team in (winningTeam, losingTeam):
+                    streak = getattr(team, 'currentWinStreak', 0)
+                    over = max(0, streak - STREAK_PRESSURE_FLOOR)
+                    team.streakPressure = round(min(STREAK_PRESSURE_CAP, over * STREAK_PRESSURE_PER_WIN), 3)
+            except Exception:
+                pass
+
         except Exception as e:
             self.logger.error(f"Error updating win streaks: {e}")
     

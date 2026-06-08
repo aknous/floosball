@@ -59,6 +59,7 @@ def init_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    _seedUnusedNames()
     logger.info(f"Database initialized at {DB_PATH}")
 
 
@@ -71,6 +72,10 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # GM threshold snapshot: per-team active fan count frozen at
+            # the front-office open (week 22) so post-week-22 logins
+            # don't inflate the threshold mid-vote.
+            ('front_office_fan_snapshot', 'TEXT'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE seasons ADD COLUMN {col} {colDef}"))
@@ -110,6 +115,28 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Hall of Fame flag (v0.17). Without this, the in-memory hallOfFame
+        # list resets on every restart and the HoF tab goes empty until brand-
+        # new retirees get inducted. Stored on the player row so the load path
+        # can route HoF members into the right list at boot.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN is_hof BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added players.is_hof")
+        except Exception:
+            conn.rollback()
+
+        # Career awards (v0.17). Same in-memory-only problem as is_hof —
+        # MVP / All-Pro / championship lists reset on restart and the
+        # player profile page goes empty. Persist as JSON columns.
+        for col in ['mvp_awards', 'all_pro_seasons', 'league_championships']:
+            try:
+                conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} JSON"))
+                conn.commit()
+                logger.info(f"  Migration: added players.{col}")
+            except Exception:
+                conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist
@@ -146,6 +173,162 @@ def _runPendingMigrations():
             conn.execute(text("ALTER TABLE game_player_stats ADD COLUMN q4_fantasy_points INTEGER DEFAULT 0"))
             conn.commit()
             logger.info("  Migration: added game_player_stats.q4_fantasy_points")
+        except Exception:
+            conn.rollback()
+
+        # Q4 scoring plays count on game_player_stats — Walk Off card uses this
+        try:
+            conn.execute(text("ALTER TABLE game_player_stats ADD COLUMN q4_scoring_plays INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added game_player_stats.q4_scoring_plays")
+        except Exception:
+            conn.rollback()
+
+        # Initial-player snapshot on fantasy_rosters — Loyalty card reads this
+        try:
+            conn.execute(text("ALTER TABLE fantasy_rosters ADD COLUMN initial_player_ids TEXT"))
+            conn.commit()
+            logger.info("  Migration: added fantasy_rosters.initial_player_ids")
+        except Exception:
+            conn.rollback()
+
+        # Card upgrade tier on user_cards (1-4 / I-IV) — leveled via same-effect
+        # duplicate + Floobits; scales the card's output (or a flat dividend for
+        # structural/no-output cards).
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN tier INTEGER DEFAULT 1 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.tier")
+        except Exception:
+            conn.rollback()
+
+        # Card Vault — permanent, irreversible collection (drives collection
+        # achievements; vaulted cards can't equip/sell/combine).
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vaulted BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vaulted")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vaulted_at DATETIME"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vaulted_at")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vault_position INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vault_position")
+        except Exception:
+            conn.rollback()
+
+        # Card Showcase — seasonal 8-slot featured-card payout (vaulted cards).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS showcase_slots ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "slot_number INTEGER NOT NULL, "
+                "user_card_id INTEGER NOT NULL, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, slot_number))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_showcase_slots_user_season "
+                "ON showcase_slots (user_id, season)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured showcase_slots table")
+        except Exception:
+            conn.rollback()
+
+        # Drop legacy coaches.team_id column (single-source-of-truth refactor).
+        # The new code uses Team.coach_id exclusively. Important: do NOT
+        # overwrite a Team.coach_id that already points at a real Coach row —
+        # that FK has been the team's actual coach pointer all along, even
+        # when the legacy Coach.team_id back-reference got polluted with
+        # orphans from buggy code paths (e.g. _saveCoachToDatabase generating
+        # a new row alongside the team's original coach).
+        #
+        # Only fill Team.coach_id when it's NULL or points at a missing row,
+        # and even then pick the OLDEST matching Coach (lowest id) since the
+        # orphan pattern observed in prod is "real coach is original, newer
+        # rows are stray" — the opposite of what auto-increment-newest would
+        # imply. Idempotent: skipped once the column is gone.
+        try:
+            cols = conn.execute(text("PRAGMA table_info(coaches)")).fetchall()
+            colNames = {row[1] for row in cols}
+            if 'team_id' in colNames:
+                conn.execute(text("""
+                    UPDATE teams
+                    SET coach_id = (
+                        SELECT MIN(c.id) FROM coaches c WHERE c.team_id = teams.id
+                    )
+                    WHERE (
+                        coach_id IS NULL
+                        OR coach_id NOT IN (SELECT id FROM coaches)
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM coaches c WHERE c.team_id = teams.id
+                    )
+                """))
+                conn.execute(text("ALTER TABLE coaches DROP COLUMN team_id"))
+                conn.commit()
+                logger.info("  Migration: dropped coaches.team_id (existing Team.coach_id preserved)")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: coaches.team_id drop skipped: {e}")
+
+        # tier_locked_funding: snapshot of the funding value the row's
+        # current tier was computed from. Markets chart needs this to put
+        # the filled dot in the right tier band after the offseason recompute
+        # (which uses effective_funding instead of season-start funding).
+        try:
+            conn.execute(text("ALTER TABLE team_funding ADD COLUMN tier_locked_funding INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added team_funding.tier_locked_funding")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
+        # Schema-level guarantee: a Coach can be assigned to at most ONE Team.
+        # SQLite UNIQUE indexes treat NULLs as distinct, so multiple coachless
+        # teams (coach_id IS NULL) are allowed; a non-null coach_id has to be
+        # unique across teams. Replaces the application-layer "is this coach
+        # available" checks with a hard schema constraint. Idempotent via
+        # IF NOT EXISTS.
+        try:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_teams_coach_id "
+                "ON teams(coach_id) WHERE coach_id IS NOT NULL"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured uq_teams_coach_id (one coach per team)")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: uq_teams_coach_id index skipped: {e}")
+
+        # Play reactions — users react to plays / sideline quotes during live games
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS play_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id INTEGER NOT NULL REFERENCES games(id),
+                    play_number INTEGER NOT NULL,
+                    target_type VARCHAR(20) NOT NULL DEFAULT 'play',
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    reaction_type VARCHAR(10) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(game_id, play_number, target_type, user_id)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_play_reaction_game_play "
+                "ON play_reactions(game_id, play_number)"
+            ))
+            conn.commit()
+            logger.info("  Migration: created play_reactions table")
         except Exception:
             conn.rollback()
 
@@ -211,6 +394,8 @@ def _runPendingMigrations():
         # Rename achievement keys that collided with existing card effect names:
         #   windfall_* → racket_*
         #   crescendo  → zenith
+        # Plus: single-tier tycoon → tycoon_i so existing user progress
+        # carries forward into the new four-tier ladder.
         try:
             renameMap = {
                 "windfall_i": "racket_i",
@@ -218,8 +403,10 @@ def _runPendingMigrations():
                 "windfall_iii": "racket_iii",
                 "windfall_iv": "racket_iv",
                 "crescendo": "zenith",
+                "tycoon": "tycoon_i",
             }
             totalRenamed = 0
+            sourcesRenamed = 0
             for oldKey, newKey in renameMap.items():
                 # If the new key already exists (e.g. from a prior partial migration or fresh seed),
                 # delete the stale row instead of renaming on top of it.
@@ -236,9 +423,21 @@ def _runPendingMigrations():
                     ), {"new": newKey, "old": oldKey})
                     if result.rowcount:
                         totalRenamed += result.rowcount
-            if totalRenamed:
+                # Update any PendingReward.source that still points at the old
+                # key — keeps the achievements page from rendering the raw
+                # 'tycoon' / 'crescendo' fragments instead of a proper name.
+                srcResult = conn.execute(text(
+                    "UPDATE pending_rewards SET source = :new "
+                    "WHERE source = :old"
+                ), {"new": f"achievement:{newKey}", "old": f"achievement:{oldKey}"})
+                if srcResult.rowcount:
+                    sourcesRenamed += srcResult.rowcount
+            if totalRenamed or sourcesRenamed:
                 conn.commit()
-                logger.info(f"  Migration: renamed {totalRenamed} collided achievement keys")
+                if totalRenamed:
+                    logger.info(f"  Migration: renamed {totalRenamed} collided achievement keys")
+                if sourcesRenamed:
+                    logger.info(f"  Migration: rewrote {sourcesRenamed} pending_rewards.source values")
             else:
                 conn.rollback()
         except Exception as e:
@@ -432,6 +631,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Starter pack + selection mechanic (feature/pack-revamp)
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN starter_pack_claimed_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added users.starter_pack_claimed_season")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE pack_types ADD COLUMN cards_kept INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added pack_types.cards_kept")
+        except Exception:
+            conn.rollback()
+
         # app_settings table — admin-editable runtime config (feedback URL,
         # survey URL, button visibility, etc). Created via SQLAlchemy below;
         # this seed step inserts default rows when missing.
@@ -447,6 +660,8 @@ def _runPendingMigrations():
                 ('feedback_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
                 ('feedback_visible', 'true'),
                 ('survey_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
+                ('halftime_show_url', ''),
+                ('halftime_show_pause_seconds', '120'),
             ]
             for k, v in defaults:
                 conn.execute(text(
@@ -474,6 +689,66 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Supporter income (feature/fan-income): fan-loyalty dividend state.
+        # supporter_weeks = tenure backing the current favorite team; persists
+        # across seasons, soft-reset on a team change. supporter_unclaimed =
+        # accrued Floobits awaiting claim (the idle pool).
+        for col, colDef in [
+            ('supporter_weeks', 'INTEGER DEFAULT 0 NOT NULL'),
+            ('supporter_unclaimed', 'INTEGER DEFAULT 0 NOT NULL'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added users.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Spectator cheer-bar state (feature/fan-income).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS spectator_progress ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL UNIQUE, "
+                "bar_fill REAL NOT NULL DEFAULT 0, "
+                "week_marker INTEGER NOT NULL DEFAULT 0, "
+                "weekly_floobits INTEGER NOT NULL DEFAULT 0, "
+                "weekly_segments INTEGER NOT NULL DEFAULT 0, "
+                "updated_at DATETIME)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_spectator_progress_user "
+                "ON spectator_progress(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured spectator_progress table")
+        except Exception:
+            conn.rollback()
+
+        # Supporter dividend ledger — itemized breakdown of the current unclaimed
+        # pool (feature/fan-income). Rows are deleted on claim, so it only holds
+        # weeks since the last claim.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS supporter_dividends ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL, "
+                "amount INTEGER NOT NULL, "
+                "breakdown_json TEXT, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, week))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_supporter_dividends_user "
+                "ON supporter_dividends(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured supporter_dividends table")
+        except Exception:
+            conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared
@@ -495,6 +770,9 @@ def _runPendingMigrations():
             ("offseason_phase",           "VARCHAR(32)"),
             ("offseason_phase_target",    "DATETIME"),
             ("offseason_completed_steps", "TEXT"),
+            # Mid-playoff resume (hotfix/playoff-resume): JSON snapshot of the
+            # in-progress bracket so a restart resumes at the next unplayed round.
+            ("playoff_state",             "TEXT"),
         ):
             try:
                 conn.execute(text(f"ALTER TABLE simulation_state ADD COLUMN {col} {ddl}"))
@@ -545,6 +823,141 @@ def _runPendingMigrations():
             logger.info("  Migration: added team_season_stats.big_plays")
         except Exception:
             conn.rollback()
+
+        # Streak peak-decay state on equipped_cards. peak_output snapshots the
+        # in-streak output the last week the streak was active; weeks_since_break
+        # counts cold weeks since then. Together they let a broken streak
+        # decay from peak rather than dropping straight to base on the first
+        # cold week. NULL peak = no prior streak to decay from.
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN peak_output REAL"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.peak_output")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN weeks_since_break INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.weeks_since_break")
+        except Exception:
+            conn.rollback()
+        # Snapshot of the old player's swap-week FP at swap time. Lets the
+        # leaderboard preserve weekly FP across post-games-end swaps.
+        try:
+            conn.execute(text("ALTER TABLE fantasy_roster_swaps ADD COLUMN banked_week_fp REAL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added fantasy_roster_swaps.banked_week_fp")
+        except Exception:
+            conn.rollback()
+        # Roster /remove support — let fantasy_roster_swaps.old_player_id
+        # and new_player_id both accept NULL. A row with new_player_id=NULL
+        # represents a "remove" (emptied the slot). A row with
+        # old_player_id=NULL represents a paid fill of a previously-emptied
+        # slot. SQLite can't drop NOT NULL via ALTER, so we rebuild the
+        # table. Idempotent: skip if both columns are already nullable.
+        try:
+            colInfo = conn.execute(text("PRAGMA table_info(fantasy_roster_swaps)")).fetchall()
+            byName = {r[1]: r for r in colInfo}
+            oldNN = byName.get('old_player_id', (None,)*6)[3] == 1
+            newNN = byName.get('new_player_id', (None,)*6)[3] == 1
+            if oldNN or newNN:
+                conn.execute(text("""
+                    CREATE TABLE fantasy_roster_swaps_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        roster_id INTEGER NOT NULL REFERENCES fantasy_rosters(id),
+                        slot VARCHAR(10) NOT NULL,
+                        old_player_id INTEGER NULL REFERENCES players(id),
+                        new_player_id INTEGER NULL REFERENCES players(id),
+                        swap_week INTEGER NOT NULL,
+                        banked_fp REAL DEFAULT 0,
+                        banked_week_fp REAL DEFAULT 0,
+                        created_at DATETIME
+                    )
+                """))
+                conn.execute(text("""
+                    INSERT INTO fantasy_roster_swaps_new
+                    SELECT id, roster_id, slot, old_player_id, new_player_id, swap_week,
+                           banked_fp, COALESCE(banked_week_fp, 0), created_at
+                    FROM fantasy_roster_swaps
+                """))
+                conn.execute(text("DROP TABLE fantasy_roster_swaps"))
+                conn.execute(text("ALTER TABLE fantasy_roster_swaps_new RENAME TO fantasy_roster_swaps"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fantasy_swap_roster ON fantasy_roster_swaps(roster_id)"))
+                conn.commit()
+                logger.info("  Migration: fantasy_roster_swaps old/new_player_id are now nullable")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration skipped (swap player_id nullable): {e}")
+        # Peak streak (longest win-or-loss run, abs value) per team-season.
+        # Column add only — backfill runs below via _backfillTeamPeakStreaks
+        # so it opens its own connection and can compute idempotently.
+        try:
+            conn.execute(text("ALTER TABLE team_season_stats ADD COLUMN peak_streak INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added team_season_stats.peak_streak")
+        except Exception:
+            conn.rollback()
+        # Themed-pack columns on pack_types (themed pack rework)
+        for col, colDef in [
+            ('theme_type', 'VARCHAR(20)'),
+            ('theme_value', 'VARCHAR(50)'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE pack_types ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added pack_types.{col}")
+            except Exception:
+                conn.rollback()
+        # Denormalized output_type on card_templates so themed packs can
+        # filter the candidate pool without scanning effect_config JSON.
+        try:
+            conn.execute(text("ALTER TABLE card_templates ADD COLUMN output_type VARCHAR(20)"))
+            conn.commit()
+            logger.info("  Migration: added card_templates.output_type")
+        except Exception:
+            conn.rollback()
+        # Per-user themed pack rotation: rotation flipped from global to
+        # per-user once we added reroll. Old rows have no user_id so they're
+        # unusable — drop them rather than backfill.
+        try:
+            result = conn.execute(text("PRAGMA table_info(featured_pack_rotation)"))
+            existingCols = {row[1] for row in result}
+            if 'user_id' not in existingCols and existingCols:
+                conn.execute(text("DROP TABLE featured_pack_rotation"))
+                conn.commit()
+                logger.info("  Migration: dropped global featured_pack_rotation (table recreated per-user by create_all)")
+        except Exception:
+            conn.rollback()
+        # Purchased flag for rotation rows so bought packs vanish from the
+        # shop within the cycle (mirrors FeaturedShopCard.purchased).
+        try:
+            conn.execute(text("ALTER TABLE featured_pack_rotation ADD COLUMN purchased BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added featured_pack_rotation.purchased")
+        except Exception:
+            conn.rollback()
+        # Yea/nay GM votes: direction on each vote, against-count on results.
+        # Existing rows default to 'yea' / 0 so old data reads as all-support.
+        try:
+            conn.execute(text("ALTER TABLE gm_votes ADD COLUMN direction VARCHAR(8) DEFAULT 'yea' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added gm_votes.direction")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE gm_vote_results ADD COLUMN votes_against INTEGER DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added gm_vote_results.votes_against")
+        except Exception:
+            conn.rollback()
+        # Playoff bracket challenge: frozen seed field on seasons (the
+        # playoff_brackets table itself is created by create_all).
+        try:
+            conn.execute(text("ALTER TABLE seasons ADD COLUMN playoff_seeds TEXT"))
+            conn.commit()
+            logger.info("  Migration: added seasons.playoff_seeds")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -562,6 +975,8 @@ def _runPendingMigrations():
     _backfillPlayerSeasonTeamIds()
     _backfillPlayerSeasonStatsFromGames()
     _backfillPlayerCareerStatsFromGames()
+    _backfillTeamPeakStreaks()
+    _backfillCardTemplateOutputType()
 
 
 def _recomputeFundingTiers():
@@ -577,12 +992,33 @@ def _recomputeFundingTiers():
     LARGE on restart. Tiers are supposed to be locked at season start —
     this migration's job is just to refresh stale labels after a threshold
     constant changes, which is invariant in `baseline + carried`.
+
+    EXCEPTION: when the active season is in offseason, the row for that
+    season has already been re-tiered by `_recomputeFundingTiersForOffseason`
+    using `effective_funding`. Overwriting that with baseline+carried here
+    would silently revert tier upgrades and undo offseason benefits, so we
+    skip that one row.
     """
     from sqlalchemy import text
     from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
 
     conn = engine.connect()
     try:
+        # Detect active offseason. If we're mid-offseason for season N,
+        # the offseason recompute has already set funding_tier on the
+        # season-N row using effective_funding — don't undo that here.
+        offseasonSeason = None
+        try:
+            res = conn.execute(text(
+                "SELECT current_season, in_offseason FROM simulation_state WHERE id = 1"
+            )).fetchone()
+            if res and res[1]:
+                offseasonSeason = res[0]
+        except Exception:
+            # simulation_state may not exist yet on a fresh DB — skip the
+            # guard and operate on all rows.
+            offseasonSeason = None
+
         seasons = [
             row[0] for row in conn.execute(
                 text("SELECT DISTINCT season FROM team_funding")
@@ -590,6 +1026,10 @@ def _recomputeFundingTiers():
         ]
         totalUpdated = 0
         for season in seasons:
+            if offseasonSeason is not None and season == offseasonSeason:
+                # Offseason-active season — its tier is intentionally
+                # effective_funding-based right now. Leave it alone.
+                continue
             rows = conn.execute(
                 text(
                     "SELECT id, baseline_funding, carried_funding, funding_tier, tier_rank "
@@ -614,6 +1054,15 @@ def _recomputeFundingTiers():
                 return FUNDING_TIER_NAMES[last], last + 1
 
             for rowId, baseline, carried, oldTier, oldRank in rows:
+                # Authoritative writers (_initializeTeamFunding's inherit
+                # step + _recomputeFundingTiersForOffseason) set the tier
+                # at the right moments using the right inputs. If a row
+                # already has a tier, leave it alone — overwriting with
+                # baseline+carried here would undo the inheritance chain
+                # and cause the baseline-compression flip we just fixed.
+                # Only operate on uninitialized rows (NULL tier).
+                if oldTier and oldRank is not None:
+                    continue
                 seasonStart = (baseline or 0) + (carried or 0)
                 newTier, newRank = tierFor(seasonStart)
                 if newTier != oldTier or newRank != oldRank:
@@ -637,14 +1086,117 @@ def _recomputeFundingTiers():
         conn.close()
 
 
-def _refreshCardEffectText():
-    """Update stale tooltip/detail text on card templates whose effects were reworked."""
+def _backfillCardTemplateOutputType():
+    """Stamp output_type on card_templates rows that don't have it set yet.
+    Resolves effectName → concrete output type via the cardEffects classifier.
+    Idempotent: only touches rows where output_type IS NULL."""
     import json as _json
-    from managers.cardEffects import EFFECT_TOOLTIPS, EFFECT_DETAIL_TEMPLATES
+    from managers.cardEffects import getEffectOutputType
     from sqlalchemy import text
 
-    # Map of effectName → fields to refresh from current definitions
-    refreshEffects = {"odometer"}
+    conn = engine.connect()
+    try:
+        rows = conn.execute(
+            text("SELECT id, effect_config FROM card_templates WHERE output_type IS NULL")
+        ).fetchall()
+        if not rows:
+            return
+        updated = 0
+        for row in rows:
+            cfg = _json.loads(row[1]) if isinstance(row[1], str) else row[1]
+            effectName = (cfg or {}).get("effectName", "")
+            outputType = getEffectOutputType(effectName)
+            if outputType is None:
+                continue  # leave NULL — mixed/contextual effects are excluded by design
+            conn.execute(
+                text("UPDATE card_templates SET output_type = :ot WHERE id = :id"),
+                {"ot": outputType, "id": row[0]},
+            )
+            updated += 1
+        if updated:
+            conn.commit()
+            logger.info(f"  Migration: backfilled output_type on {updated} card templates")
+        else:
+            conn.rollback()
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Migration: output_type backfill skipped ({e})")
+    finally:
+        conn.close()
+
+
+def _refreshCardEffectText():
+    """Update stale tooltip/detail text on card templates whose effects were reworked.
+
+    Re-runs the same placeholder substitution buildEffectConfig does — so
+    templates that reference {primary.fieldName} pick up the current text
+    AND the current value (computed from stored primary). Add an effect
+    name to refreshEffects when its tooltip / detail template changes
+    and existing card descriptions should re-render on next boot.
+    """
+    import json as _json
+    import re as _re
+    from managers.cardEffects import EFFECT_TOOLTIPS, EFFECT_DETAIL_TEMPLATES, STAT_DISPLAY_NAMES
+    from sqlalchemy import text
+
+    refreshEffects = {
+        "odometer", "snake_eyes",
+        # FPx delta-notation sweep — existing cards stored 1.x values in
+        # their tooltip/detail strings; re-render with the *Delta variants.
+        "backfield_buddies", "all_in", "stacked_deck",
+        # Full-roster-required tightening — drought/sandbagger/quiet_storm
+        # /hedge now refuse to pay on a gutted roster (<6 filled slots),
+        # so the description should surface that.
+        "drought", "sandbagger", "quiet_storm", "hedge",
+        # Fav-team-event cards reworked into roster-trait mechanics +
+        # floobits bonus on the rare event. (Note: this refresh only
+        # rewrites text — existing dev-DB cards have old primary keys
+        # and will render with `?` placeholders until they're rebuilt
+        # via fresh start or pack re-open. Fine for next-season's clean
+        # slate.)
+        "comeback_kid", "domination", "walk_off",
+        # Reworked: Believe (per fav-team season win), Showoff (per 5★),
+        # Eminence (per top-10 roster player).
+        "believe", "showoff", "eminence",
+        # FP → FPx conversions for Base FPx variety. Param keys changed.
+        "homer", "honor_roll",
+    }
+
+    # Same FullMult → Delta synthesis buildEffectConfig does. Keep these
+    # two maps in sync.
+    _FULL_MULT_FIELDS = {
+        'xMultValue':    'xMultDelta',
+        'baseXMult':     'baseXDelta',
+        'baseMult':      'baseDelta',
+        'enhancedMult':  'enhancedDelta',
+        'maxMult':       'maxDelta',
+        'q4MultFactor':  'q4MultDelta',
+    }
+    _REWARDVALUE_IS_MULT_EFFECTS = {'bandwagon', 'stack', 'backfield_buddies', 'full_roster'}
+
+    def _renderTemplate(tmpl: str, primary: dict) -> str:
+        if not tmpl:
+            return ""
+        # Synthesize delta variants on a working copy of primary.
+        derived = dict(primary or {})
+        for fullKey, deltaKey in _FULL_MULT_FIELDS.items():
+            if fullKey in derived and isinstance(derived[fullKey], (int, float)):
+                derived[deltaKey] = round(derived[fullKey] - 1, 2)
+        if 'rewardValue' in derived:
+            rv = derived['rewardValue']
+            if isinstance(rv, (int, float)) and rv >= 1.0:
+                derived['rewardDelta'] = round(rv - 1, 2)
+        if derived.get('rewardType') == 'mult' and 'baseReward' in derived:
+            br = derived['baseReward']
+            if isinstance(br, (int, float)) and br >= 1.0:
+                derived['baseRewardDelta'] = round(br - 1, 2)
+        out = tmpl
+        for key, val in derived.items():
+            out = out.replace("{" + key + "}", str(val))
+        statKey = derived.get("stat", "")
+        if statKey:
+            out = out.replace("{statDisplay}", STAT_DISPLAY_NAMES.get(statKey, statKey))
+        return _re.sub(r'\{[a-zA-Z_]+\}', '?', out)
 
     conn = engine.connect()
     try:
@@ -655,12 +1207,13 @@ def _refreshCardEffectText():
             effectName = cfg.get("effectName", "")
             if effectName not in refreshEffects:
                 continue
-            currentTooltip = EFFECT_TOOLTIPS.get(effectName, "")
-            currentDetail = EFFECT_DETAIL_TEMPLATES.get(effectName, "")
-            if cfg.get("tooltip") == currentTooltip and cfg.get("detail") == currentDetail:
+            primary = cfg.get("primary", {}) or {}
+            newTooltip = _renderTemplate(EFFECT_TOOLTIPS.get(effectName, ""), primary)
+            newDetail = _renderTemplate(EFFECT_DETAIL_TEMPLATES.get(effectName, ""), primary)
+            if cfg.get("tooltip") == newTooltip and cfg.get("detail") == newDetail:
                 continue
-            cfg["tooltip"] = currentTooltip
-            cfg["detail"] = currentDetail
+            cfg["tooltip"] = newTooltip
+            cfg["detail"] = newDetail
             conn.execute(
                 text("UPDATE card_templates SET effect_config = :cfg WHERE id = :id"),
                 {"cfg": _json.dumps(cfg), "id": row[0]},
@@ -674,6 +1227,71 @@ def _refreshCardEffectText():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillTeamPeakStreaks():
+    """Walk regular-season games chronologically per team-season and write
+    the longest win-or-loss run into team_season_stats.peak_streak.
+
+    Idempotent: only updates rows where peak_streak is below the computed
+    value. The Gone Streaking card reads this field via favoriteTeamPeakStreak,
+    so without a backfill, existing seasons would show 0 on cards even
+    after weeks of streaks already played out.
+    """
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        rows = conn.execute(text("""
+            SELECT g.season, g.id, g.week, g.game_date,
+                   g.home_team_id, g.away_team_id, g.home_score, g.away_score
+            FROM games g
+            WHERE g.is_playoff = 0
+              AND g.status = 'final'
+            ORDER BY g.season, g.week, g.game_date, g.id
+        """)).fetchall()
+        if not rows:
+            return
+        # streakByTeam: (season, team_id) → current signed streak
+        # peakByTeam:   (season, team_id) → max abs streak observed
+        streakByTeam = {}
+        peakByTeam = {}
+        def recordResult(season, teamId, won):
+            key = (season, teamId)
+            cur = streakByTeam.get(key, 0)
+            if won:
+                cur = cur + 1 if cur > 0 else 1
+            else:
+                cur = cur - 1 if cur < 0 else -1
+            streakByTeam[key] = cur
+            absCur = abs(cur)
+            if absCur > peakByTeam.get(key, 0):
+                peakByTeam[key] = absCur
+        for season, gid, week, gameDate, homeId, awayId, homeScore, awayScore in rows:
+            if homeScore is None or awayScore is None or homeScore == awayScore:
+                continue
+            if homeScore > awayScore:
+                recordResult(season, homeId, True)
+                recordResult(season, awayId, False)
+            else:
+                recordResult(season, awayId, True)
+                recordResult(season, homeId, False)
+        updated = 0
+        for (season, teamId), peak in peakByTeam.items():
+            result = conn.execute(text("""
+                UPDATE team_season_stats
+                SET peak_streak = :peak
+                WHERE team_id = :team_id AND season = :season
+                  AND COALESCE(peak_streak, 0) < :peak
+            """), {"team_id": teamId, "season": season, "peak": peak})
+            updated += result.rowcount or 0
+        if updated:
+            conn.commit()
+            logger.info(f"  Backfill: set peak_streak on {updated} team_season_stats rows")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Backfill warning (peak_streak): {e}")
     finally:
         conn.close()
 
@@ -921,114 +1539,122 @@ def _backfillPlayerCareerStatsFromGames():
         fixed = 0
 
         for playerId in playerIds:
-            # Aggregate ALL game stats across ALL seasons
-            gameRows = conn.execute(text(
-                "SELECT gps.passing_stats, gps.rushing_stats, gps.receiving_stats, "
-                "       gps.kicking_stats, gps.defense_stats, gps.fantasy_points "
-                "FROM game_player_stats gps "
-                "JOIN games g ON gps.game_id = g.id "
-                "WHERE gps.player_id = :pid AND g.is_playoff = 0"
-            ), {"pid": playerId}).fetchall()
+            try:
+                # Aggregate ALL game stats across ALL seasons
+                gameRows = conn.execute(text(
+                    "SELECT gps.passing_stats, gps.rushing_stats, gps.receiving_stats, "
+                    "       gps.kicking_stats, gps.defense_stats, gps.fantasy_points "
+                    "FROM game_player_stats gps "
+                    "JOIN games g ON gps.game_id = g.id "
+                    "WHERE gps.player_id = :pid AND g.is_playoff = 0"
+                ), {"pid": playerId}).fetchall()
 
-            if not gameRows:
-                continue
+                if not gameRows:
+                    continue
 
-            passing = {}
-            rushing = {}
-            receiving = {}
-            kicking = {}
-            defense = {}
-            totalFp = 0
-            gamesPlayed = len(gameRows)
+                passing = {}
+                rushing = {}
+                receiving = {}
+                kicking = {}
+                defense = {}
+                totalFp = 0
+                gamesPlayed = len(gameRows)
 
-            for gPassing, gRushing, gReceiving, gKicking, gDefense, gFp in gameRows:
-                totalFp += gFp or 0
-                for src, dest in [
-                    (gPassing, passing), (gRushing, rushing),
-                    (gReceiving, receiving), (gKicking, kicking), (gDefense, defense)
-                ]:
-                    if src:
+                for gPassing, gRushing, gReceiving, gKicking, gDefense, gFp in gameRows:
+                    totalFp += gFp or 0
+                    for src, dest in [
+                        (gPassing, passing), (gRushing, rushing),
+                        (gReceiving, receiving), (gKicking, kicking), (gDefense, defense)
+                    ]:
+                        if not src:
+                            continue
                         d = _json.loads(src) if isinstance(src, str) else src
+                        # _json.loads('null') -> None; some legacy rows store 'null' here
+                        if not d:
+                            continue
                         for k, v in d.items():
                             if isinstance(v, (int, float)):
                                 dest[k] = dest.get(k, 0) + v
 
-            # Recompute derived stats
-            if passing.get('att', 0) > 0:
-                passing['compPerc'] = round(passing.get('comp', 0) / passing['att'] * 100, 1)
-                passing['ypc'] = round(passing.get('yards', 0) / passing['att'], 1)
-            if rushing.get('carries', 0) > 0:
-                rushing['ypc'] = round(rushing.get('yards', 0) / rushing['carries'], 1)
-            if receiving.get('receptions', 0) > 0:
-                receiving['ypr'] = round(receiving.get('yards', 0) / receiving['receptions'], 1)
-            if receiving.get('targets', 0) > 0:
-                receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
-            if kicking.get('fgAtt', 0) > 0:
-                kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
-            # Per-range FG percentages (under 20 / 20-40 / 40-50 / 50+).
-            # Each pair tracks attempts (xxxAtt) and makes (xxx).
-            for mkKey, attKey, percKey in (
-                ('fgUnder20', 'fgUnder20att', 'fgUnder20perc'),
-                ('fg20to40', 'fg20to40att', 'fg20to40perc'),
-                ('fg40to50', 'fg40to50att', 'fg40to50perc'),
-                ('fgOver50', 'fgOver50att', 'fgOver50perc'),
-            ):
-                att = kicking.get(attKey, 0) or 0
-                if att > 0:
-                    kicking[percKey] = round((kicking.get(mkKey, 0) or 0) / att * 100, 1)
+                # Recompute derived stats
+                if passing.get('att', 0) > 0:
+                    passing['compPerc'] = round(passing.get('comp', 0) / passing['att'] * 100, 1)
+                    passing['ypc'] = round(passing.get('yards', 0) / passing['att'], 1)
+                if rushing.get('carries', 0) > 0:
+                    rushing['ypc'] = round(rushing.get('yards', 0) / rushing['carries'], 1)
+                if receiving.get('receptions', 0) > 0:
+                    receiving['ypr'] = round(receiving.get('yards', 0) / receiving['receptions'], 1)
+                if receiving.get('targets', 0) > 0:
+                    receiving['rcvPerc'] = round(receiving.get('receptions', 0) / receiving['targets'] * 100, 1)
+                if kicking.get('fgAtt', 0) > 0:
+                    kicking['fgPerc'] = round(kicking.get('fgs', 0) / kicking['fgAtt'] * 100, 1)
+                # Per-range FG percentages (under 20 / 20-40 / 40-50 / 50+).
+                # Each pair tracks attempts (xxxAtt) and makes (xxx).
+                for mkKey, attKey, percKey in (
+                    ('fgUnder20', 'fgUnder20att', 'fgUnder20perc'),
+                    ('fg20to40', 'fg20to40att', 'fg20to40perc'),
+                    ('fg40to50', 'fg40to50att', 'fg40to50perc'),
+                    ('fgOver50', 'fgOver50att', 'fgOver50perc'),
+                ):
+                    att = kicking.get(attKey, 0) or 0
+                    if att > 0:
+                        kicking[percKey] = round((kicking.get(mkKey, 0) or 0) / att * 100, 1)
+                    else:
+                        kicking[percKey] = 0
+
+                # Check if career row exists
+                existing = conn.execute(text(
+                    "SELECT id FROM player_career_stats WHERE player_id = :pid AND season = 0"
+                ), {"pid": playerId}).fetchone()
+
+                if existing:
+                    conn.execute(text(
+                        "UPDATE player_career_stats SET "
+                        "  passing_stats = :passing, rushing_stats = :rushing, "
+                        "  receiving_stats = :receiving, kicking_stats = :kicking, "
+                        "  defense_stats = :defense, fantasy_points = :fp, "
+                        "  games_played = :gp, "
+                        "  passing_yards = :pyards, passing_tds = :ptds, passing_ints = :pints, "
+                        "  rushing_yards = :ryards, rushing_tds = :rtds, "
+                        "  receiving_yards = :recyards, receiving_tds = :rectds "
+                        "WHERE id = :id"
+                    ), {
+                        "passing": _json.dumps(passing) if passing else None,
+                        "rushing": _json.dumps(rushing) if rushing else None,
+                        "receiving": _json.dumps(receiving) if receiving else None,
+                        "kicking": _json.dumps(kicking) if kicking else None,
+                        "defense": _json.dumps(defense) if defense else None,
+                        "fp": totalFp, "gp": gamesPlayed, "id": existing[0],
+                        "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
+                        "pints": passing.get('ints', 0),
+                        "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
+                        "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
+                    })
                 else:
-                    kicking[percKey] = 0
-
-            # Check if career row exists
-            existing = conn.execute(text(
-                "SELECT id FROM player_career_stats WHERE player_id = :pid AND season = 0"
-            ), {"pid": playerId}).fetchone()
-
-            if existing:
-                conn.execute(text(
-                    "UPDATE player_career_stats SET "
-                    "  passing_stats = :passing, rushing_stats = :rushing, "
-                    "  receiving_stats = :receiving, kicking_stats = :kicking, "
-                    "  defense_stats = :defense, fantasy_points = :fp, "
-                    "  games_played = :gp, "
-                    "  passing_yards = :pyards, passing_tds = :ptds, passing_ints = :pints, "
-                    "  rushing_yards = :ryards, rushing_tds = :rtds, "
-                    "  receiving_yards = :recyards, receiving_tds = :rectds "
-                    "WHERE id = :id"
-                ), {
-                    "passing": _json.dumps(passing) if passing else None,
-                    "rushing": _json.dumps(rushing) if rushing else None,
-                    "receiving": _json.dumps(receiving) if receiving else None,
-                    "kicking": _json.dumps(kicking) if kicking else None,
-                    "defense": _json.dumps(defense) if defense else None,
-                    "fp": totalFp, "gp": gamesPlayed, "id": existing[0],
-                    "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
-                    "pints": passing.get('ints', 0),
-                    "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
-                    "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
-                })
-            else:
-                conn.execute(text(
-                    "INSERT INTO player_career_stats "
-                    "(player_id, season, games_played, fantasy_points, "
-                    " passing_yards, passing_tds, passing_ints, rushing_yards, rushing_tds, "
-                    " receiving_yards, receiving_tds, "
-                    " passing_stats, rushing_stats, receiving_stats, kicking_stats, defense_stats) "
-                    "VALUES (:pid, 0, :gp, :fp, :pyards, :ptds, :pints, :ryards, :rtds, "
-                    "        :recyards, :rectds, :passing, :rushing, :receiving, :kicking, :defense)"
-                ), {
-                    "pid": playerId, "gp": gamesPlayed, "fp": totalFp,
-                    "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
-                    "pints": passing.get('ints', 0),
-                    "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
-                    "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
-                    "passing": _json.dumps(passing) if passing else None,
-                    "rushing": _json.dumps(rushing) if rushing else None,
-                    "receiving": _json.dumps(receiving) if receiving else None,
-                    "kicking": _json.dumps(kicking) if kicking else None,
-                    "defense": _json.dumps(defense) if defense else None,
-                })
-            fixed += 1
+                    conn.execute(text(
+                        "INSERT INTO player_career_stats "
+                        "(player_id, season, games_played, fantasy_points, "
+                        " passing_yards, passing_tds, passing_ints, rushing_yards, rushing_tds, "
+                        " receiving_yards, receiving_tds, "
+                        " passing_stats, rushing_stats, receiving_stats, kicking_stats, defense_stats) "
+                        "VALUES (:pid, 0, :gp, :fp, :pyards, :ptds, :pints, :ryards, :rtds, "
+                        "        :recyards, :rectds, :passing, :rushing, :receiving, :kicking, :defense)"
+                    ), {
+                        "pid": playerId, "gp": gamesPlayed, "fp": totalFp,
+                        "pyards": passing.get('yards', 0), "ptds": passing.get('tds', 0),
+                        "pints": passing.get('ints', 0),
+                        "ryards": rushing.get('yards', 0), "rtds": rushing.get('tds', 0),
+                        "recyards": receiving.get('yards', 0), "rectds": receiving.get('tds', 0),
+                        "passing": _json.dumps(passing) if passing else None,
+                        "rushing": _json.dumps(rushing) if rushing else None,
+                        "receiving": _json.dumps(receiving) if receiving else None,
+                        "kicking": _json.dumps(kicking) if kicking else None,
+                        "defense": _json.dumps(defense) if defense else None,
+                    })
+                fixed += 1
+            except Exception as perPlayerErr:
+                logger.info(f"  Backfill: skipped player {playerId} ({perPlayerErr})")
+                continue
 
         conn.commit()
         logger.info(f"  Backfill: reconstructed career stats for {fixed} players from game data")
@@ -1050,8 +1676,11 @@ def clear_db():
     # Tables to preserve across fresh starts. app_settings holds
     # admin-editable runtime config (feedback URL, survey toggles, etc.) —
     # those are operator settings, not season data, and should survive
-    # a DB wipe.
-    preserveTables = {"users", "beta_allowlist", "app_settings"}
+    # a DB wipe. unused_names holds the player/coach name pool, which
+    # admins can add to from the dashboard; that curation should not be
+    # wiped by a fresh start. New names from config.json are merged in
+    # on every boot via _seedUnusedNames().
+    preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names"}
 
     # Drop all non-preserved tables (reverse dependency order), then recreate
     tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
@@ -1061,6 +1690,22 @@ def clear_db():
 
     # Recreate all tables (create_all is safe — skips existing preserved tables)
     Base.metadata.create_all(bind=engine)
+
+    # Clear per-season user flags — these are scoped to season number, and
+    # fresh start resets the counter to 1.  Without this reset, prior-run
+    # stamps (e.g. starter_pack_claimed_season=1) carry over and incorrectly
+    # match the new season-1, hiding once-per-season offers.
+    try:
+        with engine.connect() as conn:
+            for col in ('starter_pack_claimed_season', 'favorite_team_locked_season'):
+                try:
+                    conn.execute(text(f"UPDATE users SET {col} = NULL"))
+                except Exception:
+                    pass
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to reset per-season user flags on fresh start: {e}")
+
     logger.info(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
     # Run migrations for preserved tables (e.g. new columns on users)
@@ -1068,18 +1713,49 @@ def clear_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    _seedUnusedNames()
 
 
 def _seedPackTypes():
-    """Seed default pack types if they don't exist."""
+    """Seed default pack types if they don't exist.
+
+    Per-team packs were initially seeded too, but the design walked back
+    to a single "Champion Team Pack" (themed_champion) that filters to
+    last season's champion roster. Existing per-team rows from older
+    builds get pruned here so they can't leak into the rotation.
+    """
     from database.repositories.card_repositories import PackTypeRepository
+    from database.models import PackType, FeaturedPackRotation
     session = SessionLocal()
     try:
         repo = PackTypeRepository(session)
         repo.seedDefaults()
+
+        # One-time cleanup: drop the deprecated `themed_team_*` rows + any
+        # rotation rows referencing them so the rotation pool can't pick
+        # them up. Idempotent — no-op once the rows are gone.
+        deprecatedTeamPacks = (
+            session.query(PackType)
+            .filter(PackType.name.like('themed_team_%'))
+            .all()
+        )
+        if deprecatedTeamPacks:
+            deprecatedIds = [pt.id for pt in deprecatedTeamPacks]
+            session.query(FeaturedPackRotation).filter(
+                FeaturedPackRotation.pack_type_id.in_(deprecatedIds)
+            ).delete(synchronize_session=False)
+            for pt in deprecatedTeamPacks:
+                session.delete(pt)
+            session.flush()
+            logger.info(
+                f"  Pruned {len(deprecatedTeamPacks)} deprecated themed_team_* "
+                f"pack rows (replaced by themed_champion)"
+            )
+
         session.commit()
-    except Exception:
+    except Exception as e:
         session.rollback()
+        logger.warning(f"  Pack type seed/prune failed: {e}")
     finally:
         session.close()
 
@@ -1149,51 +1825,112 @@ def _seedAchievements():
             {"key": "curator", "name": "Curator", "category": "guidance", "scope": "per_season", "sort_order": 130, "target": 15,
              "description": "Collect 15 unique cards this season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "tycoon", "name": "Tycoon", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 1000,
-             "description": "Earn 1,000 floobits in a single season.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": ["income_boost"], "deferred": False}},
+            # Collection — permanent goals on the Vault (once-scope, never reset).
+            {"key": "hometown_hero", "name": "Hometown Hero", "category": "collection", "scope": "once", "sort_order": 310, "target": 5,
+             "description": "Vault 5 cards of players on your favorite team.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "full_spectrum", "name": "Full Spectrum", "category": "collection", "scope": "once", "sort_order": 320, "target": 1,
+             "description": "Vault all four editions of a single player.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "all_pro_set", "name": "All-Pro Set", "category": "collection", "scope": "once", "sort_order": 330, "target": 1,
+             "description": "Vault every All-Pro card from a single season.",
+             "reward_config": {"floobits": 400, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            {"key": "ice_cold_i", "name": "Ice Cold I", "category": "collection", "scope": "once", "sort_order": 340, "target": 3,
+             "description": "Vault 3 Diamond cards.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "ice_cold_ii", "name": "Ice Cold II", "category": "collection", "scope": "once", "sort_order": 341, "target": 8,
+             "description": "Vault 8 Diamond cards.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "ice_cold_iii", "name": "Ice Cold III", "category": "collection", "scope": "once", "sort_order": 342, "target": 20,
+             "description": "Vault 20 Diamond cards.",
+             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "archivist_i", "name": "Archivist I", "category": "collection", "scope": "once", "sort_order": 350, "target": 10,
+             "description": "Vault cards of 10 different players.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "archivist_ii", "name": "Archivist II", "category": "collection", "scope": "once", "sort_order": 351, "target": 50,
+             "description": "Vault cards of 50 different players.",
+             "reward_config": {"floobits": 200, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "archivist_iii", "name": "Archivist III", "category": "collection", "scope": "once", "sort_order": 352, "target": 150,
+             "description": "Vault cards of 150 different players.",
+             "reward_config": {"floobits": 600, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            # Card upgrades — seasonal (tiers reset each season unless vaulted).
+            {"key": "artificer_i", "name": "Artificer I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 1,
+             "description": "Level up a card this season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "artificer_ii", "name": "Artificer II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 5,
+             "description": "Level up cards 5 times this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "artificer_iii", "name": "Artificer III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 12,
+             "description": "Level up cards 12 times this season.",
+             "reward_config": {"floobits": 100, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "ascendant", "name": "Ascendant", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1,
+             "description": "Bring a card to its max tier (IV) this season.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            # Tycoon tiers — floobits earned in a single season. Mirrors
+            # Magnate (spent side). Targets reflect post-curve income
+            # economy where a typical user earns 2-4k/season.
+            {"key": "tycoon_i", "name": "Tycoon I", "category": "guidance", "scope": "per_season", "sort_order": 140, "target": 750,
+             "description": "Earn 750 floobits in a single season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_ii", "name": "Tycoon II", "category": "guidance", "scope": "per_season", "sort_order": 141, "target": 2500,
+             "description": "Earn 2,500 floobits in a single season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_iii", "name": "Tycoon III", "category": "guidance", "scope": "per_season", "sort_order": 142, "target": 5500,
+             "description": "Earn 5,500 floobits in a single season.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "tycoon_iv", "name": "Tycoon IV", "category": "guidance", "scope": "per_season", "sort_order": 143, "target": 10000,
+             "description": "Earn 10,000 floobits in a single season.",
+             "reward_config": {"floobits": 150, "packs": [], "powerups": ["income_boost"], "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
-            # Banner Week tiers — FP earned in a single week
-            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 150,
-             "description": "Earn 150+ fantasy points in a single week.",
-             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 200,
-             "description": "Earn 200+ fantasy points in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 250,
-             "description": "Earn 250+ fantasy points in a single week.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 300,
+            # Banner Week tiers — FP earned in a single week.
+            # Rescaled for the Balatro pullback (FP outputs roughly halved
+            # via _BAL_FP_MULT = 0.5). Targets dropped ~50% so the tiers
+            # remain reachable on optimized hands during an amplify week
+            # without being trivial.
+            {"key": "banner_week_i", "name": "Banner Week I", "category": "guidance", "scope": "per_season", "sort_order": 160, "target": 300,
              "description": "Earn 300+ fantasy points in a single week.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "banner_week_ii", "name": "Banner Week II", "category": "guidance", "scope": "per_season", "sort_order": 161, "target": 1000,
+             "description": "Earn 1,000+ fantasy points in a single week.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "banner_week_iii", "name": "Banner Week III", "category": "guidance", "scope": "per_season", "sort_order": 162, "target": 2500,
+             "description": "Earn 2,500+ fantasy points in a single week.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 5000,
+             "description": "Earn 5,000+ fantasy points in a single week.",
              "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
-            # (renamed from Windfall to avoid clashing with the card effect of the same name)
-            {"key": "racket_i", "name": "Racket I", "category": "guidance", "scope": "per_season", "sort_order": 190, "target": 50,
-             "description": "Earn 50+ floobits from card effects in a single week.",
+            # (renamed from Windfall to avoid clashing with the card effect of
+            # the same name). Targets widened (next-season).
+            {"key": "racket_i", "name": "Racket I", "category": "guidance", "scope": "per_season", "sort_order": 190, "target": 60,
+             "description": "Earn 60+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "racket_ii", "name": "Racket II", "category": "guidance", "scope": "per_season", "sort_order": 191, "target": 100,
-             "description": "Earn 100+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "racket_iii", "name": "Racket III", "category": "guidance", "scope": "per_season", "sort_order": 192, "target": 150,
+            {"key": "racket_ii", "name": "Racket II", "category": "guidance", "scope": "per_season", "sort_order": 191, "target": 150,
              "description": "Earn 150+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 200,
-             "description": "Earn 200+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Dynamo tiers — cumulative season fantasy points
-            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 1000,
-             "description": "Earn 1,000 total fantasy points this season.",
-             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 2000,
-             "description": "Earn 2,000 total fantasy points this season.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 3500,
-             "description": "Earn 3,500 total fantasy points this season.",
+            {"key": "racket_iii", "name": "Racket III", "category": "guidance", "scope": "per_season", "sort_order": 192, "target": 250,
+             "description": "Earn 250+ floobits from card effects in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 5000,
-             "description": "Earn 5,000 total fantasy points this season.",
+            {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 400,
+             "description": "Earn 400+ floobits from card effects in a single week.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Dynamo tiers — cumulative season fantasy points. Targets
+            # halved to match the Balatro pullback (_BAL_FP_MULT = 0.5).
+            # Tier IV is still a meaningful "great season" milestone given
+            # 28 game days of compounding output.
+            {"key": "dynamo_i", "name": "Dynamo I", "category": "guidance", "scope": "per_season", "sort_order": 200, "target": 2500,
+             "description": "Earn 2,500 total fantasy points this season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_ii", "name": "Dynamo II", "category": "guidance", "scope": "per_season", "sort_order": 201, "target": 7000,
+             "description": "Earn 7,000 total fantasy points this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iii", "name": "Dynamo III", "category": "guidance", "scope": "per_season", "sort_order": 202, "target": 15000,
+             "description": "Earn 15,000 total fantasy points this season.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 30000,
+             "description": "Earn 30,000 total fantasy points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
@@ -1208,18 +1945,33 @@ def _seedAchievements():
             {"key": "oracle_iv", "name": "Oracle IV", "category": "guidance", "scope": "per_season", "sort_order": 213, "target": 1800,
              "description": "Earn 1,800 total prognostication points this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Magnate tiers — cumulative season floobits spent
-            {"key": "magnate_i", "name": "Magnate I", "category": "guidance", "scope": "per_season", "sort_order": 220, "target": 500,
-             "description": "Spend 500 floobits this season.",
+            # Bracketeer tiers — playoff bracket points this season (28 max).
+            {"key": "bracketeer_i", "name": "Bracketeer I", "category": "guidance", "scope": "per_season", "sort_order": 214, "target": 6,
+             "description": "Score 6 points in the playoff bracket challenge.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "magnate_ii", "name": "Magnate II", "category": "guidance", "scope": "per_season", "sort_order": 221, "target": 1500,
-             "description": "Spend 1,500 floobits this season.",
+            {"key": "bracketeer_ii", "name": "Bracketeer II", "category": "guidance", "scope": "per_season", "sort_order": 215, "target": 12,
+             "description": "Score 12 points in the playoff bracket challenge.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "magnate_iii", "name": "Magnate III", "category": "guidance", "scope": "per_season", "sort_order": 222, "target": 3000,
-             "description": "Spend 3,000 floobits this season.",
+            {"key": "bracketeer_iii", "name": "Bracketeer III", "category": "guidance", "scope": "per_season", "sort_order": 216, "target": 18,
+             "description": "Score 18 points in the playoff bracket challenge.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "magnate_iv", "name": "Magnate IV", "category": "guidance", "scope": "per_season", "sort_order": 223, "target": 5000,
-             "description": "Spend 5,000 floobits this season.",
+            {"key": "bracketeer_iv", "name": "Bracketeer IV", "category": "guidance", "scope": "per_season", "sort_order": 217, "target": 24,
+             "description": "Score 24 points in the playoff bracket challenge.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            # Magnate tiers — cumulative season floobits spent. Targets
+            # widened (next-season) so tier IV is a real spender milestone
+            # given the floobit-curve income changes.
+            {"key": "magnate_i", "name": "Magnate I", "category": "guidance", "scope": "per_season", "sort_order": 220, "target": 750,
+             "description": "Spend 750 floobits this season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "magnate_ii", "name": "Magnate II", "category": "guidance", "scope": "per_season", "sort_order": 221, "target": 2500,
+             "description": "Spend 2,500 floobits this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "magnate_iii", "name": "Magnate III", "category": "guidance", "scope": "per_season", "sort_order": 222, "target": 5500,
+             "description": "Spend 5,500 floobits this season.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "magnate_iv", "name": "Magnate IV", "category": "guidance", "scope": "per_season", "sort_order": 223, "target": 10000,
+             "description": "Spend 10,000 floobits this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Podium tiers — weekly fantasy leaderboard top-3 finishes this season
             {"key": "podium_i", "name": "Podium I", "category": "guidance", "scope": "per_season", "sort_order": 230, "target": 5,
@@ -1260,18 +2012,27 @@ def _seedAchievements():
             {"key": "benefactor_iv", "name": "Benefactor IV", "category": "guidance", "scope": "per_season", "sort_order": 253, "target": 5000,
              "description": "Contribute 5,000 floobits to your team this season.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
-            # Compound tiers — single-week total FP multiplier (stored as multiplier × 100)
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 120,
-             "description": "Reach a 1.2x total FP multiplier in a single week.",
+            # Compound tiers — single-week total FP multiplier (stored as
+            # multiplier × 100). Rescaled (Balatro pass): with single FPx
+            # cards like Snake Eyes hitting 3.10× and Cornucopia capable of
+            # 5×+ on a hot week, the old 3.5× cap is hit by ONE card. Tiers
+            # now require actual stacking — Tier IV needs a full FPx hand
+            # with elite multipliers.
+            # Bumped (next-season): amplify modifier doubles the FPx
+            # bonus portion, so a hand of 4-5 modest FPx cards can hit
+            # 7x on a hot week. New top tier requires both a heavily
+            # stacked FPx hand AND a favorable modifier draw.
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 250,
+             "description": "Reach a 2.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 150,
-             "description": "Reach a 1.5x total FP multiplier in a single week.",
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 450,
+             "description": "Reach a 4.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 170,
-             "description": "Reach a 1.7x total FP multiplier in a single week.",
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 700,
+             "description": "Reach a 7.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 200,
-             "description": "Reach a 2.0x total FP multiplier in a single week.",
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1000,
+             "description": "Reach a 10.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard
@@ -1308,7 +2069,7 @@ def _seedAchievements():
              "description": "Finish #1 overall on the season prognostication leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "zenith", "name": "Zenith", "category": "secret", "scope": "once", "sort_order": 600, "target": 1,
-             "description": "Earn a Perfect Week and 300+ fantasy points in the same week.",
+             "description": "Earn a Perfect Week and 800+ fantasy points in the same week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "consecration", "name": "Consecration", "category": "secret", "scope": "once", "sort_order": 610, "target": 1,
              "description": "Your favorite team wins the Floosbowl.",
@@ -1325,11 +2086,11 @@ def _seedAchievements():
             {"key": "sweep", "name": "Sweep", "category": "secret", "scope": "once", "sort_order": 650, "target": 1,
              "description": "Buy every card featured in your shop in a single day.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "mutineer", "name": "Mutineer", "category": "secret", "scope": "once", "sort_order": 660, "target": 1,
-             "description": "Cast the maximum number of fire-coach votes in a single season.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "mutineer", "name": "Scorched Earth", "category": "secret", "scope": "once", "sort_order": 660, "target": 1,
+             "description": "Vote to fire your coach and release every player on the roster in a single offseason.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "tribune", "name": "Tribune", "category": "secret", "scope": "once", "sort_order": 665, "target": 1,
-             "description": "Cast every one of your 20 GM votes in a single season.",
+             "description": "Cast 6 GM votes in a single season.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "monk", "name": "Monk", "category": "secret", "scope": "once", "sort_order": 670, "target": 1,
              "description": "Go an entire season without opening a card pack.",
@@ -1337,6 +2098,16 @@ def _seedAchievements():
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            # Card-upgrade secrets
+            {"key": "overclocked", "name": "Overclocked", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
+             "description": "Hold three max-tier (IV) cards in a single season.",
+             "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynasty", "name": "Dynasty", "category": "secret", "scope": "once", "sort_order": 695, "target": 1,
+             "description": "Vault a fully upgraded (tier IV) card.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "crown_jewel", "name": "Crown Jewel", "category": "secret", "scope": "once", "sort_order": 700, "target": 1,
+             "description": "Take a Diamond card to its max tier (IV).",
+             "reward_config": {"floobits": 200, "packs": [], "powerups": [], "deferred": False}},
             {"key": "faithful", "name": "Faithful", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
              "description": "Your favorite team misses the playoffs three seasons in a row.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
@@ -1346,6 +2117,15 @@ def _seedAchievements():
             {"key": "completist", "name": "Completist", "category": "secret", "scope": "once", "sort_order": 710, "target": 1,
              "description": "Own all four editions (base, holographic, prismatic, diamond) of the same player.",
              "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "anthology", "name": "Anthology", "category": "secret", "scope": "once", "sort_order": 720, "target": 1,
+             "description": "Buy one of every pack type in a single season.",
+             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "flawless", "name": "Flawless", "category": "secret", "scope": "once", "sort_order": 730, "target": 1,
+             "description": "Predict every playoff advancer correctly in a single bracket.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "pool_shark", "name": "Pool Shark", "category": "secret", "scope": "once", "sort_order": 740, "target": 1,
+             "description": "Finish #1 on the season playoff bracket leaderboard.",
+             "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "sparkler", "name": "Sparkler", "category": "guidance", "scope": "per_season", "sort_order": 170, "target": 1,
              "description": "Open your first Diamond card of the season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -1410,6 +2190,59 @@ def _seedBetaAllowlist():
         session.commit()
     except Exception:
         session.rollback()
+    finally:
+        session.close()
+
+
+def _seedUnusedNames():
+    """Merge player/coach names from config.json into the unused_names table.
+
+    Idempotent — only inserts names that aren't already in the table AND
+    aren't currently held by an active coach or player. Without the active-
+    entity filter, names that were promoted from the pool into a coach or
+    player slot get silently re-seeded on every boot, leaving the pool
+    polluted with names the runtime defensive filter then has to scrub at
+    every draw.
+
+    Runs on every startup so new names added to config.json get picked up
+    without wiping admin-curated additions. The unused_names table is
+    preserved across fresh starts (see clear_db()), so admin additions
+    survive.
+    """
+    from database.models import UnusedName, Coach, Player
+    try:
+        from config_manager import get_config
+        names = get_config().get("players", [])
+    except Exception:
+        return
+    if not names:
+        return
+    session = SessionLocal()
+    try:
+        existing = {row.name for row in session.query(UnusedName.name).all()}
+        activeCoachNames = {c.name for c in session.query(Coach.name).all() if c.name}
+        activePlayerNames = {p.name for p in session.query(Player.name).all() if p.name}
+        inUse = activeCoachNames | activePlayerNames
+        added = 0
+        skipped = 0
+        for name in names:
+            if name in existing:
+                continue
+            if name in inUse:
+                skipped += 1
+                continue
+            session.add(UnusedName(name=name))
+            existing.add(name)
+            added += 1
+        if added or skipped:
+            session.commit()
+            logger.info(
+                f"Seeded {added} new names from config into unused_names pool"
+                + (f" (skipped {skipped} already in use by coaches/players)" if skipped else "")
+            )
+    except Exception as exc:
+        session.rollback()
+        logger.warning(f"Failed to seed unused_names: {exc}")
     finally:
         session.close()
 

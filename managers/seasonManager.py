@@ -76,13 +76,19 @@ def _isEdt(d):
 
 class Season:
     """Represents a single season"""
-    
+
     def __init__(self, seasonNumber: int):
         self.seasonNumber = seasonNumber
         self.currentSeason = seasonNumber  # Backward compatibility
         self.currentWeek = 0
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
+        # Rule book for this season. Defaults to the standard ruleset.
+        # Future Cores' rule patches mutate this object via
+        # ``gameRules.applyPatch(...)`` and the patch propagates to
+        # every game scheduled in this season from that point forward.
+        from game_rules import GameRules
+        self.gameRules = GameRules()
         self.activeGames = None
         self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []
@@ -285,6 +291,19 @@ class SeasonManager:
         # Initialize team funding for the new season (baseline + carry-forward) and assign initial tiers
         self._initializeTeamFunding(seasonNumber)
 
+        # Dev-only: spread teams across all 4 funding tiers so single-user
+        # testing produces a realistic tier distribution. Set DEV_SPREAD_TIERS=1
+        # in the environment to enable. Teams are assigned by ID into 4 equal
+        # buckets (deterministic — same team gets same tier every season).
+        self._applyDevTierOverride()
+
+        # Set prior-season expectation pressure baselines (must run after
+        # statArchive is populated by season completion last year — which it
+        # has been by this point — and after funding tier is assigned so
+        # market scaling can read the right value at game time).
+        teamMgr = self.serviceContainer.getService('team_manager')
+        teamMgr.setPressureModifiersForNewSeason(seasonNumber)
+
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
@@ -376,25 +395,48 @@ class SeasonManager:
         # Simulate playoffs (pick-em continues through playoffs)
         await self._simulatePlayoffs()
 
+        # Season-end wrap-up (shared with the mid-playoff resume path)
+        await self._finishSeasonAfterPlayoffs()
+
+    async def _finishSeasonAfterPlayoffs(self) -> None:
+        """Post-playoff season wrap-up: pick-em season prizes, season-end
+        emails, the unspent-Floobit tax, funding-tier lock-in, and season
+        completion. Extracted so the mid-playoff resume path runs the exact
+        same tail after finishing the resumed bracket. All steps here run
+        once per season (after the bowl), so they're safe on the resume path
+        too — they never executed in the interrupted run."""
         # Award pick-em season prizes after playoffs so all rounds are included
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
 
-        # Send season-end email reports (before tax so earned totals are accurate)
+        # Send season-end email reports. Offloaded to a worker thread (same hot-
+        # path reason as day-end emails). Safe to run alongside the tax/offseason
+        # that follow: the report's "earned totals" sum POSITIVE transactions
+        # only (the tax is a negative transaction, excluded), and the rest
+        # (champion, pick-em leaderboard) is immutable historical data.
         if not self.timingManager.catchingUp:
-            self._sendSeasonEndEmails(self.currentSeason.seasonNumber)
+            asyncio.get_running_loop().run_in_executor(
+                None, self._sendSeasonEndEmails, self.currentSeason.seasonNumber,
+            )
 
         # Apply season-end tax on unspent Floobits
         self._applySeasonEndTax(self.currentSeason.seasonNumber)
+        # Lock in funding tiers for the offseason — fans' season-long
+        # contributions (mid-season + season-end tax) recompute the team's
+        # market tier NOW, so FA bidding power / training / GM thresholds /
+        # rookie scouting all use the upgraded tier instead of waiting for
+        # next season to begin. Until this point tiers stayed frozen at
+        # season-start values so in-season mechanics couldn't drift.
+        self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
         # Close game stats file
         self._closeGameStatsFile()
-        
+
         # Handle season completion
         await self._completeSeasonSimulation()
-        
+
         logger.info(f"Season {self.currentSeason.seasonNumber} simulation complete")
-    
+
     async def _simulateRegularSeason(self, resumeFromWeek: int = 0) -> None:
         """Simulate all regular season games.
 
@@ -466,6 +508,16 @@ class SeasonManager:
 
             weekStartTime = week['startTime']
 
+            # Pre-set the countdown cache so the /api/season `next_game_start_time`
+            # field is correct during the long pre-game await below. Without this,
+            # the cache stays None until `await waitForWeekSetup` returns, and the
+            # API's fallback path (`getNextGameStartTime(currentWeek)`) lands on
+            # `schedule[currentWeek]` which is *next* week — off by one hour.
+            # Reproduced after a server restart that lands between rounds with
+            # `activeGames` reset to the upcoming week but no cache.
+            if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
+                self._cachedNextGameStart = weekStartTime
+
             # Detect catch-up: current time is past this week's scheduled start
             if self.timingManager._isScheduledMode:
                 isBehindSchedule = datetime.datetime.utcnow() > weekStartTime
@@ -509,6 +561,29 @@ class SeasonManager:
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
 
+            # Recompute regular-season pressure blend: prior-season expectations
+            # wane over the first ~14 weeks while inSeasonPressure (set by
+            # standings/elimination logic) takes over. Playoff weeks set
+            # pressureModifier directly elsewhere and are not affected here.
+            try:
+                teamMgr = self.serviceContainer.getService('team_manager')
+                teamMgr.applyRegularSeasonPressureBlend(
+                    nextWeek, season=self.currentSeason.seasonNumber,
+                )
+            except Exception as e:
+                logger.warning(f"Pressure blend at week {nextWeek} failed: {e}")
+
+            # Anomaly system weekly tick: applies attention decay,
+            # accumulates this week's engagement contributions, advances
+            # the state ladder, and recomputes the league-wide aggregate
+            # toward the Cracking threshold. Wrapped defensively so a
+            # failure in this layer never blocks the actual game loop.
+            try:
+                from managers.anomalyManager import weeklyTick as anomalyWeeklyTick
+                anomalyWeeklyTick(self.currentSeason.seasonNumber, nextWeek)
+            except Exception as e:
+                logger.warning(f"Anomaly weekly tick at week {nextWeek} failed: {e}")
+
             # Cache the game start time so REST API returns a stable value on refresh
             if self.timingManager._isScheduledMode and not self.timingManager.catchingUp:
                 self._cachedNextGameStart = weekStartTime
@@ -543,6 +618,20 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 )
                 broadcaster.broadcast_sync('season', week_event)
+
+            # Resolve duplicate-effect equipped sets that pre-date the
+            # no-duplicate rule. Modifies the just-completed week's
+            # equipped rows so carry-forward later (at game start) only
+            # propagates one copy per effectName per user. Runs at week
+            # start, not at the game-start lock — users see the change
+            # before their cards lock.
+            try:
+                self._resolveDuplicateEquippedEffects(
+                    self.currentSeason.seasonNumber,
+                    sourceWeek=self.currentSeason.currentWeek - 1,
+                )
+            except Exception as _e:
+                logger.warning(f"Duplicate-effect resolution failed: {_e}")
 
             # Open the FA voting window mid-season once Week 22 arrives (the
             # Front Office's activation threshold). Fans can rank projected
@@ -606,9 +695,13 @@ class SeasonManager:
                 unlocked = lockSession.query(FantasyRoster).filter_by(
                     season=self.currentSeason.seasonNumber, is_locked=False
                 ).all()
+                # Auto-lock anyone with at least the ROSTER_MIN_PLAYERS
+                # floor. Previously required all 6 slots filled, so a
+                # partially-set-up roster silently forfeited the week.
+                from constants import ROSTER_MIN_PLAYERS as _ROSTER_MIN
                 for roster in unlocked:
                     filledSlots = {rp.slot for rp in roster.players}
-                    if len(filledSlots) >= 6:
+                    if len(filledSlots) >= _ROSTER_MIN:
                         roster.is_locked = True
                         roster.locked_at = datetime.datetime.utcnow()
                         for rp in roster.players:
@@ -617,6 +710,15 @@ class SeasonManager:
                                     rp.player_id, self.currentSeason.seasonNumber
                                 ) if tracker else 0
                             )
+                        # Replay All-Pro swap grants now that the roster is
+                        # locked. Users who equipped AP cards before lock had
+                        # the grant skipped (the equip endpoint requires a
+                        # locked roster); without this, swap_bonus_active
+                        # stays False and the UI shows "Swap used" even
+                        # though no swap was consumed.
+                        self._grantAllProSwapsForRoster(
+                            lockSession, roster, seasonNum, currentWeek
+                        )
                         logger.info(f"Auto-locked roster for user {roster.user_id}")
                 lockSession.commit()
                 lockSession.close()
@@ -747,6 +849,16 @@ class SeasonManager:
             from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
             if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
                 self._evaluateRetirementCandidates()
+                # Snapshot per-team active fan counts at this moment so
+                # the GM vote threshold doesn't shift if new fans log in
+                # for the first time after the front office opens.
+                self._snapshotActiveFanCounts()
+                # Generate the per-team coach candidate slate so users can
+                # see + vote on potential replacements during the FA window
+                # rather than after the fire resolves. Names of unhired
+                # candidates return to the unused-name pool at hire
+                # resolution, so this isn't a net drain.
+                self._generateCoachCandidatesForFA()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -779,11 +891,21 @@ class SeasonManager:
                 else:
                     await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
 
-            # Send day-end email reports (skip during catch-up / fast modes)
+            # Send day-end email reports (skip during catch-up / fast modes).
+            # Offload to a worker thread: sending loops over every opted-in user
+            # with a throttle sleep + blocking Resend HTTP call each, which would
+            # otherwise freeze the event loop (and the API, same process) for the
+            # whole batch. The method only READS shared state + writes to Resend
+            # via its own DB session, so a background thread is safe. Fire-and-
+            # forget — the executor runs it to completion even if we drop the
+            # future, and the inter-day wait gives it idle time to finish.
             if isLastRoundOfDay and not self.timingManager.catchingUp:
                 firstRound = roundIndex - 6  # 0-indexed first round of this day
                 weekRange = list(range(firstRound + 1, roundIndex + 2))  # 1-indexed week numbers
-                self._sendDayEndEmails(self.currentSeason.seasonNumber, dayNum, weekRange)
+                asyncio.get_running_loop().run_in_executor(
+                    None, self._sendDayEndEmails,
+                    self.currentSeason.seasonNumber, dayNum, weekRange,
+                )
 
         # Catch-up is done — switch to SCHEDULED so playoffs run at normal speed
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
@@ -791,13 +913,13 @@ class SeasonManager:
             logger.info("Catch-up complete at end of regular season — switched to SCHEDULED mode")
         self.timingManager.catchingUp = False
 
-    async def _simulatePlayoffs(self) -> None:
+    async def _simulatePlayoffs(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate playoff games"""
         logger.info("Starting playoff simulation")
-        
-        
+
+
         # Simulate playoff rounds
-        await self._simulatePlayoffRounds()
+        await self._simulatePlayoffRounds(resumeFromRound=resumeFromRound, restoredState=restoredState)
 
     async def _simulateGame(self, game: FloosGame.Game, gameIndex: int = -1) -> None:
         """Simulate a single game"""
@@ -828,6 +950,14 @@ class SeasonManager:
                                         _ft.addPlayerQ4Points(_pid, pts)
                                 return cb
                             player.stat_tracker._on_fantasy_points = _makeFpCallback(
+                                pid, gameInstance, fantasyTracker
+                            )
+                            def _makeScoreCallback(_pid, _game, _ft):
+                                def cb(_kind):
+                                    if _game.currentQuarter >= 4:
+                                        _ft.addPlayerQ4Score(_pid)
+                                return cb
+                            player.stat_tracker._on_scoring_play = _makeScoreCallback(
                                 pid, gameInstance, fantasyTracker
                             )
 
@@ -888,13 +1018,22 @@ class SeasonManager:
                 self._resolvePickEmGame(gameIndex, gameInstance)
 
         except Exception as e:
+            tb = traceback.format_exc()
             logger.error(
                 f"Error simulating game ({game.homeTeam.name} vs {game.awayTeam.name}): {e}\n"
-                + traceback.format_exc()
+                + tb
             )
+            # Persist a crash dump to the volume so we can post-mortem even
+            # after the rotating in-app log overwrites the trail. Best-effort —
+            # never let dump failure block the force-finish below.
+            try:
+                self._writeGameCrashDump(game, e, tb)
+            except Exception as dumpErr:
+                logger.warning(f"Failed to write game crash dump: {dumpErr}")
             # Force-finish the game so it doesn't stay stuck as "Live" forever
             if getattr(game, 'status', None) != FloosGame.GameStatus.Final:
                 game.status = FloosGame.GameStatus.Final
+                tiedAtCrash = (game.homeScore == game.awayScore)
                 if not getattr(game, 'winningTeam', None):
                     if game.homeScore > game.awayScore:
                         game.winningTeam = game.homeTeam
@@ -903,18 +1042,103 @@ class SeasonManager:
                         game.winningTeam = game.awayTeam
                         game.losingTeam = game.homeTeam
                     else:
+                        # Tied at crash time. Mark home as "winningTeam" for
+                        # the legacy fields that demand a value, but apply
+                        # a tie in the standings below — don't arbitrarily
+                        # credit one team with a win they didn't earn.
                         game.winningTeam = game.homeTeam
                         game.losingTeam = game.awayTeam
                 try:
-                    # Update season win/loss records (normally done inside playGame())
+                    # Update season win/loss/tie records.
                     if getattr(game, 'isRegularSeasonGame', False) and getattr(game, 'winningTeam', None):
-                        game.winningTeam.seasonTeamStats.setdefault('wins', 0)
-                        game.losingTeam.seasonTeamStats.setdefault('losses', 0)
-                        game.winningTeam.seasonTeamStats['wins'] += 1
-                        game.losingTeam.seasonTeamStats['losses'] += 1
+                        if tiedAtCrash:
+                            game.homeTeam.seasonTeamStats.setdefault('ties', 0)
+                            game.awayTeam.seasonTeamStats.setdefault('ties', 0)
+                            game.homeTeam.seasonTeamStats['ties'] += 1
+                            game.awayTeam.seasonTeamStats['ties'] += 1
+                        else:
+                            game.winningTeam.seasonTeamStats.setdefault('wins', 0)
+                            game.losingTeam.seasonTeamStats.setdefault('losses', 0)
+                            game.winningTeam.seasonTeamStats['wins'] += 1
+                            game.losingTeam.seasonTeamStats['losses'] += 1
                     self._updateTeamRecords(game)
                 except Exception as recordErr:
                     logger.warning(f"Failed to update records after game error recovery: {recordErr}")
+
+    def _writeGameCrashDump(self, game, err, tb: str) -> None:
+        """Persist a game's state at exception time to the data volume so
+        we can post-mortem even after the rotating in-app log overwrites
+        the original traceback. Keeps the most recent 50 dumps; older ones
+        get pruned so the volume doesn't fill up.
+        """
+        import datetime as _dt
+        import json as _json
+        dumpDir = '/data/crashes'
+        if not os.path.isdir('/data'):
+            # Local dev — fall back to project-relative logs dir.
+            dumpDir = os.path.join(os.getcwd(), 'logs', 'crashes')
+        os.makedirs(dumpDir, exist_ok=True)
+
+        ts = _dt.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+        gid = getattr(game, 'dbId', None) or getattr(game, 'id', 'unknown')
+        path = os.path.join(dumpDir, f'game_{gid}_{ts}.txt')
+
+        homeTeamName = getattr(game.homeTeam, 'name', '?')
+        awayTeamName = getattr(game.awayTeam, 'name', '?')
+        feedTail = []
+        for entry in (getattr(game, 'gameFeed', None) or [])[:25]:
+            try:
+                if isinstance(entry, dict):
+                    if 'play' in entry:
+                        p = entry['play']
+                        feedTail.append({
+                            'kind': 'play',
+                            'quarter': getattr(p, 'quarter', None),
+                            'time': getattr(p, 'timeRemaining', None),
+                            'result': str(getattr(p, 'playResult', None)),
+                            'text': getattr(p, 'playText', None),
+                        })
+                    elif 'event' in entry:
+                        feedTail.append({'kind': 'event', 'event': entry['event']})
+            except Exception:
+                continue
+
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(f"=== Game crash dump ===\n")
+            fh.write(f"timestamp: {ts}\n")
+            fh.write(f"game_id (dbId): {gid}\n")
+            fh.write(f"matchup: {awayTeamName} @ {homeTeamName}\n")
+            fh.write(f"score: away={getattr(game, 'awayScore', '?')} home={getattr(game, 'homeScore', '?')}\n")
+            fh.write(f"quarter: {getattr(game, 'currentQuarter', '?')}  clock: {getattr(game, 'gameClockSeconds', '?')}\n")
+            fh.write(f"isOvertime: {getattr(game, 'isOvertime', '?')}  otPeriod: {getattr(game, 'otPeriod', '?')}\n")
+            fh.write(f"otFirstPossComplete: {getattr(game, 'otFirstPossComplete', '?')}  "
+                     f"otSecondPossComplete: {getattr(game, 'otSecondPossComplete', '?')}\n")
+            fh.write(f"totalPlays: {getattr(game, 'totalPlays', '?')}\n")
+            fh.write(f"offense: {getattr(getattr(game, 'offensiveTeam', None), 'abbr', '?')}  "
+                     f"defense: {getattr(getattr(game, 'defensiveTeam', None), 'abbr', '?')}\n")
+            fh.write(f"down: {getattr(game, 'down', '?')}  "
+                     f"yardsToEndzone: {getattr(game, 'yardsToEndzone', '?')}  "
+                     f"yardsToFirstDown: {getattr(game, 'yardsToFirstDown', '?')}\n")
+            fh.write(f"\nexception: {type(err).__name__}: {err}\n\n")
+            fh.write("traceback:\n")
+            fh.write(tb)
+            fh.write("\nrecent_feed:\n")
+            fh.write(_json.dumps(feedTail, indent=2, default=str))
+            fh.write("\n")
+
+        # Prune to last 50 dumps so the volume doesn't grow unbounded.
+        try:
+            files = sorted(
+                (os.path.join(dumpDir, f) for f in os.listdir(dumpDir) if f.startswith('game_') and f.endswith('.txt')),
+                key=os.path.getmtime,
+            )
+            for old in files[:-50]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
     def _openGameStatsFile(self) -> None:
         """Open file for game statistics logging"""
@@ -1051,6 +1275,12 @@ class SeasonManager:
         # Process card effects for this week (regular season only)
         if not in_playoffs:
             self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
+            # Card bonuses just landed in WeeklyCardBonus — drop the cached
+            # snapshot so downstream consumers (leaderboard prizes, FP payout,
+            # achievements) recompute a weekTotal that includes them.
+            _ft = self.serviceContainer.getService('fantasy_tracker')
+            if _ft:
+                _ft.invalidateSnapshotCache()
 
         # Award weekly leaderboard prizes (after card effects are finalized)
         if not in_playoffs:
@@ -1063,6 +1293,11 @@ class SeasonManager:
         # Achievement hook — Veteran (rosters set this regular-season week)
         if not in_playoffs:
             self._creditVeteranForWeek(self.currentSeason.seasonNumber)
+
+        # Supporter dividends (fan-income) — accrue every week, regular AND
+        # playoff (backing a deep-run team keeps paying). Ticks tenure for all
+        # fans; credits a dividend to those whose team played this week.
+        self._accrueSupporterDividends(self.currentSeason.seasonNumber, week)
 
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
@@ -1120,6 +1355,111 @@ class SeasonManager:
         # Broadcast final leaderboard with persisted card bonuses
         self._broadcastLeaderboardUpdate()
 
+    def _resolveDuplicateEquippedEffects(self, season: int, sourceWeek: int) -> None:
+        """Auto-unequip duplicate-effect cards from a user's equipped set.
+
+        Runs at week start (before the game-start auto-lock). Modifies
+        the just-completed week's equipped rows so carry-forward later
+        only propagates one copy per effectName per user. Picks the
+        keeper by edition rarity, then by lowest slot for a stable tie
+        break. The dropped EquippedCard row is deleted; the underlying
+        UserCard stays in the user's collection, free to be sold,
+        combined, or re-equipped to its own slot.
+
+        No-op when sourceWeek < 1 (pre-week-1).
+        """
+        if not sourceWeek or sourceWeek < 1:
+            return
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import EquippedCard, UserCard, CardTemplate
+            from api.game_broadcaster import broadcaster as _broadcaster
+        except Exception as e:
+            logger.warning(f"Duplicate-effect resolver: import failed: {e}")
+            return
+
+        # Edition rarity order — keep the rarest in the duplicate group.
+        editionRank = {'diamond': 4, 'prismatic': 3, 'holographic': 2, 'base': 1}
+
+        session = get_session()
+        try:
+            rows = (
+                session.query(EquippedCard, UserCard, CardTemplate)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(EquippedCard.season == season, EquippedCard.week == sourceWeek)
+                .all()
+            )
+            byUser: dict = {}
+            for eq, uc, tmpl in rows:
+                cfg = tmpl.effect_config or {}
+                effName = cfg.get('effectName') or ''
+                if not effName:
+                    continue
+                byUser.setdefault(eq.user_id, {}).setdefault(effName, []).append((eq, uc, tmpl))
+
+            unequippedCount = 0
+            usersAffected = []
+            for userId, effectGroups in byUser.items():
+                droppedForUser = []
+                for effName, group in effectGroups.items():
+                    if len(group) <= 1:
+                        continue
+                    # Keeper rule for a duplicate-effect group:
+                    #   1. Highest edition rarity wins (diamond > prismatic > holo > base).
+                    #   2. Same edition: keep the higher-rated depicted player.
+                    #   3. Same edition AND rating: keep the lower slot (stable).
+                    group.sort(key=lambda x: (
+                        -editionRank.get(x[2].edition, 0),
+                        -int(getattr(x[2], 'player_rating', 0) or 0),
+                        x[0].slot_number,
+                    ))
+                    keeper, *drops = group
+                    for dropEq, dropUc, dropTmpl in drops:
+                        # Delete the equipped row so carry-forward skips it.
+                        # UserCard stays in the collection — user can sell,
+                        # combine, or re-equip it on a free slot.
+                        session.delete(dropEq)
+                        droppedForUser.append({
+                            'effectName': effName,
+                            'displayName': (dropTmpl.effect_config or {}).get('displayName') or effName,
+                            'slotNumber': dropEq.slot_number,
+                            'userCardId': dropUc.id,
+                        })
+                        unequippedCount += 1
+                if droppedForUser:
+                    usersAffected.append((userId, droppedForUser))
+
+            if unequippedCount:
+                session.commit()
+                logger.info(
+                    f"Duplicate-effect resolver: unequipped {unequippedCount} cards "
+                    f"across {len(usersAffected)} users in week {sourceWeek}"
+                )
+                # Per-user WebSocket notification so the UI can surface
+                # what changed without forcing a manual refetch.
+                for userId, dropped in usersAffected:
+                    try:
+                        payload = {
+                            'type': 'duplicate_effects_resolved',
+                            'data': {
+                                'sourceWeek': sourceWeek,
+                                'dropped': dropped,
+                            },
+                        }
+                        _broadcaster.broadcast_to_user_sync(userId, payload)
+                    except Exception:
+                        pass
+            else:
+                session.rollback()
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"Duplicate-effect resolver: failed for season {season} week {sourceWeek}: {e}")
+        finally:
+            session.close()
+
     def _carryForwardEquippedCards(self, session, equippedRepo, season: int, currentWeek: int) -> None:
         """Carry forward equipped cards from the most recent week for users who don't have any yet."""
         from database.models import EquippedCard, UserCard, CardTemplate
@@ -1155,12 +1495,31 @@ class SeasonManager:
                 if prevEquipped:
                     for prev in prevEquipped:
                         userCard = session.get(UserCard, prev.user_card_id)
-                        if not userCard:
+                        # Skip missing or vaulted cards — a card vaulted after an
+                        # earlier equip must not be carried forward and locked.
+                        if not userCard or getattr(userCard, "vaulted", False):
                             continue
                         template = session.get(CardTemplate, userCard.card_template_id)
                         if not template or template.season_created != season:
                             continue
-                        prevStreak = getattr(prev, 'streak_count', 1) or 1
+                        # Preserve a streak_count of 0 across carry-forward —
+                        # an `or 1` fallback here would clobber the "just-
+                        # broken streak" signal that drives the restart
+                        # halving penalty in _processWeekCardEffects.
+                        prevStreak = getattr(prev, 'streak_count', 1)
+                        if prevStreak is None:
+                            prevStreak = 1
+                        # Preserve the All-Pro swap-bonus flag so a card that
+                        # granted an unused swap last week still shows as
+                        # "swap available" this week. Without this, every
+                        # week boundary silently flips active grants to
+                        # "used" — matching one of the swap-accounting bugs.
+                        prevSwapBonus = bool(getattr(prev, 'swap_bonus_active', False))
+                        # Carry forward peak-decay state so a cold-week
+                        # streak compute on this new row can hold the
+                        # peak and decay from it.
+                        prevPeakOutput = getattr(prev, 'peak_output', None)
+                        prevWeeksSinceBreak = getattr(prev, 'weeks_since_break', 0) or 0
                         equippedRepo.save(EquippedCard(
                             user_id=userId,
                             season=season,
@@ -1169,6 +1528,9 @@ class SeasonManager:
                             user_card_id=prev.user_card_id,
                             locked=False,
                             streak_count=prevStreak,
+                            swap_bonus_active=prevSwapBonus,
+                            peak_output=prevPeakOutput,
+                            weeks_since_break=prevWeeksSinceBreak,
                         ))
                     carried += 1
                     break
@@ -1176,30 +1538,89 @@ class SeasonManager:
             session.flush()
             logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
 
+    def _grantAllProSwapsForRoster(self, session, roster, season: int, currentWeek: int) -> None:
+        """Replay All-Pro swap grants for an equipped roster.
+
+        Mirrors the All-Pro grant block in PUT /api/cards/equipped: for each
+        equipped All-Pro card whose UserCard.last_swap_grant_cycle is below
+        the current cycle, grant +1 swap, advance the cycle marker, and flag
+        the EquippedCard's swap_bonus_active=True. Idempotent — cards that
+        already granted in this cycle are skipped.
+        """
+        if not currentWeek or currentWeek < 1:
+            return
+        try:
+            from database.models import EquippedCard, UserCard, CardTemplate
+            swapCycle = (currentWeek - 1) // 7 + 1
+            equippedAP = (
+                session.query(EquippedCard, UserCard, CardTemplate)
+                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                .filter(
+                    EquippedCard.user_id == roster.user_id,
+                    EquippedCard.season == season,
+                    EquippedCard.week == currentWeek,
+                    CardTemplate.classification.isnot(None),
+                    CardTemplate.classification.contains("all_pro"),
+                )
+                .all()
+            )
+            for eqCard, uc, _tmpl in equippedAP:
+                if uc.last_swap_grant_cycle < swapCycle:
+                    roster.swaps_available += 1
+                    uc.last_swap_grant_cycle = swapCycle
+                    eqCard.swap_bonus_active = True
+        except Exception as e:
+            logger.warning(f"Failed to grant All-Pro swaps for roster {roster.id}: {e}")
+
     def _grantRosterSwaps(self, season: int) -> None:
-        """Grant 1 swap to all locked rosters.
-        Cap is 1 normally, 2 if user has a Champion-classified card equipped."""
+        """Grant 1 organic swap to all locked rosters at week end.
+
+        Cap = 1 baseline + 1 per equipped All-Pro card whose grant is still
+        unused this cycle (swap_bonus_active=True). The AP bump exists so an
+        AP grant doesn't immediately suppress the next weekly organic refill
+        (without it, swaps would already be at the cap of 1 and the refill
+        check `1 < 1` would fail).
+
+        Champion used to bump this cap by 1 — leftover from when adding a
+        FLEX player consumed a swap. That cost was removed long ago (empty
+        FLEX adds are free), so the Champion bump no longer has a purpose
+        and was removed.
+        """
         try:
             from database.connection import get_session as _getSession
             from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
             swapSession = _getSession()
+            currentWeek = (
+                self.currentSeason.currentWeek
+                if self.currentSeason and self.currentSeason.currentWeek
+                else 0
+            )
             rosters = swapSession.query(FantasyRoster).filter_by(
                 season=season, is_locked=True
             ).all()
             updated = 0
             for roster in rosters:
-                # Check if user has a Champion card equipped
-                hasChampion = swapSession.query(EquippedCard).join(
+                # AP bump — count equipped AP cards (THIS WEEK only) whose
+                # grants are still unused this cycle (swap_bonus_active=True).
+                # Each adds room for one extra outstanding swap so the weekly
+                # organic refill can stack on top of the AP grant.
+                # Without the week filter, carry-forward rows from earlier
+                # weeks would inflate the count and the cap would ratchet up
+                # by 1 every week.
+                apActiveCount = swapSession.query(EquippedCard).join(
                     UserCard, EquippedCard.user_card_id == UserCard.id
                 ).join(
                     CardTemplate, UserCard.card_template_id == CardTemplate.id
                 ).filter(
                     EquippedCard.user_id == roster.user_id,
                     EquippedCard.season == season,
+                    EquippedCard.week == currentWeek,
+                    EquippedCard.swap_bonus_active == True,
                     CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("champion")
-                ).first() is not None
-                maxSwaps = 2 if hasChampion else 1
+                    CardTemplate.classification.contains("all_pro"),
+                ).count() if currentWeek > 0 else 0
+                maxSwaps = 1 + apActiveCount
                 if roster.swaps_available < maxSwaps:
                     roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
                     updated += 1
@@ -1277,6 +1698,15 @@ class SeasonManager:
                         weekPlayerStats[pid] = _dbStatsToCardFormat(
                             {}, {}, {}, {}, fp,
                         )
+
+                # Inject Q4 fantasy points for Closer card effect — mirrors
+                # the fantasyTracker live-snapshot injection. Without this,
+                # the persisted week-end breakdown always read 0 Q4 FP and
+                # Closer paid nothing, because _dbStatsToCardFormat doesn't
+                # surface the q4_fantasy_points column on its own.
+                for gps in gameStats:
+                    if gps.q4_fantasy_points and gps.player_id in weekPlayerStats:
+                        weekPlayerStats[gps.player_id]["q4FantasyPoints"] = gps.q4_fantasy_points
 
                 # ─── Build shared context data ───────────────────────────────
 
@@ -1367,9 +1797,22 @@ class SeasonManager:
                 except Exception:
                     pass
 
-                # Eminence: position pace data (same for all users)
+                # Eminence + Cornerstone: position pace + leaderboard data
+                # (same for all users this week). computeEminenceData returns 4
+                # values — top10/top1 sets feed Cornerstone too.
                 from managers.cardEffectCalculator import computeEminenceData
-                positionAvgFPs, playerSeasonFPPerGame = computeEminenceData(session, season, week)
+                (positionAvgFPs, playerSeasonFPPerGame,
+                 top10PerPosition, top1PerPosition) = computeEminenceData(session, season, week)
+
+                # Roster-trait context shared across users:
+                #   priorSeasonMissedPlayoffTeamIds — Comeback Kid
+                #   currentTop6TeamIds              — Domination
+                from managers.cardProjection import (
+                    _lookupPriorSeasonMissedPlayoffTeams,
+                    _lookupCurrentTop6Teams,
+                )
+                priorSeasonMissedPlayoffTeamIds = _lookupPriorSeasonMissedPlayoffTeams(session, season)
+                currentTop6TeamIds = _lookupCurrentTop6Teams(session, season)
 
                 # ─── Process each user ───────────────────────────────────────
                 for userId, userEquipped in byUser.items():
@@ -1415,14 +1858,103 @@ class SeasonManager:
                     streakCounts = {
                         eq.id: getattr(eq, 'streak_count', 1) for eq in userEquipped
                     }
+                    # Streak peak-decay state — feeds _computeStreakEffect so a
+                    # cold week after a recent streak pays a decaying tail
+                    # instead of dropping straight to base.
+                    streakPeakOutputs = {
+                        eq.id: float(eq.peak_output) for eq in userEquipped
+                        if getattr(eq, 'peak_output', None) is not None
+                    }
+                    streakWeeksSinceBreak = {
+                        eq.id: int(getattr(eq, 'weeks_since_break', 0) or 0)
+                        for eq in userEquipped
+                    }
+
+                    # Roster-trait card data (for Castaway, Rookie Hype) ──
+                    # Team records: team_id → win pct, used by Castaway to detect
+                    # sub-.500 team players on the roster.
+                    teamRecords = {}
+                    if teamManager:
+                        for team in teamManager.teams:
+                            stats = getattr(team, 'seasonTeamStats', {}) or {}
+                            wp = stats.get('winPerc')
+                            if wp is None:
+                                w = stats.get('wins', 0) or 0
+                                l = stats.get('losses', 0) or 0
+                                wp = w / (w + l) if (w + l) > 0 else 0.5
+                            teamRecords[team.id] = float(wp)
+                    # Rookie flags: playerId → True if rookie. Used by Rookie Hype.
+                    # Matches the "Rookie" service tier (seasonsPlayed 0–1) so
+                    # the card fires for the same players the UI labels as
+                    # rookies, not just the strict first-year subset.
+                    rosterRookieFlags = {}
+                    rosterSeasonsPlayed = {}  # Vanguard reads this for 5+ vets
+                    if self.playerManager:
+                        for pid in rosterPlayerIds:
+                            player = self.playerManager.getPlayerById(pid)
+                            if player:
+                                svc = getattr(player, 'serviceTime', None)
+                                isRookieSvc = bool(svc and getattr(svc, 'name', '') == 'Rookie')
+                                rosterRookieFlags[pid] = bool(
+                                    isRookieSvc
+                                    or (getattr(player, 'seasonsPlayed', 99) or 99) <= 1
+                                )
+                                rosterSeasonsPlayed[pid] = int(getattr(player, 'seasonsPlayed', 0) or 0)
+
+                    # Loyalty snapshot — original roster player IDs persisted
+                    # at first-save on the FantasyRoster row. Empty if the user
+                    # hasn't saved yet (shouldn't happen by week-end but guard).
+                    initialRosterPlayerIds: set = set()
+                    if roster and getattr(roster, 'initial_player_ids', None):
+                        try:
+                            import json as _json
+                            initialRosterPlayerIds = {
+                                int(pid) for pid in _json.loads(roster.initial_player_ids)
+                            }
+                        except Exception:
+                            initialRosterPlayerIds = set()
+
+                    # Pick-em stats this user/week — drives Conviction (manual
+                    # submit streak), Augur (accuracy bonus), Tipster (FPx
+                    # scaling with weekly points).
+                    userManualPickSubmittedThisWeek = False
+                    userWeeklyPickemCorrect = 0
+                    userWeeklyPickemTotal = 0
+                    userWeeklyPickemPoints = 0
+                    try:
+                        from database.models import PickEmPick
+                        weekPicks = session.query(PickEmPick).filter_by(
+                            user_id=userId, season=season, week=week,
+                        ).all()
+                        if weekPicks:
+                            userManualPickSubmittedThisWeek = any(not p.is_auto for p in weekPicks)
+                            for p in weekPicks:
+                                if p.correct is True:
+                                    userWeeklyPickemCorrect += 1
+                                    userWeeklyPickemTotal += 1
+                                elif p.correct is False:
+                                    userWeeklyPickemTotal += 1
+                                userWeeklyPickemPoints += int(p.points_earned or 0)
+                    except Exception as e:
+                        logger.debug(f"Pick-em ctx hydration skipped for user={userId} wk={week}: {e}")
 
                     # User's favorite team data
                     userRow = session.get(User, userId)
                     userFavoriteTeamId = userRow.favorite_team_id if userRow else None
 
+                    # Believe reads favorite team season wins
+                    favoriteTeamSeasonWins = 0
+                    if userFavoriteTeamId and teamManager:
+                        _favTeam = teamManager.getTeamById(userFavoriteTeamId)
+                        if _favTeam:
+                            favoriteTeamSeasonWins = int(
+                                (getattr(_favTeam, 'seasonTeamStats', {}) or {}).get('wins', 0) or 0
+                            )
+
                     favoriteTeamElo = 1500.0
                     favoriteTeamStreak = 0
                     favoriteTeamPriorStreak = 0
+                    favoriteTeamPeakStreak = 0
                     favoriteTeamSeasonLosses = 0
                     favoriteTeamInPlayoffs = False
                     favoriteTeamWonThisWeek = False
@@ -1437,6 +1969,7 @@ class SeasonManager:
                             favStats = getattr(favTeam, 'seasonTeamStats', {})
                             favoriteTeamStreak = favStats.get('streak', 0)
                             favoriteTeamPriorStreak = favStats.get('priorStreak', 0)
+                            favoriteTeamPeakStreak = favStats.get('peakStreak', 0)
                             favoriteTeamSeasonLosses = favStats.get('losses', 0)
                             favoriteTeamWonThisWeek = teamResults.get(userFavoriteTeamId, False)
                             favoriteTeamBigPlays = bigPlaysByTeam.get(userFavoriteTeamId, 0)
@@ -1539,6 +2072,31 @@ class SeasonManager:
                     except Exception as e:
                         logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
 
+                    # FLEX slot detection — mirrors fantasyTracker._buildCardCalcContext.
+                    # Without this, Home Alone misses an empty FLEX slot at week-end.
+                    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+                    if not hasFlexSlot:
+                        try:
+                            from database.models import ShopPurchase as _SP
+                            for eqRow in userEquipped:
+                                uc2 = getattr(eqRow, 'user_card', None)
+                                tmpl = getattr(uc2, 'card_template', None) if uc2 else None
+                                cls = getattr(tmpl, 'classification', None) or ''
+                                if 'champion' in cls:
+                                    hasFlexSlot = True
+                                    break
+                            if not hasFlexSlot:
+                                activeFlex = session.query(_SP).filter(
+                                    _SP.user_id == userId,
+                                    _SP.season == season,
+                                    _SP.item_slug == 'temp_flex',
+                                    _SP.expires_at_week >= week,
+                                ).first()
+                                if activeFlex:
+                                    hasFlexSlot = True
+                        except Exception:
+                            pass
+
                     # Build context
                     calcCtx = CardCalcContext(
                         userId=userId,
@@ -1553,11 +2111,20 @@ class SeasonManager:
                         rosterTotalTds=rosterTotalTds,
                         rosterPlayerPositions=rosterPlayerPositions,
                         streakCounts=streakCounts,
+                        streakPeakOutputs=streakPeakOutputs,
+                        streakWeeksSinceBreak=streakWeeksSinceBreak,
+                        _teamRecords=teamRecords,
+                        _rosterRookieFlags=rosterRookieFlags,
+                        userManualPickSubmittedThisWeek=userManualPickSubmittedThisWeek,
+                        userWeeklyPickemCorrect=userWeeklyPickemCorrect,
+                        userWeeklyPickemTotal=userWeeklyPickemTotal,
+                        userWeeklyPickemPoints=userWeeklyPickemPoints,
                         userFavoriteTeamId=userFavoriteTeamId,
                         favoriteTeamElo=favoriteTeamElo,
                         leagueAverageElo=leagueAverageElo,
                         favoriteTeamStreak=favoriteTeamStreak,
                         favoriteTeamPriorStreak=favoriteTeamPriorStreak,
+                        favoriteTeamPeakStreak=favoriteTeamPeakStreak,
                         favoriteTeamSeasonLosses=favoriteTeamSeasonLosses,
                         favoriteTeamInPlayoffs=favoriteTeamInPlayoffs,
                         favoriteTeamWonThisWeek=favoriteTeamWonThisWeek,
@@ -1573,36 +2140,109 @@ class SeasonManager:
                         activeModifier=userModifier,
                         unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
                         seasonSwapsUsed=seasonSwapsUsed,
+                        hasFlexSlot=hasFlexSlot,
                         userFloobitsBalance=userFloobitsBalance,
                         positionAvgFPs=positionAvgFPs,
                         playerSeasonFPPerGame=playerSeasonFPPerGame,
+                        top10PerPosition=top10PerPosition,
+                        top1PerPosition=top1PerPosition,
+                        # Roster-trait card data (next-season additions)
+                        priorSeasonMissedPlayoffTeamIds=priorSeasonMissedPlayoffTeamIds,
+                        currentTop6TeamIds=currentTop6TeamIds,
+                        _rosterSeasonsPlayed=rosterSeasonsPlayed,
+                        initialRosterPlayerIds=initialRosterPlayerIds,
+                        favoriteTeamSeasonWins=favoriteTeamSeasonWins,
                     )
 
-                    # Populate streak conditions for breakdown display
+                    # Populate streak conditions for breakdown display AND
+                    # pre-bump streakCounts to the PROJECTED value when the
+                    # condition is met. Without the bump, the persisted
+                    # breakdown for week N pays at the count from end-of-
+                    # week-N-1 (always one tick behind) — meaning the very
+                    # first week the streak triggers pays base only, which
+                    # contradicts the per-week growth users expect.
+                    # The actual eq.streak_count DB bump still happens
+                    # post-calc at line ~1914; this just keeps the calc-time
+                    # view in sync with the live snapshot path.
                     from managers.cardEffects import STREAK_CONFIGS as _streakConfigs
                     streakConditions = {}
                     for eq in userEquipped:
                         ec = eq.user_card.card_template.effect_config or {}
                         eName = ec.get("effectName", "")
-                        if eName in _streakConfigs:
-                            streakConditions[eq.id] = checkStreakCondition(
-                                eName, calcCtx, eq.user_card.card_template.player_id
-                            )
+                        if eName not in _streakConfigs:
+                            continue
+                        cfg = _streakConfigs[eName]
+                        # Weekly accumulators (touchdown_jackpot) compute
+                        # their own ticks from this week's data; don't bump.
+                        if cfg.get("isWeekly"):
+                            streakConditions[eq.id] = True
+                            continue
+                        condMet = checkStreakCondition(
+                            eName, calcCtx, eq.user_card.card_template.player_id
+                        )
+                        streakConditions[eq.id] = condMet
+                        # Apply ironclad modifier — if active, treat as met
+                        # for the bump too (matches the eq.streak_count
+                        # bump path below at the streak-management block).
+                        effectiveMet = condMet or (userModifier == "ironclad")
+                        if effectiveMet:
+                            # Streak restart penalty (applied pre-calc so
+                            # THIS week's compute sees the halved peak): if
+                            # this is the first met week after a break and
+                            # a peak carries from a prior streak, halve the
+                            # peak in calcCtx so carriedBase = halved value.
+                            # Post-calc, the same halving is persisted to
+                            # eq.peak_output for future weeks.
+                            priorCount = eq.streak_count if eq.streak_count is not None else 1
+                            if priorCount == 0:
+                                priorPeak = calcCtx.streakPeakOutputs.get(eq.id)
+                                if priorPeak is not None:
+                                    primary = ec.get("primary", {}) or {}
+                                    baseReward = primary.get("baseReward", 0) or 0
+                                    halved = float(priorPeak) * 0.5
+                                    if halved <= baseReward:
+                                        calcCtx.streakPeakOutputs.pop(eq.id, None)
+                                    else:
+                                        calcCtx.streakPeakOutputs[eq.id] = halved
+                                # Skip the "1 = idle baseline" value on restart
+                                # so display (count - 1) shows 1 on first met
+                                # week instead of 0.
+                                calcCtx.streakCounts[eq.id] = 2
+                            else:
+                                calcCtx.streakCounts[eq.id] = calcCtx.streakCounts.get(eq.id, 0) + 1
                     calcCtx.liveStreakConditionsMet = streakConditions
 
                     # Calculate card bonuses
                     result = calculateWeekCardBonuses(userEquipped, calcCtx)
 
-                    # Formula: (rosterFP + Σ flat FP) × FPx₁ × FPx₂ × ...
-                    baseFP = weekRawFP + result.totalBonusFP
-                    multProduct = 1.0
-                    for f in result.multFactors:
-                        multProduct *= f
-                    totalFP = round(baseFP * multProduct, 2)
+                    # When the Cracking is active, the simulation's math is
+                    # the controlling Core's signature equation rather than
+                    # the baseline aggregator. Resolved once per week per
+                    # user against the persisted Cracking state. No
+                    # Cracking → computeFinalOutput uses the standard
+                    # bonus-additive formula (next-season's aggregator).
+                    try:
+                        from managers.anomalyManager import getActiveCrackingCore
+                        crackingCore = getActiveCrackingCore(season, week)
+                    except Exception:
+                        crackingCore = None
+
+                    from managers.coreEquations import computeFinalOutput, equationTemplate
+                    rawTotalFP, totalEquation = computeFinalOutput(
+                        weekRawFP, result.totalBonusFP, result.multFactors,
+                        coreKey=crackingCore,
+                    )
                     # Subtract raw FP so we store only the card bonus portion
-                    totalFP = round(totalFP - weekRawFP, 2)
+                    totalFP = round(rawTotalFP - weekRawFP, 2)
                     if totalFP < 0:
                         totalFP = 0.0
+                    # multProduct feeds the Compound achievement hook below.
+                    # Always use the bonus-additive aggregator — it's the
+                    # user-facing effective multiplier from the card breakdown
+                    # they see. During Cracking the totalFP is different but
+                    # the achievement signal still tracks card-stacking strength.
+                    from managers.cardEffectCalculator import aggregateMultFactors
+                    multProduct = aggregateMultFactors(result.multFactors)
 
                     # Achievement hook — Compound tiers (single-week FPx from cards only)
                     # Exclude the synergy weekly modifier's contribution so the achievement
@@ -1629,6 +2269,7 @@ class SeasonManager:
                         breakdownDicts = [{
                             "slotNumber": b.slotNumber,
                             "edition": b.edition,
+                            "tier": b.tier,
                             "playerId": b.playerId,
                             "playerName": b.playerName,
                             "effectName": b.effectName,
@@ -1665,6 +2306,9 @@ class SeasonManager:
                                 "weekRawFP": round(weekRawFP, 1),
                                 "totalBonusFP": round(result.totalBonusFP, 2),
                                 "multFactors": [round(f, 2) for f in result.multFactors],
+                                "crackingCore": crackingCore,
+                                "crackingEquation": totalEquation if crackingCore else None,
+                                "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
                             },
                         })
                         weekBonus = WeeklyCardBonus(
@@ -1721,18 +2365,95 @@ class SeasonManager:
                                 conditionMet = checkStreakCondition(
                                     effectName, calcCtx, eq.user_card.card_template.player_id
                                 )
+                            cfg = STREAK_CONFIGS.get(effectName, {})
+                            isNoReset = cfg.get("noReset", False)
+                            isWeekly = cfg.get("isWeekly", False)
                             if conditionMet:
-                                eq.streak_count = getattr(eq, 'streak_count', 0) + 1
-                            elif not STREAK_CONFIGS.get(effectName, {}).get("noReset", False):
+                                priorCount = eq.streak_count if eq.streak_count is not None else 1
+                                # Streak restart penalty: when condition is
+                                # met again after a break (priorCount==0 but
+                                # peak_output carries from a prior streak),
+                                # halve the carried peak so the new streak
+                                # has to climb back up rather than instantly
+                                # paying the prior peak. Without this, a
+                                # quick on/off cycle on a deep streak (e.g.
+                                # Drought) sustained 500+ FP indefinitely.
+                                if (priorCount == 0
+                                        and getattr(eq, 'peak_output', None) is not None
+                                        and not isWeekly and not isNoReset):
+                                    halved = float(eq.peak_output) * 0.5
+                                    primary = effectConfig.get("primary", {})
+                                    baseReward = primary.get("baseReward", 0)
+                                    if halved <= baseReward:
+                                        eq.peak_output = None
+                                    else:
+                                        eq.peak_output = halved
+                                # On restart from 0, skip the "1 = idle"
+                                # baseline so display (count - 1) reads as 1
+                                # for the first active week.
+                                if priorCount == 0:
+                                    eq.streak_count = 2
+                                else:
+                                    eq.streak_count = priorCount + 1
+                                # peak_output stays LOCKED during an active
+                                # streak — it represents the carried base
+                                # the streak began at. Only break weeks and
+                                # cold continuing weeks mutate it.
+                                if not isWeekly and not isNoReset:
+                                    eq.weeks_since_break = 0
+                            elif not isNoReset:
+                                if not isWeekly:
+                                    primary = effectConfig.get("primary", {})
+                                    baseReward = primary.get("baseReward", 0)
+                                    growthPerTick = primary.get("growthPerTick", 0)
+                                    rewardType = primary.get("rewardType", "fp")
+                                    priorCount = eq.streak_count or 0
+                                    currentPeak = eq.peak_output
+                                    if currentPeak is not None and currentPeak > baseReward:
+                                        carriedBase = currentPeak
+                                    else:
+                                        carriedBase = baseReward
+                                    if priorCount > 0:
+                                        # Streak just broke. New peak = the peak the
+                                        # streak achieved. Compute this week already
+                                        # paid this value; store it so subsequent
+                                        # cold weeks decay from here.
+                                        newPeak = carriedBase + growthPerTick * (priorCount - 1)
+                                        if newPeak > baseReward:
+                                            eq.peak_output = newPeak
+                                        else:
+                                            eq.peak_output = None
+                                        eq.weeks_since_break = 0
+                                    elif eq.peak_output is not None:
+                                        # Continuing cold week — decay one step
+                                        # of the streak's own growth amount. For
+                                        # mult cards we step down the bonus
+                                        # portion (peak − 1) by growthPerTick;
+                                        # for FP cards just subtract directly.
+                                        # Symmetric to build: a 10-week streak
+                                        # decays over ~10 cold weeks, matching
+                                        # the same pace as the climb.
+                                        if rewardType == "mult":
+                                            currentBonus = max(0.0, eq.peak_output - 1)
+                                            steppedBonus = max(0.0, currentBonus - growthPerTick)
+                                            stepped = 1.0 + steppedBonus
+                                        else:
+                                            stepped = eq.peak_output - growthPerTick
+                                        if stepped <= baseReward:
+                                            eq.peak_output = None
+                                        else:
+                                            eq.peak_output = stepped
+                                        eq.weeks_since_break = (eq.weeks_since_break or 0) + 1
                                 eq.streak_count = 0
                             # If noReset=True and condition not met, streak stays unchanged
 
                 session.commit()
             except Exception as e:
                 session.rollback()
-                logger.error(f"Error processing week card effects: {e}")
                 import traceback
-                logger.debug(traceback.format_exc())
+                logger.error(
+                    f"Error processing week card effects: {e}\n{traceback.format_exc()}"
+                )
             finally:
                 session.close()
         except ImportError as e:
@@ -1872,21 +2593,33 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Failed to clean up orphaned week games: {e}")
 
-    def _cleanupOrphanedPlayoffData(self, season: int) -> None:
+    def _cleanupOrphanedPlayoffData(self, season: int, fromWeek: int = 29) -> None:
         """Clean up stale playoff data so replaying playoffs is safe on restart.
 
         Resets team playoff state, deletes orphaned Game/PlayerStats records,
         unresolves pick-em picks, and removes duplicate prize transactions.
         This is a no-op on first run (nothing to clean up).
+
+        ``fromWeek`` scopes the DB deletions to playoff weeks >= fromWeek. On a
+        fresh run it's 29 (the first playoff week), wiping the whole bracket.
+        On a mid-playoff resume it's 28 + resumeRound, so already-completed
+        rounds are preserved and only the interrupted round (and later) are
+        cleared for a clean replay.
         """
-        # A. Reset team playoff state to prevent stacked modifiers and stale flags
+        # A. Reset team playoff state to prevent stacked modifiers and stale flags.
+        # On resume the survivor list + eliminations are re-applied right after
+        # the bracket is rebuilt, so resetting to a clean baseline here is safe.
         teamManager = self.serviceContainer.getService('team_manager')
+        from managers.teamManager import logPressureDiag
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else None
         for team in teamManager.teams:
             team.eliminated = False
             team.leagueChampion = False
             team.pressureModifier = 1.0
+            logPressureDiag(team, "playoff_reset", season=seasonNum, week=getattr(self.currentSeason, 'currentWeek', None))
 
-        # B. Clear freeAgencyOrder — it gets rebuilt during playoffs
+        # B. Clear freeAgencyOrder — it gets rebuilt during playoffs (and is
+        # restored from the persisted snapshot on a mid-playoff resume).
         self.currentSeason.freeAgencyOrder = []
 
         if not DB_IMPORTS_AVAILABLE or not USE_DATABASE:
@@ -1899,9 +2632,13 @@ class SeasonManager:
 
             session = _getSession()
 
-            # C. Delete orphaned playoff Game + GamePlayerStats records
-            orphanedGames = session.query(DBGame).filter_by(
-                season=season, is_playoff=True
+            # C. Delete orphaned playoff Game + GamePlayerStats records for the
+            # interrupted round and later (week >= fromWeek). Completed rounds
+            # below fromWeek are preserved so a resume keeps their results.
+            orphanedGames = session.query(DBGame).filter(
+                DBGame.season == season,
+                DBGame.is_playoff == True,  # noqa: E712
+                DBGame.week >= fromWeek,
             ).all()
             if orphanedGames:
                 gameIds = [g.id for g in orphanedGames]
@@ -1915,18 +2652,20 @@ class SeasonManager:
                     f"{statsDeleted} player stat records for S{season}"
                 )
 
-            # D. Unresolve pick-em picks for playoff weeks (29-32)
+            # D. Unresolve pick-em picks for the affected playoff weeks
+            # (fromWeek..32) so they re-resolve cleanly on replay.
             pickemRepo = PickEmRepository(session)
             totalUnresolved = 0
-            for playoffWeek in range(29, 33):
+            for playoffWeek in range(fromWeek, 33):
                 totalUnresolved += pickemRepo.unresolvePicksByWeek(season, playoffWeek)
             if totalUnresolved:
                 logger.info(f"Unresolved {totalUnresolved} playoff pick-em picks for S{season}")
 
-            # E. Delete currency transactions for playoff weeks to prevent double prizes
+            # E. Delete currency transactions for the affected playoff weeks to
+            # prevent double prizes on replay (completed rounds keep theirs).
             txDeleted = session.query(CurrencyTransaction).filter(
                 CurrencyTransaction.season == season,
-                CurrencyTransaction.week >= 29,
+                CurrencyTransaction.week >= fromWeek,
                 CurrencyTransaction.transaction_type.in_([
                     'pickem_correct', 'pickem_leaderboard_weekly'
                 ]),
@@ -1952,7 +2691,14 @@ class SeasonManager:
             from database.repositories.notification_repository import NotificationRepository
 
             session = _getSession()
-            # Find all power-ups that expired last week
+            # Defensive sweep: catch any stale FLEX rosterPlayers whose powerup
+            # expired before this week (covers cases where the precise
+            # week-boundary notification didn't fire — server downtime, week
+            # skip, etc.). Runs first so the per-week notifications below get
+            # a clean state to compare against.
+            self._sweepStaleFlexPlayers(session, season, currentWeek)
+            # Find all power-ups that expired last week — this drives the
+            # one-shot user notification (fires once per purchase).
             expiredPurchases = session.query(ShopPurchase).filter(
                 ShopPurchase.item_slug.in_(["temp_card_slot", "temp_flex"]),
                 ShopPurchase.season == season,
@@ -2047,6 +2793,78 @@ class SeasonManager:
             session.close()
         except Exception as e:
             logger.warning(f"Failed to notify expired power-ups: {e}")
+
+    def _sweepStaleFlexPlayers(self, session, season: int, currentWeek: int) -> None:
+        """Remove FLEX rosterPlayers that no longer have backing entitlement.
+
+        A FLEX slot is granted by an active temp_flex powerup OR a Champion-
+        classified card equipped this week. If neither is true, any FLEX
+        rosterPlayer is stranded and should be removed. This is a defensive
+        sweep — the precise expiration handler runs alongside it but only
+        catches the exact week-boundary case.
+        """
+        try:
+            from database.models import (
+                ShopPurchase, FantasyRoster, FantasyRosterPlayer,
+                EquippedCard, UserCard, CardTemplate,
+            )
+            staleFlex = (
+                session.query(FantasyRosterPlayer)
+                .join(FantasyRoster, FantasyRosterPlayer.roster_id == FantasyRoster.id)
+                .filter(
+                    FantasyRosterPlayer.slot == "FLEX",
+                    FantasyRoster.season == season,
+                )
+                .all()
+            )
+            removed = 0
+            for rp in staleFlex:
+                userId = rp.roster.user_id
+                # Active temp_flex?
+                hasActiveFlex = session.query(ShopPurchase.id).filter(
+                    ShopPurchase.user_id == userId,
+                    ShopPurchase.season == season,
+                    ShopPurchase.item_slug == "temp_flex",
+                    ShopPurchase.expires_at_week >= currentWeek,
+                ).first() is not None
+                if hasActiveFlex:
+                    continue
+                # Champion card equipped recently? The sweep runs at week
+                # rollover BEFORE carry-forward fills the new week's rows,
+                # so checking week == currentWeek would miss a Champion that
+                # the user clearly still has equipped (just not yet copied
+                # over). Use the latest week we have equipped data for to
+                # answer "is Champion still in the loadout?".
+                from sqlalchemy import func
+                latestEqWeek = session.query(func.max(EquippedCard.week)).filter(
+                    EquippedCard.user_id == userId,
+                    EquippedCard.season == season,
+                    EquippedCard.week <= currentWeek,
+                ).scalar()
+                hasChampion = False
+                if latestEqWeek is not None:
+                    hasChampion = (
+                        session.query(EquippedCard.id)
+                        .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                        .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                        .filter(
+                            EquippedCard.user_id == userId,
+                            EquippedCard.season == season,
+                            EquippedCard.week == latestEqWeek,
+                            CardTemplate.classification.isnot(None),
+                            CardTemplate.classification.contains("champion"),
+                        )
+                        .limit(1).count()
+                    ) > 0
+                if hasChampion:
+                    continue
+                session.delete(rp)
+                removed += 1
+            if removed:
+                session.commit()
+                logger.info(f"Swept {removed} stale FLEX rosterPlayer(s) at week {currentWeek}")
+        except Exception as e:
+            logger.warning(f"Failed to sweep stale FLEX players: {e}")
 
     def _saveGameToDatabase(self, game: FloosGame.Game) -> None:
         """Save a completed game to the database"""
@@ -2176,13 +2994,15 @@ class SeasonManager:
                     gameFP = getattr(player, '_lastGameFantasyPoints', None)
                     if gameFP is None:
                         gameFP = gd.get('fantasyPoints', 0)
-                    # Get Q4 FP from fantasy tracker (in-memory accumulator)
+                    # Get Q4 FP + scoring play count from fantasy tracker
                     fantasyTracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
                     q4FP = fantasyTracker._weekQ4FP.get(player.id, 0) if fantasyTracker else 0
+                    q4Scores = fantasyTracker._weekQ4Scores.get(player.id, 0) if fantasyTracker else 0
                     playerStats[player.id] = {
                         'teamId': team.id,
                         'fantasyPoints': gameFP,
                         'q4FantasyPoints': q4FP,
+                        'q4ScoringPlays': q4Scores,
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -2202,6 +3022,7 @@ class SeasonManager:
                         team_id=stats.get('teamId', 0),
                         fantasy_points=stats.get('fantasyPoints', 0),
                         q4_fantasy_points=stats.get('q4FantasyPoints', 0),
+                        q4_scoring_plays=stats.get('q4ScoringPlays', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
                         receiving_stats=stats.get('receiving'),
@@ -2285,7 +3106,7 @@ class SeasonManager:
                     game = weekGames[x]
                     homeTeam: FloosTeam.Team = game[0] 
                     awayTeam: FloosTeam.Team = game[1]
-                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'))
+                    newGame: FloosGame.Game = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam, timingManager=self.timingManager, personalityManager=self.serviceContainer.getService('personality_manager'), gameRules=self.currentSeason.gameRules)
                     
                     # Assign unique integer ID and metadata
                     self._gameIdCounter += 1
@@ -2361,7 +3182,8 @@ class SeasonManager:
             self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
                                      timingManager=self.timingManager,
-                                     personalityManager=self.serviceContainer.getService('personality_manager'))
+                                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                                     gameRules=self.currentSeason.gameRules)
             newGame.id = self._gameIdCounter
             newGame.dbId = row.id
             newGame.seasonNumber = seasonNumber
@@ -2848,12 +3670,164 @@ class SeasonManager:
             weeks.append(week)
         
         return weeks
-    
-    async def _simulatePlayoffRounds(self) -> None:
-        """Simulate all playoff rounds"""
 
-        # Clean up stale data from any previous playoff run (safe no-op on first run)
-        self._cleanupOrphanedPlayoffData(self.currentSeason.seasonNumber)
+    # ── Playoff bracket challenge hooks ──────────────────────────────────
+    def _freezePlayoffSeeds(self, playoffTeamsByConf) -> None:
+        """Freeze the bracket field when seeding locks so the challenge can
+        project matchups. playoffTeamsByConf: {confName: [Team,...] best-first};
+        top 2 per conference are byes."""
+        try:
+            seeds = {"conferences": {}}
+            for confName, teams in playoffTeamsByConf.items():
+                seeds["conferences"][confName] = [
+                    {
+                        "teamId": t.id,
+                        "seed": i + 1,
+                        "bye": i < 2,
+                        "winPct": round(t.seasonTeamStats.get('winPerc', 0), 4),
+                        "scoreDiff": t.seasonTeamStats.get('scoreDiff', 0),
+                        "teamName": t.name,
+                        "city": getattr(t, 'city', ''),
+                        "abbreviation": getattr(t, 'abbreviation', None) or t.name[:3].upper(),
+                    }
+                    for i, t in enumerate(teams)
+                ]
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            s = _gs()
+            try:
+                PlayoffBracketRepository(s).freezeSeeds(self.currentSeason.seasonNumber, seeds)
+                s.commit()
+            finally:
+                s.close()
+            logger.info(
+                f"Playoff bracket field frozen "
+                f"({sum(len(v) for v in seeds['conferences'].values())} teams)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to freeze playoff seeds: {e}")
+
+    def _scorePlayoffBrackets(self) -> None:
+        """Recompute all bracket scores from results so far (idempotent).
+        Called after each playoff round resolves."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            from managers import achievementManager as _am
+            season = self.currentSeason.seasonNumber
+            s = _gs()
+            try:
+                repo = PlayoffBracketRepository(s)
+                repo.scoreAllBrackets(season)
+                s.commit()
+                # Grant Bracketeer point tiers (I-IV) AS thresholds are crossed
+                # each round, not batched at the Floos Bowl. recordProgress is
+                # monotonic (absolute=max) + idempotent (no re-grant once
+                # completed) and toasts on unlock, so calling it every round just
+                # fires newly-crossed tiers. (flawless/pool_shark stay end-only —
+                # they need the COMPLETE bracket / final leaderboard.)
+                for b in repo.getLeaderboard(season):
+                    if b.points > 0:
+                        _am.onPlayoffBracketScored(s, b.user_id, b.points, season)
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to score playoff brackets: {e}")
+
+    def _awardPlayoffBracketPrizes(self) -> None:
+        """After the Floos Bowl: final scoring + floobit prizes to the top
+        brackets. Guarded against double-payment by a per-season tx check."""
+        try:
+            from database.connection import get_session as _gs
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            from database.repositories.card_repositories import CurrencyRepository
+            from database.models import CurrencyTransaction
+            from constants import (PLAYOFF_BRACKET_PRIZES, PLAYOFF_BRACKET_TOP_PCT,
+                                   PLAYOFF_BRACKET_TOP_PCT_PRIZE)
+            season = self.currentSeason.seasonNumber
+            txType = 'playoff_bracket_prize'
+            s = _gs()
+            try:
+                if s.query(CurrencyTransaction.id).filter(
+                        CurrencyTransaction.transaction_type == txType,
+                        CurrencyTransaction.season == season).first():
+                    logger.info("Playoff bracket prizes already awarded — skipping")
+                    return
+                repo = PlayoffBracketRepository(s)
+                repo.scoreAllBrackets(season)
+                board = [b for b in repo.getLeaderboard(season) if b.points > 0]
+                cur = CurrencyRepository(s)
+                topPctCount = int(len(board) * PLAYOFF_BRACKET_TOP_PCT)
+                paid = 0
+                for rank, b in enumerate(board, start=1):
+                    prize = PLAYOFF_BRACKET_PRIZES.get(rank, 0)
+                    if prize == 0 and rank <= topPctCount:
+                        prize = PLAYOFF_BRACKET_TOP_PCT_PRIZE
+                    if prize > 0:
+                        cur.addFunds(b.user_id, prize, txType,
+                                     f"Playoff bracket #{rank} ({b.points} pts)", season)
+                        paid += 1
+                # Bracket achievements. Bracketeer point tiers are already
+                # granted incrementally each round in _scorePlayoffBrackets; the
+                # call below is an idempotent final backstop. The flawless /
+                # pool_shark secrets are end-only — they need the COMPLETE
+                # bracket (all advancers correct) and the FINAL leaderboard (#1).
+                from managers import achievementManager as _am
+                advancers, _champ = repo.computeActualAdvancers(season)
+                totalAdvancers = sum(len(v) for v in advancers.values())
+                topPoints = board[0].points if board else 0
+                for b in board:
+                    _am.onPlayoffBracketScored(s, b.user_id, b.points, season)  # Bracketeer I-IV
+                    if totalAdvancers > 0 and b.correct_count >= totalAdvancers:
+                        _am.unlockSecret(s, b.user_id, "flawless")              # perfect bracket
+                    if b.points == topPoints:
+                        _am.unlockSecret(s, b.user_id, "pool_shark")            # #1 on the leaderboard
+                s.commit()
+                logger.info(f"Playoff bracket prizes awarded to {paid} brackets")
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to award playoff bracket prizes: {e}")
+
+    def _awardShowcasePayouts(self) -> None:
+        """End-of-season Card Showcase payout: each user's featured showcase is
+        graded (F→S) and pays out flat Floobits. Guarded against double-payment
+        by a per-season transaction check. The showcase is season-scoped, so it
+        clears automatically — next season simply has no featured slots."""
+        try:
+            from database.connection import get_session as _gs
+            from managers import showcaseManager
+            season = self.currentSeason.seasonNumber
+            s = _gs()
+            try:
+                summary = showcaseManager.awardSeasonPayouts(s, season)
+                s.commit()
+                if summary.get("alreadyAwarded"):
+                    logger.info("Showcase payouts already awarded — skipping")
+                else:
+                    logger.info(f"Showcase payouts awarded to {summary['paid']} users (S{season})")
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to award showcase payouts: {e}")
+
+    async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
+        """Simulate all playoff rounds.
+
+        ``resumeFromRound`` > 1 (with ``restoredState``) resumes an interrupted
+        playoff run: completed rounds are preserved, the bracket survivors and
+        free-agency order are restored from the persisted snapshot, and the loop
+        picks up at the next unplayed round. The bracket-setup awards/broadcasts
+        are skipped on resume (those clinch bonuses already fired and the team
+        flags that gate them are runtime-only, so re-running would double-pay).
+        """
+        resuming = resumeFromRound > 1
+
+        # Clean up stale data from any previous playoff run (safe no-op on first
+        # run). On resume, scope it to the interrupted round and later so the
+        # already-completed rounds keep their games / pick-em / prizes.
+        self._cleanupOrphanedPlayoffData(self.currentSeason.seasonNumber, fromWeek=28 + resumeFromRound)
 
         playoffDict = {}
         playoffTeams = {}
@@ -2875,8 +3849,10 @@ class SeasonManager:
             list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
             list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
-            # Award top seed Floobits if not already clinched mid-season
-            if not getattr(playoffsByeTeamList[0], 'clinchedTopSeed', False):
+            # Award top seed Floobits if not already clinched mid-season.
+            # Skipped on resume — the bonus already fired and clinchedTopSeed is
+            # runtime-only, so re-running here would double-pay favorite-team fans.
+            if not resuming and not getattr(playoffsByeTeamList[0], 'clinchedTopSeed', False):
                 from constants import CLINCH_TOPSEED_REWARD
                 self._awardFavoriteTeamBonus(
                     playoffsByeTeamList[0].id, CLINCH_TOPSEED_REWARD, 'team_clinch_topseed',
@@ -2890,10 +3866,11 @@ class SeasonManager:
             season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
             if season_str not in topSeed.topSeeds:
                 topSeed.topSeeds.append(season_str)
-            _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
-            self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
-            if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
+            if not resuming:
+                _topSeedText = '{0} {1} clinched the {2} top seed!'.format(topSeed.city, topSeed.name, league.name)
+                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
+                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
 
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
@@ -2903,7 +3880,7 @@ class SeasonManager:
                 team: FloosTeam.Team
                 team.playoffAppearances += 1
                 team.seasonTeamStats['madePlayoffs'] = True
-                if not team.clinchedPlayoffs:
+                if not resuming and not team.clinchedPlayoffs:
                     from constants import CLINCH_PLAYOFF_REWARD
                     self._awardFavoriteTeamBonus(
                         team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
@@ -2919,15 +3896,16 @@ class SeasonManager:
                 if not team.clinchedPlayoffs:
                     team.clinchedPlayoffs = True
                     team.eliminated = False
-                    from constants import CLINCH_PLAYOFF_REWARD
-                    self._awardFavoriteTeamBonus(
-                        team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
-                        description='Favorite team clinched playoffs',
-                        season=self.currentSeason.seasonNumber)
-                    _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
-                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
-                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
+                    if not resuming:
+                        from constants import CLINCH_PLAYOFF_REWARD
+                        self._awardFavoriteTeamBonus(
+                            team.id, CLINCH_PLAYOFF_REWARD, 'team_clinch_playoff',
+                            description='Favorite team clinched playoffs',
+                            season=self.currentSeason.seasonNumber)
+                        _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
+                        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
+                        if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                            await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
 
         for team in nonPlayoffTeamList:
             team: FloosTeam.Team
@@ -2935,16 +3913,43 @@ class SeasonManager:
             if not team.eliminated:
                 team.eliminated = True
                 team.clinchedPlayoffs = False
-                _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
-                self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
-                if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
-                    await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
+                if not resuming:
+                    _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
+                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                        await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
 
 
-        self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
-        list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
+        # freeAgencyOrder seeding: on a fresh run, start it with the non-playoff
+        # teams (worst-first). On resume it's restored wholesale from the
+        # persisted snapshot below, so skip the rebuild here.
+        if not resuming:
+            self.currentSeason.freeAgencyOrder.extend(nonPlayoffTeamList)
+            list.sort(self.currentSeason.freeAgencyOrder, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=False)
         import floosball_methods as FloosMethods
         numOfRounds = FloosMethods.getPower(2, len(self.leagueManager.teams)/2)
+
+        # On resume, replace the freshly-seeded bracket with the persisted
+        # snapshot: survivors entering the resume round (per league) and the
+        # accumulated free-agency/draft order. Eliminations for completed rounds
+        # are re-applied here so downstream offseason logic sees the right state.
+        if resuming and restoredState:
+            teamById = {t.id: t for t in self.serviceContainer.getService('team_manager').teams}
+            survivors = restoredState.get('survivors', {}) or {}
+            for league in self.leagueManager.leagues:
+                survivingIds = survivors.get(league.name, [])
+                survivingTeams = [teamById[tid] for tid in survivingIds if tid in teamById]
+                playoffTeams[league.name] = survivingTeams
+                # Anyone who made the playoffs in this league but isn't a
+                # survivor was eliminated in a completed round.
+                for team in league.teamList:
+                    if team.seasonTeamStats.get('madePlayoffs') and team not in survivingTeams:
+                        team.eliminated = True
+            faOrderIds = restoredState.get('faOrder', []) or []
+            self.currentSeason.freeAgencyOrder = [teamById[tid] for tid in faOrderIds if tid in teamById]
+            logger.info(f"Playoff resume: restored bracket at round {resumeFromRound} — "
+                        f"survivors={{ {', '.join(f'{lg}:{len(playoffTeams.get(lg, []))}' for lg in [l.name for l in self.leagueManager.leagues])} }}, "
+                        f"faOrder={len(self.currentSeason.freeAgencyOrder)}")
 
         # PLAYOFF_TEST: set anchor for compressed scheduling and enable playoff waits
         from managers.timingManager import TimingMode
@@ -2953,7 +3958,12 @@ class SeasonManager:
             self.timingManager.playoffPhase = True
             logger.info(f"PLAYOFF_TEST: playoff anchor set, gap={self.timingManager.scheduleGap}s between rounds")
 
-        for x in range(numOfRounds):
+        # Seeding is locked — freeze the bracket-challenge field (opens it for
+        # submission until Round 1 kicks off). Already frozen on a resume.
+        if not resuming:
+            self._freezePlayoffSeeds(playoffTeams)
+
+        for x in range(resumeFromRound - 1, numOfRounds):
 
             playoffGamesDict = {}
             playoffGamesList = []
@@ -2969,17 +3979,25 @@ class SeasonManager:
                     teamsInRound = []
                     gamesList = []
 
+                    # Pressure is set ABSOLUTELY by round (1.5 / 1.7 / 1.9 ...)
+                    # rather than incremented, so it's correct regardless of how
+                    # many rounds actually ran in-process — i.e. resume-safe.
+                    roundPressure = round(1.5 + 0.2 * (currentRound - 1), 2)
                     if currentRound == 1:
                         teamsInRound.extend(playoffsNonByeTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
-                            team.pressureModifier = 1.5
+                            team.pressureModifier = roundPressure
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, "playoff_r1", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
                     else:
                         teamsInRound.extend(playoffTeams[league.name])
                         for team in playoffTeams[league.name]:
                             team: FloosTeam.Team
-                            team.pressureModifier += .2
+                            team.pressureModifier = roundPressure
+                            from managers.teamManager import logPressureDiag
+                            logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
                     list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
 
@@ -2991,6 +4009,7 @@ class SeasonManager:
                             teamsInRound[hiSeed], teamsInRound[lowSeed],
                             timingManager=self.timingManager,
                             personalityManager=self.serviceContainer.getService('personality_manager'),
+                            gameRules=self.currentSeason.gameRules,
                         )
 
                         # Assign unique integer ID and metadata
@@ -3032,6 +4051,7 @@ class SeasonManager:
                     floosbowlTeams[0], floosbowlTeams[1],
                     timingManager=self.timingManager,
                     personalityManager=self.serviceContainer.getService('personality_manager'),
+                    gameRules=self.currentSeason.gameRules,
                 )
 
                 # Assign unique integer ID and metadata
@@ -3041,6 +4061,15 @@ class SeasonManager:
                 newGame.playoffRound = currentRound
                 newGame.gameNumber = gameNumber
                 newGame.gameType = 'playoff'
+                newGame.isFloosBowl = True
+                # Admin-configurable halftime pause so the Floos Bowl halftime
+                # show has room to play. None / unset → default halftime delay.
+                try:
+                    from database.models import AppSetting as _AppSetting
+                    _hsRow = self.db_session.query(_AppSetting).filter_by(key='halftime_show_pause_seconds').first()
+                    newGame.halftimeShowPauseSeconds = float(_hsRow.value) if (_hsRow and _hsRow.value) else None
+                except Exception:
+                    newGame.halftimeShowPauseSeconds = None
 
                 newGame.status = FloosGame.GameStatus.Scheduled
                 newGame.startTime = roundStartTime
@@ -3053,6 +4082,9 @@ class SeasonManager:
                 self.currentWeekText = 'Floos Bowl'
                 newGame.homeTeam.pressureModifier = 2.5
                 newGame.awayTeam.pressureModifier = 2.5
+                from managers.teamManager import logPressureDiag
+                logPressureDiag(newGame.homeTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
+                logPressureDiag(newGame.awayTeam, "floos_bowl", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
             # Track playoff round so pick-em can use virtual week numbers (29+)
             self.currentSeason.currentPlayoffRound = currentRound
@@ -3158,10 +4190,24 @@ class SeasonManager:
             # Resolve pick-em weekly prizes for this playoff round
             self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
+            # Supporter dividends for this playoff round — pays deep-run fans
+            # (incl. the playoff round bonus) but does NOT tick tenure, so only
+            # full regular seasons build loyalty.
+            self._accrueSupporterDividends(self.currentSeason.seasonNumber, 28 + currentRound, tickTenure=False)
+
+            # Re-score playoff brackets now this round's results are final.
+            self._scorePlayoffBrackets()
+
             if len(playoffGamesList) == 1:
                 game: FloosGame.Game = playoffGamesList[0]
+                # Bind the bowl's own results. Previously this relied on a stale
+                # gameResults left over from an earlier round's multi-game branch,
+                # which is unset when resuming straight into the bowl (round 4) —
+                # raising UnboundLocalError — and stored the wrong game's dict even
+                # in a normal run.
+                gameResults = game.gameDict
                 playoffTeamsList.clear()
-                
+
                 season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
                 
                 # Both teams in the Floosbowl are league champions
@@ -3188,6 +4234,13 @@ class SeasonManager:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _champText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_champText))
+
+                # Bracket challenge: final scoring + floobit prizes to top brackets.
+                self._awardPlayoffBracketPrizes()
+
+                # Card Showcase: grade each user's featured collection and pay out.
+                self._awardShowcasePayouts()
+
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)
                 self.currentSeason.freeAgencyOrder.append(self.currentSeason.champion)
@@ -3282,6 +4335,14 @@ class SeasonManager:
                         nextGameStartTime=None,
                     )
                     broadcaster.broadcast_sync('season', weekEndEvent)
+
+            # Checkpoint this completed round so a restart resumes at the NEXT
+            # unplayed round instead of replaying the bracket. Must be LAST in
+            # the round body: a crash before here replays the round; after here
+            # it's durably done. The bowl (final round) needs no checkpoint — the
+            # post-playoff finish flips simulation_state to the offseason.
+            if x < numOfRounds - 1:
+                self._persistPlayoffState(currentRound, self.currentWeekText, playoffTeams)
 
         # Clear PLAYOFF_TEST phase flag
         self.timingManager.playoffPhase = False
@@ -3421,11 +4482,163 @@ class SeasonManager:
 
         logger.info(f"Season {seasonNumber} completed. Champion: {self.currentSeason.champion.name if self.currentSeason.champion else 'None'}")
     
-    async def handleOffseason(self) -> None:
-        """Handle offseason activities"""
-        await self._handleOffseason()
-    
-    async def _handleOffseason(self) -> None:
+    async def restoreForOffseasonResume(self, seasonNumber: int) -> None:
+        """Rebuild minimal state needed to re-enter _handleOffseason after a
+        mid-offseason restart, WITHOUT re-running the regular season / playoffs
+        and WITHOUT _clearSeasonData (which would wipe standings + team stats).
+
+        Loads the season record from the DB, restores the startDate anchor,
+        re-loads the schedule so any inspection code works, rebuilds the
+        pending rookie pool (so a partial-rookie-draft resume sees the right
+        candidates), and lets _persistOffseasonFlow's loaded values (already
+        hydrated in __init__ via _loadOffseasonStateFromDb on construction)
+        drive the phase + completed-steps state.
+        """
+        self.currentSeason = Season(seasonNumber)
+        # Re-hydrate offseason flow phase + completed-steps from DB so
+        # _handleOffseason skips the right phases on resume.
+        self.loadOffseasonFlowFromDb()
+        # Restore startDate so any timing-anchored UI/logging stays consistent.
+        self._restoreSeasonStartDate(seasonNumber)
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+            try:
+                self._fillMissingScheduleWeeks(seasonNumber)
+                self._loadScheduleFromDatabase(seasonNumber)
+            except Exception as e:
+                logger.warning(f"restoreForOffseasonResume: schedule reload failed: {e}")
+        # Mark the season as in the offseason week.
+        self.currentSeason.currentWeek = 0
+        self.currentSeason.currentWeekText = 'Offseason'
+        # Restore the upcoming-rookie pool from DB-flagged players so the
+        # rookie_draft phase (if it hasn't completed) has its pool ready.
+        try:
+            self._pendingRookiePool = [
+                p for p in self.playerManager.activePlayers
+                if getattr(p, 'is_upcoming_rookie', False)
+            ]
+            logger.info(f"restoreForOffseasonResume: rebuilt rookie pool with "
+                        f"{len(self._pendingRookiePool)} players")
+        except Exception as e:
+            logger.warning(f"restoreForOffseasonResume: rookie pool rebuild failed: {e}")
+            self._pendingRookiePool = []
+
+    # ── Mid-playoff resume (hotfix/playoff-resume) ──────────────────────────
+    def _persistPlayoffState(self, completedRound: int, roundText: str, playoffTeams: dict) -> None:
+        """Snapshot the bracket to simulation_state after a round completes.
+
+        Stores the last completed round, the surviving teams per league, and
+        the accumulated free-agency/draft order (the one order-sensitive piece
+        that can't be safely rebuilt from game results). Also flips
+        in_playoffs=True so the resume path triggers. Mirrors
+        _persistOffseasonFlow — direct single-row write on its own session.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            import json
+            from database.connection import get_session as _gs
+            from database.models import SimulationState
+            survivors = {
+                league.name: [t.id for t in playoffTeams.get(league.name, [])]
+                for league in self.leagueManager.leagues
+            }
+            faOrder = [getattr(t, 'id', None) for t in (self.currentSeason.freeAgencyOrder or [])]
+            faOrder = [tid for tid in faOrder if tid is not None]
+            payload = json.dumps({
+                'completedRound': completedRound,
+                'roundText': roundText,
+                'survivors': survivors,
+                'faOrder': faOrder,
+            })
+            sess = _gs()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                if not row:
+                    return
+                row.in_playoffs = True
+                row.playoff_round = roundText
+                row.current_week = 28 + completedRound
+                row.playoff_state = payload
+                sess.commit()
+                logger.info(f"Persisted playoff state: completed round {completedRound} "
+                            f"({roundText}), survivors per league + faOrder of {len(faOrder)}")
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.warning(f"Could not persist playoff state: {e}")
+
+    def loadPlayoffStateFromDb(self) -> Optional[dict]:
+        """Read the persisted playoff snapshot. Returns None if absent/unparseable."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return None
+        try:
+            import json
+            from database.connection import get_session
+            from database.models import SimulationState
+            sess = get_session()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                encoded = getattr(row, 'playoff_state', None) if row else None
+                if not encoded:
+                    return None
+                return json.loads(encoded)
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.warning(f"Could not load playoff state: {e}")
+            return None
+
+    async def restoreForPlayoffResume(self, seasonNumber: int) -> None:
+        """Rebuild the minimal state needed to resume mid-playoffs, WITHOUT
+        re-running the regular season (which would re-award MVP / All-Pro /
+        season-end fantasy prizes) and WITHOUT _clearSeasonData.
+
+        Loads the season record, the startDate anchor, regular-season standings,
+        and the full schedule (which also advances _gameIdCounter past every
+        existing game so newly-simulated resume-round games get fresh ids).
+        """
+        self.currentSeason = Season(seasonNumber)
+        self._restoreSeasonStartDate(seasonNumber)
+        teamManager = self.serviceContainer.getService('team_manager')
+        if teamManager:
+            teamManager.loadSeasonTeamStats(seasonNumber)
+        if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
+            try:
+                self._fillMissingScheduleWeeks(seasonNumber)
+                self._loadScheduleFromDatabase(seasonNumber)
+            except Exception as e:
+                logger.warning(f"restoreForPlayoffResume: schedule reload failed: {e}")
+        # Seed the playoff round state from the persisted snapshot so playoff-
+        # aware API paths (pick-em week/label, week_text) read correctly during
+        # the resume window — otherwise a playoff week with an unset
+        # currentPlayoffRound shows up as "Week 29/30" instead of the round name.
+        ps = self.loadPlayoffStateFromDb() or {}
+        completedRound = ps.get('completedRound', 0)
+        self.currentSeason.currentPlayoffRound = completedRound or None
+        self.currentSeason.currentWeek = 28 + completedRound if completedRound else 28
+        self.currentSeason.currentWeekText = ps.get('roundText') or 'Playoffs'
+
+    async def resumePlayoffsAndFinishSeason(self, resumeFromRound: int, restoredState: Optional[dict]) -> None:
+        """Resume an interrupted playoff bracket at resumeFromRound and run the
+        normal post-playoff season wrap-up. Called by floosballApplication's
+        restart path when simulation_state.in_playoffs is set."""
+        logger.info(f"Resuming playoffs at round {resumeFromRound} for season "
+                    f"{self.currentSeason.seasonNumber if self.currentSeason else '?'}")
+        self._openGameStatsFile()
+        await self._simulatePlayoffs(resumeFromRound=resumeFromRound, restoredState=restoredState)
+        await self._finishSeasonAfterPlayoffs()
+
+    async def handleOffseason(self, resumeFromOffseason: bool = False) -> None:
+        """Handle offseason activities.
+
+        resumeFromOffseason=True is used by floosballApplication's restart
+        path when in_offseason=True was found in simulation_state. It tells
+        _handleOffseason to honor the persisted completed-steps set and
+        skip phases that already finished, instead of replaying from scratch.
+        """
+        await self._handleOffseason(resumeFromOffseason=resumeFromOffseason)
+
+    async def _handleOffseason(self, resumeFromOffseason: bool = False) -> None:
         """Handle offseason activities — phased flow.
 
         Phase model (set on self._offseasonFlowPhase, target on self._offseasonFlowTarget):
@@ -3435,13 +4648,23 @@ class SeasonManager:
           pre_fa      → wait until top of next hour.
           fa_draft    → live FA picks.
           training    → silent player development calculations.
-        """
-        logger.info("Processing offseason activities")
 
-        # Reset the per-phase completion tracker. Each non-idempotent step in
-        # this method calls _markOffseasonStepComplete; future phase-aware
-        # resume work will use the persisted set to skip already-done steps.
-        self._resetOffseasonCompletedSteps()
+        Each phase marks a corresponding step in _offseasonCompletedSteps when
+        it finishes. On resumeFromOffseason=True, the persisted set is loaded
+        instead of reset, and each phase guards itself on _isOffseasonStepComplete
+        so completed phases are skipped. For partial-draft state, the pre-init
+        snapshot-restore in run_api.py rolls the DB back to phase-start before
+        we ever reach this method, so the in-progress draft re-runs cleanly.
+        """
+        if resumeFromOffseason:
+            logger.info(
+                f"Resuming offseason: phase={self._offseasonFlowPhase}, "
+                f"completed_steps={sorted(self._offseasonCompletedSteps)}"
+            )
+        else:
+            logger.info("Processing offseason activities")
+            # Fresh offseason — reset the per-phase completion tracker.
+            self._resetOffseasonCompletedSteps()
 
         # OFFSEASON_TEST runs the season silently and only broadcasts during
         # the offseason. Enable the broadcaster as the very first step so
@@ -3466,29 +4689,41 @@ class SeasonManager:
         # ── PHASE: post_bowl ───────────────────────────────────
         # _completeSeasonSimulation sets the phase + target before this runs;
         # we just honor the configured wait. In SCHEDULED that's 1h.
-        await self.timingManager.waitPostChampionship()
+        # Skipped on resume if we've already moved past this phase — the
+        # waitPostChampionship clock check is itself idempotent (it polls
+        # until target time) so re-entering during the wait is also fine.
+        if not self._isOffseasonStepComplete('post_bowl'):
+            await self.timingManager.waitPostChampionship()
+            self._markOffseasonStepComplete('post_bowl')
 
-        # Clear stale state from previous season's offseason
-        self._offseasonTransactions = []
-        self._offseasonGmResults = []
-        self._offseasonFaVoteResults = {}
-        self.playerManager._gmFaDirectives = {}
+        # Clear stale state from previous season's offseason. Only safe
+        # on a fresh offseason — on resume these may already hold meaningful
+        # in-flight data that the FA / draft phases depend on.
+        if not resumeFromOffseason:
+            self._offseasonTransactions = []
+            self._offseasonGmResults = []
+            self._offseasonFaVoteResults = {}
+            self.playerManager._gmFaDirectives = {}
         # Reset freeAgencyComplete on every team — last season's FA draft
         # left it True, which would make this season's panel boot with every
         # team showing DONE + "FREE AGENCY COMPLETE" until the draft starts.
+        # Skip on resume so a completed FA draft mid-offseason isn't reverted.
         teamManager = self.serviceContainer.getService('team_manager')
-        if teamManager:
+        if teamManager and not resumeFromOffseason:
             for t in teamManager.teams:
                 t.freeAgencyComplete = False
 
-        # Set offseason status
+        # Set offseason status (always safe to re-apply)
         if self.currentSeason:
             self.currentSeason.currentWeek = 0
             self.currentSeason.currentWeekText = 'Offseason'
 
         # Season-end prizes already awarded at end of regular season (before playoffs).
-        # Process user season transitions (All-Pro grants, etc.)
-        self._processUserSeasonTransitions()
+        # Process user season transitions (All-Pro grants, etc.) — non-idempotent,
+        # gate on the existing frontoffice_decisions marker so we don't
+        # double-credit on resume.
+        if not self._isOffseasonStepComplete('frontoffice_decisions'):
+            self._processUserSeasonTransitions()
 
         # ── PHASE: frontoffice ─────────────────────────────────
         # Front-office decisions all resolve here, then we wait until the
@@ -3547,6 +4782,12 @@ class SeasonManager:
             # STEP 3.5: Resolve Cut Player GM votes (releases players to FA pool)
             logger.info("Step 3.5: Resolve GM cut player votes")
             await self._resolveGmCutVotes(gmResults)
+
+            # STEP 3.6: Award the "Scorched Earth" secret to fans who voted to
+            # tear their team all the way down. Runs here, after cuts, while the
+            # roster still reflects every removal and before the drafts refill it.
+            logger.info("Step 3.6: Award clean-house achievements")
+            await self._awardCleanHouseAchievements(gmResults)
 
             self._markOffseasonStepComplete('frontoffice_decisions')
         else:
@@ -3632,6 +4873,7 @@ class SeasonManager:
                             outcome=r.get('outcome', ''),
                             targetPlayerName=r.get('targetPlayerName'),
                             totalVotes=r.get('totalVotes', 0),
+                            votesAgainst=r.get('votesAgainst', 0),
                             threshold=r.get('threshold', 0),
                             probability=r.get('probability', 0.0),
                         )
@@ -3721,100 +4963,112 @@ class SeasonManager:
         await self.timingManager.waitUntilNoonEt()
 
         # ── PHASE: rookie_draft ─────────────────────────────
+        # Snapshot is taken on phase entry. On a partial-draft resume, the
+        # pre-init restore in run_api.py rolls the DB back to that snapshot
+        # so picks re-run from scratch without leaving half-drafted rookies.
         await self._setOffseasonFlow('rookie_draft', None)
 
         # STEP 4: rookie draft picks (rookies + retirements were prepared at
         # the end of the front-office phase so the pool was visible during
         # the wait). Ballots are collected NOW so any edits made during the
         # wait — fans were free to revise — get picked up.
-        logger.info("Step 4: Rookie draft picks streaming")
-        rookies = self._pendingRookiePool or []
-        leagueHighlights = []
-        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
-            leagueHighlights = self.currentSeason.leagueHighlights
+        if self._isOffseasonStepComplete('rookie_draft'):
+            logger.info("Step 4 skipped — rookie_draft already complete")
+            self._offseasonPhase = 'rookie_draft'
+            # Skip the pick streaming + post-pick pause; advance straight to
+            # the pre-FA integrity sweep + pre_fa wait below.
+            rookies = self._pendingRookiePool or []
+        else:
+            logger.info("Step 4: Rookie draft picks streaming")
+            rookies = self._pendingRookiePool or []
+            leagueHighlights = []
+            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+                leagueHighlights = self.currentSeason.leagueHighlights
 
-        fanPreferences = self._collectRookieDraftBallots(seasonNum)
-        self._offseasonRookieBallotResults = dict(fanPreferences)
-        freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
+            fanPreferences = self._collectRookieDraftBallots(seasonNum)
+            self._offseasonRookieBallotResults = dict(fanPreferences)
+            freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
 
-        # Live pick-by-pick rookie draft — drives the same WS events the FA
-        # draft uses, so the OffseasonPanel can render the rookie phase too.
-        # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
-        # rookie draft from FA draft.
-        pickGen = self.playerManager.rookieDraftPickGenerator(
-            rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
-        )
+            # Live pick-by-pick rookie draft — drives the same WS events the FA
+            # draft uses, so the OffseasonPanel can render the rookie phase too.
+            # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
+            # rookie draft from FA draft.
+            pickGen = self.playerManager.rookieDraftPickGenerator(
+                rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
+            )
 
-        self._offseasonPhase = 'rookie_draft'
-        # rookie_draft_start was broadcast above (during front-office phase
-        # end) to populate the rookie pool during the wait — don't re-fire
-        # it here, that would reset state on the panel.
+            self._offseasonPhase = 'rookie_draft'
+            # rookie_draft_start was broadcast above (during front-office phase
+            # end) to populate the rookie pool during the wait — don't re-fire
+            # it here, that would reset state on the panel.
 
-        draftSummary = None
-        try:
-            for entry in pickGen:
-                kind = entry.get('type')
-                if kind == 'on_clock':
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_on_clock',
-                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                        })
-                        await self.timingManager.waitBetweenOffseasonPicks()
-                elif kind == 'pick':
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_pick',
+            draftSummary = None
+            try:
+                for entry in pickGen:
+                    kind = entry.get('type')
+                    if kind == 'on_clock':
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_on_clock',
+                                'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            })
+                            await self.timingManager.waitBetweenOffseasonPicks()
+                    elif kind == 'pick':
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_pick',
+                                'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                                'playerId': entry.get('playerId'),
+                                'player': entry['playerName'], 'position': entry['position'],
+                                'rating': entry['rating'], 'tier': entry['tier'],
+                                'source': entry.get('source', 'ai_best'),
+                            })
+                        # Persist so /api/offseason can replay the pick on refresh.
+                        self._offseasonTransactions.append({
+                            'type': 'rookie_pick',
                             'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
                             'playerId': entry.get('playerId'),
                             'player': entry['playerName'], 'position': entry['position'],
                             'rating': entry['rating'], 'tier': entry['tier'],
-                            'source': entry.get('source', 'ai_best'),
                         })
-                    # Persist so /api/offseason can replay the pick on refresh.
-                    self._offseasonTransactions.append({
-                        'type': 'rookie_pick',
-                        'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
-                        'playerId': entry.get('playerId'),
-                        'player': entry['playerName'], 'position': entry['position'],
-                        'rating': entry['rating'], 'tier': entry['tier'],
-                    })
-                elif kind == 'skip':
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_skip',
+                    elif kind == 'skip':
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_skip',
+                                'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                                'reason': entry.get('reason'),
+                            })
+                        # Persist so refresh shows skipped teams too.
+                        reason = entry.get('reason')
+                        skipLabel = '(pipeline full — forfeited pick)' if reason == 'pipeline_full' else '(no eligible rookies)'
+                        self._offseasonTransactions.append({
+                            'type': 'rookie_skip',
                             'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                            'reason': entry.get('reason'),
+                            'player': skipLabel, 'position': '—',
+                            'rating': 0,
                         })
-                    # Persist so refresh shows skipped teams too.
-                    reason = entry.get('reason')
-                    skipLabel = '(pipeline full — forfeited pick)' if reason == 'pipeline_full' else '(no eligible rookies)'
-                    self._offseasonTransactions.append({
-                        'type': 'rookie_skip',
-                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                        'player': skipLabel, 'position': '—',
-                        'rating': 0,
-                    })
-                elif kind == 'complete':
-                    draftSummary = entry
-                    if BROADCASTING_AVAILABLE and broadcaster:
-                        await broadcaster.broadcast_season_event({
-                            'event': 'rookie_draft_complete',
-                            'totalPicks': len(entry.get('picks', [])),
-                            'undraftedCount': len(entry.get('undrafted', [])),
-                        })
-        except Exception as e:
-            logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
-            # Drain the rest so mutations still complete
-            for _ in pickGen:
-                pass
+                    elif kind == 'complete':
+                        draftSummary = entry
+                        if BROADCASTING_AVAILABLE and broadcaster:
+                            await broadcaster.broadcast_season_event({
+                                'event': 'rookie_draft_complete',
+                                'totalPicks': len(entry.get('picks', [])),
+                                'undraftedCount': len(entry.get('undrafted', [])),
+                            })
+            except Exception as e:
+                logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
+                # Drain the rest so mutations still complete
+                for _ in pickGen:
+                    pass
 
-        # Brief pause so the frontend can show the rookie draft's final state
-        # before the FA phase takes over and shifts the panel's content. Skip
-        # when broadcasting is off (no human watching) or during fast-catchup.
-        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
-                and not getattr(self.timingManager, '_isFastCatchingUp', False):
-            await asyncio.sleep(3)
+            # Brief pause so the frontend can show the rookie draft's final state
+            # before the FA phase takes over and shifts the panel's content. Skip
+            # when broadcasting is off (no human watching) or during fast-catchup.
+            if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
+                    and not getattr(self.timingManager, '_isFastCatchingUp', False):
+                await asyncio.sleep(3)
+
+            self._markOffseasonStepComplete('rookie_draft')
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (rookie draft just promoted some
@@ -3866,29 +5120,37 @@ class SeasonManager:
                     await asyncio.sleep(halfWait)
 
         # ── PHASE: fa_draft ──────────────────────────────────
+        # Snapshot taken on phase entry. On partial-draft resume the pre-init
+        # restore in run_api.py rolls the DB back to that snapshot so FA picks
+        # re-run cleanly without leaving half-assigned free agents.
         await self._setOffseasonFlow('fa_draft', None)
 
-        # STEP 5.5: Final FA ballot resolution + window close.
-        # Re-runs RCV with whatever ballots have been submitted up to this
-        # exact moment, then officially closes the window. Users watching
-        # the post-rookie wait can revise ballots until this fires.
-        logger.info("Step 5.5: Final FA ballot resolution + window close")
-        await self._runFaVotingWindow(closeWindow=True)
+        if self._isOffseasonStepComplete('fa_draft'):
+            logger.info("Steps 5.5–6.5 skipped — fa_draft already complete")
+        else:
+            # STEP 5.5: Final FA ballot resolution + window close.
+            # Re-runs RCV with whatever ballots have been submitted up to this
+            # exact moment, then officially closes the window. Users watching
+            # the post-rookie wait can revise ballots until this fires.
+            logger.info("Step 5.5: Final FA ballot resolution + window close")
+            await self._runFaVotingWindow(closeWindow=True)
 
-        # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
-        # *final* ballot directives (just resolved above), so any post-cuts
-        # ballot revisions are honored. Runs before the round-robin so
-        # promoted prospects fill their slots first.
-        logger.info("Step 5.75: Apply fan-voted prospect promotions")
-        await self._applyFanVotedPromotions()
+            # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
+            # *final* ballot directives (just resolved above), so any post-cuts
+            # ballot revisions are honored. Runs before the round-robin so
+            # promoted prospects fill their slots first.
+            logger.info("Step 5.75: Apply fan-voted prospect promotions")
+            await self._applyFanVotedPromotions()
 
-        # STEP 6: FA Draft
-        logger.info("Step 6: Free agency draft")
-        await self._processFreeAgency()
+            # STEP 6: FA Draft
+            logger.info("Step 6: Free agency draft")
+            await self._processFreeAgency()
 
-        # STEP 6.5: Validate roster/FA integrity after draft too — defensive,
-        # in case new mismatches were introduced during picks.
-        self._validateRosterIntegrity()
+            # STEP 6.5: Validate roster/FA integrity after draft too — defensive,
+            # in case new mismatches were introduced during picks.
+            self._validateRosterIntegrity()
+
+            self._markOffseasonStepComplete('fa_draft')
 
         # ── PHASE: training ──────────────────────────────────
         # Players just signed by FA are now under their new team's coach +
@@ -3988,6 +5250,10 @@ class SeasonManager:
             from database.connection import get_session
             from database.models import User, UserCurrency
             from api.auth import _provisionStarterPack
+            # Pass currentSeason explicitly — at boot time this runs BEFORE
+            # api.main.floosball_app is wired, so _provisionStarterPack's
+            # fallback lookup of seasonManager wouldn't find anything.
+            currentSeason = self.currentSeason.seasonNumber if self.currentSeason else None
             session = get_session()
             usersWithoutCurrency = (
                 session.query(User)
@@ -3999,7 +5265,7 @@ class SeasonManager:
                 session.close()
                 return
             for user in usersWithoutCurrency:
-                _provisionStarterPack(session, user)
+                _provisionStarterPack(session, user, currentSeason=currentSeason)
             session.commit()
             session.close()
             logger.info(f"Re-provisioned starter packs for {len(usersWithoutCurrency)} existing user(s)")
@@ -4152,8 +5418,11 @@ class SeasonManager:
             pendingUsers = session.query(User).filter(
                 User.pending_favorite_team_id.isnot(None)
             ).all()
+            from managers.supporterManager import onFavoriteTeamChange
             for u in pendingUsers:
                 logger.info(f"User {u.id}: promoting pending favorite team {u.pending_favorite_team_id}")
+                # Switching teams — soft-reset Supporter loyalty tenure (anti-bandwagon).
+                onFavoriteTeamChange(u)
                 u.favorite_team_id = u.pending_favorite_team_id
                 u.pending_favorite_team_id = None
                 u.favorite_team_locked_season = None
@@ -4661,7 +5930,7 @@ class SeasonManager:
                 leagueHighlights = self.currentSeason.leagueHighlights
             for player, team in flagged:
                 leagueHighlights.insert(0, {
-                    'event': {'text': f'{player.name} ({team.name}) has announced he will retire at the end of the season'}
+                    'event': {'text': f'{player.name} ({team.name}) has announced retirement at the end of the season'}
                 })
                 logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
 
@@ -4715,6 +5984,105 @@ class SeasonManager:
         
         self.playerManager.unusedNames.append(name)
     
+    def _generateCoachCandidatesForFA(self) -> None:
+        """Pre-generate 3 coach candidates per team at front office open.
+
+        Users need to see candidates DURING the FA voting window (so they
+        know who they're voting for) — not after the fire vote resolves.
+        We generate up front for every team; teams whose fire vote fails
+        will have their candidates wiped after hire resolution and the
+        names returned to the unused-name pool, so this isn't a permanent
+        name drain.
+
+        Names consumed during candidate generation are persisted in a
+        single save AFTER the outer DB commit. Per-call saves inside the
+        loop would hammer SQLite's write lock (96 separate transactions
+        contending with the outer one) and deadlock.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        if not self.currentSeason:
+            return
+        try:
+            from database.connection import get_session as _getSession
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            session = _getSession()
+            try:
+                season = self.currentSeason.seasonNumber
+                generatedTeams = 0
+                for team in teamManager.teams:
+                    cands = teamManager.generateCoachCandidates(team, season, session=session)
+                    if cands:
+                        generatedTeams += 1
+                session.commit()
+                logger.info(
+                    f"Front Office: pre-generated coach candidates for {generatedTeams} teams"
+                )
+            finally:
+                session.close()
+            # Persist the names that were popped during candidate generation.
+            # Done AFTER the outer commit so the write-lock contention seen
+            # in fast mode (database is locked on DELETE FROM unused_names)
+            # can't happen — the candidate transaction is fully committed
+            # and released before we open a new session here.
+            try:
+                playerMgr = self.serviceContainer.getService('player_manager')
+                if playerMgr is not None and hasattr(playerMgr, 'saveUnusedNames'):
+                    playerMgr.saveUnusedNames()
+            except Exception as e:
+                logger.warning(f"Name pool save after candidate gen failed: {e}")
+        except Exception as e:
+            logger.warning(f"FA coach candidate pre-generation failed: {e}")
+
+    def _snapshotActiveFanCounts(self) -> None:
+        """Freeze per-team active fan counts at front office open (week 22).
+
+        Stored as JSON {teamId: count} on the season row. The GM vote
+        threshold reads this snapshot for fire / resign / cut votes so a
+        fan who logs in for the first time AFTER the voting window has
+        opened doesn't suddenly raise the bar mid-resolution.
+
+        "Active" = users with favorite_team_id == teamId AND
+        last_login_at >= season.start_date.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        if not self.currentSeason:
+            return
+        try:
+            import json as _json
+            from database.connection import get_session as _getSession
+            from database.models import Season as DBSeason, User
+            from sqlalchemy import func
+            session = _getSession()
+            try:
+                seasonRow = session.get(DBSeason, self.currentSeason.seasonNumber)
+                if seasonRow is None:
+                    return
+                snapshotStart = seasonRow.start_date
+                rows = session.query(
+                    User.favorite_team_id,
+                    func.count(User.id),
+                ).filter(
+                    User.favorite_team_id.isnot(None),
+                )
+                if snapshotStart is not None:
+                    rows = rows.filter(User.last_login_at >= snapshotStart)
+                rows = rows.group_by(User.favorite_team_id).all()
+                snapshot = {str(teamId): int(count) for teamId, count in rows}
+                seasonRow.front_office_fan_snapshot = _json.dumps(snapshot)
+                session.commit()
+                logger.info(
+                    f"Front Office fan snapshot: {len(snapshot)} teams, "
+                    f"total active fans = {sum(snapshot.values())}"
+                )
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Failed to snapshot active fan counts: {e}")
+
     # ── GM Mode offseason helpers ─────────────────────────────────────────
 
     async def _resolveGmFireCoachVotes(self, gmResults: list) -> None:
@@ -4747,12 +6115,37 @@ class SeasonManager:
                 for r in hireResults:
                     logger.info(f"GM hire_coach result: {r['teamName']} → {r['outcome']}")
 
+            # Phase 3: Wipe leftover candidates for teams whose fire vote
+            # FAILED. Their pre-generated slate is no longer needed and we
+            # want the names back in the pool for next season. Defer the
+            # per-team DB save — we issue one saveUnusedNames call after
+            # the outer commit so SQLite isn't running ~24 separate write
+            # transactions inside this one.
+            unfiredTeams = [t for t in teamManager.teams if t.id not in firedTeamIds]
+            for team in unfiredTeams:
+                teamManager.clearCoachCandidates(
+                    team.id, season, keepCoachId=None, session=session,
+                    deferNameSave=True,
+                )
+
             session.commit()
         except Exception as e:
             session.rollback()
             logger.error(f"GM fire/hire coach resolution error: {e}")
         finally:
             session.close()
+
+        # Single name-pool flush AFTER the session closes. Per-team flushes
+        # inside the loop above would contend with the outer write lock and
+        # deadlock under fast-mode timing. By the time we get here the GM
+        # resolution transaction is fully released, so saveUnusedNames'
+        # own session can acquire the lock without contention.
+        try:
+            playerMgr = self.serviceContainer.getService('player_manager')
+            if playerMgr is not None and hasattr(playerMgr, 'saveUnusedNames'):
+                playerMgr.saveUnusedNames()
+        except Exception as e:
+            logger.warning(f"Name pool save after GM hire resolution failed: {e}")
 
     async def _resolveGmResignVotes(self, gmResults: list) -> None:
         """Resolve resign_player GM votes. Sets _gmResigned flag on players."""
@@ -4806,6 +6199,76 @@ class SeasonManager:
         except Exception as e:
             session.rollback()
             logger.error(f"GM cut resolution error: {e}")
+        finally:
+            session.close()
+
+    async def _awardCleanHouseAchievements(self, gmResults: list) -> None:
+        """Grant the 'mutineer' secret (Scorched Earth) to fans who orchestrated
+        a total teardown of their favorite team this offseason.
+
+        Earned when, in one offseason, a fan votes to fire the coach AND to
+        remove players (cut or let walk), and the team actually ends up gutted:
+        the coach was fired and every roster slot is now empty. Must run right
+        after cut resolution — at that point the roster reflects every cut and
+        non-resign, and the rookie/FA drafts that refill it haven't fired yet.
+        The coach always gets backfilled in the fire/hire step, so the coach
+        side is gated on "fired this offseason" (a ratified fire vote in
+        gmResults), not an empty coach slot.
+        """
+        from database.connection import get_session
+        from database.models import GmVote
+        from managers import achievementManager as _am
+
+        # Teams whose coach was fired this offseason (ratified fire vote).
+        firedTeamIds = {
+            r["teamId"] for r in gmResults
+            if r.get("voteType") == "fire_coach" and r.get("outcome") == "success"
+        }
+        if not firedTeamIds:
+            return
+
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+
+        # Of the fired-coach teams, the ones whose entire roster is now empty —
+        # every starter cut or not re-signed. rosterDict slots go None when vacated.
+        clearedTeamIds = {
+            t.id for t in teamManager.teams
+            if t.id in firedTeamIds
+            and all(p is None for p in t.rosterDict.values())
+        }
+        if not clearedTeamIds:
+            return
+
+        season = self.currentSeason.seasonNumber if self.currentSeason else 0
+        session = get_session()
+        try:
+            for teamId in clearedTeamIds:
+                votes = session.query(GmVote).filter_by(
+                    team_id=teamId, season=season,
+                ).all()
+                # Fans who voted to fire the coach...
+                fireBackers = {
+                    v.user_id for v in votes
+                    if v.vote_type == "fire_coach" and (v.direction or "yea") != "nay"
+                }
+                # ...AND voted to remove at least one player (cut yea / re-sign nay).
+                playerPurgers = {
+                    v.user_id for v in votes
+                    if (v.vote_type == "cut_player" and (v.direction or "yea") != "nay")
+                    or (v.vote_type == "resign_player" and v.direction == "nay")
+                }
+                for uid in (fireBackers & playerPurgers):
+                    _am.unlockSecret(session, uid, "mutineer")
+                    logger.info(
+                        f"Scorched Earth (mutineer) unlocked for user {uid} "
+                        f"(team {teamId} torn down)"
+                    )
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Clean-house achievement award error: {e}")
         finally:
             session.close()
 
@@ -4987,6 +6450,41 @@ class SeasonManager:
         import json
         return json.dumps(sorted(steps))
 
+    def loadOffseasonFlowFromDb(self) -> None:
+        """Re-hydrate _offseasonFlowPhase + _offseasonFlowTarget +
+        _offseasonCompletedSteps from simulation_state. Called by the resume
+        path so a restart picks up exactly where the previous run left off.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import SimulationState
+            import json
+            sess = get_session()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                if not row:
+                    return
+                self._offseasonFlowPhase = getattr(row, 'offseason_phase', None)
+                self._offseasonFlowTarget = getattr(row, 'offseason_phase_target', None)
+                encoded = getattr(row, 'offseason_completed_steps', None)
+                if encoded:
+                    try:
+                        self._offseasonCompletedSteps = set(json.loads(encoded))
+                    except Exception:
+                        self._offseasonCompletedSteps = set()
+                else:
+                    self._offseasonCompletedSteps = set()
+                logger.info(
+                    f"loadOffseasonFlowFromDb: phase={self._offseasonFlowPhase}, "
+                    f"completed_steps={sorted(self._offseasonCompletedSteps)}"
+                )
+            finally:
+                sess.close()
+        except Exception as e:
+            logger.warning(f"Could not load offseason flow state: {e}")
+
     def _isOffseasonStepComplete(self, step: str) -> bool:
         return step in getattr(self, '_offseasonCompletedSteps', set())
 
@@ -5005,22 +6503,40 @@ class SeasonManager:
         self._persistOffseasonFlow()
 
     def _snapshotDbForPhase(self, phase: str) -> None:
-        """Copy floosball.db to /data/offseason_${season}_${phase}.db using
-        SQLite's online backup API so a corrupted resume can be rolled back
-        manually. Skipped on non-prod paths (no /data) and silently noops
-        on any error — snapshots are belt-and-suspenders, not load-bearing.
+        """Snapshot the offseason-mutable tables to
+        /data/offseason_${season}_${phase}.db so a mid-phase restart can roll the
+        DB back and re-run the phase cleanly (drafts compound picks, so they
+        aren't safe to replay). Skipped on non-prod paths (no /data) and silently
+        noops on any error — snapshots are belt-and-suspenders, not load-bearing.
 
-        Old snapshots from previous seasons are pruned before writing the
-        new one. Each season produces 6 checkpoints at ~90MB each, so
-        accumulating them across seasons would burn ~500MB/year of disk.
+        Two things keep this cheap and flat across seasons:
+          1. Only the non-idempotent phases (OFFSEASON_PARTIAL_PHASES) are
+             snapshotted — the restore path never rolls back any other phase.
+          2. Only the offseason-mutable tables are copied; the large in-season
+             append-only tables (OFFSEASON_SNAPSHOT_EXCLUDE_TABLES) are skipped
+             since drafts never touch them. That drops each snapshot from a full
+             ~57MB copy to ~15MB, and — since the excluded tables are exactly the
+             ones that grow every season — keeps it from ballooning over time.
+
+        Restore (run_api._restorePartialPhaseSnapshotIfNeeded) replaces only the
+        snapshotted tables, leaving the excluded ones (which never changed during
+        the phase) untouched. Old snapshots from prior seasons are pruned first.
         """
+        from constants import OFFSEASON_PARTIAL_PHASES, OFFSEASON_SNAPSHOT_EXCLUDE_TABLES
+        # Only the non-idempotent phases need a rollback point.
+        if phase not in OFFSEASON_PARTIAL_PHASES:
+            return
         try:
             import os
             import glob
             import sqlite3
-            dbPath = os.path.join('data', 'floosball.db')
+            # Resolve the DB path the same way run_api._restorePartialPhaseSnapshotIfNeeded
+            # does, so the writer and reader always agree (prod → /data; local →
+            # DATABASE_DIR or ./data).
+            dbDir = os.environ.get('DATABASE_DIR', 'data')
             if os.path.exists('/data') and os.path.isdir('/data'):
-                dbPath = '/data/floosball.db'
+                dbDir = '/data'
+            dbPath = os.path.join(dbDir, 'floosball.db')
             if not os.path.exists(dbPath):
                 return
             seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
@@ -5043,16 +6559,41 @@ class SeasonManager:
                         pass
 
             outPath = os.path.join(outDir, f"offseason_s{seasonNum}_{phase}.db")
+            # Start fresh — a stale same-season/phase file would collide with the
+            # CREATE TABLE statements below.
+            if os.path.exists(outPath):
+                try:
+                    os.remove(outPath)
+                except OSError:
+                    pass
+
             src = sqlite3.connect(dbPath)
             try:
-                dst = sqlite3.connect(outPath)
+                tables = [r[0] for r in src.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()]
+                included = [t for t in tables
+                            if t not in OFFSEASON_SNAPSHOT_EXCLUDE_TABLES]
+                src.execute("ATTACH DATABASE ? AS snap", (outPath,))
                 try:
-                    src.backup(dst)
+                    # CREATE TABLE AS SELECT copies columns (in declared order) +
+                    # rows. Constraints/indexes are intentionally omitted: restore
+                    # inserts positionally back into the real (constrained) tables,
+                    # so the snapshot is just a data carrier.
+                    for t in included:
+                        src.execute(
+                            f'CREATE TABLE snap."{t}" AS SELECT * FROM main."{t}"'
+                        )
                 finally:
-                    dst.close()
+                    src.execute("DETACH DATABASE snap")
             finally:
                 src.close()
-            logger.info(f"  Offseason checkpoint snapshot: {outPath}")
+            sizeMb = os.path.getsize(outPath) / 1e6 if os.path.exists(outPath) else 0
+            logger.info(
+                f"  Offseason checkpoint snapshot: {outPath} "
+                f"({len(included)} tables, {sizeMb:.1f}MB)"
+            )
         except Exception as e:
             logger.debug(f"Could not snapshot DB for phase {phase}: {e}")
 
@@ -5166,7 +6707,7 @@ class SeasonManager:
             }
 
             gm = GmManager(session, lowQuorum=self._isTestMode)
-            directives, positionRankings = gm.resolveSignFaVotes(
+            directives, overallRankings = gm.resolveSignFaVotes(
                 teamManager.teams, season,
                 freeAgentLists, teamOpenPositions
             )
@@ -5177,12 +6718,9 @@ class SeasonManager:
             if directives:
                 logger.info(f"GM FA directives for {len(directives)} team(s)")
 
-            # Build enriched per-team per-position ranking structure so the
-            # UI can show fans' tallied votes for every open position across
-            # the league (not just the user's favorite team). Uses team's
-            # prospects pool in addition to FAs so promoted prospects still
-            # resolve by ID.
-            POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+            # Build enriched per-team flat ranking. Each entry carries its
+            # own position name so the UI can render position chips on a
+            # single ordered list.
             playerLookup = {p.id: p for p in self.playerManager.freeAgents}
             for t in teamManager.teams:
                 for p in getattr(t, 'prospects', []):
@@ -5191,32 +6729,27 @@ class SeasonManager:
                     if p is not None:
                         playerLookup[p.id] = p
             teamLookup = {t.id: t for t in teamManager.teams}
-            enrichedPositionRankings = {}
-            for tId, perPos in positionRankings.items():
+            enrichedFaRankings: Dict[str, list] = {}
+            for tId, playerIds in overallRankings.items():
                 team = teamLookup.get(tId)
                 teamAbbr = getattr(team, 'abbr', None) if team else None
                 if not teamAbbr:
                     continue
-                posEntry = {}
-                for posValue, playerIds in perPos.items():
-                    posName = POS_NAMES.get(posValue, str(posValue))
-                    entries = []
-                    for pid in playerIds:
-                        p = playerLookup.get(pid)
-                        if not p:
-                            continue
-                        entries.append({
-                            "id": p.id,
-                            "name": p.name,
-                            "position": p.position.name,
-                            "rating": round(getattr(p, 'playerRating', 0), 1),
-                            "isProspect": bool(getattr(p, 'is_prospect', False)),
-                        })
-                    if entries:
-                        posEntry[posName] = entries
-                if posEntry:
-                    enrichedPositionRankings[teamAbbr] = posEntry
-            self._offseasonFaVoteResults = enrichedPositionRankings
+                entries = []
+                for pid in playerIds:
+                    p = playerLookup.get(pid)
+                    if not p:
+                        continue
+                    entries.append({
+                        "id": p.id,
+                        "name": p.name,
+                        "position": p.position.name,
+                        "rating": round(getattr(p, 'playerRating', 0), 1),
+                        "isProspect": bool(getattr(p, 'is_prospect', False)),
+                    })
+                if entries:
+                    enrichedFaRankings[teamAbbr] = entries
+            self._offseasonFaVoteResults = enrichedFaRankings
 
             # Broadcast directives to frontend with player details
             if BROADCASTING_AVAILABLE and broadcaster and directives:
@@ -5237,7 +6770,7 @@ class SeasonManager:
                                 })
                     from api.event_models import GmEvent
                     event = GmEvent.faDirectives(enriched)
-                    event['positionRankings'] = enrichedPositionRankings
+                    event['faRankings'] = enrichedFaRankings
                     await broadcaster.broadcast_season_event(event)
                 except Exception as e:
                     logger.warning(f"Could not broadcast FA directives: {e}")
@@ -5377,14 +6910,17 @@ class SeasonManager:
         logger.info(f"Generated {numOfPlayers} new players to replace retirees")
     
     def _getUnusedName(self) -> str:
-        """Get an unused name from the pool"""
+        """Get an unused name from the pool, skipping any already attached to
+        a live player or coach. Goes through playerManager.popUniqueName so
+        polluted entries get dropped instead of producing a duplicate.
+        Falls back to a numeric placeholder if the pool is exhausted.
+        """
         from random import randint
-        
-        if not self.playerManager.unusedNames:
+        name = self.playerManager.popUniqueName()
+        if name is None:
             logger.error("No unused names available!")
             return f"Player {randint(1000, 9999)}"
-        
-        return self.playerManager.unusedNames.pop(randint(0, len(self.playerManager.unusedNames) - 1))
+        return name
     
     async def _updateTeamRatings(self) -> None:
         """Update team ratings and defenses based on current rosters"""
@@ -5563,7 +7099,18 @@ class SeasonManager:
             # Initialize additional team attributes that Game class may need
             if not hasattr(team, 'winningStreak'):
                 team.winningStreak = False
-    
+
+        # On resume, hydrate seasonTeamStats from DB so live-tracked fields
+        # (streak, peakStreak, bigPlays, etc.) reflect the persisted values
+        # rather than the class-default zeros. Without this, the first
+        # _saveTeamSeasonStatsToDatabase after restart writes zeros back over
+        # the persisted values, permanently losing season-cumulative state
+        # for any field not also recomputed each game.
+        if isResume:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager and self.currentSeason:
+                teamManager.loadSeasonTeamStats(self.currentSeason.seasonNumber)
+
     def _updateWeeklyStats(self) -> None:
         """Update weekly statistics and averages for teams and players"""
         # Update team averages (matches original)
@@ -5764,34 +7311,42 @@ class SeasonManager:
 
     # ─── Weekly Modifier Selection ────────────────────────────────────────────
 
+    # Cascade was removed — it was a duplicate of Amplify (both doubled FPx
+    # bonus portions). Existing prod rows with modifier='cascade' resolve
+    # through the same code path as amplify in the calculator, but new
+    # weekly rolls won't pick cascade.
     MODIFIER_WEIGHTS = {
-        "amplify": 10, "cascade": 8, "ironclad": 10, "overdrive": 10,
+        "amplify": 10, "ironclad": 10, "overdrive": 10,
         "payday": 10, "grounded": 5, "wildcard": 8,
         "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
         "fortunate": 8,
     }
 
     MODIFIER_DISPLAY = {
-        "amplify": "Amplify", "cascade": "Cascade", "ironclad": "Ironclad",
+        "amplify": "Amplify", "ironclad": "Ironclad",
         "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
         "wildcard": "Wildcard", "longshot": "Longshot",
         "frenzy": "Frenzy", "synergy": "Synergy", "steady": "Steady",
         "fortunate": "Fortunate",
+        # Legacy display label kept so historical "cascade" rows still
+        # render with a friendly name in the recap screens.
+        "cascade": "Amplify",
     }
 
     MODIFIER_DESCRIPTIONS = {
         "amplify": "FPx bonus portions are doubled",
-        "cascade": "FPx bonus portions are doubled",
         "ironclad": "Streak cards can't reset this week",
         "overdrive": "Match bonus is 2.5x instead of 1.5x",
         "payday": "Floobits earned are tripled",
         "grounded": "All FPx effects disabled",
         "wildcard": "All cards treated as matched",
-        "longshot": "Conditional thresholds halved",
+        "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
         "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
         "fortunate": "Chance card trigger rates increased by 15%",
+        # Legacy — same behavior as amplify for historical rows.
+        "cascade": "FPx bonus portions are doubled",
     }
 
     def _selectWeeklyModifier(self, season: int, week: int) -> str:
@@ -5858,40 +7413,51 @@ class SeasonManager:
 
     def _awardFavoriteTeamBonus(self, teamId: int, amount: int, transactionType: str,
                                  description: str, season: int, week: int = None) -> int:
-        """Award Floobits to all users whose favorite_team_id matches teamId.
+        """Award a milestone Floobit bonus to a team's fans, scaled per-fan by
+        Supporter loyalty × patron rank (this is where the "profit only for
+        long-tenure fans of great teams" envelope actually bites). Gated on the
+        same activity rule as idle accrual — dormant accounts don't get paid.
         Returns the number of users rewarded."""
         try:
             from database.connection import get_session
             from database.models import User
             from database.repositories.card_repositories import CurrencyRepository
+            from managers.supporterManager import (
+                computePatronRanks, combinedMultiplier, isEarning,
+            )
 
             session = get_session()
             try:
                 users = session.query(User).filter_by(
                     favorite_team_id=teamId, is_active=True
                 ).all()
+                # Only fans who pass the activity gate (consistent with accrual).
+                users = [u for u in users if isEarning(u)]
                 if not users:
                     session.close()
                     return 0
+                patronRanks = computePatronRanks(session, season)
                 currencyRepo = CurrencyRepository(session)
                 from database.repositories.notification_repository import NotificationRepository
                 notifRepo = NotificationRepository(session)
                 count = 0
                 for user in users:
+                    mult, _loyalty, _patron = combinedMultiplier(user, patronRanks)
+                    scaled = int(round(amount * mult))
                     currencyRepo.addFunds(
-                        user.id, amount, transactionType,
+                        user.id, scaled, transactionType,
                         description=description,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         user.id, 'favorite_team',
                         'Team Bonus',
-                        f'{description}! +{amount} Floobits',
-                        data={'teamId': teamId, 'amount': amount},
+                        f'{description}! +{scaled} Floobits',
+                        data={'teamId': teamId, 'amount': scaled},
                     )
                     count += 1
                 session.commit()
-                logger.info(f"Awarded {amount} Floobits ({transactionType}) to {count} users for team {teamId}")
+                logger.info(f"Awarded scaled {transactionType} bonus (base {amount}F) to {count} fans of team {teamId}")
                 return count
             except Exception as e:
                 session.rollback()
@@ -5901,6 +7467,23 @@ class SeasonManager:
                 session.close()
         except ImportError:
             return 0
+
+    def _accrueSupporterDividends(self, season: int, week: int, tickTenure: bool = True) -> None:
+        """Accrue weekly Supporter (fan-loyalty) dividends. Idle income — accrues
+        to each fan's claim pool; they collect via POST /api/supporter/claim.
+        `tickTenure=False` for playoff rounds: pay the dividend without advancing
+        tenure (full regular seasons drive tenure, not playoff weeks)."""
+        try:
+            from database.connection import get_session
+            from managers.supporterManager import accrueWeekly
+            session = get_session()
+            try:
+                accrueWeekly(session, season, week, tickTenure=tickTenure)
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Supporter dividend accrual failed (s{season} w{week}): {e}")
 
     def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
         """Award Floobits to top leaderboard performers for the week."""
@@ -5914,7 +7497,10 @@ class SeasonManager:
             return
 
         try:
-            snapshot = fantasyTracker.getSnapshot(season)
+            # forceFresh: this runs once at week end, right after card bonuses
+            # are persisted — the 8s cache could otherwise serve a pre-card-bonus
+            # snapshot and rank/pay prizes on the wrong weekTotal.
+            snapshot = fantasyTracker.getSnapshot(season, forceFresh=True)
         except Exception as e:
             logger.error(f"Error getting snapshot for weekly leaderboard: {e}")
             return
@@ -6042,31 +7628,60 @@ class SeasonManager:
                 f"Cultivation no growth: eq={eq.id} roll={roll}>{growthChance}% "
                 f"triggers={triggerCount}"
             )
-        # Patch the stored breakdown with the roll result
+        # Patch the stored breakdown with the roll result. The stored
+        # primaryFP/totalFP have already been multiplied by match bonus +
+        # Conductor boost (run earlier in the calculator). When Bonsai grows
+        # we need to scale the new raw value by the same multiplier or we
+        # lose those bonuses; when it doesn't grow we leave the boosted
+        # totals in place but reattach any conductor suffix the existing
+        # equation carried.
         if weekBonus and weekBonus.breakdowns_json:
             try:
                 stored = _json.loads(weekBonus.breakdowns_json)
                 for bd in stored.get("breakdowns", []):
-                    if bd.get("effectName") == "bonsai":
-                        bd["equation"] = resultEq
-                        if grew:
-                            bd["primaryFP"] = round(currentFP + growthFP, 1)
-                            bd["totalFP"] = round(currentFP + growthFP, 1)
+                    if bd.get("effectName") != "bonsai":
+                        continue
+                    # Pull any "+X% (Conductor)" suffix off the existing
+                    # equation so we can re-append it to the result text.
+                    existingEq = bd.get("equation", "") or ""
+                    conductorSuffix = ""
+                    if " (Conductor)" in existingEq:
+                        idx = existingEq.rfind(" +")
+                        if idx >= 0 and "(Conductor)" in existingEq[idx:]:
+                            conductorSuffix = existingEq[idx:]
+
+                    if grew:
+                        # Scale the new raw value by the multiplier that was
+                        # applied to the old one — preserves match + conductor.
+                        oldRaw = currentFP
+                        oldFinal = bd.get("totalFP", oldRaw)
+                        multiplier = (oldFinal / oldRaw) if oldRaw > 0 else 1.0
+                        newRaw = round(currentFP + growthFP, 1)
+                        newFinal = round(newRaw * multiplier, 1)
+                        bd["primaryFP"] = newFinal
+                        bd["totalFP"] = newFinal
+
+                    bd["equation"] = resultEq + conductorSuffix
                 weekBonus.breakdowns_json = _json.dumps(stored)
             except Exception:
                 pass
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
-        """Award Floobits to all users based on a percentage of their weekly FP."""
-        import math
-        from constants import WEEKLY_FP_FLOOBIT_RATE, WEEKLY_FP_FLOOBIT_CAP
+        """Award Floobits via the FP→F curve: scale × FP^exponent (Endowment shifts to flatter taper)."""
+        from constants import (
+            WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
+            WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+        )
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
         if not fantasyTracker:
             return
 
         try:
-            snapshot = fantasyTracker.getSnapshot(season)
+            # forceFresh: card bonuses for this week just persisted; a stale
+            # cached snapshot would under-pay the FP Floobit reward and
+            # under-credit Banner Week / Dynamo achievements by the card bonus.
+            snapshot = fantasyTracker.getSnapshot(season, forceFresh=True)
         except Exception as e:
             logger.error(f"Error getting snapshot for weekly FP floobits: {e}")
             return
@@ -6085,11 +7700,9 @@ class SeasonManager:
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)
                 from database.repositories.shop_repository import ShopPurchaseRepository
-                from constants import POWERUP_INCOME_BOOST
                 shopRepo = ShopPurchaseRepository(session)
-                boostedCap = POWERUP_INCOME_BOOST.get("boostedCap", 40)
-                # Pre-load Prosperity card ceiling bonuses per user
-                prosperityCaps = {}
+                # Pre-load Prosperity card flat-F bonuses per user
+                prosperityBonuses = {}
                 try:
                     from database.repositories.card_repositories import EquippedCardRepository
                     eqRepo = EquippedCardRepository(session)
@@ -6098,41 +7711,54 @@ class SeasonManager:
                         ec = eq.user_card.card_template.effect_config or {}
                         if ec.get("effectName") == "surplus":
                             ownerId = eq.user_id
-                            bonus = ec.get("primary", {}).get("ceilingBonus", 0)
-                            prosperityCaps[ownerId] = prosperityCaps.get(ownerId, 0) + bonus
+                            bonus = ec.get("primary", {}).get("flatBonus", ec.get("primary", {}).get("ceilingBonus", 0))
+                            prosperityBonuses[ownerId] = prosperityBonuses.get(ownerId, 0) + int(bonus)
                 except Exception as e:
-                    logger.warning(f"Could not load Prosperity caps: {e}")
+                    logger.warning(f"Could not load Prosperity bonuses: {e}")
                 awarded = 0
                 for entry in entries:
                     weekFp = entry.get('weekTotal', 0)
                     if weekFp <= 0:
                         continue
                     userId = entry['userId']
-                    # Check for active income boost powerup
                     activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
-                    cap = boostedCap if activeBoost else WEEKLY_FP_FLOOBIT_CAP
-                    # Apply Prosperity card ceiling bonus
-                    cap += prosperityCaps.get(userId, 0)
-                    raw = weekFp * WEEKLY_FP_FLOOBIT_RATE
-                    reward = min(math.floor(raw), cap)
+                    if activeBoost:
+                        scale, exponent = WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT
+                    else:
+                        scale, exponent = WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
+                    base = round(scale * (weekFp ** exponent))
+                    prosperity = prosperityBonuses.get(userId, 0)
+                    reward = int(base + prosperity)
                     if reward <= 0:
                         continue
+                    descCore = f'Week {week}: {weekFp:.0f} FP → {base}F'
+                    if prosperity:
+                        descCore += f' (+{prosperity} Prosperity)'
+                    if activeBoost:
+                        descCore += ' [Endowment]'
                     currencyRepo.addFunds(
                         userId, reward, 'weekly_fp_bonus',
-                        description=f'Week {week}: {int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP',
+                        description=descCore,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         userId, 'weekly_fp_bonus',
                         f'Week {week} Earnings',
-                        f'+{reward} Floobits ({int(WEEKLY_FP_FLOOBIT_RATE * 100)}% of {weekFp:.0f} FP)',
-                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward},
+                        f'+{reward} Floobits from {weekFp:.0f} FP',
+                        data={'season': season, 'week': week, 'weekFp': weekFp, 'reward': reward,
+                              'base': base, 'prosperity': prosperity, 'boosted': bool(activeBoost)},
                     )
                     # Achievement hooks — Banner Week (single-week) + Dynamo (cumulative season)
                     try:
                         from managers import achievementManager as _am
-                        _am.onWeeklyFantasyPoints(session, userId, int(weekFp), season)
-                        seasonFp = int(entry.get('seasonTotal', 0) or 0)
+                        # Round (don't truncate) so the integer the achievement
+                        # system compares against its target matches the rounded
+                        # value the user sees on the fantasy page (.toFixed(0)).
+                        # int(4999.6)=4999 would miss a 5000 target the UI shows
+                        # as "5,000". Floobit-curve math above still uses the raw
+                        # float weekFp.
+                        _am.onWeeklyFantasyPoints(session, userId, round(weekFp), season)
+                        seasonFp = round(entry.get('seasonTotal', 0) or 0)
                         if seasonFp > 0:
                             _am.onSeasonFantasyPointsTotal(session, userId, seasonFp, season)
                         # Secret — Blank (≤20 FP with a full roster of 6)
@@ -6880,6 +8506,35 @@ class SeasonManager:
                     if cap > 0:
                         p.attributes.attitude = max(0, current - _attRand(0, cap))
 
+    def _recomputeFundingTiersForOffseason(self, completedSeason: int) -> None:
+        """Refresh funding tiers at offseason start using the completed
+        season's final effective_funding (baseline + carried + in-season
+        contributions + season-end tax).
+
+        Tiers stay locked during the regular season (so in-season
+        contributions don't shift competitive balance mid-game). At
+        offseason start we unfreeze them once, letting fans' contributions
+        translate immediately into FA bidding power, training quality, GM
+        vote thresholds, and rookie scouting. Season N+1's `_initialize-
+        TeamFunding` then carries the same effective_funding forward via
+        FUNDING_DECAY_RATE, so the relative tier ordering is preserved.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            session = get_session()
+            try:
+                self._assignFundingTiers(session, completedSeason)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Offseason tier recompute failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
         Contributions update the existing TeamFunding records created at season start."""
@@ -7079,6 +8734,11 @@ class SeasonManager:
             tierName, tierRank = tierFor(rec.effective_funding or 0)
             rec.funding_tier = tierName
             rec.tier_rank = tierRank
+            # Snapshot the funding value this tier was computed from so the
+            # markets chart can place the filled dot in the matching band
+            # even when post-recompute contributions push effective_funding
+            # higher than what locked the tier.
+            rec.tier_locked_funding = rec.effective_funding or 0
 
         session.flush()
 
@@ -7132,12 +8792,37 @@ class SeasonManager:
             from database.models import TeamFunding
             session = get_session()
             try:
-                # Fetch previous season's effective funding for carry-forward
+                # Retrofit: ensure prev season's tier reflects its final
+                # effective_funding (baseline + carried + fan contributions
+                # + season-end tax) before inheriting. Idempotent — if
+                # the offseason recompute already ran for prev (post-
+                # deploy seasons), this produces the same value. On the
+                # FIRST season after this code deployed mid-cycle, prev
+                # season's tier is still the baseline+carried value from
+                # its start (the offseason recompute didn't exist when N
+                # was simulated). Running it now upgrades the label so
+                # the inheritance step picks up fans' contributions
+                # immediately — no one-season delay.
+                if previousSeason >= 1:
+                    self._assignFundingTiers(session, previousSeason)
+                    session.flush()
+
+                # Fetch previous season's effective funding for carry-forward,
+                # plus its (now-current) tier label so we can inherit rather
+                # than recompute. Recomputing N+1's tier from baseline+carried
+                # would compress ratios toward 1.0 (every team gets the same
+                # +baseline bump), shifting a team that earned MEGA at
+                # offseason end back to LARGE for no in-game reason.
                 prevFunding = {}
+                prevTiers: dict = {}
                 if previousSeason >= 1:
                     prevRecords = session.query(TeamFunding).filter_by(season=previousSeason).all()
                     for rec in prevRecords:
                         prevFunding[rec.team_id] = rec.effective_funding
+                        prevTiers[rec.team_id] = (
+                            rec.funding_tier or 'MID_MARKET',
+                            rec.tier_rank or 3,
+                        )
 
                 # Check if records already exist for this season (resume after restart)
                 existing = session.query(TeamFunding).filter_by(season=currentSeason).first()
@@ -7176,11 +8861,52 @@ class SeasonManager:
                         current_funding=currentFunding,
                         carried_funding=carriedFunding,
                         effective_funding=effectiveFunding,
+                        # Tier locked at season-start values — baseline + carried.
+                        # Will be overwritten by _assignFundingTiers at offseason
+                        # recompute (which uses full effective_funding instead).
+                        tier_locked_funding=effectiveFunding,
                     )
                     session.add(funding)
 
                 session.flush()
-                self._assignFundingTiers(session, currentSeason)
+                # Tier assignment:
+                #   Season 1 (no prior season): assign by ratio. All teams
+                #     start at baseline=200 with carried=0, so everyone
+                #     lands at MID_MARKET — same outcome as inheriting.
+                #   Season N>1: inherit the tier label from N-1's row.
+                #     N-1's row was finalized by _recomputeFundingTiers-
+                #     ForOffseason at the start of its offseason, so the
+                #     label carries the team's actual end-of-season
+                #     standing. Skipping the recompute here avoids the
+                #     baseline-compression tier-flip.
+                if prevTiers:
+                    newRecords = session.query(TeamFunding).filter_by(season=currentSeason).all()
+                    for rec in newRecords:
+                        inheritedTier, inheritedRank = prevTiers.get(
+                            rec.team_id, ('MID_MARKET', 3),
+                        )
+                        rec.funding_tier = inheritedTier
+                        rec.tier_rank = inheritedRank
+                    session.flush()
+                    # Mirror to runtime team objects so game-day effects
+                    # read the inherited tier immediately.
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    tierMap = {
+                        r.team_id: (r.funding_tier, r.tier_rank, r.effective_funding or 0)
+                        for r in newRecords
+                    }
+                    for team in teamManager.teams:
+                        tier, rank, eff = tierMap.get(team.id, ('MID_MARKET', 3, 0))
+                        team.fundingTier = tier
+                        team.fundingTierRank = rank
+                        team.effectiveFunding = eff
+                    tierCounts: dict = {}
+                    for r in newRecords:
+                        tierCounts[r.funding_tier] = tierCounts.get(r.funding_tier, 0) + 1
+                    logger.info(f"Inherited funding tiers from S{previousSeason}: {tierCounts}")
+                else:
+                    # Season 1 fallback — uniform MID via ratio path
+                    self._assignFundingTiers(session, currentSeason)
                 session.commit()
                 logger.info(f"Initialized team funding for season {currentSeason} (baseline={FUNDING_BASELINE_PER_TEAM}F)")
             except Exception as e:
@@ -7196,6 +8922,51 @@ class SeasonManager:
         except ImportError:
             logger.info("First season — all teams default to MID_MARKET funding tier")
 
+    def _applyDevTierOverride(self) -> None:
+        """Dev/testing only: redistribute teams across all four funding tiers
+        regardless of actual fan contributions. Bypasses the funding-derived
+        tier assignment from `_assignFundingTiers` so single-user test runs
+        produce a realistic 4-tier distribution.
+
+        Two modes:
+          - DEV_SPREAD_TIERS=1   → deterministic by team.id (same team gets
+            the same tier every season). Good for trajectory diagnostics.
+          - DEV_SHUFFLE_TIERS=1  → random per-season assignment seeded by the
+            current season number. Same season number reproduces the same
+            shuffle; consecutive seasons rotate teams through different tiers.
+            Use when the deterministic mode keeps your favorite team in the
+            same bucket every season.
+        """
+        import os
+        import random as _random
+        spread = os.environ.get("DEV_SPREAD_TIERS") == "1"
+        shuffle = os.environ.get("DEV_SHUFFLE_TIERS") == "1"
+        if not (spread or shuffle):
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        sortedTeams = sorted(teamManager.teams, key=lambda t: getattr(t, 'id', 0))
+        n = len(sortedTeams)
+        if n == 0:
+            return
+        if shuffle:
+            seasonNum = getattr(self.currentSeason, 'seasonNumber', None) or 1
+            seed = seasonNum * 1009 + 7
+            rng = _random.Random(seed)
+            rng.shuffle(sortedTeams)
+            mode = f"shuffled (season={seasonNum}, seed={seed})"
+        else:
+            mode = "deterministic by team.id"
+        chunk = max(1, n // 4)
+        tiers = ["MEGA_MARKET", "LARGE_MARKET", "MID_MARKET", "SMALL_MARKET"]
+        for idx, team in enumerate(sortedTeams):
+            tierIdx = min(idx // chunk, 3)
+            team.fundingTier = tiers[tierIdx]
+            team.fundingTierRank = tierIdx + 1
+        logger.info(
+            f"Dev tier override active ({mode}) — {n} teams × 4 tiers × "
+            f"{chunk} teams each"
+        )
+
     def _getPickemWeek(self) -> int:
         """Return the effective week number for pick-em storage.
         Regular season: currentWeek (1-28). Playoffs: 28 + playoffRound (29-32)."""
@@ -7204,6 +8975,20 @@ class SeasonManager:
             return 28 + playoffRound
         week = self.currentSeason.currentWeek
         return week if isinstance(week, int) else 0
+
+    def playoffRoundLabel(self, week: int) -> str:
+        """Human label for a playoff virtual week (29+): 'Playoffs Round N',
+        'League Championship', or 'Floos Bowl'. Derived from the week number so
+        it's correct even when the volatile currentPlayoffRound flag is unset
+        (e.g. a brief window during a mid-playoff restart)."""
+        import floosball_methods as FloosMethods
+        numOfRounds = int(FloosMethods.getPower(2, len(self.leagueManager.teams) / 2))
+        rnd = week - 28
+        if rnd >= numOfRounds:
+            return 'Floos Bowl'
+        if rnd == numOfRounds - 1:
+            return 'League Championship'
+        return f'Playoffs Round {max(1, rnd)}'
 
     def _autoPickFavorites(self, games) -> None:
         """Auto-submit picks for users who opted into auto-pick.
@@ -7379,11 +9164,15 @@ class SeasonManager:
             pass
 
     def _sweepExpiredAchievementRewards(self) -> None:
-        """Drop pending rewards the user didn't claim or stash-in-time.
+        """Drop pending rewards the user didn't claim or stash-in-time, then
+        convert any over-cap pack stash to Floobits.
 
         Passes the new season number so the sweep can also clear stashed
         rewards whose deferral target season has already come and gone
-        without the reward being claimed.
+        without the reward being claimed. After the sweep, over-cap packs
+        (held in violation of the soft cap due to legacy state or future
+        bugs) are converted to Floobits at shop cost — keeps the cap
+        consistent at the start of every new season.
         """
         try:
             from database.connection import get_session
@@ -7392,10 +9181,11 @@ class SeasonManager:
             session = get_session()
             try:
                 _am.sweepExpiredRewards(session, currentSeason=newSeason)
+                _am.convertOverCapPackStash(session)
                 session.commit()
             except Exception as e:
                 session.rollback()
-                logger.warning(f"Expired reward sweep failed: {e}")
+                logger.warning(f"Expired reward sweep / overcap conversion failed: {e}")
             finally:
                 session.close()
         except Exception:
@@ -7544,10 +9334,14 @@ class SeasonManager:
                     if packTxCount == 0:
                         _am.unlockSecret(session, uid, "monk")
 
-                    # Stalwart — no roster swaps this season
-                    swapCount = session.query(func.count(FantasyRosterSwap.id)).filter(
-                        FantasyRosterSwap.user_id == uid,
-                        FantasyRosterSwap.season == season,
+                    # Stalwart — no roster swaps this season. Swaps are
+                    # keyed to a FantasyRoster (per-season, per-user), not
+                    # directly to the user; join via roster_id.
+                    swapCount = session.query(func.count(FantasyRosterSwap.id)).join(
+                        FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
+                    ).filter(
+                        FantasyRoster.user_id == uid,
+                        FantasyRoster.season == season,
                     ).scalar() or 0
                     if swapCount == 0:
                         _am.unlockSecret(session, uid, "stalwart")
@@ -7642,7 +9436,10 @@ class SeasonManager:
                     if equippedCount == 0:
                         _am.unlockSecret(session, uid, "purist")
 
-                # Crescendo — Perfect Week AND 300+ FP in the same week
+                # Zenith — Perfect Week AND 800+ FP in the same week.
+                # Threshold rescaled with the Balatro pass (was 300 — trivial
+                # now since Hedge alone floors at 675). 800 keeps the secret
+                # tied to a strong-composition week, not just any active one.
                 # Perfect Week = user had picks this week and all were correct.
                 # Aggregate per user, then compare in Python (portable across DBs).
                 from sqlalchemy import case
@@ -7656,7 +9453,7 @@ class SeasonManager:
                     PickEmPick.correct.isnot(None),
                 ).group_by(PickEmPick.user_id).all()
                 for uid, total, correct in pickAgg:
-                    if total > 0 and correct == total and weekFpByUser.get(uid, 0) >= 300:
+                    if total > 0 and correct == total and weekFpByUser.get(uid, 0) >= 800:
                         _am.unlockSecret(session, uid, "zenith")
 
                 session.commit()
@@ -8178,6 +9975,11 @@ class SeasonManager:
                 # Big plays — persisted so Highlight Reel's per-game
                 # average survives backend restarts.
                 db_stats.big_plays = stats.get('bigPlays', 0)
+
+                # Peak streak — persisted so Gone Streaking survives
+                # restarts. peakStreak is the longest win-or-loss run
+                # (abs value) seen this season.
+                db_stats.peak_streak = stats.get('peakStreak', 0)
 
                 # JSON for detailed breakdown
                 db_stats.offense_stats = stats.get('Offense', {})
