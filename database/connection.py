@@ -192,6 +192,58 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Card upgrade tier on user_cards (1-4 / I-IV) — leveled via same-effect
+        # duplicate + Floobits; scales the card's output (or a flat dividend for
+        # structural/no-output cards).
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN tier INTEGER DEFAULT 1 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.tier")
+        except Exception:
+            conn.rollback()
+
+        # Card Vault — permanent, irreversible collection (drives collection
+        # achievements; vaulted cards can't equip/sell/combine).
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vaulted BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vaulted")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vaulted_at DATETIME"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vaulted_at")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE user_cards ADD COLUMN vault_position INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added user_cards.vault_position")
+        except Exception:
+            conn.rollback()
+
+        # Card Showcase — seasonal 8-slot featured-card payout (vaulted cards).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS showcase_slots ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "slot_number INTEGER NOT NULL, "
+                "user_card_id INTEGER NOT NULL, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, slot_number))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_showcase_slots_user_season "
+                "ON showcase_slots (user_id, season)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured showcase_slots table")
+        except Exception:
+            conn.rollback()
+
         # Drop legacy coaches.team_id column (single-source-of-truth refactor).
         # The new code uses Team.coach_id exclusively. Important: do NOT
         # overwrite a Team.coach_id that already points at a real Coach row —
@@ -634,6 +686,66 @@ def _runPendingMigrations():
             conn.execute(text("ALTER TABLE users ADD COLUMN vacancy_auto_pick VARCHAR(20) DEFAULT 'best_available' NOT NULL"))
             conn.commit()
             logger.info("  Migration: added users.vacancy_auto_pick")
+        except Exception:
+            conn.rollback()
+
+        # Supporter income (feature/fan-income): fan-loyalty dividend state.
+        # supporter_weeks = tenure backing the current favorite team; persists
+        # across seasons, soft-reset on a team change. supporter_unclaimed =
+        # accrued Floobits awaiting claim (the idle pool).
+        for col, colDef in [
+            ('supporter_weeks', 'INTEGER DEFAULT 0 NOT NULL'),
+            ('supporter_unclaimed', 'INTEGER DEFAULT 0 NOT NULL'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added users.{col}")
+            except Exception:
+                conn.rollback()
+
+        # Spectator cheer-bar state (feature/fan-income).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS spectator_progress ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL UNIQUE, "
+                "bar_fill REAL NOT NULL DEFAULT 0, "
+                "week_marker INTEGER NOT NULL DEFAULT 0, "
+                "weekly_floobits INTEGER NOT NULL DEFAULT 0, "
+                "weekly_segments INTEGER NOT NULL DEFAULT 0, "
+                "updated_at DATETIME)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_spectator_progress_user "
+                "ON spectator_progress(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured spectator_progress table")
+        except Exception:
+            conn.rollback()
+
+        # Supporter dividend ledger — itemized breakdown of the current unclaimed
+        # pool (feature/fan-income). Rows are deleted on claim, so it only holds
+        # weeks since the last claim.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS supporter_dividends ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL, "
+                "amount INTEGER NOT NULL, "
+                "breakdown_json TEXT, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, week))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_supporter_dividends_user "
+                "ON supporter_dividends(user_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured supporter_dividends table")
         except Exception:
             conn.rollback()
 
@@ -1713,6 +1825,47 @@ def _seedAchievements():
             {"key": "curator", "name": "Curator", "category": "guidance", "scope": "per_season", "sort_order": 130, "target": 15,
              "description": "Collect 15 unique cards this season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            # Collection — permanent goals on the Vault (once-scope, never reset).
+            {"key": "hometown_hero", "name": "Hometown Hero", "category": "collection", "scope": "once", "sort_order": 310, "target": 5,
+             "description": "Vault 5 cards of players on your favorite team.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "full_spectrum", "name": "Full Spectrum", "category": "collection", "scope": "once", "sort_order": 320, "target": 1,
+             "description": "Vault all four editions of a single player.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "all_pro_set", "name": "All-Pro Set", "category": "collection", "scope": "once", "sort_order": 330, "target": 1,
+             "description": "Vault every All-Pro card from a single season.",
+             "reward_config": {"floobits": 400, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            {"key": "ice_cold_i", "name": "Ice Cold I", "category": "collection", "scope": "once", "sort_order": 340, "target": 3,
+             "description": "Vault 3 Diamond cards.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "ice_cold_ii", "name": "Ice Cold II", "category": "collection", "scope": "once", "sort_order": 341, "target": 8,
+             "description": "Vault 8 Diamond cards.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "ice_cold_iii", "name": "Ice Cold III", "category": "collection", "scope": "once", "sort_order": 342, "target": 20,
+             "description": "Vault 20 Diamond cards.",
+             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "archivist_i", "name": "Archivist I", "category": "collection", "scope": "once", "sort_order": 350, "target": 10,
+             "description": "Vault cards of 10 different players.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "archivist_ii", "name": "Archivist II", "category": "collection", "scope": "once", "sort_order": 351, "target": 50,
+             "description": "Vault cards of 50 different players.",
+             "reward_config": {"floobits": 200, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "archivist_iii", "name": "Archivist III", "category": "collection", "scope": "once", "sort_order": 352, "target": 150,
+             "description": "Vault cards of 150 different players.",
+             "reward_config": {"floobits": 600, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            # Card upgrades — seasonal (tiers reset each season unless vaulted).
+            {"key": "artificer_i", "name": "Artificer I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 1,
+             "description": "Level up a card this season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "artificer_ii", "name": "Artificer II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 5,
+             "description": "Level up cards 5 times this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "artificer_iii", "name": "Artificer III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 12,
+             "description": "Level up cards 12 times this season.",
+             "reward_config": {"floobits": 100, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "ascendant", "name": "Ascendant", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1,
+             "description": "Bring a card to its max tier (IV) this season.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             # Tycoon tiers — floobits earned in a single season. Mirrors
             # Magnate (spent side). Targets reflect post-curve income
             # economy where a typical user earns 2-4k/season.
@@ -1945,6 +2098,16 @@ def _seedAchievements():
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            # Card-upgrade secrets
+            {"key": "overclocked", "name": "Overclocked", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
+             "description": "Hold three max-tier (IV) cards in a single season.",
+             "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynasty", "name": "Dynasty", "category": "secret", "scope": "once", "sort_order": 695, "target": 1,
+             "description": "Vault a fully upgraded (tier IV) card.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "crown_jewel", "name": "Crown Jewel", "category": "secret", "scope": "once", "sort_order": 700, "target": 1,
+             "description": "Take a Diamond card to its max tier (IV).",
+             "reward_config": {"floobits": 200, "packs": [], "powerups": [], "deferred": False}},
             {"key": "faithful", "name": "Faithful", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
              "description": "Your favorite team misses the playoffs three seasons in a row.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},

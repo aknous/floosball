@@ -778,19 +778,19 @@ class FantasyTracker:
                         gamesActive=gamesActive,
                     )
                     calcResult = calculateWeekCardBonuses(userEquipped, calcCtx)
-                    # When a Cracking is active, the controlling Core's
+                    # When a Criticality is active, the controlling Core's
                     # signature equation replaces the baseline aggregator.
-                    # No Cracking → computeFinalOutput uses the standard
+                    # No Criticality → computeFinalOutput uses the standard
                     # bonus-additive formula (next-season's aggregator).
                     try:
-                        from managers.anomalyManager import getActiveCrackingCore
-                        crackingCore = getActiveCrackingCore(seasonNum, currentWeek)
+                        from managers.anomalyManager import getActiveCriticalityCore
+                        criticalityCore = getActiveCriticalityCore(seasonNum, currentWeek)
                     except Exception:
-                        crackingCore = None
+                        criticalityCore = None
                     from managers.coreEquations import computeFinalOutput, equationTemplate
-                    rawTotalFP, crackingEquation = computeFinalOutput(
+                    rawTotalFP, criticalityEquation = computeFinalOutput(
                         weekRawFP, calcResult.totalBonusFP, calcResult.multFactors,
-                        coreKey=crackingCore,
+                        coreKey=criticalityCore,
                     )
                     weekCardBonus = round(rawTotalFP - weekRawFP, 2)
                     if weekCardBonus < 0:
@@ -801,16 +801,22 @@ class FantasyTracker:
                     ]
                     # Build hand synergy summary from calcCtx
                     chanceAmplifiers = []
+                    from constants import CARD_TIER_MULT as _TM
+                    from managers.cardEffects import tierScaledStrength as _tss
                     for eq in userEquipped:
                         ec = eq.user_card.card_template.effect_config or {}
                         eName = ec.get("effectName", "")
                         primary = ec.get("primary", {})
+                        _tier = getattr(eq.user_card, "tier", 1) or 1
+                        _tmult = _TM.get(_tier, 1.0)
                         if eName == "providence" and primary.get("chanceBonus"):
-                            chanceAmplifiers.append({"name": "Providence", "bonus": round(primary["chanceBonus"], 2)})
+                            chanceAmplifiers.append({"name": "Providence",
+                                                     "bonus": round(primary["chanceBonus"] * _tmult, 2)})
                         elif eName == "catalyst":
-                            fpPer1Pct = primary.get("fpPer1Pct", 12)
+                            _sc = _tss("catalyst", primary, _tmult)
+                            fpPer1Pct = _sc.get("fpPer1Pct", primary.get("fpPer1Pct", 12))
                             baseline = primary.get("baseline", 55)
-                            maxBoost = primary.get("maxBoost", 0.10)
+                            maxBoost = _sc.get("maxBoost", primary.get("maxBoost", 0.10))
                             if weekRawFP > baseline:
                                 catBoost = min(maxBoost, (weekRawFP - baseline) / fpPer1Pct / 100)
                             else:
@@ -841,9 +847,9 @@ class FantasyTracker:
                         "totalBonusFP": round(calcResult.totalBonusFP, 2),
                         "multFactors": [round(f, 2) for f in calcResult.multFactors],
                         "handSynergies": handSynergies,
-                        "crackingCore": crackingCore,
-                        "crackingEquation": crackingEquation if crackingCore else None,
-                        "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
+                        "criticalityCore": criticalityCore,
+                        "criticalityEquation": criticalityEquation if criticalityCore else None,
+                        "criticalityEquationTemplate": equationTemplate(criticalityCore) if criticalityCore else None,
                     }
                 elif hasStoredCurrentWeekBonus:
                     stored = userWeekBonuses[currentWeek]
@@ -1600,6 +1606,7 @@ class FantasyTracker:
         return {
             "slotNumber": b.slotNumber,
             "edition": b.edition,
+            "tier": b.tier,
             "playerId": b.playerId,
             "playerName": b.playerName,
             "effectName": b.effectName,

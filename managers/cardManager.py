@@ -212,7 +212,11 @@ CLASSIFICATION_VALUE_MULTIPLIERS = {
 
 
 def getCardValue(card, currentSeason: int) -> int:
-    """Get classification-aware value for a card. Used by The Combine operations."""
+    """Get classification- and tier-aware value for a card. Used by The Combine
+    operations and sell value. A leveled-up card is worth more: its tier's WORTH
+    is consumed when fed to the Combine (the tier isn't 'lost', it lifts the
+    result edition) and lifts sell value too."""
+    from constants import CARD_TIER_MULT
     isActive = card.card_template.season_created == currentSeason
     baseValue = getSellValue(card.card_template.edition, isActive=isActive)
     classification = card.card_template.classification or ""
@@ -220,7 +224,8 @@ def getCardValue(card, currentSeason: int) -> int:
     for tag, mult in CLASSIFICATION_VALUE_MULTIPLIERS.items():
         if tag in classification:
             multiplier *= mult
-    return max(1, int(baseValue * multiplier))
+    tierMult = CARD_TIER_MULT.get(getattr(card, "tier", 1) or 1, 1.0)
+    return max(1, int(baseValue * multiplier * tierMult))
 
 
 def computeRarityWeight(edition: str, playerRating: int) -> int:
@@ -479,6 +484,9 @@ class CardManager:
         # Rookie classification doubles sell value
         if classification and "rookie" in classification:
             sellValue *= 2
+        # Upgraded cards are worth more to sell, matching their Combine value.
+        from constants import CARD_TIER_MULT as _CTM
+        sellValue = max(1, int(sellValue * _CTM.get(getattr(userCard, "tier", 1) or 1, 1.0)))
 
         # Derive category from effect name if missing from effectConfig (legacy cards)
         from managers.cardEffects import EFFECT_CATEGORY
@@ -524,6 +532,113 @@ class CardManager:
             # Re-derive output type with fresh params
             outputType = _deriveOutputType(category, effectName, primary)
 
+        # Upgrade tier: make the DISPLAYED values reflect the card's tier (the
+        # calc already scales the actual output). Rebuilding the primary at
+        # editionScale x tierMult scales output params (they're editionScale-
+        # multiplied in the builders) while leaving thresholds/counts/chances
+        # untouched, so detail/tagline/tooltip show the tiered numbers.
+        # Structural (no-own-output) cards instead append their flat dividend.
+        tierNote = None  # distinct line shown under the description for tiered cards
+        tier = getattr(userCard, "tier", 1) or 1
+        if tier > 1:
+            from constants import (
+                CARD_TIER_MULT, CARD_TIER_DIVIDEND_FP, CARD_TIER_DIVIDEND_FLOOBITS,
+            )
+            from managers.cardEffects import rebuildPrimaryParams
+            tierMult = CARD_TIER_MULT.get(tier, 1.0)
+            tierRoman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(tier, str(tier))
+            prim = effectConfig.get("primary") or {}
+            # No flat dividend anymore — every amplifier/meta card scales a real
+            # knob (advantage's roll count is handled in the strength merge below).
+            isStructural = False
+            baseDetail = effectConfig.get("detail") or ""
+            if isStructural:
+                # No own output — show the flat per-tier dividend (edition-banded).
+                edition = template.edition or "base"
+                divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(edition, {}).get(tier, 0)
+                divFP = CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
+                if outputType == "floobits" and divFloob:
+                    tierNote = f"Tier {tierRoman}: +{divFloob} Floobits"
+                elif divFP:
+                    fp = int(divFP) if float(divFP).is_integer() else divFP
+                    tierNote = f"Tier {tierRoman}: +{fp} FP"
+            else:
+                # Scale the STORED params (drift-free) by the builder's own
+                # per-key behavior. OUTPUT params are detected with a 2x probe
+                # (a true threshold/count doesn't move with editionScale; an
+                # output param does). Output params then scale:
+                #   - mult-value keys -> scale the DELTA (keep the 1.0 base)
+                #   - INVERSE params (fat_cat's floobitsPerFP, which goes DOWN as
+                #     the card gets stronger) -> scale by their builder ratio
+                #   - normal additive -> scale by tierMult directly and show a
+                #     decimal, so small integers (e.g. 2 Floobits/reception) move
+                #     visibly instead of int-rounding flat.
+                edScale = effectConfig.get("editionScale", 1.0)
+                baseR = rebuildPrimaryParams(effectName, template.player_rating, edScale) or {}
+                tierR = rebuildPrimaryParams(effectName, template.player_rating, edScale * tierMult) or {}
+                bigR = rebuildPrimaryParams(effectName, template.player_rating, edScale * 2.0) or {}
+                MULT_VAL = {"xMultValue", "baseXMult", "baseMult", "enhancedMult", "maxMult", "q4MultFactor"}
+                rewardIsMult = effectName in ("bandwagon", "stack", "backfield_buddies", "full_roster")
+
+                def _fmt(v):
+                    if float(v).is_integer():
+                        return int(v)
+                    a = abs(v)
+                    # tiny per-unit FPx (e.g. vagabond ~0.02/swap) needs 3 dp so
+                    # adjacent tiers don't round to the same 2-dp value
+                    if a < 0.1:
+                        return round(v, 3)
+                    return round(v, 2) if a < 1 else round(v, 1)
+
+                scaled = dict(primary)
+                for k, bv in baseR.items():
+                    bigv = bigR.get(k)
+                    sv = scaled.get(k)
+                    if k == "gates" and isinstance(bv, list) and isinstance(sv, list) and bigv != bv:
+                        scaled[k] = [{**g, "fp": _fmt(g.get("fp", 0) * tierMult)} for g in sv]
+                        continue
+                    if not (isinstance(bv, (int, float)) and isinstance(sv, (int, float))):
+                        continue
+                    # Only scale params that respond to editionScale (output), not
+                    # thresholds/counts (which the 2x probe leaves unchanged).
+                    if not isinstance(bigv, (int, float)) or bv == bigv:
+                        continue
+                    if k in MULT_VAL or (k == "rewardValue" and rewardIsMult) \
+                            or (k == "baseReward" and scaled.get("rewardType") == "mult" and sv >= 1.0):
+                        scaled[k] = round(1 + (sv - 1) * tierMult, 2)  # scale the FPx delta
+                    elif bigv < bv:                                     # inverse param
+                        tv = tierR.get(k, bv)
+                        scaled[k] = _fmt(sv * ((tv / bv) if bv else tierMult))
+                    else:                                              # normal additive output
+                        scaled[k] = _fmt(sv * tierMult)
+                _FULL_MULT = {
+                    "xMultValue": "xMultDelta", "baseXMult": "baseXDelta",
+                    "baseMult": "baseDelta", "enhancedMult": "enhancedDelta",
+                    "maxMult": "maxDelta", "q4MultFactor": "q4MultDelta",
+                }
+                for fk, dk in _FULL_MULT.items():
+                    if isinstance(scaled.get(fk), (int, float)):
+                        scaled[dk] = round(scaled[fk] - 1, 2)
+                if rewardIsMult and isinstance(scaled.get("rewardValue"), (int, float)) and scaled["rewardValue"] >= 1.0:
+                    scaled["rewardDelta"] = round(scaled["rewardValue"] - 1, 2)
+                if scaled.get("rewardType") == "mult" and isinstance(scaled.get("baseReward"), (int, float)) \
+                        and scaled["baseReward"] >= 1.0:
+                    scaled["baseRewardDelta"] = round(scaled["baseReward"] - 1, 2)
+                # Amplifier strength params (conductor %, doubler/surveyor/
+                # sharpshooter mult, catalyst chance ramp) aren't editionScale-
+                # driven, so the loop above misses them — overlay their tier-scaled
+                # values so the description matches the calc.
+                from managers.cardEffects import tierScaledStrength
+                scaled.update(tierScaledStrength(effectName, primary, tierMult))
+                if effectName == "advantage":  # roll count scales with tier (I=2, IV=5)
+                    scaled["rollCount"] = tier + 1
+                scaled["posLabel"] = primary.get("posLabel", POSITION_LABELS.get(template.position, "??"))
+                _rebuildTemplates(scaled)
+                # If nothing in the text changed (Copycat copies dynamically,
+                # Odometer lists yard thresholds), spell out the multiplier.
+                if (effectConfig.get("detail") or "") == baseDetail:
+                    tierNote = f"Tier {tierRoman}: ×{tierMult:g} output"
+
         # Edition secondary bonuses removed — edition now determines effect tier only
         effectConfig.pop("secondary", None)
 
@@ -542,6 +657,10 @@ class CardManager:
             "ratingStars": min(5, max(1, (template.player_rating - 60) // 8 + 1)),
             "position": template.position,
             "edition": template.edition,
+            "tier": getattr(userCard, "tier", 1) or 1,
+            "tierNote": tierNote,
+            "vaulted": bool(getattr(userCard, "vaulted", False)),
+            "vaultPosition": getattr(userCard, "vault_position", None),
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,
@@ -597,6 +716,11 @@ class CardManager:
         if equippedIds:
             raise ValueError(f"Cannot sell equipped cards: {list(equippedIds)}")
 
+        # Vaulted cards are permanent — they can't be sold.
+        vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+        if vaultedIds:
+            raise ValueError(f"Cannot sell vaulted cards: {vaultedIds}")
+
         # Calculate total and sell (Rookie classification = 2x sell value)
         totalFloobits = 0
         for card in cards:
@@ -605,6 +729,8 @@ class CardManager:
             classification = card.card_template.classification or ""
             if "rookie" in classification:
                 cardValue *= 2
+            from constants import CARD_TIER_MULT as _CTM
+            cardValue = max(1, int(cardValue * _CTM.get(getattr(card, "tier", 1) or 1, 1.0)))
             totalFloobits += cardValue
 
         currencyRepo.addFunds(
@@ -633,6 +759,11 @@ class CardManager:
             foundIds = {c.id for c in cards}
             missingIds = [cid for cid in cardIds if cid not in foundIds]
             raise ValueError(f"Cards not found or not owned: {missingIds}")
+
+        # Vaulted cards are permanent — can't be Combined or fed to a Level Up.
+        vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+        if vaultedIds:
+            raise ValueError(f"Cannot use vaulted cards: {vaultedIds}")
 
         equippedRows = session.query(EquippedCard).filter(
             EquippedCard.user_card_id.in_(cardIds),
@@ -803,6 +934,230 @@ class CardManager:
             "totalValue": totalValue,
             "resultEdition": resultEdition,
             "cardCount": len(cards),
+        }
+
+    # ─── Card Upgrade Tiers (Level Up) ────────────────────────────────────────
+
+    @staticmethod
+    def _effectName(card) -> str:
+        return ((card.card_template.effect_config or {}).get("effectName") or "")
+
+    def _tierUpgradeCost(self, card, toTier: int) -> int:
+        """Floobit cost to level a card INTO toTier (2-4), edition-scaled and
+        rounded to the nearest 10 so costs read clean (not 94 / 312)."""
+        from constants import CARD_TIER_UPGRADE_COST, CARD_TIER_EDITION_COST_MULT
+        base = CARD_TIER_UPGRADE_COST.get(toTier)
+        if base is None:
+            return 0
+        edMult = CARD_TIER_EDITION_COST_MULT.get(card.card_template.edition, 1.0)
+        return int(round(base * edMult / 10.0)) * 10
+
+    def getUpgradeInfo(self, session, userId: int, targetCardId: int,
+                       currentSeason: int) -> dict:
+        """Cost + eligible same-effect duplicates the UI can offer to feed."""
+        from database.repositories.card_repositories import UserCardRepository
+        from constants import CARD_TIER_MAX
+        cardRepo = UserCardRepository(session)
+        target = cardRepo.getByIds([targetCardId], userId)
+        if not target:
+            raise ValueError("Card not found or not owned")
+        target = target[0]
+        effect = self._effectName(target)
+        atMax = target.tier >= CARD_TIER_MAX
+        nextTier = target.tier + 1
+        # Eligible offerings: any OTHER owned card with the same effect that
+        # isn't vaulted (vaulted cards are permanent and can't be fed/consumed).
+        offerings = [
+            c for c in cardRepo.getByUser(userId)
+            if c.id != target.id and not getattr(c, "vaulted", False)
+            and self._effectName(c) == effect
+        ]
+        return {
+            "cardId": target.id,
+            "effectName": effect,
+            "tier": target.tier,
+            "maxTier": CARD_TIER_MAX,
+            "atMax": atMax,
+            "nextTier": None if atMax else nextTier,
+            "cost": None if atMax else self._tierUpgradeCost(target, nextTier),
+            "eligibleOfferings": [self.serializeCard(c, currentSeason) for c in offerings],
+        }
+
+    def levelUpCard(self, session, userId: int, targetCardId: int,
+                    offeringCardId: int, currentSeason: int,
+                    currentWeek: int = 0) -> dict:
+        """Level a card I->IV by consuming ONE same-effect duplicate + Floobits.
+
+        Same effect ⇒ same edition (effects are edition-locked), so the duplicate
+        is a free rarity gate. The duplicate is destroyed; the target gains +1 tier.
+        """
+        from database.models import CardUpgradeLog
+        from database.repositories.card_repositories import (
+            UserCardRepository, CurrencyRepository,
+        )
+        from constants import CARD_TIER_MAX
+
+        if targetCardId == offeringCardId:
+            raise ValueError("Target and offering must be different cards")
+
+        # Ownership + not-equipped-this-week (reuses Combine validation)
+        cards = self._validateUpgradeCards(session, userId,
+                                           [targetCardId, offeringCardId],
+                                           currentSeason, currentWeek)
+        byId = {c.id: c for c in cards}
+        target, offering = byId[targetCardId], byId[offeringCardId]
+
+        if target.tier >= CARD_TIER_MAX:
+            raise ValueError("Card is already at max tier")
+        if self._effectName(target) != self._effectName(offering):
+            raise ValueError("Offering must have the same effect as the target")
+
+        toTier = target.tier + 1
+        cost = self._tierUpgradeCost(target, toTier)
+
+        currencyRepo = CurrencyRepository(session)
+        result = currencyRepo.spendFunds(
+            userId, cost,
+            transactionType="card_level_up",
+            description=f"Leveled {self._effectName(target)} to tier {toTier}",
+            season=currentSeason,
+        )
+        if result is None:
+            raise ValueError("Insufficient Floobits")
+
+        target.tier = toTier
+        UserCardRepository(session).deleteBatch([offering])
+        session.add(CardUpgradeLog(
+            user_id=userId,
+            upgrade_type="level_up",
+            subject_user_card_id=target.id,
+            offering_user_card_ids=[offering.id],
+            # Level Up keeps the same template (only the instance's tier changes);
+            # point both at the target's template so the NOT NULL column is satisfied.
+            old_template_id=target.card_template_id,
+            new_template_id=target.card_template_id,
+            floobits_spent=cost,
+        ))
+        session.flush()
+        return self.serializeCard(target, currentSeason)
+
+    # ─── Card Vault (permanent collection) ────────────────────────────────────
+
+    def vaultCard(self, session, userId: int, cardId: int, currentSeason: int,
+                  currentWeek: int = 0) -> dict:
+        """Permanently move a card into the user's Vault. IRREVERSIBLE — vaulted
+        cards can no longer be equipped, sold, or Combined; they persist forever
+        and drive collection achievements. Can't vault an equipped card."""
+        from datetime import datetime
+        from database.repositories.card_repositories import UserCardRepository, EquippedCardRepository
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds([cardId], userId)
+        if not cards:
+            raise ValueError("Card not found or not owned")
+        card = cards[0]
+        if getattr(card, "vaulted", False):
+            raise ValueError("Card is already vaulted")
+        equippedIds = EquippedCardRepository(session).getEquippedCardIds(userId, currentSeason, currentWeek)
+        if card.id in equippedIds:
+            raise ValueError("Unequip the card before vaulting it")
+        card.vaulted = True
+        card.vaulted_at = datetime.utcnow()
+        session.flush()
+        return self.serializeCard(card, currentSeason)
+
+    def trashVaultedCard(self, session, userId: int, cardId: int) -> dict:
+        """Permanently remove (trash) a vaulted card. Unlike selling, there's no
+        Floobit return — it's a delete. Only vaulted cards can be trashed this
+        way (un-vaulted cards are sold instead). Cleans up any showcase/equipped
+        rows that reference it first so the delete can't orphan FK rows."""
+        from database.repositories.card_repositories import UserCardRepository
+        from database.models import ShowcaseSlot, EquippedCard
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds([cardId], userId)
+        if not cards:
+            raise ValueError("Card not found or not owned")
+        card = cards[0]
+        if not getattr(card, "vaulted", False):
+            raise ValueError("Only vaulted cards can be trashed here")
+        session.query(ShowcaseSlot).filter(
+            ShowcaseSlot.user_id == userId, ShowcaseSlot.user_card_id == cardId,
+        ).delete(synchronize_session=False)
+        session.query(EquippedCard).filter(
+            EquippedCard.user_id == userId, EquippedCard.user_card_id == cardId,
+        ).delete(synchronize_session=False)
+        cardRepo.delete(card)
+        session.flush()
+        return {"trashed": True, "cardId": cardId}
+
+    def reorderVault(self, session, userId: int, orderedCardIds: list) -> dict:
+        """Set the manual sort order of vaulted cards. `orderedCardIds` is the
+        full desired order; each card's vault_position becomes its index. Only
+        the user's own vaulted cards are repositioned."""
+        from database.repositories.card_repositories import UserCardRepository
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds(orderedCardIds, userId)
+        byId = {c.id: c for c in cards}
+        pos = 0
+        for cardId in orderedCardIds:
+            card = byId.get(cardId)
+            if card and getattr(card, "vaulted", False):
+                card.vault_position = pos
+                pos += 1
+        session.flush()
+        return {"reordered": pos}
+
+    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int):
+        """High-level stat line for a vaulted card's back — the player's numbers
+        for the season the card is from. A vaulted card drops its effect and
+        becomes a keepsake, so the back shows who the player actually was that
+        year. Returns None if no stats were recorded that season."""
+        from database.models import PlayerSeasonStats, Team
+        row = session.query(PlayerSeasonStats).filter_by(
+            player_id=playerId, season=season,
+        ).first()
+        if not row:
+            return None
+        # Team the player actually suited up for that season (can differ from the
+        # card's current team after a trade / FA move).
+        teamName = None
+        teamColor = None
+        if row.team_id:
+            team = session.get(Team, row.team_id)
+            if team:
+                teamName = team.name
+                teamColor = team.color
+        lines = []
+        def add(label, value):
+            lines.append({"label": label, "value": value})
+        if position == 1:  # QB
+            add("Pass Yds", row.passing_yards or 0)
+            add("Pass TD", row.passing_tds or 0)
+            add("INT", row.passing_ints or 0)
+            if (row.rushing_yards or 0) > 0:
+                add("Rush Yds", row.rushing_yards)
+        elif position == 2:  # RB — no receiving game in this sim
+            add("Rush Yds", row.rushing_yards or 0)
+            add("Rush TD", row.rushing_tds or 0)
+            add("Rush Att", row.rushing_attempts or 0)
+        elif position in (3, 4):  # WR / TE
+            add("Rec", row.receptions or 0)
+            add("Rec Yds", row.receiving_yards or 0)
+            add("Rec TD", row.receiving_tds or 0)
+        elif position == 5:  # K
+            k = row.kicking_stats or {}
+            add("FG", f"{k.get('fgs', 0)}/{k.get('fgAtt', 0)}")
+            if k.get('fgPerc'):
+                add("FG%", k.get('fgPerc'))
+            if k.get('xps'):
+                add("XP", k.get('xps'))
+            if k.get('fgAvg'):
+                add("Avg", f"{k.get('fgAvg')} yd")
+        return {
+            "season": season,
+            "teamName": teamName,
+            "teamColor": teamColor,
+            "fantasyPoints": row.fantasy_points or 0,
+            "lines": lines,
         }
 
     # ─── Pack Opening ─────────────────────────────────────────────────────────
