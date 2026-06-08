@@ -7486,6 +7486,7 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
     """Level a card I->IV by spending Floobits + ONE same-effect duplicate."""
     from database.connection import get_session
     from managers.cardManager import CardManager
+    from managers import achievementManager as _am
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -7496,6 +7497,11 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
     try:
         result = cardManager.levelUpCard(session, user.id, cardId, req.offeringCardId,
                                          currentSeason, currentWeek)
+        # Card-upgrade achievements (Artificer tiers, Ascendant, Overclocked).
+        try:
+            _am.onCardLeveledUp(session, user.id, result.get("tier", 1), currentSeason)
+        except Exception:
+            pass
         session.commit()
         return build_success_response(result)
     except ValueError as e:

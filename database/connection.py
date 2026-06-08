@@ -1853,6 +1853,19 @@ def _seedAchievements():
             {"key": "archivist_iii", "name": "Archivist III", "category": "collection", "scope": "once", "sort_order": 352, "target": 150,
              "description": "Vault cards of 150 different players.",
              "reward_config": {"floobits": 600, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+            # Card upgrades — seasonal (tiers reset each season unless vaulted).
+            {"key": "artificer_i", "name": "Artificer I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 1,
+             "description": "Level up a card this season.",
+             "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "artificer_ii", "name": "Artificer II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 5,
+             "description": "Level up cards 5 times this season.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "artificer_iii", "name": "Artificer III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 12,
+             "description": "Level up cards 12 times this season.",
+             "reward_config": {"floobits": 100, "packs": ["grand"], "powerups": [], "deferred": False}},
+            {"key": "ascendant", "name": "Ascendant", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1,
+             "description": "Bring a card to its max tier (IV) this season.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             # Tycoon tiers — floobits earned in a single season. Mirrors
             # Magnate (spent side). Targets reflect post-curve income
             # economy where a typical user earns 2-4k/season.
@@ -2085,6 +2098,13 @@ def _seedAchievements():
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            # Card-upgrade secrets
+            {"key": "overclocked", "name": "Overclocked", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
+             "description": "Hold three max-tier (IV) cards in a single season.",
+             "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "dynasty", "name": "Dynasty", "category": "secret", "scope": "once", "sort_order": 695, "target": 1,
+             "description": "Vault a fully upgraded (tier IV) card.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "faithful", "name": "Faithful", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
              "description": "Your favorite team misses the playoffs three seasons in a row.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},

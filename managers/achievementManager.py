@@ -625,12 +625,15 @@ def syncCollectionAchievements(session: Session, userId: int) -> List[UserAchiev
     players = set()
     editionsByPlayer: Dict[int, set] = {}
     allProBySeason: Dict[int, set] = {}
+    hasMaxTierVaulted = False
     for _uc, tpl in vaulted:
         players.add(tpl.player_id)
         if favTeamId and tpl.team_id == favTeamId:
             homeTeamCount += 1
         if tpl.edition == "diamond":
             diamondCount += 1
+        if (getattr(_uc, "tier", 1) or 1) >= 4:
+            hasMaxTierVaulted = True
         editionsByPlayer.setdefault(tpl.player_id, set()).add(tpl.edition)
         if tpl.classification and "all_pro" in tpl.classification:
             allProBySeason.setdefault(tpl.season_created, set()).add(tpl.player_id)
@@ -666,6 +669,11 @@ def syncCollectionAchievements(session: Session, userId: int) -> List[UserAchiev
     _rec("archivist_i", len(players))
     _rec("archivist_ii", len(players))
     _rec("archivist_iii", len(players))
+    # Secret: enshrine a fully upgraded card.
+    if hasMaxTierVaulted:
+        s = unlockSecret(session, userId, "dynasty")
+        if s:
+            completed.append(s)
     return completed
 
 
@@ -758,6 +766,37 @@ def onWeeklyPickemPodium(session: Session, userId: int, currentSeason: int) -> L
     for key in ("pundit_i", "pundit_ii", "pundit_iii", "pundit_iv"):
         u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
         if u: unlocked.append(u)
+    return unlocked
+
+
+def onCardLeveledUp(session: Session, userId: int, toTier: int, currentSeason: int) -> List[UserAchievement]:
+    """Card-upgrade hooks (seasonal): Artificer tiers count level-ups; Ascendant
+    fires on reaching max tier. Secret Overclocked fires at three max-tier cards
+    in one season."""
+    from constants import CARD_TIER_MAX
+    unlocked = []
+    for key in ("artificer_i", "artificer_ii", "artificer_iii"):
+        u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
+        if u:
+            unlocked.append(u)
+    if toTier >= CARD_TIER_MAX:
+        u = recordProgress(session, userId, "ascendant", absolute=1, currentSeason=currentSeason)
+        if u:
+            unlocked.append(u)
+        # Secret: three max-tier cards minted this season.
+        maxCount = (
+            session.query(UserCard.id)
+            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+            .filter(
+                UserCard.user_id == userId,
+                UserCard.tier >= CARD_TIER_MAX,
+                CardTemplate.season_created == currentSeason,
+            ).count()
+        )
+        if maxCount >= 3:
+            s = unlockSecret(session, userId, "overclocked")
+            if s:
+                unlocked.append(s)
     return unlocked
 
 
