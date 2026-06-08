@@ -879,7 +879,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "indemnity": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Chance grows with {posLabel} underperformance, up to 70%",
     # ── Same-Team Stacking Effects ──
     "stack": "+{rewardDelta} FPx when your roster's QB and WR share a team",
-    "backfield_buddies": "+{rewardDelta} FPx when your roster's QB and RB share a team",
+    "backfield_buddies": "+{rewardValue} FPx when your roster's QB and RB share a team",
     "homer": "+{perPlayerMult} FPx per roster player on your favorite team. Max +{maxDelta} FPx.",
     "gone_streaking": "+{baseFP} FP base, +{perStreakFP} per game in longest streak (winning or losing) by your favorite team this season. Streak does not need to be active.",
     "hometown_hero": "+{rewardFloobits} Floobits when 3+ roster players share a team",
@@ -1879,7 +1879,9 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     # rewardValue can be either a flat FP value OR a full-mult value
     # depending on the effect. For the handful of FPx-output effects that
     # store rewardValue as 1+delta, compute a rewardDelta variant too.
-    _REWARDVALUE_IS_MULT_EFFECTS = {'bandwagon', 'stack', 'backfield_buddies', 'full_roster'}
+    # NOTE: backfield_buddies stores rewardValue as a bare delta (compute does
+    # 1 + rewardValue), so it is NOT in this set — its template uses {rewardValue}.
+    _REWARDVALUE_IS_MULT_EFFECTS = {'bandwagon', 'stack', 'full_roster'}
     if effectName in _REWARDVALUE_IS_MULT_EFFECTS and 'rewardValue' in primary:
         rv = primary['rewardValue']
         if isinstance(rv, (int, float)) and rv >= 1.0:
