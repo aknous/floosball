@@ -7267,9 +7267,15 @@ def getCardCollection(
     edition: Optional[str] = Query(default=None),
     position: Optional[int] = Query(default=None),
     activeOnly: bool = Query(default=False),
+    vaulted: Optional[bool] = Query(default=None),
+    sort: str = Query(default="recent"),
     user: _User = Depends(_getCurrentUser),
 ):
-    """Get user's card collection with optional filters."""
+    """Get user's card collection with optional filters and sorting.
+
+    `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
+    `sort`: recent | rarity | rating | tier | name | team | position | manual.
+    """
     from database.connection import get_session
     from database.repositories.card_repositories import UserCardRepository
     from managers.cardManager import CardManager
@@ -7279,6 +7285,9 @@ def getCardCollection(
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    # Rarity order for sorting (ascending index → descending value when reversed)
+    _EDITION_RANK = {"base": 0, "holographic": 1, "prismatic": 2, "diamond": 3}
 
     session = get_session()
     try:
@@ -7299,9 +7308,49 @@ def getCardCollection(
                 continue
             if activeOnly and tpl.season_created != currentSeason:
                 continue
+            if vaulted is not None and bool(getattr(card, "vaulted", False)) != vaulted:
+                continue
             data = cardManager.serializeCard(card, currentSeason)
             data["isEquipped"] = card.id in equippedCardIds
+            # Vaulted cards drop their effect and become keepsakes — attach the
+            # player's stat line for the season the card is from (back of card).
+            if data.get("vaulted") and tpl.player_id:
+                stats = cardManager.buildPlayerSeasonStats(
+                    session, tpl.player_id, tpl.season_created, tpl.position,
+                )
+                if stats:
+                    data["playerStats"] = stats
             result.append(data)
+
+        # Sort. Default "recent" = newest first (highest id). All sorts keep a
+        # stable secondary order by id so ties are deterministic.
+        def _num(d, *keys):
+            for k in keys:
+                v = d.get(k)
+                if isinstance(v, (int, float)):
+                    return v
+            return 0
+        if sort == "rarity":
+            result.sort(key=lambda d: (_EDITION_RANK.get(d.get("edition"), 0), _num(d, "id")), reverse=True)
+        elif sort == "rating":
+            result.sort(key=lambda d: (_num(d, "playerRating", "rating"), _num(d, "id")), reverse=True)
+        elif sort == "tier":
+            result.sort(key=lambda d: (_num(d, "tier"), _num(d, "id")), reverse=True)
+        elif sort == "name":
+            result.sort(key=lambda d: ((d.get("playerName") or "").lower(), _num(d, "id")))
+        elif sort == "team":
+            result.sort(key=lambda d: (_num(d, "teamId"), (d.get("playerName") or "").lower(), _num(d, "id")))
+        elif sort == "position":
+            result.sort(key=lambda d: (_num(d, "position"), -_num(d, "id")))
+        elif sort == "manual":
+            # Vault manual order: vault_position asc, unset (None) last, then newest.
+            result.sort(key=lambda d: (
+                0 if isinstance(d.get("vaultPosition"), int) else 1,
+                d.get("vaultPosition") if isinstance(d.get("vaultPosition"), int) else 0,
+                -_num(d, "id"),
+            ))
+        else:  # "recent"
+            result.sort(key=lambda d: _num(d, "id"), reverse=True)
 
         return build_success_response({"cards": result, "currentSeason": currentSeason})
     finally:
@@ -7437,6 +7486,7 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
     """Level a card I->IV by spending Floobits + ONE same-effect duplicate."""
     from database.connection import get_session
     from managers.cardManager import CardManager
+    from managers import achievementManager as _am
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -7447,6 +7497,12 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
     try:
         result = cardManager.levelUpCard(session, user.id, cardId, req.offeringCardId,
                                          currentSeason, currentWeek)
+        # Card-upgrade achievements (Artificer tiers, Ascendant, Overclocked).
+        try:
+            _am.onCardLeveledUp(session, user.id, result.get("tier", 1), currentSeason,
+                                edition=result.get("edition"))
+        except Exception:
+            pass
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -7459,6 +7515,348 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
             raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
         logger.error(f"Card level-up failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to level up card")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# THE VAULT (permanent collection)
+# ============================================================================
+
+
+@app.post("/api/cards/{cardId}/vault")
+def vaultCard(cardId: int, user: _User = Depends(_getCurrentUser)):
+    """Permanently move a card into the Vault. IRREVERSIBLE — a vaulted card can
+    no longer be equipped, sold, or used in The Combine; it persists across
+    seasons and counts toward collection achievements."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+    from managers import achievementManager as _am
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.vaultCard(session, user.id, cardId, currentSeason, currentWeek)
+        # Vaulting can complete collection achievements (Hometown Hero, Full
+        # Spectrum, etc.) — keep Curator's unique-template count in sync too.
+        try:
+            _am.syncCuratorProgress(session, user.id, currentSeason)
+            _am.syncCollectionAchievements(session, user.id)
+        except Exception:
+            pass
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card vault failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to vault card")
+    finally:
+        session.close()
+
+
+@app.delete("/api/cards/{cardId}/vault")
+def trashVaultedCard(cardId: int, user: _User = Depends(_getCurrentUser)):
+    """Remove a card from the Vault — permanently trashes it (no Floobit return).
+    Only vaulted cards can be trashed here; un-vaulted cards are sold instead."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+    from managers import achievementManager as _am
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.trashVaultedCard(session, user.id, cardId)
+        try:
+            _am.syncCuratorProgress(session, user.id, currentSeason)
+            _am.syncCollectionAchievements(session, user.id)
+        except Exception:
+            pass
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card trash failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove card from vault")
+    finally:
+        session.close()
+
+
+class ReorderVaultRequest(BaseModel):
+    orderedCardIds: List[int]
+
+
+@app.put("/api/cards/vault/order")
+def reorderVault(req: ReorderVaultRequest, user: _User = Depends(_getCurrentUser)):
+    """Persist the manual order of the user's vaulted cards (drag-to-arrange).
+    Send the full desired order; each card's position becomes its index."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+    session = get_session()
+    try:
+        result = cardManager.reorderVault(session, user.id, req.orderedCardIds)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Vault reorder failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reorder vault")
+    finally:
+        session.close()
+
+
+# ============================================================================
+# THE SHOWCASE (seasonal collection payout)
+# ============================================================================
+
+
+def _buildShowcasePayload(session, cardManager, userId, currentSeason):
+    """Shared GET/PUT response: 8 slots (filled or null) + the live grade,
+    estimated payout, and named Active/Almost sets. The raw score is never
+    included — grade + payout + set names only."""
+    from database.models import ShowcaseSlot, UserCard
+    from managers import showcaseManager
+    from constants import SHOWCASE_SLOTS
+
+    rows = (
+        session.query(ShowcaseSlot)
+        .filter(ShowcaseSlot.user_id == userId, ShowcaseSlot.season == currentSeason)
+        .all()
+    )
+    bySlot = {r.slot_number: r for r in rows}
+    slots = []
+    infos = []
+    for slotNum in range(1, SHOWCASE_SLOTS + 1):
+        row = bySlot.get(slotNum)
+        cardData = None
+        if row:
+            uc = session.get(UserCard, row.user_card_id)
+            if uc and uc.card_template:
+                cardData = cardManager.serializeCard(uc, currentSeason)
+                tpl = uc.card_template
+                if tpl.player_id:
+                    stats = cardManager.buildPlayerSeasonStats(
+                        session, tpl.player_id, tpl.season_created, tpl.position)
+                    if stats:
+                        cardData["playerStats"] = stats
+                infos.append(showcaseManager.cardInfo(uc))
+        slots.append({"slotNumber": slotNum, "card": cardData})
+
+    score = showcaseManager.evaluate(infos, currentSeason)
+    return {
+        "slots": slots,
+        "slotCount": len([s for s in slots if s["card"]]),
+        "maxSlots": SHOWCASE_SLOTS,
+        "grade": score["grade"],
+        "estimatedPayout": score["payout"],
+        "activeSets": score["activeSets"],
+        "almostSets": score["almostSets"],
+        "season": currentSeason,
+    }
+
+
+@app.get("/api/cards/showcase")
+def getShowcase(user: _User = Depends(_getCurrentUser)):
+    """The user's seasonal Showcase: featured slots + live grade / payout / sets."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        return build_success_response(
+            _buildShowcasePayload(session, cardManager, user.id, currentSeason))
+    finally:
+        session.close()
+
+
+class ShowcaseSlotInput(BaseModel):
+    slotNumber: int
+    userCardId: int
+
+
+class SetShowcaseRequest(BaseModel):
+    slots: List[ShowcaseSlotInput]
+
+
+@app.get("/api/cards/showcase/leaderboard")
+def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
+    """Ranked list of everyone with a featured Showcase this season. Ranked by
+    the hidden score (which drives the grade); only grade / payout / card count
+    are exposed, never the raw number."""
+    from database.connection import get_session
+    from database.models import ShowcaseSlot, User as _UserModel
+    from managers import showcaseManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
+            ShowcaseSlot.season == currentSeason).distinct().all()]
+        rows = []
+        for uid in userIds:
+            infos = showcaseManager.loadShowcaseCardInfos(session, uid, currentSeason)
+            if not infos:
+                continue
+            ev = showcaseManager.evaluate(infos, currentSeason)
+            u = session.get(_UserModel, uid)
+            rows.append({
+                "userId": uid,
+                "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
+                "grade": ev["grade"],
+                "estimatedPayout": ev["payout"],
+                "cardCount": len(infos),
+                "activeSets": ev["activeSets"],
+                "_score": ev["score"],  # for ranking only; stripped below
+                "isCurrentUser": uid == user.id,
+            })
+        rows.sort(key=lambda r: r["_score"], reverse=True)
+        leaderboard = []
+        for rank, r in enumerate(rows, start=1):
+            r.pop("_score", None)
+            r["rank"] = rank
+            leaderboard.append(r)
+        return build_success_response({"leaderboard": leaderboard, "season": currentSeason})
+    finally:
+        session.close()
+
+
+@app.get("/api/cards/showcase/last-result")
+def showcaseLastResult(user: _User = Depends(_getCurrentUser)):
+    """The user's most recent end-of-season Showcase payout, for the results
+    recap. Durable (reads the payout transaction) so offline users see it on
+    their next visit. Returns null data if they've never been paid out."""
+    from database.connection import get_session
+    from database.models import CurrencyTransaction
+    from managers.showcaseManager import SHOWCASE_PAYOUT_TX
+    import re as _re
+
+    session = get_session()
+    try:
+        tx = (
+            session.query(CurrencyTransaction)
+            .filter(
+                CurrencyTransaction.user_id == user.id,
+                CurrencyTransaction.transaction_type == SHOWCASE_PAYOUT_TX,
+            )
+            .order_by(CurrencyTransaction.season.desc(), CurrencyTransaction.id.desc())
+            .first()
+        )
+        if not tx:
+            return build_success_response(None)
+        m = _re.search(r"grade (\w+)", tx.description or "")
+        return build_success_response({
+            "season": tx.season,
+            "payout": tx.amount,
+            "grade": m.group(1) if m else None,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/cards/showcase/user/{userId}")
+def getUserShowcase(userId: int, user: _User = Depends(_getCurrentUser)):
+    """View another user's Showcase (read-only) — for browsing from the standings."""
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        payload = _buildShowcasePayload(session, cardManager, userId, currentSeason)
+        u = session.get(_UserModel, userId)
+        payload["username"] = (getattr(u, "username", None) or "Anonymous") if u else "Anonymous"
+        payload["userId"] = userId
+        return build_success_response(payload)
+    finally:
+        session.close()
+
+
+@app.put("/api/cards/showcase")
+def setShowcase(req: SetShowcaseRequest, user: _User = Depends(_getCurrentUser)):
+    """Replace the user's featured cards for the season. Only vaulted cards may
+    be featured. Send the full set of filled slots (empty slots omitted)."""
+    from database.connection import get_session
+    from database.models import ShowcaseSlot, UserCard
+    from managers.cardManager import CardManager
+    from constants import SHOWCASE_SLOTS
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    # Validate slot numbers + uniqueness
+    slotNums = [s.slotNumber for s in req.slots]
+    for n in slotNums:
+        if n < 1 or n > SHOWCASE_SLOTS:
+            raise HTTPException(status_code=400, detail=f"Invalid slot number: {n}")
+    if len(slotNums) != len(set(slotNums)):
+        raise HTTPException(status_code=400, detail="Duplicate slot numbers")
+    cardIds = [s.userCardId for s in req.slots]
+    if len(cardIds) != len(set(cardIds)):
+        raise HTTPException(status_code=400, detail="A card can't be featured in two slots")
+
+    session = get_session()
+    try:
+        # Every featured card must be owned by the user and vaulted
+        for s in req.slots:
+            uc = session.query(UserCard).filter_by(id=s.userCardId, user_id=user.id).first()
+            if not uc:
+                raise HTTPException(status_code=400, detail=f"Card {s.userCardId} not found")
+            if not getattr(uc, "vaulted", False):
+                raise HTTPException(status_code=400, detail="Only vaulted cards can be featured")
+
+        # Replace the whole selection for this season
+        session.query(ShowcaseSlot).filter(
+            ShowcaseSlot.user_id == user.id, ShowcaseSlot.season == currentSeason,
+        ).delete(synchronize_session=False)
+        for s in req.slots:
+            session.add(ShowcaseSlot(
+                user_id=user.id, season=currentSeason,
+                slot_number=s.slotNumber, user_card_id=s.userCardId,
+            ))
+        session.commit()
+        return build_success_response(
+            _buildShowcasePayload(session, cardManager, user.id, currentSeason))
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Set showcase failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update showcase")
     finally:
         session.close()
 
@@ -7525,9 +7923,9 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 # Skip slot 6 if user no longer qualifies for extra slot
                 if prev.slot_number == 6 and not hasExtraSlotForCarry:
                     continue
-                # Verify card still exists and is active season
+                # Verify card still exists, is active season, and isn't vaulted
                 userCard = session.get(UserCard, prev.user_card_id)
-                if not userCard:
+                if not userCard or getattr(userCard, "vaulted", False):
                     continue
                 template = session.get(CardTemplate, userCard.card_template_id)
                 if not template or template.season_created != currentSeason:
@@ -7749,6 +8147,8 @@ def setEquippedCards(
             userCard = session.query(UserCard).filter_by(id=c.userCardId, user_id=user.id).first()
             if not userCard:
                 raise HTTPException(status_code=400, detail=f"Card {c.userCardId} not found")
+            if getattr(userCard, "vaulted", False):
+                raise HTTPException(status_code=400, detail="Vaulted cards can't be equipped")
             template = session.query(CardTemplate).filter_by(id=userCard.card_template_id).first()
             if not template or template.season_created != currentSeason:
                 raise HTTPException(status_code=400, detail=f"Card {c.userCardId} is not active this season")

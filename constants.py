@@ -519,6 +519,32 @@ CARD_TIER_EDITION_COST_MULT = {
     "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
 }
 
+# ─── Card Showcase (seasonal collection payout) ──────────────────────────────
+# An 8-slot showcase filled from the permanent Vault. Scored each season into a
+# letter grade (F→S) that pays out flat Floobits at season end, then clears.
+# Scoring is hidden (grade + named sets only) — see showcaseManager. All values
+# below are owner-approved starting points; tune via /simcheck before balancing.
+SHOWCASE_SLOTS = 8
+# Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
+SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
+SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
+# Recency: newer cards pay more. recency = max(FLOOR, 1 − STEP × seasonsOld).
+SHOWCASE_RECENCY_FLOOR = 0.25
+SHOWCASE_RECENCY_STEP = 0.25
+# Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
+SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
+# Set bonuses ADD into one multiplier: score = Σ cardPoints × (1 + Σ bonuses),
+# with the bonus sum capped here so stacked sets can't run away.
+SHOWCASE_MAX_SET_BONUS = 2.5
+# Score → grade (first threshold the score meets, scanning high to low).
+# Calibrated via tune_showcase.py Monte Carlo (recency-1.0 best-8 showcases):
+# casual≈D, regular≈C, dedicated≈B, whale≈A, top-few-%-whale≈S.
+SHOWCASE_GRADE_THRESHOLDS = [
+    ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
+]
+# Grade → flat Floobit payout at season end.
+SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 50, "C": 120, "B": 250, "A": 450, "S": 800}
+
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
 

@@ -1185,6 +1185,9 @@ class UserCard(Base):
     acquired_via: Mapped[str] = mapped_column(String(20), nullable=False)  # pack_standard, pack_premium, pack_elite, starter
     last_swap_grant_cycle: Mapped[int] = mapped_column(Integer, default=0)  # Tracks All-Pro swap bonus exhaustion per cycle
     tier: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # Upgrade tier 1-4 (I-IV); leveled via same-effect duplicate + Floobits
+    vaulted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Permanent collection — irreversible; can't equip/sell/combine
+    vaulted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When it was vaulted
+    vault_position: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Manual sort order within the Vault (null = unset)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")
@@ -1233,6 +1236,34 @@ class EquippedCard(Base):
 
     def __repr__(self):
         return f"<EquippedCard(user_id={self.user_id}, S{self.season}W{self.week}, slot={self.slot_number})>"
+
+
+class ShowcaseSlot(Base):
+    """A featured card in a user's seasonal Showcase (8 slots, vaulted cards only).
+
+    Season-scoped: a new season starts with no rows, so the showcase "clears"
+    automatically each season after the end-of-season payout. Only vaulted cards
+    may be featured (enforced at the API layer)."""
+    __tablename__ = "showcase_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1–8
+    user_card_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_cards.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    user_card: Mapped["UserCard"] = relationship("UserCard")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "season", "slot_number", name="uq_showcase_slot"),
+        Index("idx_showcase_slots_user_season", "user_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<ShowcaseSlot(user_id={self.user_id}, S{self.season}, slot={self.slot_number})>"
 
 
 class WeeklyCardBonus(Base):

@@ -484,6 +484,9 @@ class CardManager:
         # Rookie classification doubles sell value
         if classification and "rookie" in classification:
             sellValue *= 2
+        # Upgraded cards are worth more to sell, matching their Combine value.
+        from constants import CARD_TIER_MULT as _CTM
+        sellValue = max(1, int(sellValue * _CTM.get(getattr(userCard, "tier", 1) or 1, 1.0)))
 
         # Derive category from effect name if missing from effectConfig (legacy cards)
         from managers.cardEffects import EFFECT_CATEGORY
@@ -656,6 +659,8 @@ class CardManager:
             "edition": template.edition,
             "tier": getattr(userCard, "tier", 1) or 1,
             "tierNote": tierNote,
+            "vaulted": bool(getattr(userCard, "vaulted", False)),
+            "vaultPosition": getattr(userCard, "vault_position", None),
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,
@@ -711,6 +716,11 @@ class CardManager:
         if equippedIds:
             raise ValueError(f"Cannot sell equipped cards: {list(equippedIds)}")
 
+        # Vaulted cards are permanent — they can't be sold.
+        vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+        if vaultedIds:
+            raise ValueError(f"Cannot sell vaulted cards: {vaultedIds}")
+
         # Calculate total and sell (Rookie classification = 2x sell value)
         totalFloobits = 0
         for card in cards:
@@ -719,6 +729,8 @@ class CardManager:
             classification = card.card_template.classification or ""
             if "rookie" in classification:
                 cardValue *= 2
+            from constants import CARD_TIER_MULT as _CTM
+            cardValue = max(1, int(cardValue * _CTM.get(getattr(card, "tier", 1) or 1, 1.0)))
             totalFloobits += cardValue
 
         currencyRepo.addFunds(
@@ -747,6 +759,11 @@ class CardManager:
             foundIds = {c.id for c in cards}
             missingIds = [cid for cid in cardIds if cid not in foundIds]
             raise ValueError(f"Cards not found or not owned: {missingIds}")
+
+        # Vaulted cards are permanent — can't be Combined or fed to a Level Up.
+        vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+        if vaultedIds:
+            raise ValueError(f"Cannot use vaulted cards: {vaultedIds}")
 
         equippedRows = session.query(EquippedCard).filter(
             EquippedCard.user_card_id.in_(cardIds),
@@ -948,10 +965,12 @@ class CardManager:
         effect = self._effectName(target)
         atMax = target.tier >= CARD_TIER_MAX
         nextTier = target.tier + 1
-        # Eligible offerings: any OTHER owned card with the same effect.
+        # Eligible offerings: any OTHER owned card with the same effect that
+        # isn't vaulted (vaulted cards are permanent and can't be fed/consumed).
         offerings = [
             c for c in cardRepo.getByUser(userId)
-            if c.id != target.id and self._effectName(c) == effect
+            if c.id != target.id and not getattr(c, "vaulted", False)
+            and self._effectName(c) == effect
         ]
         return {
             "cardId": target.id,
@@ -1021,6 +1040,125 @@ class CardManager:
         ))
         session.flush()
         return self.serializeCard(target, currentSeason)
+
+    # ─── Card Vault (permanent collection) ────────────────────────────────────
+
+    def vaultCard(self, session, userId: int, cardId: int, currentSeason: int,
+                  currentWeek: int = 0) -> dict:
+        """Permanently move a card into the user's Vault. IRREVERSIBLE — vaulted
+        cards can no longer be equipped, sold, or Combined; they persist forever
+        and drive collection achievements. Can't vault an equipped card."""
+        from datetime import datetime
+        from database.repositories.card_repositories import UserCardRepository, EquippedCardRepository
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds([cardId], userId)
+        if not cards:
+            raise ValueError("Card not found or not owned")
+        card = cards[0]
+        if getattr(card, "vaulted", False):
+            raise ValueError("Card is already vaulted")
+        equippedIds = EquippedCardRepository(session).getEquippedCardIds(userId, currentSeason, currentWeek)
+        if card.id in equippedIds:
+            raise ValueError("Unequip the card before vaulting it")
+        card.vaulted = True
+        card.vaulted_at = datetime.utcnow()
+        session.flush()
+        return self.serializeCard(card, currentSeason)
+
+    def trashVaultedCard(self, session, userId: int, cardId: int) -> dict:
+        """Permanently remove (trash) a vaulted card. Unlike selling, there's no
+        Floobit return — it's a delete. Only vaulted cards can be trashed this
+        way (un-vaulted cards are sold instead). Cleans up any showcase/equipped
+        rows that reference it first so the delete can't orphan FK rows."""
+        from database.repositories.card_repositories import UserCardRepository
+        from database.models import ShowcaseSlot, EquippedCard
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds([cardId], userId)
+        if not cards:
+            raise ValueError("Card not found or not owned")
+        card = cards[0]
+        if not getattr(card, "vaulted", False):
+            raise ValueError("Only vaulted cards can be trashed here")
+        session.query(ShowcaseSlot).filter(
+            ShowcaseSlot.user_id == userId, ShowcaseSlot.user_card_id == cardId,
+        ).delete(synchronize_session=False)
+        session.query(EquippedCard).filter(
+            EquippedCard.user_id == userId, EquippedCard.user_card_id == cardId,
+        ).delete(synchronize_session=False)
+        cardRepo.delete(card)
+        session.flush()
+        return {"trashed": True, "cardId": cardId}
+
+    def reorderVault(self, session, userId: int, orderedCardIds: list) -> dict:
+        """Set the manual sort order of vaulted cards. `orderedCardIds` is the
+        full desired order; each card's vault_position becomes its index. Only
+        the user's own vaulted cards are repositioned."""
+        from database.repositories.card_repositories import UserCardRepository
+        cardRepo = UserCardRepository(session)
+        cards = cardRepo.getByIds(orderedCardIds, userId)
+        byId = {c.id: c for c in cards}
+        pos = 0
+        for cardId in orderedCardIds:
+            card = byId.get(cardId)
+            if card and getattr(card, "vaulted", False):
+                card.vault_position = pos
+                pos += 1
+        session.flush()
+        return {"reordered": pos}
+
+    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int):
+        """High-level stat line for a vaulted card's back — the player's numbers
+        for the season the card is from. A vaulted card drops its effect and
+        becomes a keepsake, so the back shows who the player actually was that
+        year. Returns None if no stats were recorded that season."""
+        from database.models import PlayerSeasonStats, Team
+        row = session.query(PlayerSeasonStats).filter_by(
+            player_id=playerId, season=season,
+        ).first()
+        if not row:
+            return None
+        # Team the player actually suited up for that season (can differ from the
+        # card's current team after a trade / FA move).
+        teamName = None
+        teamColor = None
+        if row.team_id:
+            team = session.get(Team, row.team_id)
+            if team:
+                teamName = team.name
+                teamColor = team.color
+        lines = []
+        def add(label, value):
+            lines.append({"label": label, "value": value})
+        if position == 1:  # QB
+            add("Pass Yds", row.passing_yards or 0)
+            add("Pass TD", row.passing_tds or 0)
+            add("INT", row.passing_ints or 0)
+            if (row.rushing_yards or 0) > 0:
+                add("Rush Yds", row.rushing_yards)
+        elif position == 2:  # RB — no receiving game in this sim
+            add("Rush Yds", row.rushing_yards or 0)
+            add("Rush TD", row.rushing_tds or 0)
+            add("Rush Att", row.rushing_attempts or 0)
+        elif position in (3, 4):  # WR / TE
+            add("Rec", row.receptions or 0)
+            add("Rec Yds", row.receiving_yards or 0)
+            add("Rec TD", row.receiving_tds or 0)
+        elif position == 5:  # K
+            k = row.kicking_stats or {}
+            add("FG", f"{k.get('fgs', 0)}/{k.get('fgAtt', 0)}")
+            if k.get('fgPerc'):
+                add("FG%", k.get('fgPerc'))
+            if k.get('xps'):
+                add("XP", k.get('xps'))
+            if k.get('fgAvg'):
+                add("Avg", f"{k.get('fgAvg')} yd")
+        return {
+            "season": season,
+            "teamName": teamName,
+            "teamColor": teamColor,
+            "fantasyPoints": row.fantasy_points or 0,
+            "lines": lines,
+        }
 
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 
