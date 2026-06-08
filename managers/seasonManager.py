@@ -409,9 +409,15 @@ class SeasonManager:
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
 
-        # Send season-end email reports (before tax so earned totals are accurate)
+        # Send season-end email reports. Offloaded to a worker thread (same hot-
+        # path reason as day-end emails). Safe to run alongside the tax/offseason
+        # that follow: the report's "earned totals" sum POSITIVE transactions
+        # only (the tax is a negative transaction, excluded), and the rest
+        # (champion, pick-em leaderboard) is immutable historical data.
         if not self.timingManager.catchingUp:
-            self._sendSeasonEndEmails(self.currentSeason.seasonNumber)
+            asyncio.get_running_loop().run_in_executor(
+                None, self._sendSeasonEndEmails, self.currentSeason.seasonNumber,
+            )
 
         # Apply season-end tax on unspent Floobits
         self._applySeasonEndTax(self.currentSeason.seasonNumber)
@@ -885,11 +891,21 @@ class SeasonManager:
                 else:
                     await broadcaster.broadcast_season_event(SeasonEvent.regularSeasonComplete())
 
-            # Send day-end email reports (skip during catch-up / fast modes)
+            # Send day-end email reports (skip during catch-up / fast modes).
+            # Offload to a worker thread: sending loops over every opted-in user
+            # with a throttle sleep + blocking Resend HTTP call each, which would
+            # otherwise freeze the event loop (and the API, same process) for the
+            # whole batch. The method only READS shared state + writes to Resend
+            # via its own DB session, so a background thread is safe. Fire-and-
+            # forget — the executor runs it to completion even if we drop the
+            # future, and the inter-day wait gives it idle time to finish.
             if isLastRoundOfDay and not self.timingManager.catchingUp:
                 firstRound = roundIndex - 6  # 0-indexed first round of this day
                 weekRange = list(range(firstRound + 1, roundIndex + 2))  # 1-indexed week numbers
-                self._sendDayEndEmails(self.currentSeason.seasonNumber, dayNum, weekRange)
+                asyncio.get_running_loop().run_in_executor(
+                    None, self._sendDayEndEmails,
+                    self.currentSeason.seasonNumber, dayNum, weekRange,
+                )
 
         # Catch-up is done — switch to SCHEDULED so playoffs run at normal speed
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
@@ -1278,6 +1294,11 @@ class SeasonManager:
         if not in_playoffs:
             self._creditVeteranForWeek(self.currentSeason.seasonNumber)
 
+        # Supporter dividends (fan-income) — accrue every week, regular AND
+        # playoff (backing a deep-run team keeps paying). Ticks tenure for all
+        # fans; credits a dividend to those whose team played this week.
+        self._accrueSupporterDividends(self.currentSeason.seasonNumber, week)
+
         # Resolve pick-em picks and award Floobits
         self._resolvePickEmWeek(self.currentSeason.seasonNumber, week)
 
@@ -1474,7 +1495,9 @@ class SeasonManager:
                 if prevEquipped:
                     for prev in prevEquipped:
                         userCard = session.get(UserCard, prev.user_card_id)
-                        if not userCard:
+                        # Skip missing or vaulted cards — a card vaulted after an
+                        # earlier equip must not be carried forward and locked.
+                        if not userCard or getattr(userCard, "vaulted", False):
                             continue
                         template = session.get(CardTemplate, userCard.card_template_id)
                         if not template or template.season_created != season:
@@ -2246,6 +2269,7 @@ class SeasonManager:
                         breakdownDicts = [{
                             "slotNumber": b.slotNumber,
                             "edition": b.edition,
+                            "tier": b.tier,
                             "playerId": b.playerId,
                             "playerName": b.playerName,
                             "effectName": b.effectName,
@@ -3689,9 +3713,22 @@ class SeasonManager:
         try:
             from database.connection import get_session as _gs
             from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            from managers import achievementManager as _am
+            season = self.currentSeason.seasonNumber
             s = _gs()
             try:
-                PlayoffBracketRepository(s).scoreAllBrackets(self.currentSeason.seasonNumber)
+                repo = PlayoffBracketRepository(s)
+                repo.scoreAllBrackets(season)
+                s.commit()
+                # Grant Bracketeer point tiers (I-IV) AS thresholds are crossed
+                # each round, not batched at the Floos Bowl. recordProgress is
+                # monotonic (absolute=max) + idempotent (no re-grant once
+                # completed) and toasts on unlock, so calling it every round just
+                # fires newly-crossed tiers. (flawless/pool_shark stay end-only —
+                # they need the COMPLETE bracket / final leaderboard.)
+                for b in repo.getLeaderboard(season):
+                    if b.points > 0:
+                        _am.onPlayoffBracketScored(s, b.user_id, b.points, season)
                 s.commit()
             finally:
                 s.close()
@@ -3731,8 +3768,11 @@ class SeasonManager:
                         cur.addFunds(b.user_id, prize, txType,
                                      f"Playoff bracket #{rank} ({b.points} pts)", season)
                         paid += 1
-                # Bracket achievements — granted once (this whole method is
-                # guarded against re-running by the prize-tx check above).
+                # Bracket achievements. Bracketeer point tiers are already
+                # granted incrementally each round in _scorePlayoffBrackets; the
+                # call below is an idempotent final backstop. The flawless /
+                # pool_shark secrets are end-only — they need the COMPLETE
+                # bracket (all advancers correct) and the FINAL leaderboard (#1).
                 from managers import achievementManager as _am
                 advancers, _champ = repo.computeActualAdvancers(season)
                 totalAdvancers = sum(len(v) for v in advancers.values())
@@ -3749,6 +3789,28 @@ class SeasonManager:
                 s.close()
         except Exception as e:
             logger.error(f"Failed to award playoff bracket prizes: {e}")
+
+    def _awardShowcasePayouts(self) -> None:
+        """End-of-season Card Showcase payout: each user's featured showcase is
+        graded (F→S) and pays out flat Floobits. Guarded against double-payment
+        by a per-season transaction check. The showcase is season-scoped, so it
+        clears automatically — next season simply has no featured slots."""
+        try:
+            from database.connection import get_session as _gs
+            from managers import showcaseManager
+            season = self.currentSeason.seasonNumber
+            s = _gs()
+            try:
+                summary = showcaseManager.awardSeasonPayouts(s, season)
+                s.commit()
+                if summary.get("alreadyAwarded"):
+                    logger.info("Showcase payouts already awarded — skipping")
+                else:
+                    logger.info(f"Showcase payouts awarded to {summary['paid']} users (S{season})")
+            finally:
+                s.close()
+        except Exception as e:
+            logger.error(f"Failed to award showcase payouts: {e}")
 
     async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate all playoff rounds.
@@ -4128,6 +4190,11 @@ class SeasonManager:
             # Resolve pick-em weekly prizes for this playoff round
             self._resolvePickEmWeek(self.currentSeason.seasonNumber, 28 + currentRound)
 
+            # Supporter dividends for this playoff round — pays deep-run fans
+            # (incl. the playoff round bonus) but does NOT tick tenure, so only
+            # full regular seasons build loyalty.
+            self._accrueSupporterDividends(self.currentSeason.seasonNumber, 28 + currentRound, tickTenure=False)
+
             # Re-score playoff brackets now this round's results are final.
             self._scorePlayoffBrackets()
 
@@ -4170,6 +4237,9 @@ class SeasonManager:
 
                 # Bracket challenge: final scoring + floobit prizes to top brackets.
                 self._awardPlayoffBracketPrizes()
+
+                # Card Showcase: grade each user's featured collection and pay out.
+                self._awardShowcasePayouts()
 
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)
@@ -5348,8 +5418,11 @@ class SeasonManager:
             pendingUsers = session.query(User).filter(
                 User.pending_favorite_team_id.isnot(None)
             ).all()
+            from managers.supporterManager import onFavoriteTeamChange
             for u in pendingUsers:
                 logger.info(f"User {u.id}: promoting pending favorite team {u.pending_favorite_team_id}")
+                # Switching teams — soft-reset Supporter loyalty tenure (anti-bandwagon).
+                onFavoriteTeamChange(u)
                 u.favorite_team_id = u.pending_favorite_team_id
                 u.pending_favorite_team_id = None
                 u.favorite_team_locked_season = None
@@ -7340,40 +7413,51 @@ class SeasonManager:
 
     def _awardFavoriteTeamBonus(self, teamId: int, amount: int, transactionType: str,
                                  description: str, season: int, week: int = None) -> int:
-        """Award Floobits to all users whose favorite_team_id matches teamId.
+        """Award a milestone Floobit bonus to a team's fans, scaled per-fan by
+        Supporter loyalty × patron rank (this is where the "profit only for
+        long-tenure fans of great teams" envelope actually bites). Gated on the
+        same activity rule as idle accrual — dormant accounts don't get paid.
         Returns the number of users rewarded."""
         try:
             from database.connection import get_session
             from database.models import User
             from database.repositories.card_repositories import CurrencyRepository
+            from managers.supporterManager import (
+                computePatronRanks, combinedMultiplier, isEarning,
+            )
 
             session = get_session()
             try:
                 users = session.query(User).filter_by(
                     favorite_team_id=teamId, is_active=True
                 ).all()
+                # Only fans who pass the activity gate (consistent with accrual).
+                users = [u for u in users if isEarning(u)]
                 if not users:
                     session.close()
                     return 0
+                patronRanks = computePatronRanks(session, season)
                 currencyRepo = CurrencyRepository(session)
                 from database.repositories.notification_repository import NotificationRepository
                 notifRepo = NotificationRepository(session)
                 count = 0
                 for user in users:
+                    mult, _loyalty, _patron = combinedMultiplier(user, patronRanks)
+                    scaled = int(round(amount * mult))
                     currencyRepo.addFunds(
-                        user.id, amount, transactionType,
+                        user.id, scaled, transactionType,
                         description=description,
                         season=season, week=week,
                     )
                     notifRepo.create(
                         user.id, 'favorite_team',
                         'Team Bonus',
-                        f'{description}! +{amount} Floobits',
-                        data={'teamId': teamId, 'amount': amount},
+                        f'{description}! +{scaled} Floobits',
+                        data={'teamId': teamId, 'amount': scaled},
                     )
                     count += 1
                 session.commit()
-                logger.info(f"Awarded {amount} Floobits ({transactionType}) to {count} users for team {teamId}")
+                logger.info(f"Awarded scaled {transactionType} bonus (base {amount}F) to {count} fans of team {teamId}")
                 return count
             except Exception as e:
                 session.rollback()
@@ -7383,6 +7467,23 @@ class SeasonManager:
                 session.close()
         except ImportError:
             return 0
+
+    def _accrueSupporterDividends(self, season: int, week: int, tickTenure: bool = True) -> None:
+        """Accrue weekly Supporter (fan-loyalty) dividends. Idle income — accrues
+        to each fan's claim pool; they collect via POST /api/supporter/claim.
+        `tickTenure=False` for playoff rounds: pay the dividend without advancing
+        tenure (full regular seasons drive tenure, not playoff weeks)."""
+        try:
+            from database.connection import get_session
+            from managers.supporterManager import accrueWeekly
+            session = get_session()
+            try:
+                accrueWeekly(session, season, week, tickTenure=tickTenure)
+                session.commit()
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Supporter dividend accrual failed (s{season} w{week}): {e}")
 
     def _awardWeeklyLeaderboardPrizes(self, season: int, week: int) -> None:
         """Award Floobits to top leaderboard performers for the week."""

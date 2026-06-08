@@ -930,20 +930,20 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
             peakBySlot.get(b.slotNumber),
         ))
 
-    # Projection uses the Core's signature equation when a Cracking is
+    # Projection uses the Core's signature equation when a Criticality is
     # active so the projected total previews what the user will actually
-    # see on their breakdown that week. With no Cracking active,
+    # see on their breakdown that week. With no Criticality active,
     # computeFinalOutput falls through to the standard bonus-additive
     # aggregation (next-season's formula).
     try:
-        from managers.anomalyManager import getActiveCrackingCore
-        crackingCore = getActiveCrackingCore(ctx.season, ctx.weekNumber)
+        from managers.anomalyManager import getActiveCriticalityCore
+        criticalityCore = getActiveCriticalityCore(ctx.season, ctx.weekNumber)
     except Exception:
-        crackingCore = None
+        criticalityCore = None
     from managers.coreEquations import computeFinalOutput, equationTemplate
     projectedTotalFP, projectedEquation = computeFinalOutput(
         ctx.weekRawFP, result.totalBonusFP, result.multFactors,
-        coreKey=crackingCore,
+        coreKey=criticalityCore,
     )
 
     # Ceiling total — same formula applied to the peak (hot-week) calc
@@ -952,7 +952,7 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
     peakCtx = _peakContext(ctx)
     bestCaseTotalFP, _ = computeFinalOutput(
         peakCtx.weekRawFP, peakResult.totalBonusFP, peakResult.multFactors,
-        coreKey=crackingCore,
+        coreKey=criticalityCore,
     )
 
     return {
@@ -965,9 +965,9 @@ def computeEquippedProjections(session, userId, season, week, seasonManager, pla
         "bestCaseTotalFP": round(max(projectedTotalFP, bestCaseTotalFP), 2),
         "opponent": ctx.favoriteTeamOpponentName,
         "winProbability": round(ctx.favoriteTeamWinProb, 2),
-        "crackingCore": crackingCore,
-        "crackingEquation": projectedEquation if crackingCore else None,
-        "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
+        "criticalityCore": criticalityCore,
+        "criticalityEquation": projectedEquation if criticalityCore else None,
+        "criticalityEquationTemplate": equationTemplate(criticalityCore) if criticalityCore else None,
     }
 
 
@@ -1062,15 +1062,17 @@ def _wrapUserCardAsEquipped(userCard):
     return _FauxEquipped(userCard)
 
 
-def _wrapTemplateAsUserCard(template, fauxId: int = -1):
+def _wrapTemplateAsUserCard(template, fauxId: int = -1, tier: int = 1):
     """Wrap a CardTemplate in a UserCard-shaped object so projection logic
-    that expects userCard.card_template / userCard.id can run against
-    not-yet-owned templates (pack reveal, shop preview)."""
+    that expects userCard.card_template / userCard.id / userCard.tier can run
+    against not-yet-owned templates (pack reveal, shop preview). `tier` defaults
+    to 1 (not-yet-owned cards are tier I); pass a value to project an upgrade."""
     class _FauxUserCard:
-        __slots__ = ('id', 'card_template')
+        __slots__ = ('id', 'card_template', 'tier')
         def __init__(self, tpl):
             self.id = fauxId
             self.card_template = tpl
+            self.tier = tier
     return _FauxUserCard(template)
 
 

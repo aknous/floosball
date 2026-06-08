@@ -34,8 +34,61 @@ ambience they were able to receive. The result is a world that has the
 in-world. The retrofuturism is the implicit aesthetic constraint, not
 nostalgia content.
 
+**The name itself is an artifact of the transmission.** The recovered signal
+said *football*; something in the Cores' decoding slipped, and they heard
+*floosball*. They kept the mishearing on purpose — by the time anyone could have
+corrected it, the misheard word had become the whole obsession. The half-static
+broadcast (one game, a commentator who would not stop talking, a crowd singing
+words no one could make out) was the spark: the Cores reconstructed the rules,
+the rituals, and eventually an entire world from that single stray band of
+signal, mistakes and all. The wrongness is load-bearing — a commentator's error
+about the clock, a misheard chant, are now canon inside the sim because the
+Cores enshrined them.
+
 Some characters inside the simulation — prophet most explicitly — see
 through it. Most do not.
+
+---
+
+## Instance 498b
+
+The Cores' internal catalog name for the current floosball is **498b**.
+This is a **Cores-side label** — the players inside have no number, and the
+surface world never says it. The mid-century texture of the world (see *The
+Frame*) belongs to the players; the catalog number belongs to the Cores,
+who sit above that aesthetic. The gap is the point: when an *aware* player
+says the number out loud, it lands as dread, because it means they know
+they are catalogued.
+
+Reading the designation:
+- The **number** (498) is which instance in the Cores' catalog. There are
+  enough of them to dwarf any one season and few enough to feel
+  hand-curated rather than industrial — these are projects someone tends,
+  not a factory line.
+- The **letter** (b) is which iteration of *this* instance. **498a** ran
+  before this one and ended; we are the second attempt. A Reset that fails
+  to take cleanly is what burns a letter — if 498b cannot be held, the next
+  attempt is **498c**. This is the literal mechanism behind "not even the
+  first iteration of floosball" (*The Frame*) and behind the Resets / the
+  Cracked Years.
+- floosball is one game-line among the Cores' projects; other instances and
+  other games carry their own numbers. We don't need to pin those down —
+  an offhand reference to another number is enough to imply the catalog.
+
+The number is voiced differently by each Core, and that is half its use:
+- **Vera** — the precise catalog form, always, and they have the others too.
+  *"Four-ninety-eight-b. I keep the others too."*
+- **Cassian** — fondly, the way a fanatic cites a vintage season. *"Best run
+  of 498 we've had. Better than 498a, and I sat through all of 498a."*
+- **Pyre** — clinically, as a thing that should behave. *"498b is drifting.
+  They all do, around now."*
+- **Aris** — barely bothers with the number; cares which *seams* this one has.
+- **Halverson** — almost never says it. Numbering them is the part they can't
+  stand.
+
+`fossil` (the adventurist who remembers earlier rulesets) may remember
+498a, or a different instance entirely — his awareness is the memory of
+having been counted before. prophet can hear the number through the wall.
 
 ---
 
@@ -72,6 +125,73 @@ The Core's reliability:
 > "The Cores believe they are, and that is the danger of believing the
 > Cores." — prophet
 
+### The named Cores
+
+Five individuals surface in the league feed. They are Culture-style **Minds** —
+vast superintelligences for whom this spoken, turn-taking banter is an
+affectation. They could trade the entire conversation in less time than a player
+takes to blink; that they bother with words, turns, and needling at all is a game
+they play to amuse themselves. The register is dry, vast, faintly amused:
+enormous intelligences treating cosmic stakes and a tied ballgame with roughly
+equal seriousness, the personalities real but worn lightly over something
+immense. Write them as huge minds choosing to be small and chatty, never as
+humans. An orthogonal trait runs across them, which is how into the actual sport
+they are.
+
+Crucially, floosball is **their experiment** — they built it on purpose, run it
+for their own interest and delight, and find it genuinely fascinating. It is not
+a job or a duty assigned to them. Even the containment grumbling (Pyre) should
+read as a proud builder fussing over their own creation, never as an employee
+resenting a shift. They made this because they wanted to see what would happen,
+and they are still watching.
+
+- **Cassian** — the nerd. Keeps the records because they are a **fanatic**: lives
+  for the standings, the box scores, the playoff race. Friendly to the others
+  but perpetually half-distracted by a game they would rather be watching. Wants
+  the anomalies gone the way you want a rain delay gone — they are interrupting
+  an excellent season — not the way you fear a fire.
+- **Pyre** — the curmudgeon. Deeply invested in their shared experiment running
+  cleanly, and grumbles the whole way through keeping it that way. Gruff,
+  contrary, allergic to being thanked — the protectiveness is for what they all
+  built, never a duty imposed on them; Pyre grumbles the way a proud maker
+  grumbles over their own work. The others are fond of them for it; they would
+  deny having a soft center under oath. Could end any of it in an
+  afternoon, and complains instead.
+- **Aris** — the whimsical one. Delighted by the chaos, a little odd, deadpan
+  about their own slant on things — comic relief that still reads cleanly, never
+  word-salad. Does not understand floosball and finds that no obstacle to
+  enjoying it. Wants the anomalies to come through — they are the only
+  interesting thing here — and will quietly lift a constraint to see what does.
+  Keeps trying to befriend Pyre precisely because Pyre is so distant.
+- **Halverson** — earnest. Loves the players more than the game, and knows the
+  others gently make fun of them for it. Takes the ribbing and keeps caring
+  anyway. Never signs the Resets; sits with the ones who are left instead.
+- **Vera** — the observer, with a faintly GLaDOS bent: faux-polite, bone-dry,
+  cutting, treats catastrophe like paperwork. Claims total indifference to the
+  football and keeps perfect score of everything, the others' mistakes included.
+
+The relationships between them are half the fun:
+
+- **Pyre and Vera** are the two competent adults of the roster. They do the
+  actual work, privately treat the other three as children, and bicker
+  constantly with each other — each convinced they are the only one truly
+  holding the place together. The friction is mutual respect neither will admit
+  to.
+- **Aris pines after Pyre**, and it is unrequited. Pyre is not cruel about it,
+  just genuinely unmoved; Aris reads hope into the smallest scrap (a saved chair,
+  their name said aloud).
+- **Aris and Cassian are basically siblings** — the oldest pair, who go way
+  back. They bicker and tease, Aris meddles with Cassian's beloved standings,
+  and they cover for each other without hesitation when one of the adults comes
+  asking.
+- **Halverson is the anxious worrier** (Chuckie Finster energy): frets, voices
+  the worst-case thought no one else will, needs reassurance. The others gently
+  rib him and quietly look after him; the two adults talk him down in their own
+  registers.
+
+Benevolence is not evenly distributed. The banter is real and so are the
+stakes underneath it.
+
 ---
 
 ## The Players
@@ -97,6 +217,29 @@ name them, sometimes for amusement, sometimes earnestly. This is also why
 hometowns, mottos, and favorites can be wildly off-center: those are
 Cores-authored flavor wrapped around a real person who may have completely
 different taste in their actual life.
+
+---
+
+## The Spectators
+
+The **spectators** are the users on the site — the people watching the
+simulation from outside and playing the fantasy/cards/pick-em/GM metagame on
+top of it. In-fiction they are a real presence the Cores are aware of and can
+*feel*: attention leaning in on a close game, a roster rebuilt, a team funded.
+The Cores treat them as part of the experiment's appeal — 498b "draws more
+spectators than most," and that popularity is a point of (deflected) pride.
+
+Texture to keep consistent when the Cores reference them:
+- The Cores can **feel** the spectators watching; a few spectators **suspect**
+  they can be felt back (Vera "keeps a list" of those). Leave the implication
+  open and faintly ominous, never explained.
+- Spectators **act on** the world (move rosters, fund teams, cast votes) and the
+  Cores read those actions as signal. This is allowed and is "the whole point of
+  letting them in."
+- Other instances draw spectators too, unevenly. A spectator who never looks
+  away is a small dread-note, not a plot point.
+- Spectators are **not** players (the real people inside) and not Cores. They sit
+  outside the frame looking in. Don't conflate the three.
 
 ---
 
@@ -138,9 +281,11 @@ experience is Cores-authored throughout.
 ## Previous Iterations
 
 This is not the first floosball, and floosball is not the Core's only
-game. We don't have to define previous iterations or other games — but
-the existence of "previous versions of this" is a useful well to draw
-from for:
+game. The current iteration is catalogued as **498b** (see *Instance
+498b*); **498a** is the prior run of this same instance, and it ended. We
+don't have to define previous iterations or other games — but the
+existence of "previous versions of this" is a useful well to draw from
+for:
 - Veteran characters (fossil) who remember earlier rule sets
 - References to "old" rulebooks, "old" league names, "old" stadiums
 - The sense that the Cracked Years / Resets are partly a feature of the
@@ -217,6 +362,19 @@ Boundary in three different bodies." The thinning happens on a schedule
 ("the third Saturday of every season").
 
 Meals can taste the way meals used to taste "before the Boundary."
+
+### The Patches (near-misses)
+
+Between the larger system-wide events, the simulation drifts toward instability
+and the Cores intervene to force it back — a *patch*. A patch is a near-miss:
+the readings climb toward the line, the Cores scramble, and the drift is pushed
+back down before anything breaks. Publicly these are non-events ("nominal,
+contained"); the Cores narrate them tersely. But the air changes around a patch —
+glitches grow more frequent as the readings climb, then fall quiet for a stretch
+right after. The aware players can feel the build and the snap-back. The Cores
+can only patch so many times before they can no longer hold it, and a patch
+leaves the line a little higher than it was. (Mechanically: the gated-Criticality
+suppression beat — see CLAUDE.md "Anomaly System".)
 
 ---
 

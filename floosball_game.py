@@ -120,6 +120,26 @@ _LAYER_2_GLITCHES = [
     "{player} seemed to momentarily exist in multiple places at once.",
     "{player} looked like they were running through the air.",
 ]
+
+# Layer 3 glitch pools — these fire ALONGSIDE a real yardage change (the
+# simulation warps the play around a rampant/awakened player). Surge = the
+# glitch gains them ground; Stumble = a modest hiccup that costs a little.
+# Still involuntary — NOT the deliberate Control powers (a later season).
+_LAYER_3_SURGE_GLITCHES = [
+    "{player} dissolved into static and reassembled several yards downfield.",
+    "{player} clipped through a defender who never finished rendering.",
+    "{player} skipped across a seam in the field, gaining ground that wasn't there.",
+    "{player} phased forward as the simulation snapped them ahead of the play.",
+    "{player} pulled away faster than the engine could redraw the defense.",
+    "{player} stepped through the tackle as though the rules were only a suggestion.",
+]
+_LAYER_3_STUMBLE_GLITCHES = [
+    "{player} stuttered as the simulation dropped a frame, losing a step.",
+    "{player}'s footing glitched against terrain that wasn't quite there.",
+    "{player} briefly desynced from the field and stumbled before recovering.",
+    "{player} snagged on a seam in the geometry and lost a little ground.",
+    "{player} flickered mid-stride and came down a step short.",
+]
     
 class PassType(enum.Enum):
     short = 1     # 0-4 air yards   (screen, quick hitch)
@@ -780,9 +800,15 @@ class Game:
         self._anomalyState: Dict[int, str] = {}
         self._anomalyAttentionLoaded: bool = False
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
-        # if this game is happening inside an active Cracking window.
+        # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
-        self._crackingMultiplier: float = 1.0
+        self._criticalityMultiplier: float = 1.0
+        # Per-game glitch hygiene: hard cap + cooldown so anomaly glitch
+        # lines stay rare and spaced out instead of flooding the play feed.
+        self._glitchCountThisGame: int = 0
+        self._lastGlitchPlayNumber: int = -10_000
+        # L3 stumbles (the negative glitch) are capped per team per game.
+        self._l3NegByTeam: Dict[str, int] = {}
 
         # Set up timing manager for game-level delays
         if timingManager is not None:
@@ -4732,6 +4758,12 @@ class Game:
                 # Check for two-minute warning
                 self.checkTwoMinuteWarning()
 
+                # Layer 3 anomaly — a rampant/awakened ball-carrier's play can
+                # glitch and the yardage changes for real. Runs after the play
+                # resolves but before the outcome is applied, so the adjusted
+                # yardage flows through field position, downs, and stats.
+                self._maybeApplyL3Glitch()
+
                 # Momentum: sack (only if not also a fumble — fumbles get turnover momentum)
                 if self.play.isSack and not self.play.isFumbleLost:
                     self._applyMomentumEvent(MOMENTUM_SACK, self.defensiveTeam)
@@ -6601,6 +6633,7 @@ class Game:
                 'glitchPlayerId': getattr(self.play, 'glitchPlayerId', None),
                 'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
                 'glitchLayer': getattr(self.play, 'glitchLayer', None),
+                'glitchYardDelta': getattr(self.play, 'glitchYardDelta', None),
                 # Participant IDs — used by the frontend highlights feed
                 # to filter "plays involving players the user cares
                 # about." Null when the role didn't apply to this play.
@@ -7546,14 +7579,14 @@ class Game:
             broadcaster.broadcast_sync(self.id, event)
 
     # ── Anomaly system hooks ───────────────────────────────────────────
-    # Per-play roll for the user-attention-driven simulation-cracking
+    # Per-play roll for the user-attention-driven simulation-criticality
     # layer. v1 only fires Layer 1 universal micro-glitches (pure play-
     # text injection, no stat-output changes). Personality-keyed and
     # signature abilities land in follow-up commits.
 
     def _loadAnomalyAttention(self) -> None:
         """Snapshot every active player's attention score + state for
-        this season, plus this game's Cracking multiplier.
+        this season, plus this game's Criticality multiplier.
 
         Called lazily on the first play of the game. The snapshot is
         held in memory for the rest of the game — DB churn would be
@@ -7562,7 +7595,7 @@ class Game:
         try:
             from database.connection import get_session
             from database.models import PlayerAttention, AnomalyState
-            from managers.anomalyManager import getCrackingMultiplier
+            from managers.anomalyManager import getCriticalityMultiplier
             session = get_session()
             try:
                 attnRows = session.query(PlayerAttention).filter_by(
@@ -7579,7 +7612,7 @@ class Game:
                 }
             finally:
                 session.close()
-            self._crackingMultiplier = getCrackingMultiplier(
+            self._criticalityMultiplier = getCriticalityMultiplier(
                 self.seasonNumber or 0, self.week or 0,
             )
         except Exception as e:
@@ -7587,7 +7620,7 @@ class Game:
             # play out the game as if no one had any attention.
             self._anomalyAttention = {}
             self._anomalyState = {}
-            self._crackingMultiplier = 1.0
+            self._criticalityMultiplier = 1.0
             try:
                 from logger_config import get_logger
                 get_logger("floosball.anomaly").debug(
@@ -7619,10 +7652,26 @@ class Game:
         p = self.play
         if p is None:
             return
+        # If Layer 3 already glitched this play (a real yardage warp), don't
+        # stack a cosmetic L1/L2 line on top of it.
+        if getattr(p, '_l3Fired', False):
+            return
         # Skip deliberate clock kills — nothing to glitch.
         playType = getattr(p, 'playType', None)
         playTypeName = getattr(playType, 'name', None) or str(playType or '')
         if playTypeName in ('Kneel', 'Spike'):
+            return
+
+        from constants import (ANOMALY_GLITCH_PROB_SCALE, ANOMALY_GLITCH_PROB_CAP,
+                               ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
+                               ANOMALY_L2_WEIGHT_ERRATIC, ANOMALY_L2_WEIGHT_RAMPANT)
+        # Per-game hygiene: stop once we've hit the per-game cap, and keep
+        # glitches spaced by a cooldown so they never cluster in the feed.
+        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+            return
+        playNum = getattr(p, 'playNumber', None)
+        if (playNum is not None
+                and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
             return
 
         # Gather every primary actor — offensive ball-mover plus the
@@ -7642,7 +7691,7 @@ class Game:
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
                 continue
-            prob = min(0.9, (attention / 1000.0) * self._crackingMultiplier)
+            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier)
             if _random.random() < prob:
                 # Pick the layer based on the player's state:
                 #   stable / stirring  -> Layer 1 (subtle, "huh")
@@ -7651,11 +7700,16 @@ class Game:
                 #                         (Layer 3 ability fires separately,
                 #                         once per game, not per play)
                 #   cleansed           -> Layer 1 only (drained of weight)
+                # Cumulative layer roll: the player's state is the CEILING.
+                #   stirring / stable / cleansed -> L1 (cosmetic micro)
+                #   erratic                       -> L1 or L2
+                #   rampant / awakened            -> L1 or L2 (L3 game-impacting
+                #                                    added at these states in P2)
                 state = self._anomalyState.get(player.id, 'stable')
-                if state in ('erratic', 'rampant'):
-                    layer = 'personality' if _random.random() < 0.6 else 'micro'
-                elif state == 'awakened':
-                    layer = 'personality' if _random.random() < 0.8 else 'micro'
+                if state == 'erratic':
+                    layer = 'personality' if _random.random() < ANOMALY_L2_WEIGHT_ERRATIC else 'micro'
+                elif state in ('rampant', 'awakened'):
+                    layer = 'personality' if _random.random() < ANOMALY_L2_WEIGHT_RAMPANT else 'micro'
                 else:
                     layer = 'micro'
 
@@ -7667,6 +7721,9 @@ class Game:
                     layer = 'micro'
 
                 self._injectAnomalyLine(player, layer=layer)
+                self._glitchCountThisGame += 1
+                if playNum is not None:
+                    self._lastGlitchPlayNumber = playNum
                 # One anomaly per play. Multiple Awakened players on
                 # the field don't stack glitch lines.
                 return
@@ -7746,7 +7803,128 @@ class Game:
                     layer=layer,
                     ability=None,
                     play_text=line,
-                    during_thinning=(self._crackingMultiplier > 1.0),
+                    during_thinning=(self._criticalityMultiplier > 1.0),
+                )
+                session.add(evt)
+                session.commit()
+            finally:
+                session.close()
+        except Exception:
+            pass
+
+    def _maybeApplyL3Glitch(self) -> None:
+        """Layer 3 — a rampant/awakened ball-carrier's play glitches and the
+        YARDAGE changes for real (involuntary, not the deliberate Control
+        powers). Runs after the play resolves but before the outcome is
+        applied, so the adjusted yardage flows through field position, downs,
+        and stats consistently.
+
+        Skewed heavily positive. A positive "surge" can extend a drive (and,
+        near the goal line, occasionally score) — that's the splashy upside.
+        A negative "stumble" is modest and tightly fenced: it only fires on
+        short, down-advancing plays (never on a play that earned a first down
+        or TD, never on 4th down), is floored so it can't cause a safety, is
+        capped per team, and is suppressed in a tight late game — so a glitch
+        can never cost a team possession, points, or a game. No turnovers.
+        """
+        if not self._anomalyAttentionLoaded:
+            self._loadAnomalyAttention()
+        if not self._anomalyAttention:
+            return
+        p = self.play
+        if p is None:
+            return
+        playType = getattr(p, 'playType', None)
+        if playType not in (PlayType.Run, PlayType.Pass):
+            return
+        # Forward-progress, non-turnover plays only — excludes incompletions,
+        # sacks, runs for loss, fumbles, and interceptions.
+        if (getattr(p, 'isFumbleLost', False) or getattr(p, 'isInterception', False)
+                or getattr(p, 'isSack', False)):
+            return
+        baseYardage = getattr(p, 'yardage', 0) or 0
+        if baseYardage <= 0:
+            return
+        carrier = p.runner if playType is PlayType.Run else getattr(p, 'receiver', None)
+        if carrier is None or getattr(carrier, 'id', None) is None:
+            return
+        if self._anomalyState.get(carrier.id, 'stable') not in ('rampant', 'awakened'):
+            return
+        if self._anomalyAttention.get(carrier.id, 0.0) <= 0:
+            return
+
+        from constants import (ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
+                               ANOMALY_L3_TRIGGER_PROB, ANOMALY_L3_HELP_CHANCE,
+                               ANOMALY_L3_POS_YARDS, ANOMALY_L3_NEG_YARDS,
+                               ANOMALY_L3_MAX_NEG_PER_TEAM, ANOMALY_L3_LATE_QUARTER,
+                               ANOMALY_L3_CLOSE_MARGIN)
+        # Per-game hygiene: shared cap + cooldown with the cosmetic layers.
+        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+            return
+        playNum = getattr(p, 'playNumber', None)
+        if (playNum is not None
+                and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
+            return
+        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier:
+            return
+
+        helpful = _random.random() < ANOMALY_L3_HELP_CHANCE
+        if helpful:
+            newYardage = baseYardage + _random.randint(*ANOMALY_L3_POS_YARDS)
+            ability, pool = 'glitch_surge', _LAYER_3_SURGE_GLITCHES
+        else:
+            # Stumble guardrails: never touch a first down / TD, never on 4th
+            # down, never cause a safety, cap per team, skip a tight late game.
+            team = self.offensiveTeam.name
+            if baseYardage >= self.yardsToEndzone or baseYardage >= self.yardsToFirstDown:
+                return
+            if self.down >= 4:
+                return
+            if self._l3NegByTeam.get(team, 0) >= ANOMALY_L3_MAX_NEG_PER_TEAM:
+                return
+            if (self.currentQuarter >= ANOMALY_L3_LATE_QUARTER
+                    and abs(self.homeScore - self.awayScore) <= ANOMALY_L3_CLOSE_MARGIN):
+                return
+            loss = _random.randint(*ANOMALY_L3_NEG_YARDS)
+            # Floor the loss so it can never drop the offense into a safety.
+            loss = min(loss, max(0, (self.yardsToSafety + baseYardage) - 1))
+            if loss <= 0:
+                return
+            newYardage = baseYardage - loss
+            ability, pool = 'glitch_stumble', _LAYER_3_STUMBLE_GLITCHES
+            self._l3NegByTeam[team] = self._l3NegByTeam.get(team, 0) + 1
+
+        p.yardage = newYardage
+        line = _random.choice(pool).format(player=carrier.name)
+        try:
+            p.glitchText = line
+            p.glitchPlayerId = carrier.id
+            p.glitchPlayerName = carrier.name
+            p.glitchLayer = 'signature'
+            p.glitchYardDelta = newYardage - baseYardage
+            p._l3Fired = True
+        except Exception:
+            pass
+        self._glitchCountThisGame += 1
+        if playNum is not None:
+            self._lastGlitchPlayNumber = playNum
+
+        # Best-effort persistence — failure here doesn't affect the game.
+        try:
+            from database.connection import get_session
+            from database.models import AnomalyEvent
+            session = get_session()
+            try:
+                evt = AnomalyEvent(
+                    player_id=carrier.id,
+                    season=self.seasonNumber or 0,
+                    week=self.week or 0,
+                    game_id=self.id,
+                    play_number=playNum,
+                    layer='signature',
+                    ability=ability,
+                    play_text=line,
+                    during_thinning=(self._criticalityMultiplier > 1.0),
                 )
                 session.add(evt)
                 session.commit()
@@ -7836,12 +8014,13 @@ class Play():
         self.isMomentumShift = False     # Play caused a significant momentum swing
         self.playNumber = 0             # Set after totalPlays is incremented
         self.playText = ''
-        # Anomaly system attachments — populated when a Layer 1 glitch
-        # fires on this play. None / empty when no anomaly happened.
+        # Anomaly system attachments — populated when a glitch fires on this
+        # play. None / empty when no anomaly happened.
         self.glitchText = None          # The glitch flavor line
         self.glitchPlayerId = None      # Player whose anomaly triggered
         self.glitchPlayerName = None
-        self.glitchLayer = None         # 'micro' for Layer 1 (Layers 2-3 land later)
+        self.glitchLayer = None         # 'micro' (L1) / 'personality' (L2) / 'signature' (L3)
+        self.glitchYardDelta = None     # L3 only: signed yards the glitch added (+) or cost (-)
         self.insights = {}              # Play insights dict — populated during execution
 
     def _captureBlitzer(self, scheme, defGameplanObj):

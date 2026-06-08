@@ -594,6 +594,89 @@ def syncCuratorProgress(session: Session, userId: int, currentSeason: int) -> Op
     return recordProgress(session, userId, "curator", absolute=uniqueCount, currentSeason=currentSeason)
 
 
+def syncCollectionAchievements(session: Session, userId: int) -> List[UserAchievement]:
+    """Recompute the permanent Vault collection achievements from the user's
+    vaulted cards. Called whenever the vault changes (vault / trash). These are
+    once-scope, so progress is authoritative (absolute) and never resets.
+
+    - Hometown Hero: vaulted cards of players on the user's favorite team
+    - Full Spectrum: all 4 editions of a single player vaulted
+    - Ice Cold I/II/III: vaulted Diamond count
+    - Archivist I/II/III: distinct players vaulted
+    - All-Pro Set: every All-Pro card from a single season vaulted
+    """
+    from database.models import User
+    completed: List[UserAchievement] = []
+
+    vaulted = (
+        session.query(UserCard, CardTemplate)
+        .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+        .filter(UserCard.user_id == userId, UserCard.vaulted == True)  # noqa: E712
+        .all()
+    )
+    if not vaulted:
+        return completed
+
+    user = session.get(User, userId)
+    favTeamId = getattr(user, "favorite_team_id", None) if user else None
+
+    homeTeamCount = 0
+    diamondCount = 0
+    players = set()
+    editionsByPlayer: Dict[int, set] = {}
+    allProBySeason: Dict[int, set] = {}
+    hasMaxTierVaulted = False
+    for _uc, tpl in vaulted:
+        players.add(tpl.player_id)
+        if favTeamId and tpl.team_id == favTeamId:
+            homeTeamCount += 1
+        if tpl.edition == "diamond":
+            diamondCount += 1
+        if (getattr(_uc, "tier", 1) or 1) >= 4:
+            hasMaxTierVaulted = True
+        editionsByPlayer.setdefault(tpl.player_id, set()).add(tpl.edition)
+        if tpl.classification and "all_pro" in tpl.classification:
+            allProBySeason.setdefault(tpl.season_created, set()).add(tpl.player_id)
+
+    fullSpectrum = 1 if any(len(eds) >= 4 for eds in editionsByPlayer.values()) else 0
+
+    # All-Pro Set: a season where the user has vaulted every All-Pro player's card.
+    allProSet = 0
+    for season, ownedPlayers in allProBySeason.items():
+        totalAllPro = (
+            session.query(CardTemplate.player_id)
+            .filter(
+                CardTemplate.season_created == season,
+                CardTemplate.classification.like("%all_pro%"),
+            ).distinct().count()
+        )
+        if totalAllPro > 0 and len(ownedPlayers) >= totalAllPro:
+            allProSet = 1
+            break
+
+    def _rec(key, value):
+        ua = recordProgress(session, userId, key, absolute=value)
+        if ua:
+            completed.append(ua)
+
+    if favTeamId:
+        _rec("hometown_hero", homeTeamCount)
+    _rec("full_spectrum", fullSpectrum)
+    _rec("all_pro_set", allProSet)
+    _rec("ice_cold_i", diamondCount)
+    _rec("ice_cold_ii", diamondCount)
+    _rec("ice_cold_iii", diamondCount)
+    _rec("archivist_i", len(players))
+    _rec("archivist_ii", len(players))
+    _rec("archivist_iii", len(players))
+    # Secret: enshrine a fully upgraded card.
+    if hasMaxTierVaulted:
+        s = unlockSecret(session, userId, "dynasty")
+        if s:
+            completed.append(s)
+    return completed
+
+
 def onDiamondOpened(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
     """Sparkler — fires once per season on first Diamond card opened."""
     return recordProgress(session, userId, "sparkler", currentSeason=currentSeason)
@@ -683,6 +766,43 @@ def onWeeklyPickemPodium(session: Session, userId: int, currentSeason: int) -> L
     for key in ("pundit_i", "pundit_ii", "pundit_iii", "pundit_iv"):
         u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
         if u: unlocked.append(u)
+    return unlocked
+
+
+def onCardLeveledUp(session: Session, userId: int, toTier: int, currentSeason: int,
+                    edition: str = None) -> List[UserAchievement]:
+    """Card-upgrade hooks (seasonal): Artificer tiers count level-ups; Ascendant
+    fires on reaching max tier. Secrets: Overclocked (three max-tier cards in one
+    season) and Crown Jewel (a Diamond taken to max tier)."""
+    from constants import CARD_TIER_MAX
+    unlocked = []
+    for key in ("artificer_i", "artificer_ii", "artificer_iii"):
+        u = recordProgress(session, userId, key, increment=1, currentSeason=currentSeason)
+        if u:
+            unlocked.append(u)
+    if toTier >= CARD_TIER_MAX:
+        u = recordProgress(session, userId, "ascendant", absolute=1, currentSeason=currentSeason)
+        if u:
+            unlocked.append(u)
+        # Secret: a Diamond card taken all the way to max tier.
+        if edition == "diamond":
+            s = unlockSecret(session, userId, "crown_jewel")
+            if s:
+                unlocked.append(s)
+        # Secret: three max-tier cards minted this season.
+        maxCount = (
+            session.query(UserCard.id)
+            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+            .filter(
+                UserCard.user_id == userId,
+                UserCard.tier >= CARD_TIER_MAX,
+                CardTemplate.season_created == currentSeason,
+            ).count()
+        )
+        if maxCount >= 3:
+            s = unlockSecret(session, userId, "overclocked")
+            if s:
+                unlocked.append(s)
     return unlocked
 
 
