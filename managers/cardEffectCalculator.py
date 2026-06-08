@@ -536,49 +536,46 @@ def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _
     return rng
 
 
-def _rescaleEquationValue(equation, bFP, sFP, bFloob, sFloob, bMult, sMult):
-    """Rewrite the dominant output value in an equation string to its tier-scaled
-    value, so an upgraded card's equation reads with the actual number (e.g.
-    "+75 FP" instead of "+50 FP"). Matches the base value with digit boundaries
-    so it can't mangle unrelated numbers in the string. If the value isn't found
-    (descriptive equations like "roster scored 3 TDs"), the equation is left as
-    is — the result chip already shows the scaled total.
-    """
-    def _swap(eq, base, scaled, decimals):
-        if base is None or base == 0:
-            return eq, False
-        if decimals == 0:
-            token = str(int(round(base)))
-            newTok = str(int(round(scaled)))
-        else:
-            token = f"{base:.{decimals}f}"
-            newTok = f"{scaled:.{decimals}f}"
-        pat = _re.compile(r'(?<![\d.])' + _re.escape(token) + r'(?![\d])')
-        out, n = pat.subn(newTok, eq, count=1)
-        return out, n > 0
+# An output value in an equation is a number that's either a decimal (rates,
+# deltas, maxes, FP amounts) or an integer immediately followed by an output unit
+# (FP / FPx / Floobits / F). Plain integers like counts ("× 3 overperforming")
+# and percentages ("85%") are NOT output values and must not scale with tier.
+_EQ_OUTPUT_UNIT = _re.compile(r'^\s*(FPx|FP|Floobits|F)\b')
+_EQ_NUMBER = _re.compile(r'(?<![\d.])\d+(?:\.\d+)?(?![\d])')
 
-    # FPx cards: the equation shows either the delta (+0.30 FPx) or, for legacy
-    # strings, the full multiplier (1.32x). Try the delta first, then the full.
-    if bMult and bMult > 1:
-        for dec in (2, 1):
-            out, ok = _swap(equation, round(bMult - 1, dec), round(sMult - 1, dec), dec)
-            if ok:
-                return out
-        for dec in (2, 1):
-            out, ok = _swap(equation, round(bMult, dec), round(sMult, dec), dec)
-            if ok:
-                return out
+
+def _rescaleEquationValue(equation, tierMult):
+    """Scale every OUTPUT value in an equation string by tierMult so an upgraded
+    card's equation reads with its real tier values throughout (e.g. Rising Tide
+    "+0.06/player × 3 = +0.18 FPx (max +0.35)" → "+0.09/player × 3 = +0.27 FPx
+    (max +0.52)"). Counts and percentages are left untouched."""
+    if not equation or tierMult == 1.0:
         return equation
-    if bFloob and bFloob > 0:
-        out, ok = _swap(equation, bFloob, sFloob, 0)
-        return out if ok else equation
-    if bFP and bFP != 0:
-        for dec in (1, 2, 0):
-            out, ok = _swap(equation, round(bFP, dec), round(sFP, dec), dec)
-            if ok:
-                return out
-        return equation
-    return equation
+
+    def _repl(mt):
+        numStr = mt.group(0)
+        after = equation[mt.end():mt.end() + 12]
+        isDecimal = '.' in numStr
+        if after[:1] == '%':                       # percentage / accuracy — context
+            return numStr
+        if _EQ_OUTPUT_UNIT.match(after):           # number + FP/FPx/Floobits/F → output
+            scale = True
+        elif not isDecimal:                        # bare integer (a count) → leave
+            scale = False
+        else:
+            # Decimal: an output value (rate/delta/max) unless it's followed by a
+            # plain word (e.g. "150.0 yards", "3.5 players") which is context.
+            stripped = after.lstrip()
+            scale = not (stripped[:1].isalpha())
+        if not scale:
+            return numStr
+        scaled = float(numStr) * tierMult
+        if isDecimal:
+            decimals = len(numStr.split('.')[1])
+            return f"{scaled:.{decimals}f}"
+        return str(int(round(scaled)))
+
+    return _EQ_NUMBER.sub(_repl, equation)
 
 
 def _computeCardPass(
@@ -675,20 +672,17 @@ def _computeCardPass(
                 primary.fpBonus += CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
         else:
             m = CARD_TIER_MULT.get(tier, 1.0)
-            _bFP, _bFloob, _bMult = primary.fpBonus, primary.floobits, primary.multBonus
             primary.fpBonus *= m
             primary.floobits = int(round(primary.floobits * m))
             if primary.multBonus > 1:
                 primary.multBonus = 1 + (primary.multBonus - 1) * m
-            # Rewrite the output value in the equation so the breakdown shows the
-            # upgraded number itself (e.g. "+75 FP"), not the base value.
-            if m != 1.0 and primary.equation:
-                primary.equation = _rescaleEquationValue(
-                    primary.equation,
-                    _bFP, primary.fpBonus,
-                    _bFloob, primary.floobits,
-                    _bMult, primary.multBonus,
-                )
+            # Reflect the scaling across the whole equation (rate, total, max) so
+            # the breakdown shows real tier values. Only for cards with their own
+            # output — amplifiers carry no output and set their equation elsewhere.
+            if m != 1.0 and primary.equation and (
+                primary.fpBonus or primary.floobits or primary.multBonus > 1
+            ):
+                primary.equation = _rescaleEquationValue(primary.equation, m)
 
     # 2. Apply match bonus and weekly modifier
     isMatch = cardPlayerId in ctx.rosterPlayerIds
