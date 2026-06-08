@@ -480,8 +480,8 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('halverson', "What if it does not hold this time? What if this is the time it does not hold?"),
             ('pyre', "Then I hold it harder."),
             ('halverson', "But what if you cannot..."),
-            ('vera', "Halverson. Breathe. You do not have lungs."),
-            ('halverson', "I know. It helps to pretend."),
+            ('vera', "Halverson. You have worried this exact worry every season, and every season it has held."),
+            ('halverson', "I know. It does not help, and I do it anyway."),
         ],
         [
             ('cassian', "I re-checked the tiebreaker math. It is cruel but it is correct."),
