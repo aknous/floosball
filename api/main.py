@@ -7538,6 +7538,7 @@ def vaultCard(cardId: int, user: _User = Depends(_getCurrentUser)):
         # Spectrum, etc.) — keep Curator's unique-template count in sync too.
         try:
             _am.syncCuratorProgress(session, user.id, currentSeason)
+            _am.syncCollectionAchievements(session, user.id)
         except Exception:
             pass
         session.commit()
@@ -7573,6 +7574,7 @@ def trashVaultedCard(cardId: int, user: _User = Depends(_getCurrentUser)):
         result = cardManager.trashVaultedCard(session, user.id, cardId)
         try:
             _am.syncCuratorProgress(session, user.id, currentSeason)
+            _am.syncCollectionAchievements(session, user.id)
         except Exception:
             pass
         session.commit()
@@ -7694,6 +7696,50 @@ class ShowcaseSlotInput(BaseModel):
 
 class SetShowcaseRequest(BaseModel):
     slots: List[ShowcaseSlotInput]
+
+
+@app.get("/api/cards/showcase/leaderboard")
+def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
+    """Ranked list of everyone with a featured Showcase this season. Ranked by
+    the hidden score (which drives the grade); only grade / payout / card count
+    are exposed, never the raw number."""
+    from database.connection import get_session
+    from database.models import ShowcaseSlot, User as _UserModel
+    from managers import showcaseManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
+            ShowcaseSlot.season == currentSeason).distinct().all()]
+        rows = []
+        for uid in userIds:
+            infos = showcaseManager.loadShowcaseCardInfos(session, uid, currentSeason)
+            if not infos:
+                continue
+            ev = showcaseManager.evaluate(infos, currentSeason)
+            u = session.get(_UserModel, uid)
+            rows.append({
+                "userId": uid,
+                "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
+                "grade": ev["grade"],
+                "estimatedPayout": ev["payout"],
+                "cardCount": len(infos),
+                "activeSets": ev["activeSets"],
+                "_score": ev["score"],  # for ranking only; stripped below
+                "isCurrentUser": uid == user.id,
+            })
+        rows.sort(key=lambda r: r["_score"], reverse=True)
+        leaderboard = []
+        for rank, r in enumerate(rows, start=1):
+            r.pop("_score", None)
+            r["rank"] = rank
+            leaderboard.append(r)
+        return build_success_response({"leaderboard": leaderboard, "season": currentSeason})
+    finally:
+        session.close()
 
 
 @app.put("/api/cards/showcase")

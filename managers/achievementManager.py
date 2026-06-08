@@ -594,6 +594,81 @@ def syncCuratorProgress(session: Session, userId: int, currentSeason: int) -> Op
     return recordProgress(session, userId, "curator", absolute=uniqueCount, currentSeason=currentSeason)
 
 
+def syncCollectionAchievements(session: Session, userId: int) -> List[UserAchievement]:
+    """Recompute the permanent Vault collection achievements from the user's
+    vaulted cards. Called whenever the vault changes (vault / trash). These are
+    once-scope, so progress is authoritative (absolute) and never resets.
+
+    - Hometown Hero: vaulted cards of players on the user's favorite team
+    - Full Spectrum: all 4 editions of a single player vaulted
+    - Ice Cold I/II/III: vaulted Diamond count
+    - Archivist I/II/III: distinct players vaulted
+    - All-Pro Set: every All-Pro card from a single season vaulted
+    """
+    from database.models import User
+    completed: List[UserAchievement] = []
+
+    vaulted = (
+        session.query(UserCard, CardTemplate)
+        .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+        .filter(UserCard.user_id == userId, UserCard.vaulted == True)  # noqa: E712
+        .all()
+    )
+    if not vaulted:
+        return completed
+
+    user = session.get(User, userId)
+    favTeamId = getattr(user, "favorite_team_id", None) if user else None
+
+    homeTeamCount = 0
+    diamondCount = 0
+    players = set()
+    editionsByPlayer: Dict[int, set] = {}
+    allProBySeason: Dict[int, set] = {}
+    for _uc, tpl in vaulted:
+        players.add(tpl.player_id)
+        if favTeamId and tpl.team_id == favTeamId:
+            homeTeamCount += 1
+        if tpl.edition == "diamond":
+            diamondCount += 1
+        editionsByPlayer.setdefault(tpl.player_id, set()).add(tpl.edition)
+        if tpl.classification and "all_pro" in tpl.classification:
+            allProBySeason.setdefault(tpl.season_created, set()).add(tpl.player_id)
+
+    fullSpectrum = 1 if any(len(eds) >= 4 for eds in editionsByPlayer.values()) else 0
+
+    # All-Pro Set: a season where the user has vaulted every All-Pro player's card.
+    allProSet = 0
+    for season, ownedPlayers in allProBySeason.items():
+        totalAllPro = (
+            session.query(CardTemplate.player_id)
+            .filter(
+                CardTemplate.season_created == season,
+                CardTemplate.classification.like("%all_pro%"),
+            ).distinct().count()
+        )
+        if totalAllPro > 0 and len(ownedPlayers) >= totalAllPro:
+            allProSet = 1
+            break
+
+    def _rec(key, value):
+        ua = recordProgress(session, userId, key, absolute=value)
+        if ua:
+            completed.append(ua)
+
+    if favTeamId:
+        _rec("hometown_hero", homeTeamCount)
+    _rec("full_spectrum", fullSpectrum)
+    _rec("all_pro_set", allProSet)
+    _rec("ice_cold_i", diamondCount)
+    _rec("ice_cold_ii", diamondCount)
+    _rec("ice_cold_iii", diamondCount)
+    _rec("archivist_i", len(players))
+    _rec("archivist_ii", len(players))
+    _rec("archivist_iii", len(players))
+    return completed
+
+
 def onDiamondOpened(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
     """Sparkler — fires once per season on first Diamond card opened."""
     return recordProgress(session, userId, "sparkler", currentSeason=currentSeason)
