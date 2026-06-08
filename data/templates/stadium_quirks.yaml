@@ -1,6 +1,10 @@
-# Stadium Quirks — each home stadium has unique field/atmospheric conditions
-# tied to the team name. Effects are small (±5-15%) but flavorful — the goal
-# is character, not balance disruption. Every team's stadium has its own vibe.
+# Stadium Quirks. These are the Cores' RECONSTRUCTIONS of the old floosball
+# venues, assembled from fragmentary broadcast transmissions. The Cores don't
+# actually know where each stadium was or what it looked like, so every one is
+# a guess built from the team's name and a few garbled signals. That is why a
+# team called "Rocks" ends up playing in a mine and the "Jetskis" play out on
+# open water. Effects are small (a few percent) and flavorful. The goal is
+# character, not balance disruption.
 #
 # Schema:
 #   <team_name>:
@@ -25,7 +29,7 @@
 #       miss: [...]               # lines on missed FGs / dropped passes / fumbles
 
 Strangers:
-  name: "The Veil"
+  name: "Shadow Court"
   icon: shadow-figure
   tagline: Shadowy Stadium
   description: |
@@ -60,7 +64,7 @@ Normals:
       - "The sideline drinks are all room temperature."
 
 Broads:
-  name: "The Blacktop"
+  name: "Asphalt Acres"
   icon: asphalt
   tagline: Hard Top
   description: |
@@ -76,7 +80,7 @@ Broads:
       - "The kicker eyes a pothole at the 32 and adjusts his approach."
 
 Drivers:
-  name: "The Interchange"
+  name: "Beltway Bowl"
   icon: car-horn
   tagline: Beltway Brawl
   description: |
@@ -94,7 +98,7 @@ Drivers:
       - "Two cars in the lot are nose-to-nose, neither will back up. Refs ignore it."
 
 Melons:
-  name: "The Patch"
+  name: "Melon Patch"
   icon: melon-slice
   tagline: Sticky Stadium
   description: |
@@ -109,23 +113,24 @@ Melons:
       - "A receiver gets up with a piece of cantaloupe stuck to his knee."
 
 Rocks:
-  name: "The Rock Hall"
-  icon: electric-guitar
-  tagline: Hall of Fame
+  name: "Bedrock Cavern"
+  icon: cave-entrance
+  tagline: Carved in Stone
   description: |
-    The stadium runs like a rock concert. Marshall stacks line the tunnels.
-    A drum solo plays between every series. The crowd headbangs in unison.
-    Road offenses can't hear themselves over the distortion.
+    The field sits deep in an old mine, bare rock walls rising into the dark.
+    Work lights string along the cavern ceiling. Every sound echoes off the
+    stone, so the roar never really stops. Footing is firm, the air cool and
+    still, and the low ceiling kills any deep ball.
   effects:
-    roadDiscipline: 0.92
-    paceMod: 1.04
-    clutchVariance: 1.07
+    roadDiscipline: 0.90
+    deepPassChance: 0.93
+    fumbleRate: 0.94
   flavor:
     ambient:
-      - "A power chord rips through the PA. The road QB winces."
-      - "The crowd starts a 'CLE-VE-LAND ROCKS' chant during the snap."
-      - "A drum solo erupts between plays. The play clock keeps running."
-      - "The Jumbotron cuts to a wall of amps. Someone is just turning them up."
+      - "A chant rolls off the cavern walls and comes back twice as loud."
+      - "A mine cart rattles past behind the end zone. Nobody reacts."
+      - "Dust sifts down from the rock ceiling onto the 40."
+      - "The road QB calls an audible and hears it three times."
 
 Beans:
   name: "Cloud Gate"
@@ -185,7 +190,7 @@ Blouses:
       - "A dove lands on the goalpost. The crowd loses it."
 
 Cranes:
-  name: "The KACL Booth"
+  name: "KACL Tower"
   icon: radio-tower
   tagline: KACL Live
   description: |
@@ -202,7 +207,7 @@ Cranes:
       - "An aria swells during the snap. The center pauses, moved."
 
 Pinecones:
-  name: "The Grove"
+  name: "Evergreen Park"
   icon: pine-tree
   tagline: The Grove
   description: |
@@ -220,7 +225,7 @@ Pinecones:
       - "A squirrel sprints across the back of the end zone."
 
 Oysters:
-  name: "The Tidepool"
+  name: "Brine Basin"
   icon: mountain-peak
   tagline: Mountain Brine
   description: |
@@ -234,7 +239,7 @@ Oysters:
       - "A faint salt fog rolls across the 50-yard line."
 
 Moonlight:
-  name: "The Moonlight"
+  name: "Moonlight Towers"
   icon: crescent-moon
   tagline: Moonlit Field
   description: |
@@ -270,7 +275,7 @@ Slippers:
       - "A munchkin choir in the upper deck strikes up between drives."
 
 Sand Dollars:
-  name: "The Sandlot"
+  name: "Coral Sands"
   icon: sand-pile
   tagline: Sandy Field
   description: |
@@ -286,7 +291,7 @@ Sand Dollars:
       - "Sand sprays into the air on a hard cut. The runner spits."
 
 Dry Heat:
-  name: "The Kiln"
+  name: "Furnace Flats"
   icon: sun
   tagline: Desert Heat
   description: |
@@ -300,7 +305,7 @@ Dry Heat:
       - "A mirage shimmers above the far hashmarks."
 
 Residents:
-  name: "The Marquee"
+  name: "Neon Hall"
   icon: spotlight
   tagline: The Headliner
   description: |
@@ -318,7 +323,7 @@ Residents:
       - "A magician saws a cheerleader in half during the TV timeout."
 
 Rhyme:
-  name: "The Stanza"
+  name: "Sonnet Park"
   icon: quill
   tagline: Poetry Slam
   description: |
@@ -333,7 +338,7 @@ Rhyme:
       - "A receiver pauses to applaud. The play clock keeps running."
 
 Bachelorettes:
-  name: "The Honky-Tonk"
+  name: "Honky-Tonk Row"
   icon: tiara
   tagline: Rowdy Crowd
   description: |
@@ -347,7 +352,7 @@ Bachelorettes:
       - "The crowd boos the road QB by name. He looks rattled."
 
 Lattes:
-  name: "The Roastery"
+  name: "Roaster's Row"
   icon: coffee-cup
   tagline: Caffeinated Air
   description: |
@@ -363,22 +368,26 @@ Lattes:
       - "The PA plays a milk-frother sound effect after every first down."
 
 Jetskis:
-  name: "The Wake"
-  icon: water-spray
-  tagline: Spray Zone
+  name: "Marina Bay"
+  icon: jet-ski
+  tagline: On the Water
   description: |
-    Jetskis idle on the sidelines. Spray drifts onto the field. The ball is
-    perpetually slick.
+    With nothing to go on but the name, the Cores put this field out on open
+    water, floating on a moored deck in the middle of a bay. Jetskis carve
+    circles past the rails and throw spray over the sideline. The platform rolls
+    with the swell and the ball never fully dries.
   effects:
     fumbleRate: 1.12
     passAccuracy: 0.96
+    fgAccuracy: 0.94
   flavor:
     ambient:
-      - "A jetski revs on the sideline. The QB's grip is visibly wet."
-      - "A wave breaks over the front row. They cheer."
+      - "A jetski cuts a wake past the rail; spray drifts across the numbers."
+      - "The deck rolls with a swell. Both lines reset their stance."
+      - "A receiver's plant foot slides on the wet platform."
 
 Phones:
-  name: "The Glass Cube"
+  name: "Glass Cube"
   icon: glass-panel
   tagline: The Glass Cube
   description: |
@@ -396,7 +405,7 @@ Phones:
       - "The PA introduces the next play in lower-case Helvetica: 'next.'"
 
 Babies:
-  name: "The Crib"
+  name: "Cradle Park"
   icon: pillow
   tagline: Cushioned Field
   description: |
@@ -414,7 +423,7 @@ Babies:
       - "A baby in the front row is asleep through a 4th-and-1."
 
 Classics:
-  name: "The Coliseum"
+  name: "Heritage Field"
   icon: glass-bottle
   tagline: The Original Recipe
   description: |
