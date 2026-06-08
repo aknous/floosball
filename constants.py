@@ -537,8 +537,10 @@ SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # with the bonus sum capped here so stacked sets can't run away.
 SHOWCASE_MAX_SET_BONUS = 2.5
 # Score → grade (first threshold the score meets, scanning high to low).
+# Calibrated via tune_showcase.py Monte Carlo (recency-1.0 best-8 showcases):
+# casual≈D, regular≈C, dedicated≈B, whale≈A, top-few-%-whale≈S.
 SHOWCASE_GRADE_THRESHOLDS = [
-    ("S", 950), ("A", 550), ("B", 280), ("C", 120), ("D", 40), ("F", 0),
+    ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
 ]
 # Grade → flat Floobit payout at season end.
 SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 50, "C": 120, "B": 250, "A": 450, "S": 800}

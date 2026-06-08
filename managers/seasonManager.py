@@ -3794,34 +3794,16 @@ class SeasonManager:
         clears automatically — next season simply has no featured slots."""
         try:
             from database.connection import get_session as _gs
-            from database.repositories.card_repositories import CurrencyRepository
-            from database.models import CurrencyTransaction, ShowcaseSlot
             from managers import showcaseManager
             season = self.currentSeason.seasonNumber
-            txType = 'showcase_payout'
             s = _gs()
             try:
-                if s.query(CurrencyTransaction.id).filter(
-                        CurrencyTransaction.transaction_type == txType,
-                        CurrencyTransaction.season == season).first():
-                    logger.info("Showcase payouts already awarded — skipping")
-                    return
-                userIds = [r[0] for r in s.query(ShowcaseSlot.user_id).filter(
-                    ShowcaseSlot.season == season).distinct().all()]
-                cur = CurrencyRepository(s)
-                paid = 0
-                for userId in userIds:
-                    infos = showcaseManager.loadShowcaseCardInfos(s, userId, season)
-                    if not infos:
-                        continue
-                    result = showcaseManager.evaluate(infos, season)
-                    payout = result["payout"]
-                    if payout > 0:
-                        cur.addFunds(userId, payout, txType,
-                                     f"Showcase payout (grade {result['grade']})", season)
-                        paid += 1
+                summary = showcaseManager.awardSeasonPayouts(s, season)
                 s.commit()
-                logger.info(f"Showcase payouts awarded to {paid} users (S{season})")
+                if summary.get("alreadyAwarded"):
+                    logger.info("Showcase payouts already awarded — skipping")
+                else:
+                    logger.info(f"Showcase payouts awarded to {summary['paid']} users (S{season})")
             finally:
                 s.close()
         except Exception as e:

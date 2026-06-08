@@ -7742,6 +7742,61 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+@app.get("/api/cards/showcase/last-result")
+def showcaseLastResult(user: _User = Depends(_getCurrentUser)):
+    """The user's most recent end-of-season Showcase payout, for the results
+    recap. Durable (reads the payout transaction) so offline users see it on
+    their next visit. Returns null data if they've never been paid out."""
+    from database.connection import get_session
+    from database.models import CurrencyTransaction
+    from managers.showcaseManager import SHOWCASE_PAYOUT_TX
+    import re as _re
+
+    session = get_session()
+    try:
+        tx = (
+            session.query(CurrencyTransaction)
+            .filter(
+                CurrencyTransaction.user_id == user.id,
+                CurrencyTransaction.transaction_type == SHOWCASE_PAYOUT_TX,
+            )
+            .order_by(CurrencyTransaction.season.desc(), CurrencyTransaction.id.desc())
+            .first()
+        )
+        if not tx:
+            return build_success_response(None)
+        m = _re.search(r"grade (\w+)", tx.description or "")
+        return build_success_response({
+            "season": tx.season,
+            "payout": tx.amount,
+            "grade": m.group(1) if m else None,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/cards/showcase/user/{userId}")
+def getUserShowcase(userId: int, user: _User = Depends(_getCurrentUser)):
+    """View another user's Showcase (read-only) — for browsing from the standings."""
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        payload = _buildShowcasePayload(session, cardManager, userId, currentSeason)
+        u = session.get(_UserModel, userId)
+        payload["username"] = (getattr(u, "username", None) or "Anonymous") if u else "Anonymous"
+        payload["userId"] = userId
+        return build_success_response(payload)
+    finally:
+        session.close()
+
+
 @app.put("/api/cards/showcase")
 def setShowcase(req: SetShowcaseRequest, user: _User = Depends(_getCurrentUser)):
     """Replace the user's featured cards for the season. Only vaulted cards may

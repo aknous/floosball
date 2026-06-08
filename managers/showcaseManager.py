@@ -183,6 +183,41 @@ def cardInfo(userCard) -> dict:
     }
 
 
+SHOWCASE_PAYOUT_TX = "showcase_payout"
+
+
+def awardSeasonPayouts(session, season: int) -> dict:
+    """Grade every user's featured showcase for the season and pay out Floobits.
+    Idempotent: a per-season transaction guard prevents double payment. Does NOT
+    commit — the caller owns the transaction. Returns a summary including per-user
+    results so the caller can log / broadcast.
+    """
+    from database.models import CurrencyTransaction, ShowcaseSlot
+    from database.repositories.card_repositories import CurrencyRepository
+
+    already = session.query(CurrencyTransaction.id).filter(
+        CurrencyTransaction.transaction_type == SHOWCASE_PAYOUT_TX,
+        CurrencyTransaction.season == season,
+    ).first()
+    if already:
+        return {"paid": 0, "alreadyAwarded": True, "results": []}
+
+    userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
+        ShowcaseSlot.season == season).distinct().all()]
+    cur = CurrencyRepository(session)
+    results = []
+    for userId in userIds:
+        infos = loadShowcaseCardInfos(session, userId, season)
+        if not infos:
+            continue
+        ev = evaluate(infos, season)
+        results.append({"userId": userId, "grade": ev["grade"], "payout": ev["payout"]})
+        if ev["payout"] > 0:
+            cur.addFunds(userId, ev["payout"], SHOWCASE_PAYOUT_TX,
+                         f"Showcase payout (grade {ev['grade']})", season)
+    return {"paid": sum(1 for r in results if r["payout"] > 0), "alreadyAwarded": False, "results": results}
+
+
 def loadShowcaseCardInfos(session, userId: int, season: int) -> list:
     """All card-infos a user has featured this season, ordered by slot."""
     from database.models import ShowcaseSlot, UserCard
