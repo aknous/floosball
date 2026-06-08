@@ -633,6 +633,14 @@ def _computeCardPass(
             primary.floobits = int(round(primary.floobits * m))
             if primary.multBonus > 1:
                 primary.multBonus = 1 + (primary.multBonus - 1) * m
+            # Reflect the tier scaling in the equation so the breakdown shows the
+            # upgraded output, not the base value. Mirrors how match/Conductor
+            # multipliers are appended. Only when there's real output to scale.
+            if m != 1.0 and primary.equation and (
+                primary.fpBonus or primary.floobits or primary.multBonus > 1
+            ):
+                _ROMAN = {2: "II", 3: "III", 4: "IV"}
+                primary.equation = f"{primary.equation} × {m:g} (Tier {_ROMAN.get(tier, tier)})"
 
     # 2. Apply match bonus and weekly modifier
     isMatch = cardPlayerId in ctx.rosterPlayerIds
