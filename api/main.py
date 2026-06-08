@@ -7923,9 +7923,9 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 # Skip slot 6 if user no longer qualifies for extra slot
                 if prev.slot_number == 6 and not hasExtraSlotForCarry:
                     continue
-                # Verify card still exists and is active season
+                # Verify card still exists, is active season, and isn't vaulted
                 userCard = session.get(UserCard, prev.user_card_id)
-                if not userCard:
+                if not userCard or getattr(userCard, "vaulted", False):
                     continue
                 template = session.get(CardTemplate, userCard.card_template_id)
                 if not template or template.season_created != currentSeason:

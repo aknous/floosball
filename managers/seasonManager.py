@@ -1495,7 +1495,9 @@ class SeasonManager:
                 if prevEquipped:
                     for prev in prevEquipped:
                         userCard = session.get(UserCard, prev.user_card_id)
-                        if not userCard:
+                        # Skip missing or vaulted cards — a card vaulted after an
+                        # earlier equip must not be carried forward and locked.
+                        if not userCard or getattr(userCard, "vaulted", False):
                             continue
                         template = session.get(CardTemplate, userCard.card_template_id)
                         if not template or template.season_created != season:
