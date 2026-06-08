@@ -746,10 +746,14 @@ class CardManager:
     # ─── The Combine (Card Upgrades) ──────────────────────────────────────────
 
     def _validateUpgradeCards(self, session, userId: int, cardIds: List[int],
-                              currentSeason: int = 0, currentWeek: int = 0):
+                              currentSeason: int = 0, currentWeek: int = 0,
+                              allowEquippedIds=None):
         """Validate cards for upgrade: owned by user and not equipped this week.
+        `allowEquippedIds` exempts specific cards from the equipped check (Level
+        Up exempts its target, so you can upgrade a card you're running).
         Returns list of UserCard objects with templates loaded.
         """
+        allowEquippedIds = set(allowEquippedIds or ())
         from database.repositories.card_repositories import UserCardRepository
         from database.models import EquippedCard
 
@@ -771,12 +775,8 @@ class CardManager:
             EquippedCard.season == currentSeason,
             EquippedCard.week == currentWeek,
         ).all()
-        equippedIds = {ec.user_card_id for ec in equippedRows}
+        equippedIds = {ec.user_card_id for ec in equippedRows} - allowEquippedIds
         if equippedIds:
-            # Log details for debugging
-            for ec in equippedRows:
-                logger.warning(f"Card {ec.user_card_id} equipped in S{ec.season}W{ec.week} slot={ec.slot_number} locked={ec.locked}")
-            logger.warning(f"Blend blocked: season={currentSeason} week={currentWeek} equippedIds={equippedIds}")
             raise ValueError(f"Cannot use equipped cards: {list(equippedIds)}")
 
         return cards
@@ -1000,10 +1000,13 @@ class CardManager:
         if targetCardId == offeringCardId:
             raise ValueError("Target and offering must be different cards")
 
-        # Ownership + not-equipped-this-week (reuses Combine validation)
+        # Ownership + not-equipped-this-week (reuses Combine validation). The
+        # target may be equipped — you can upgrade a card you're currently running;
+        # only the consumed offering must be unequipped.
         cards = self._validateUpgradeCards(session, userId,
                                            [targetCardId, offeringCardId],
-                                           currentSeason, currentWeek)
+                                           currentSeason, currentWeek,
+                                           allowEquippedIds={targetCardId})
         byId = {c.id: c for c in cards}
         target, offering = byId[targetCardId], byId[offeringCardId]
 
