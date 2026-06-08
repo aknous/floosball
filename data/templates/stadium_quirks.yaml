@@ -4,6 +4,7 @@
 #
 # Schema:
 #   <team_name>:
+#     name: "Stadium Name"       # the venue's proper name (fan-submittable)
 #     icon: kebab-case-key       # SVG key on the frontend
 #     tagline: short pregame description
 #     description: longer flavor for hover/modal
@@ -24,6 +25,7 @@
 #       miss: [...]               # lines on missed FGs / dropped passes / fumbles
 
 Strangers:
+  name: "The Veil"
   icon: shadow-figure
   tagline: Shadowy Stadium
   description: |
@@ -41,6 +43,7 @@ Strangers:
       - "The kicker watches the ball disappear into the shadows. Wide left."
 
 Normals:
+  name: "Procedure Field"
   icon: gridlines
   tagline: Painfully Average
   description: |
@@ -57,6 +60,7 @@ Normals:
       - "The sideline drinks are all room temperature."
 
 Broads:
+  name: "The Blacktop"
   icon: asphalt
   tagline: Hard Top
   description: |
@@ -72,6 +76,7 @@ Broads:
       - "The kicker eyes a pothole at the 32 and adjusts his approach."
 
 Drivers:
+  name: "The Interchange"
   icon: car-horn
   tagline: Beltway Brawl
   description: |
@@ -89,6 +94,7 @@ Drivers:
       - "Two cars in the lot are nose-to-nose, neither will back up. Refs ignore it."
 
 Melons:
+  name: "The Patch"
   icon: melon-slice
   tagline: Sticky Stadium
   description: |
@@ -103,6 +109,7 @@ Melons:
       - "A receiver gets up with a piece of cantaloupe stuck to his knee."
 
 Rocks:
+  name: "The Rock Hall"
   icon: electric-guitar
   tagline: Hall of Fame
   description: |
@@ -121,6 +128,7 @@ Rocks:
       - "The Jumbotron cuts to a wall of amps. Someone is just turning them up."
 
 Beans:
+  name: "Cloud Gate"
   icon: soup-pot
   tagline: Soupy Field
   description: |
@@ -138,6 +146,7 @@ Beans:
       - "A linebacker is unrecognizable under a layer of mud."
 
 Caddies:
+  name: "Eldorado Greens"
   icon: golf-flag
   tagline: Eldorado Greens
   description: |
@@ -158,6 +167,7 @@ Caddies:
       - "A caddie hands the QB a five-iron between drives. He politely declines."
 
 Blouses:
+  name: "Paisley Park"
   icon: purple-rain
   tagline: Purple Rain
   description: |
@@ -175,6 +185,7 @@ Blouses:
       - "A dove lands on the goalpost. The crowd loses it."
 
 Cranes:
+  name: "The KACL Booth"
   icon: radio-tower
   tagline: KACL Live
   description: |
@@ -191,6 +202,7 @@ Cranes:
       - "An aria swells during the snap. The center pauses, moved."
 
 Pinecones:
+  name: "The Grove"
   icon: pine-tree
   tagline: The Grove
   description: |
@@ -208,6 +220,7 @@ Pinecones:
       - "A squirrel sprints across the back of the end zone."
 
 Oysters:
+  name: "The Tidepool"
   icon: mountain-peak
   tagline: Mountain Brine
   description: |
@@ -221,6 +234,7 @@ Oysters:
       - "A faint salt fog rolls across the 50-yard line."
 
 Moonlight:
+  name: "The Moonlight"
   icon: crescent-moon
   tagline: Moonlit Field
   description: |
@@ -236,12 +250,14 @@ Moonlight:
       - "The moon is full tonight. The crowd howls."
 
 Slippers:
+  name: "Poppy Field"
   icon: ruby-shoe
   tagline: No Place Like Home
   description: |
-    A yellow brick path runs down the middle of the field. The end zones are
-    ruby red. A funnel cloud is always somewhere on the horizon. The home
-    crowd believes — really believes — there's no place like home.
+    An open field ringed by an expanse of red and white poppies, the end zones
+    marked off by flower patches. Gentle hills surround the field for fan
+    picnicking. The air is sweet and heavy, and visitors find it hard to stay
+    sharp. There really is no place like home.
   effects:
     paceMod: 0.93
     homeBoost: 1.06
@@ -254,6 +270,7 @@ Slippers:
       - "A munchkin choir in the upper deck strikes up between drives."
 
 Sand Dollars:
+  name: "The Sandlot"
   icon: sand-pile
   tagline: Sandy Field
   description: |
@@ -269,6 +286,7 @@ Sand Dollars:
       - "Sand sprays into the air on a hard cut. The runner spits."
 
 Dry Heat:
+  name: "The Kiln"
   icon: sun
   tagline: Desert Heat
   description: |
@@ -282,6 +300,7 @@ Dry Heat:
       - "A mirage shimmers above the far hashmarks."
 
 Residents:
+  name: "The Marquee"
   icon: spotlight
   tagline: The Headliner
   description: |
@@ -299,6 +318,7 @@ Residents:
       - "A magician saws a cheerleader in half during the TV timeout."
 
 Rhyme:
+  name: "The Stanza"
   icon: quill
   tagline: Poetry Slam
   description: |
@@ -313,6 +333,7 @@ Rhyme:
       - "A receiver pauses to applaud. The play clock keeps running."
 
 Bachelorettes:
+  name: "The Honky-Tonk"
   icon: tiara
   tagline: Rowdy Crowd
   description: |
@@ -326,6 +347,7 @@ Bachelorettes:
       - "The crowd boos the road QB by name. He looks rattled."
 
 Lattes:
+  name: "The Roastery"
   icon: coffee-cup
   tagline: Caffeinated Air
   description: |
@@ -341,6 +363,7 @@ Lattes:
       - "The PA plays a milk-frother sound effect after every first down."
 
 Jetskis:
+  name: "The Wake"
   icon: water-spray
   tagline: Spray Zone
   description: |
@@ -355,6 +378,7 @@ Jetskis:
       - "A wave breaks over the front row. They cheer."
 
 Phones:
+  name: "The Glass Cube"
   icon: glass-panel
   tagline: The Glass Cube
   description: |
@@ -372,6 +396,7 @@ Phones:
       - "The PA introduces the next play in lower-case Helvetica: 'next.'"
 
 Babies:
+  name: "The Crib"
   icon: pillow
   tagline: Cushioned Field
   description: |
@@ -389,6 +414,7 @@ Babies:
       - "A baby in the front row is asleep through a 4th-and-1."
 
 Classics:
+  name: "The Coliseum"
   icon: glass-bottle
   tagline: The Original Recipe
   description: |
