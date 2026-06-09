@@ -1958,6 +1958,10 @@ class LeagueAnomalyState(Base):
     last_reset_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Week through which the post-Reset suppression dampener is in effect.
     suppression_window_ends_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Last (season, week) the weekly tick processed. weeklyTick is NOT idempotent
+    # — it re-adds the week's attention contributions on every call — so this
+    # guards against a mid-week restart re-running it and double-counting.
+    last_tick_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Audit trail of every Core-issued rule patch this season (mirrors
     # GameRules.patchHistory but persisted). Each entry includes the Core
     # responsible, the news-text payload, the field touched, and old/new.
@@ -1994,6 +1998,12 @@ class LeagueNewsItem(Base):
     player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     player_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     anomaly_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Exchange threading — set when this item is one turn of a multi-Core
+    # conversation, so the feed can group the turns under a single header on
+    # refresh (not just live over WS).
+    exchange_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    turn_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    turn_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
