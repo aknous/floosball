@@ -164,7 +164,10 @@ INSTABILITY_SUPPRESSED = 0.45        # multiplier during a suppression window �
 # saves, the next crossing fires the real event). Enforced in
 # _suppressCriticality, conditional on ANOMALY_CRITICALITY_ENABLED.
 SUPPRESSION_MAX_PER_SEASON = 1  # cap once Criticality is enabled; unlimited while gated
-SUPPRESSION_AGGREGATE_DAMP = 0.55    # aggregate is knocked to this fraction on a patch (must re-climb)
+SUPPRESSION_AGGREGATE_DAMP = 0.55    # minimum drain on a patch (knock off at least 45%)
+SUPPRESSION_TARGET_RATIO = 0.30      # but always drain down to AT LEAST this fraction of threshold
+                                     # — below the warning floor, so a patch visibly stabilizes even
+                                     # when the aggregate has badly overshot the threshold
 SUPPRESSION_THRESHOLD_BUMP = 1.10    # each patch reinforces containment: threshold ×= this
 
 # Reset purge dodge multipliers, keyed by personality meta-awareness tier.
@@ -448,7 +451,12 @@ def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
     inSuppression = _inSuppressionWindow(state, week)
 
     ratio = _bandRatio(state)
-    if inSuppression:
+    # Show 'stabilizing' only while the patch has actually quieted things (ratio
+    # below the warning floor). If the aggregate has already re-climbed into a
+    # warning band during the suppression window, reflect that band instead —
+    # otherwise the status looks stuck on 'stabilizing' while it is clearly
+    # building back up.
+    if inSuppression and ratio < WARNING_LOW_THRESHOLD:
         key, label, desc = SUPPRESSION_STATUS
         # Surface the Core that led the most recent patch, for the control room.
         activeCore = suppressionEntries[-1].get('core') if suppressionEntries else None
@@ -1336,18 +1344,28 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
     state.updated_at = datetime.utcnow()
 
     # Drain the accumulated over-cap fuel so the weekly recompute genuinely
-    # restarts lower. This is what makes the re-climb real — the aggregate is
-    # recomputed from over_cap_carry every tick, so damping the stored
-    # aggregate alone wouldn't survive next week.
+    # restarts lower (the aggregate is rebuilt from over_cap_carry every tick, so
+    # damping the stored aggregate alone wouldn't survive next week). Target an
+    # ABSOLUTE level — SUPPRESSION_TARGET_RATIO * threshold, below the warning
+    # floor — rather than a flat fraction. A flat fraction leaves a badly-
+    # overshot aggregate still critical, so the patch never visibly stabilizes;
+    # the absolute target guarantees the climb actually restarts low. Never
+    # drains LESS than SUPPRESSION_AGGREGATE_DAMP.
+    backgroundPressure = float(currentWeek)
+    currentOverCap = max(0.0, float(state.aggregate_score) - backgroundPressure)
+    targetOverCap = max(0.0, SUPPRESSION_TARGET_RATIO * state.threshold - backgroundPressure)
+    dampFactor = SUPPRESSION_AGGREGATE_DAMP
+    if currentOverCap > 0:
+        dampFactor = max(0.0, min(SUPPRESSION_AGGREGATE_DAMP, targetOverCap / currentOverCap))
     drainedFrom = 0
     if session is not None:
         carryRows = session.query(PlayerAttention).filter_by(season=state.season).all()
         for row in carryRows:
             if row.over_cap_carry:
-                row.over_cap_carry = float(row.over_cap_carry) * SUPPRESSION_AGGREGATE_DAMP
+                row.over_cap_carry = float(row.over_cap_carry) * dampFactor
                 drainedFrom += 1
     # Reflect the drain immediately for any in-tick reads (recomputed next week).
-    state.aggregate_score = float(state.aggregate_score) * SUPPRESSION_AGGREGATE_DAMP
+    state.aggregate_score = backgroundPressure + currentOverCap * dampFactor
 
     logger.warning(
         f"CRITICALITY SUPPRESSED (patch #{patchNumber}/{SUPPRESSION_MAX_PER_SEASON}, "

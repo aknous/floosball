@@ -716,6 +716,12 @@ def hasExchange(eventType: str) -> bool:
     return bool(_EXCHANGES.get(eventType))
 
 
+def exchangePoolSize(eventType: str) -> int:
+    """Number of exchanges in a pool — used to weight live data-aware beats so
+    they appear about as often as a single canned exchange, not preferentially."""
+    return len(_EXCHANGES.get(eventType, []))
+
+
 def pickExchange(eventType: str) -> List[Tuple[str, str]]:
     """Pick one multi-Core exchange (list of (coreKey, line) turns) for the event
     type, cycling through all exchanges for that event before any one repeats.
