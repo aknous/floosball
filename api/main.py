@@ -1205,11 +1205,11 @@ async def cores_status():
     return build_success_response(status)
 
 
-# Chance that an `idle` conversation request returns a live data-aware beat
-# (anomaly observation or game-result reaction) instead of a canned exchange,
-# when such data is available. Keeps ambient banter feeling like the Cores are
-# actually watching the sim.
-CORES_DATA_BEAT_CHANCE = 0.5
+# Live data-aware beats (anomaly observation, game-result reaction) are weighted
+# to appear about as often as a SINGLE canned idle exchange — not preferentially.
+# The actual idle-request chance is computed per call as
+# numDataBeats / (idleExchanges + numDataBeats), so each data bucket sits in the
+# idle rotation like one more line rather than dominating it.
 
 
 def _gatherAnomalyObservation() -> Optional[Dict[str, Any]]:
@@ -1343,7 +1343,7 @@ async def cores_conversation(event: str = Query(default="idle")):
     number-free (see getCriticalityStatus)."""
     import random as _random
     from managers.coresManager import (
-        exchangeEntriesFor, hasExchange,
+        exchangeEntriesFor, hasExchange, exchangePoolSize,
         observationEntriesFor, gameResultEntriesFor,
     )
 
@@ -1382,9 +1382,14 @@ async def cores_conversation(event: str = Query(default="idle")):
             return _shape(entries, evt)
         event = 'idle'  # nothing to observe yet — fall back to canned banter
 
-    if event == 'idle' and dataBeats and _random.random() < CORES_DATA_BEAT_CHANCE:
-        evt, entries = _random.choice(dataBeats)
-        return _shape(entries, evt)
+    if event == 'idle' and dataBeats:
+        # Weight each data bucket like a single idle exchange: chance to surface
+        # one = numDataBeats / (idleExchanges + numDataBeats).
+        idleCount = exchangePoolSize('idle')
+        total = idleCount + len(dataBeats)
+        if total > 0 and _random.random() < (len(dataBeats) / total):
+            evt, entries = _random.choice(dataBeats)
+            return _shape(entries, evt)
 
     if not hasExchange(event):
         event = "idle"
