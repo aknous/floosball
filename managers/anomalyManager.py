@@ -156,8 +156,14 @@ INSTABILITY_SUPPRESSED = 0.45        # multiplier during a suppression window �
 # ── Near-miss / patch beat (P3) ───────────────────────────────────────────────
 # When the aggregate crosses threshold while Criticality is gated, the Cores
 # scramble and force it back rather than letting the event fire. This is the
-# dramatized tease beat — 1-2 per season, each one quieter to recover from.
-SUPPRESSION_MAX_PER_SEASON = 1 if _ANOMALY_FAST else 2  # hard cap on patch beats per season
+# dramatized tease beat — each one quieter to recover from.
+#
+# Cap behavior: while Criticality is GATED OFF, there is NO cap — the Cores
+# suppress every crossing, so the tease never "gives up" and pins the league at
+# 100% all season. Once Criticality is ENABLED, the cap applies (after this many
+# saves, the next crossing fires the real event). Enforced in
+# _suppressCriticality, conditional on ANOMALY_CRITICALITY_ENABLED.
+SUPPRESSION_MAX_PER_SEASON = 1  # cap once Criticality is enabled; unlimited while gated
 SUPPRESSION_AGGREGATE_DAMP = 0.55    # aggregate is knocked to this fraction on a patch (must re-climb)
 SUPPRESSION_THRESHOLD_BUMP = 1.10    # each patch reinforces containment: threshold ×= this
 
@@ -192,6 +198,12 @@ RESET_SUPPRESSION_WEEKS = 2
 # audit trail tracks which have already fired so we don't repeat).
 WARNING_LOW_THRESHOLD = 0.40   # 40% of threshold — first vague warning
 WARNING_HIGH_THRESHOLD = 0.65  # 65% — pointed, escalating warning
+
+# How many player state-transitions we NARRATE to the feed per tick. Every
+# crossing is still recorded in the DB; we just broadcast the most significant
+# few (highest state first) with distinct lines, so a big week does not flood
+# the feed with the same handful of repeated transition lines.
+MAX_TRANSITION_NEWS_PER_TICK = 3
 
 # Per-state ominous feed lines, broadcast when a player crosses to that
 # state for the first time this season. No context, no documentation —
@@ -255,6 +267,15 @@ def weeklyTick(seasonNumber: int, week: int) -> None:
     """
     session = get_session()
     try:
+        # Idempotency guard: this tick is NOT safe to run twice for the same
+        # (season, week) — it re-adds the week's attention contributions on each
+        # call. A mid-week restart re-entering the season loop would otherwise
+        # double-count. Skip if we've already processed this week.
+        existing = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        if existing is not None and existing.last_tick_week == week:
+            logger.info(f"Anomaly weekly tick skipped — season {seasonNumber}, week {week} already processed")
+            return
+
         # If a Criticality window has just ended without a Reset, fire one
         # before this week's updates so the purge applies to current
         # attention values rather than this week's freshly-incremented
@@ -265,6 +286,11 @@ def weeklyTick(seasonNumber: int, week: int) -> None:
         _enforceCapAndTrack(session, seasonNumber)
         _updateStateLadder(session, seasonNumber, week)
         _updateLeagueAggregate(session, seasonNumber, week)
+        # Mark this week processed (the row exists now — _updateLeagueAggregate
+        # seeds it on the first tick of the season).
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        if state is not None:
+            state.last_tick_week = week
         session.commit()
         logger.info(f"Anomaly weekly tick complete — season {seasonNumber}, week {week}")
     except Exception as e:
@@ -406,7 +432,7 @@ def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
         return {
             'status': key, 'label': label, 'description': desc,
             'inSuppression': False, 'patchesApplied': 0, 'activeCore': activeCore,
-            'criticalityActive': True,
+            'criticalityActive': True, 'progressPct': 100.0,
         }
 
     session = get_session()
@@ -421,12 +447,12 @@ def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
     ] if state is not None else []
     inSuppression = _inSuppressionWindow(state, week)
 
+    ratio = _bandRatio(state)
     if inSuppression:
         key, label, desc = SUPPRESSION_STATUS
         # Surface the Core that led the most recent patch, for the control room.
         activeCore = suppressionEntries[-1].get('core') if suppressionEntries else None
     else:
-        ratio = _bandRatio(state)
         if ratio >= 1.0:
             key, label, desc = CRITICALITY_STATUS_BANDS[3]
         elif ratio >= WARNING_HIGH_THRESHOLD:
@@ -443,6 +469,9 @@ def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
         'patchesApplied': len(suppressionEntries),
         'activeCore': activeCore,
         'criticalityActive': False,
+        # Progress toward Criticality (0-100, clamped). Flavor for the control
+        # room — the raw aggregate/threshold still stay in the debug endpoint.
+        'progressPct': round(min(max(ratio, 0.0), 1.0) * 100, 1),
     }
 
 
@@ -749,16 +778,30 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
     # DB writes so the session commit's atomicity isn't entangled with
     # the broadcast layer.
     if transitionEvents:
-        playerIds = [pid for pid, _ in transitionEvents]
+        # Narrate only the most significant few per tick (every transition is
+        # still recorded in the DB above). Prefer higher states (awakened >
+        # rampant > ...) and pick distinct line text so a big week does not
+        # spam the feed with the same repeated transition lines.
+        ranked = sorted(
+            transitionEvents,
+            key=lambda e: _STATE_RANK.get(e[1], 0),
+            reverse=True,
+        )[:MAX_TRANSITION_NEWS_PER_TICK]
+        playerIds = [pid for pid, _ in ranked]
         playerNames = {
             p.id: p.name for p in
             session.query(Player).filter(Player.id.in_(playerIds)).all()
         }
-        for playerId, targetState in transitionEvents:
+        usedLines: set = set()
+        for playerId, targetState in ranked:
             playerName = playerNames.get(playerId)
             if not playerName:
                 continue
-            line = random.choice(STATE_TRANSITION_LINES[targetState]).format(player=playerName)
+            pool = STATE_TRANSITION_LINES[targetState]
+            fresh = [ln for ln in pool if ln not in usedLines] or pool
+            template = random.choice(fresh)
+            usedLines.add(template)
+            line = template.format(player=playerName)
             _broadcastStateTransition(playerId, playerName, targetState, line, week,
                                        session=session, seasonNumber=seasonNumber)
 
@@ -1241,7 +1284,11 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
         1 for e in (state.cores_patches_applied or [])
         if e.get('event') == 'suppression'
     )
-    if priorPatches >= SUPPRESSION_MAX_PER_SEASON:
+    # No cap while Criticality is gated — the Cores keep catching it all season,
+    # so the league never gets stuck pinned at 100%. The cap only bites once the
+    # real event is enabled.
+    from constants import ANOMALY_CRITICALITY_ENABLED
+    if ANOMALY_CRITICALITY_ENABLED and priorPatches >= SUPPRESSION_MAX_PER_SEASON:
         # Out of patches for the season — the Cores can't force it back again.
         # The league stays pinned critical (the instability dial sits at its
         # ceiling), but the event remains gated off, so nothing actually fires.
@@ -1333,6 +1380,9 @@ def _broadcastCoreNews(news: Optional[Dict], session: Optional[Session] = None,
                 text=news.get('text', ''),
                 core=news.get('core'),
                 core_display_name=news.get('coreDisplayName'),
+                exchange_id=news.get('exchangeId'),
+                turn_index=news.get('turnIndex'),
+                turn_count=news.get('turnCount'),
             ))
         except Exception as e:
             logger.debug(f"Cores news persist skipped: {e}")

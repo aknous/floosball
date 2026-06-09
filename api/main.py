@@ -2240,6 +2240,9 @@ async def get_league_news_recent(
                 'playerId': r.player_id,
                 'playerName': r.player_name,
                 'anomalyState': r.anomaly_state,
+                'exchangeId': r.exchange_id,
+                'turnIndex': r.turn_index,
+                'turnCount': r.turn_count,
                 'createdAt': r.created_at.isoformat() + 'Z' if r.created_at else None,
             } for r in rows]
         finally:

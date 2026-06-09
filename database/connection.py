@@ -115,6 +115,30 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Anomaly weekly-tick idempotency guard — prevents a mid-week restart
+        # from re-running the (non-idempotent) tick and double-counting that
+        # week's attention contributions.
+        try:
+            conn.execute(text("ALTER TABLE league_anomaly_state ADD COLUMN last_tick_week INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added league_anomaly_state.last_tick_week")
+        except Exception:
+            conn.rollback()
+
+        # Cores exchange threading on persisted league-news items, so multi-Core
+        # conversations group under one header on refresh (not just live).
+        for col, colDef in [
+            ("exchange_id", "VARCHAR(40)"),
+            ("turn_index", "INTEGER"),
+            ("turn_count", "INTEGER"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE league_news_items ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added league_news_items.{col}")
+            except Exception:
+                conn.rollback()
+
         # Hall of Fame flag (v0.17). Without this, the in-memory hallOfFame
         # list resets on every restart and the HoF tab goes empty until brand-
         # new retirees get inducted. Stored on the player row so the load path
