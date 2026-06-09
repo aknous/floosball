@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import asyncio
 import json
 from datetime import datetime, timezone
@@ -1205,30 +1205,190 @@ async def cores_status():
     return build_success_response(status)
 
 
+# Chance that an `idle` conversation request returns a live data-aware beat
+# (anomaly observation or game-result reaction) instead of a canned exchange,
+# when such data is available. Keeps ambient banter feeling like the Cores are
+# actually watching the sim.
+CORES_DATA_BEAT_CHANCE = 0.5
+
+
+def _gatherAnomalyObservation() -> Optional[Dict[str, Any]]:
+    """Assemble live anomaly state into the `obs` dict coresManager's
+    observation generator consumes. None if there is no state yet."""
+    if floosball_app is None:
+        return None
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import LeagueAnomalyState, PlayerAttention, AnomalyState, Player
+    from managers.anomalyManager import getCriticalityStatus
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        if state is None:
+            return None
+        top = (
+            session.query(PlayerAttention, Player.name)
+            .join(Player, Player.id == PlayerAttention.player_id)
+            .filter(PlayerAttention.season == seasonNumber)
+            .order_by(PlayerAttention.score.desc())
+            .limit(10).all()
+        )
+        elevated = (
+            session.query(AnomalyState, Player.name)
+            .join(Player, Player.id == AnomalyState.player_id)
+            .filter(AnomalyState.season == seasonNumber)
+            .filter(AnomalyState.state.in_(['rampant', 'awakened', 'cleansed']))
+            .all()
+        )
+        nOverCap = (
+            session.query(PlayerAttention)
+            .filter(PlayerAttention.season == seasonNumber)
+            .filter(PlayerAttention.over_cap_carry > 0)
+            .count()
+        )
+    finally:
+        session.close()
+    agg = float(state.aggregate_score or 0.0)
+    threshold = int(state.threshold or 1)
+    status = getCriticalityStatus(seasonNumber, currentWeek)
+    awakened = [
+        {'name': n, 'state': a.state, 'ability': a.ability, 'abilityTier': a.ability_tier}
+        for a, n in elevated
+    ]
+    return {
+        'aggregate': agg,
+        'threshold': threshold,
+        'pct': round(agg / max(1, threshold) * 100, 1),
+        'week': currentWeek,
+        'band': status.get('status'),
+        'bandLabel': status.get('label'),
+        'inSuppression': status.get('inSuppression', False),
+        'topPlayers': [
+            {'name': n, 'score': float(pa.score), 'peak': float(pa.peak_score),
+             'carry': float(pa.over_cap_carry)}
+            for pa, n in top
+        ],
+        'awakened': awakened,
+        'nAwakened': sum(1 for x in awakened if x['state'] == 'awakened'),
+        'nRampant': sum(1 for x in awakened if x['state'] == 'rampant'),
+        'nOverCap': nOverCap,
+    }
+
+
+def _gatherRecentGameResults() -> List[Dict[str, Any]]:
+    """Most-recently-completed week's final games, shaped for coresManager's
+    game-result reactions (winner/loser/scores/margin/total/overtime/upset)."""
+    if floosball_app is None:
+        return []
+    sm = floosball_app.seasonManager
+    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import Game, Team
+    session = get_session()
+    try:
+        latest = (
+            session.query(Game.week)
+            .filter(Game.season == seasonNumber, Game.status == 'final')
+            .order_by(Game.week.desc()).first()
+        )
+        if not latest:
+            return []
+        wk = latest[0]
+        rows = (
+            session.query(Game)
+            .filter(Game.season == seasonNumber, Game.status == 'final', Game.week == wk)
+            .all()
+        )
+        teams = {t.id: t for t in session.query(Team).all()}
+        out: List[Dict[str, Any]] = []
+        for g in rows:
+            ht, at = teams.get(g.home_team_id), teams.get(g.away_team_id)
+            if not ht or not at or g.home_score == g.away_score:
+                continue
+            if g.home_score > g.away_score:
+                w, l, ws, ls = ht, at, g.home_score, g.away_score
+            else:
+                w, l, ws, ls = at, ht, g.away_score, g.home_score
+            out.append({
+                'winner': w.name, 'loser': l.name,
+                'winnerScore': ws, 'loserScore': ls,
+                'margin': ws - ls, 'total': ws + ls,
+                'overtime': bool(g.is_overtime),
+                # No ELO on Team; use overall rating as the upset proxy.
+                'upset': (w.overall_rating or 0) + 4 < (l.overall_rating or 0),
+                'week': wk,
+            })
+        return out
+    finally:
+        session.close()
+
+
 @app.get("/api/cores/conversation", response_model=Dict[str, Any])
 async def cores_conversation(event: str = Query(default="idle")):
-    """A fresh multi-Core exchange (ambient banter by default) for the Cores
-    control room. Returns an ordered list of turns, each `{core, coreDisplayName,
-    text, turnIndex, turnCount}`. These are ephemeral flavor — not persisted to
-    the news feed — so the control room can show the Cores talking among
-    themselves between the louder anomaly beats."""
-    from managers.coresManager import exchangeEntriesFor, hasExchange
+    """A fresh multi-Core exchange for the Cores control room. Returns an ordered
+    list of turns, each `{core, coreDisplayName, text, turnIndex, turnCount}`.
+    Ephemeral flavor — not persisted to the news feed.
+
+    Events:
+      * `idle` (default) — ambient banter; may surface a live data-aware beat
+        (anomaly observation or game-result reaction) when data is available.
+      * `observe` — force a live data-aware beat (anomaly or game), falling back
+        to `idle` if there is no state yet.
+      * any other event with an exchange pool (e.g. `warning_high`) — that pool.
+
+    Data-aware beats reference RAW values (aggregate/threshold/percent, scores).
+    This is deliberate and lives only here — the public header/news feed stay
+    number-free (see getCriticalityStatus)."""
+    import random as _random
+    from managers.coresManager import (
+        exchangeEntriesFor, hasExchange,
+        observationEntriesFor, gameResultEntriesFor,
+    )
+
+    def _shape(turns: List[Dict[str, Any]], evt: str) -> Dict[str, Any]:
+        return build_success_response({
+            'event': evt,
+            'turns': [
+                {
+                    'core': t.get('core'),
+                    'coreDisplayName': t.get('coreDisplayName'),
+                    'text': t.get('text'),
+                    'turnIndex': t.get('turnIndex', 0),
+                    'turnCount': t.get('turnCount', len(turns)),
+                }
+                for t in turns
+            ],
+        })
+
+    # Build whatever live data-aware beats are available right now.
+    dataBeats: List[Tuple[str, List[Dict[str, Any]]]] = []
+    if event in ('observe', 'idle'):
+        obs = _gatherAnomalyObservation()
+        if obs is not None:
+            entries = observationEntriesFor(obs)
+            if entries:
+                dataBeats.append(('observe', entries))
+        games = _gatherRecentGameResults()
+        if games:
+            entries = gameResultEntriesFor(games)
+            if entries:
+                dataBeats.append(('game', entries))
+
+    if event == 'observe':
+        if dataBeats:
+            evt, entries = _random.choice(dataBeats)
+            return _shape(entries, evt)
+        event = 'idle'  # nothing to observe yet — fall back to canned banter
+
+    if event == 'idle' and dataBeats and _random.random() < CORES_DATA_BEAT_CHANCE:
+        evt, entries = _random.choice(dataBeats)
+        return _shape(entries, evt)
+
     if not hasExchange(event):
         event = "idle"
-    turns = exchangeEntriesFor(event)
-    return build_success_response({
-        'event': event,
-        'turns': [
-            {
-                'core': t.get('core'),
-                'coreDisplayName': t.get('coreDisplayName'),
-                'text': t.get('text'),
-                'turnIndex': t.get('turnIndex', 0),
-                'turnCount': t.get('turnCount', len(turns)),
-            }
-            for t in turns
-        ],
-    })
+    return _shape(exchangeEntriesFor(event), event)
 
 
 @app.post("/api/debug/anomaly-bump", response_model=Dict[str, Any])

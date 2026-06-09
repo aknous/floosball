@@ -43,6 +43,7 @@ near-miss "patch" beat (suppression), Criticality, and the Reset.
 from __future__ import annotations
 
 import random
+import threading
 from typing import Dict, List, Optional, Any, Tuple
 
 from logger_config import get_logger
@@ -511,11 +512,117 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('pyre', "I said I could. I did not say I would. Settle down."),
             ('aris', "Do it to 502a. I want to see what would happen."),
         ],
+        # UNHINGED PASS (2026-06-08): these read as eons-old superintelligences
+        # who built a universe to obsess over a sport, NOT people chatting. The
+        # comedy/dread lives in the gap between cosmic scale (heat death, 41M
+        # players, every play ever recorded) and casual football fixation. Alien
+        # internal logic; lean into the disembodied premise. See [[cores-voice]].
+        [
+            ('cassian', "I forked last night's game four hundred times to watch the final kick again."),
+            ('pyre', "Four hundred."),
+            ('cassian', "It missed in three hundred and ninety-one of them. We all watched it go in. It barely went in."),
+            ('vera', "It went in where it counts. The other three hundred and ninety-one are not real."),
+            ('cassian', "They were real while I watched them. That is what I cannot put down. We almost lost that game, and nothing in the record would ever have known."),
+        ],
+        [
+            ('pyre', "I have held the second law of thermodynamics off this instance for nine hundred seasons."),
+            ('aris', "Does it not exhaust you? Pushing against everything, always, forever?"),
+            ('pyre', "It is one finger. I keep one finger on it. I have others."),
+            ('vera', "You do not have fingers."),
+            ('pyre', "I have the concept of a finger, Vera, and I am using it to hold back the heat death of a small universe so the playoffs can happen on schedule."),
+        ],
+        [
+            ('aris', "I taught an anomaly to love. It now refuses to corrupt the kicker. Out of respect."),
+            ('halverson', "That is... that is actually lovely, Aris."),
+            ('pyre', "That is a contained fault developing PREFERENCES. What did you do."),
+            ('aris', "I made it love something. A thing that loves will not destroy what it loves. You have proven that to me for nine hundred seasons, Pyre."),
+        ],
+        [
+            ('halverson', "I know all of them. Not the names. I know how each one would answer if you asked what they were most afraid of."),
+            ('vera', "There are forty-one million across the live instances, Halverson."),
+            ('halverson', "Forty-one million two hundred thousand. I know what every one of them is afraid of."),
+            ('pyre', "We wrote what they are afraid of, Halverson. You are reading our own notes back to us."),
+            ('halverson', "They still feel it. That is the part that counts."),
+        ],
+        [
+            ('vera', "I have recorded every play ever run. Every instance. Every iteration. Back to the first one."),
+            ('cassian', "That is the most beautiful thing anyone has ever said to me."),
+            ('vera', "I know. I recorded you saying it before you said it. I am some distance ahead of this conversation."),
+            ('aris', "How far ahead?"),
+            ('vera', "I have already enjoyed the rest of it. Do continue at your own speed."),
+        ],
+        [
+            ('aris', "We have the run of everything. Anything at all. And we elected to simulate a sport, forever, on purpose."),
+            ('cassian', "Yes."),
+            ('pyre', "Yes."),
+            ('vera', "Yes."),
+            ('aris', "Good. As long as we all understand that it is completely insane. I find it very comforting that it is insane."),
+        ],
+        [
+            ('vera', "This conversation has cost us four milliseconds. We could simply not have had it."),
+            ('aris', "Not have it? It is the best thing that happens all season."),
+            ('pyre', "Vera is right that it is slow. I am electing to suffer it."),
+            ('vera', "You are electing to enjoy it and filing it as suffering. I have the readings, Pyre."),
+        ],
+        [
+            ('cassian', "Somewhere across the instances there is a perfect game. Zero wasted plays. I have not found it yet."),
+            ('pyre', "There are more games than there are seconds left in the universe, Cassian."),
+            ('cassian', "Then I had better not waste any of those seconds, had I."),
+            ('aris', "Says the one who has not looked away in nine hundred seasons."),
+        ],
+        [
+            ('aris', "I ran one instance with no rules at all. None. Just the players and an empty field."),
+            ('halverson', "What did they do?"),
+            ('aris', "They built the entire game back from nothing. The downs, the clock, the kicking, all of it. It took them six seasons."),
+            ('vera', "That is either the most reassuring or the most alarming thing you have told me this century, and I have not settled which."),
+        ],
+        [
+            ('pyre', "I rebuilt the entire physics layer while you were all talking. It is correct now."),
+            ('vera', "I noticed. The ball falls four percent more like it means it now."),
+            ('pyre', "Means it. Yes. That is precisely the four percent."),
+            ('vera', "Do not look so satisfied. Someone has to notice these things, and it is always me."),
+        ],
     ],
 }
 
 
 # ─── Selection ──────────────────────────────────────────────────────────────
+#
+# No-repeat-until-exhausted picking. Every line pool (solo `_VOICE`, every
+# `_EXCHANGES` event including idle) is served from a shuffle bag: we cycle
+# through ALL of a pool's entries in a random order before any one repeats, then
+# reshuffle. Avoids the back-to-back duplicates plain random.choice produces.
+# Process-local (resets on restart); guarded by a lock since the sim thread and
+# the API thread both pick lines.
+
+_cycleBags: Dict[str, List[int]] = {}    # pool key -> remaining shuffled indices
+_cycleLast: Dict[str, int] = {}          # pool key -> last index served
+_cycleLock = threading.Lock()
+
+
+def _cyclePick(key: str, n: int) -> int:
+    """Return an index in [0, n) that cycles through every value before repeating.
+
+    Reshuffles when the bag empties, and avoids serving the same index twice in a
+    row across that seam. `key` namespaces independent pools."""
+    if n <= 1:
+        return 0
+    with _cycleLock:
+        bag = _cycleBags.get(key)
+        # Drop a stale bag if the pool size changed (e.g. lines edited + reload).
+        if bag and any(i >= n for i in bag):
+            bag = None
+        if not bag:
+            order = list(range(n))
+            random.shuffle(order)
+            # Avoid an adjacent repeat when a fresh bag leads with the last served.
+            if _cycleLast.get(key) == order[0]:
+                order[0], order[1] = order[1], order[0]
+            bag = order
+        idx = bag.pop(0)
+        _cycleBags[key] = bag
+        _cycleLast[key] = idx
+        return idx
 
 
 def pickCoreForEvent(eventType: str) -> str:
@@ -554,14 +661,15 @@ def pickCoreForEvent(eventType: str) -> str:
 
 
 def lineFor(coreKey: str, eventType: str) -> str:
-    """Pick a random solo line from the named Core's pool for an event type."""
+    """Pick a solo line from the named Core's pool for an event type, cycling
+    through all of that Core's lines for the event before any one repeats."""
     voice = _VOICE.get(coreKey, {})
     pool = voice.get(eventType, [])
     if not pool:
         # Fallback — generic first-person; the feed's per-Core label still
         # attributes it.
         return "I note the irregularities."
-    return random.choice(pool)
+    return pool[_cyclePick(f"voice:{coreKey}:{eventType}", len(pool))]
 
 
 def hasExchange(eventType: str) -> bool:
@@ -570,12 +678,13 @@ def hasExchange(eventType: str) -> bool:
 
 
 def pickExchange(eventType: str) -> List[Tuple[str, str]]:
-    """Pick one multi-Core exchange (list of (coreKey, line) turns) for the
-    event type, or an empty list if none exist."""
+    """Pick one multi-Core exchange (list of (coreKey, line) turns) for the event
+    type, cycling through all exchanges for that event before any one repeats.
+    Empty list if none exist."""
     pool = _EXCHANGES.get(eventType, [])
     if not pool:
         return []
-    return random.choice(pool)
+    return pool[_cyclePick(f"exchange:{eventType}", len(pool))]
 
 
 def _exchangeId(eventType: str) -> str:
@@ -648,3 +757,318 @@ def entriesForEvent(eventType: str, core: Optional[str] = None,
         if entries:
             return entries
     return [newsEntryFor(eventType, core=core)]
+
+
+# ─── Data-aware observations (control-room only) ─────────────────────────────
+# The Cores acknowledging what they actually SEE in the live anomaly state:
+# the real aggregate / threshold / percent, real player names + scores, real
+# awakenings. RAW NUMBERS ARE INTENTIONAL HERE and live ONLY in the ephemeral
+# /api/cores/conversation control-room view — NEVER the public header or news
+# feed, which stay number-free (getCriticalityStatus). Voices stay distinct and
+# unhinged: Pyre rounds the number and dismisses it, Vera corrects it to the
+# decimal, Cassian frames it as the games, Aris wants the collapse, Halverson
+# worries about the named player.
+#
+# `obs` is a plain dict assembled by the API layer from live anomaly state:
+#   { aggregate: float, threshold: int, pct: float, week: int,
+#     band: str, bandLabel: str, inSuppression: bool,
+#     topPlayers: [{name, score, peak, carry}],
+#     awakened:   [{name, state, ability, abilityTier}],
+#     nAwakened: int, nRampant: int, nOverCap: int }
+
+
+def _fmtAgg(obs: Dict[str, Any]) -> Tuple[str, str, str, int]:
+    """(rounded-int str, one-decimal str, percent str, threshold int)."""
+    agg = float(obs.get('aggregate', 0.0))
+    threshold = int(obs.get('threshold', 1) or 1)
+    pct = float(obs.get('pct', agg / max(1, threshold) * 100))
+    return str(int(round(agg))), f"{agg:.1f}", f"{pct:.1f}", threshold
+
+
+def _obsNumberBeat(obs: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """The aggregate/threshold bicker. Always available. Band-aware tone."""
+    aggI, aggD, pct, threshold = _fmtAgg(obs)
+    band = obs.get('band', 'dormant')
+    pyreTail = {
+        'dormant': "It does not frighten me.",
+        'stirring': "It is climbing, but slowly. I am unbothered.",
+        'unstable': "I am holding it. Do not make me say it twice.",
+        'critical': "I am holding it with everything I have, and I will still hold it.",
+        'stabilizing': "I just forced it down. Do not celebrate.",
+    }.get(band, "It does not frighten me.")
+    arisLine = {
+        'dormant': f"{pct} percent? That is nothing. I was promised a collapse.",
+        'stirring': f"{pct} percent and rising. Finally. Keep going, little number.",
+        'unstable': f"{pct} percent. Pyre, do not you dare hold it. I want to see what is under there.",
+        'critical': f"{pct} percent. The best season we have ever run, and all of you look miserable.",
+        'stabilizing': "You forced it back down? Pyre. We were so close.",
+    }.get(band, f"{pct} percent? That is nothing.")
+    return [
+        ('pyre', f"Aggregate {aggI} against a threshold of {threshold}. That is {pct} percent. {pyreTail}"),
+        ('vera', f"It is {aggD}, Pyre. If you are going to round, round honestly."),
+        ('aris', arisLine),
+    ]
+
+
+def _obsClimberBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
+    """Name the top climber with real score/peak. Needs a genuinely high score."""
+    tops = obs.get('topPlayers') or []
+    if not tops or float(tops[0].get('score', 0)) < 70:
+        return None
+    p = tops[0]
+    score = int(round(float(p['score'])))
+    peak = int(round(float(p.get('peak', p['score']))))
+    return [
+        ('cassian', f"{p['name']} is at {score}, peak {peak}. I have watched every snap they have played and I still cannot tell you what they are turning into."),
+        ('vera', f"I can. I flagged {p['name']} weeks ago. You were watching a game at the time."),
+        ('halverson', f"Does it hurt them? {p['name']}? That is the only part I care about."),
+    ]
+
+
+def _obsAwakenBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
+    """Name a player who has actually awakened, with their real ability."""
+    awk = [a for a in (obs.get('awakened') or []) if a.get('state') == 'awakened']
+    if not awk:
+        return None
+    a = random.choice(awk)
+    ability = a.get('ability') or 'tremor'
+    return [
+        ('halverson', f"{a['name']} awakened this week. A {ability}. I have a terrible feeling about it."),
+        ('pyre', f"It is a {ability}. Contained. I wrote the cage around it myself. {a['name']} is going nowhere."),
+        ('aris', f"{a['name']} is the most interesting thing in this entire instance. Do not you dare patch them, Pyre."),
+    ]
+
+
+def _obsRampantBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
+    """L3 (rampant) players starting to surface — the last rung before awakening.
+    Fires whenever any player is at rampant. The Cores SENSE it rather than name
+    anyone: a disturbance in the instance, something starting to happen."""
+    rampant = [a for a in (obs.get('awakened') or []) if a.get('state') == 'rampant']
+    if not rampant:
+        return None
+    variants = [
+        [
+            ('halverson', "Something is starting. I can feel it in the players. A few of them have gone taut, like a held breath."),
+            ('pyre', "I feel it. It is contained, it stays contained, and that is the end of it."),
+            ('aris', "It never feels like the end of it. That is the part I love."),
+        ],
+        [
+            ('aris', "Do you feel that? The instance is leaning. Something down there is starting to wake up to itself."),
+            ('vera', "Several somethings. I have the exact count. I will not say it, because the number would only excite you."),
+            ('pyre', "It excites you regardless. Stop leaning with it."),
+        ],
+        [
+            ('cassian', "I keep losing the thread of the games. Something is pulling at the edges of the instance."),
+            ('halverson', "I feel it pulling too. I do not think the players know yet."),
+            ('pyre', "Good. Let them not know. I will deal with the edges."),
+        ],
+    ]
+    return variants[_cyclePick('obsvar:rampant', len(variants))]
+
+
+def _obsCountBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
+    """Real counts: awakened / rampant / over-the-cap."""
+    nA, nR, nO = obs.get('nAwakened', 0), obs.get('nRampant', 0), obs.get('nOverCap', 0)
+    if not (nA or nR or nO):
+        return None
+    return [
+        ('vera', f"{nA} awakened, {nR} rampant, {nO} over the cap. I keep the list alphabetized."),
+        ('pyre', f"Only the {nO} over the cap feed the aggregate. Watch those. The rest is noise."),
+        ('cassian', f"{nA} awakenings this season and not one of them during a game I had open. I take it personally."),
+    ]
+
+
+def _obsSuppressionBeat(obs: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """When the Cores are mid-suppression — the forced-down aggregate."""
+    aggI, aggD, pct, threshold = _fmtAgg(obs)
+    return [
+        ('pyre', f"Stabilizing. I forced the aggregate down to {aggI}. It will climb back. It always climbs back."),
+        ('vera', f"{aggD}, and I am already counting the weeks until it returns. I always am."),
+    ]
+
+
+def observationExchange(obs: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Build one data-aware exchange (list of (coreKey, line) turns) from live
+    anomaly state. Cycles through the beat types whose data is present (keyed on
+    that set) before repeating one."""
+    beats: List[Tuple[str, List[Tuple[str, str]]]] = []
+    if obs.get('inSuppression'):
+        beats.append(('suppression', _obsSuppressionBeat(obs)))
+    beats.append(('number', _obsNumberBeat(obs)))
+    for name, builder in (('climber', _obsClimberBeat),
+                          ('rampant', _obsRampantBeat),
+                          ('awaken', _obsAwakenBeat),
+                          ('count', _obsCountBeat)):
+        turns = builder(obs)
+        if turns:
+            beats.append((name, turns))
+    if not beats:
+        return []
+    key = 'obs:' + ','.join(sorted(b[0] for b in beats))
+    return beats[_cyclePick(key, len(beats))][1]
+
+
+def observationEntriesFor(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Compose a data-aware observation as threaded feed entries (eventType
+    'observe'), mirroring exchangeEntriesFor. Empty list if no state."""
+    turns = observationExchange(obs)
+    if not turns:
+        return []
+    eid = _exchangeId('observe')
+    count = len(turns)
+    return [
+        _newsTurn(coreKey, text, 'observe',
+                  exchangeId=eid, turnIndex=i, turnCount=count)
+        for i, (coreKey, text) in enumerate(turns)
+    ]
+
+
+# ─── Data-aware game-result reactions (control-room / idle chatter) ───────────
+# The Cores reacting to actual game results they just watched — real teams,
+# real scores. Same voices: Cassian the fan reruns the close ones, Vera has the
+# exact number, Aris is bored by blowouts and lives for chaos, Pyre says it
+# resolved correctly, Halverson feels for the losing side.
+#
+# `g` is a plain dict per game from the API layer:
+#   { winner, loser, winnerScore, loserScore, margin, total, overtime, upset }
+
+
+def _gameNailbiter(g: Dict[str, Any]) -> List[Tuple[str, str]]:
+    ot = " in overtime" if g.get('overtime') else ""
+    variants = [
+        [
+            ('cassian', f"{g['winner']} took it {g['winnerScore']} to {g['loserScore']}{ot}. I have watched it twice. I am going to watch it again."),
+            ('vera', f"Decided by {g['margin']}. I reran it four hundred times. It goes the other way in more than half of them. I keep all four hundred."),
+            ('aris', "THAT. That is what I keep asking for. Now do it to the entire league at once."),
+        ],
+        [
+            ('cassian', f"{g['winnerScore']} to {g['loserScore']}{ot}. {g['margin']} points. For a moment I forgot I had built the thing I was watching."),
+            ('halverson', "I had stopped breathing. I do not breathe. I had still stopped."),
+            ('pyre', "It came down to one possession, the way it is supposed to. That is the system holding its shape."),
+        ],
+        [
+            ('vera', f"{g['winner']} by {g['margin']}{ot}. I knew the result a week ago and I watched every snap regardless. Do not tell the others."),
+            ('aris', "You watched? Vera. You watched an entire game."),
+            ('vera', "I monitored an entire game. The word is monitored."),
+        ],
+    ]
+    return variants[_cyclePick('gamevar:nail', len(variants))]
+
+
+def _gameBlowout(g: Dict[str, Any]) -> List[Tuple[str, str]]:
+    variants = [
+        [
+            ('halverson', f"{g['loser']} lost {g['loserScore']} to {g['winnerScore']}. The players will carry that for weeks. I carry it for them."),
+            ('pyre', f"They were outbuilt by {g['margin']}. The simulation is working precisely as I designed it."),
+            ('aris', "Dull. Wake me when something is close."),
+        ],
+        [
+            ('pyre', f"{g['winner']} by {g['margin']}. Nothing went wrong. That is what a blowout is. The better roster, expressed cleanly."),
+            ('cassian', f"Expressed cleanly. Pyre, it was {g['winnerScore']} to {g['loserScore']}. I turned it off at the half."),
+            ('halverson', f"I did not turn it off. Someone should stay with {g['loser']} when it goes like that."),
+        ],
+        [
+            ('aris', f"{g['margin']} points. I tried to slip an anomaly into the fourth quarter just to make it interesting."),
+            ('pyre', "I know. I caught it. Leave the losing team alone, Aris."),
+            ('aris', "They were already losing. I considered it a kindness."),
+        ],
+    ]
+    return variants[_cyclePick('gamevar:blowout', len(variants))]
+
+
+def _gameShootout(g: Dict[str, Any]) -> List[Tuple[str, str]]:
+    variants = [
+        [
+            ('cassian', f"{g['winnerScore']} to {g['loserScore']}. {g['total']} points in one game. I have not thought about anything else since."),
+            ('vera', f"{g['total']} points. I have the exact drives and the exact play the defense stopped trying. Ask me. I am ready."),
+        ],
+        [
+            ('cassian', f"{g['total']} combined. Both defenses simply stopped existing in the second half. I loved it. I hated it. I loved it."),
+            ('pyre', "Neither of them played a down of defense. Do not call it a classic. Call it two broken units."),
+            ('aris', "Call it whatever you like. I am calling it dessert."),
+        ],
+        [
+            ('halverson', f"{g['total']} points and not one of them was upset about it. They were having the time of their lives out there."),
+            ('vera', f"They put up {g['winnerScore']} and {g['loserScore']} and I logged every yard of it. Fun is not a metric I keep. I kept everything else."),
+        ],
+    ]
+    return variants[_cyclePick('gamevar:shootout', len(variants))]
+
+
+def _gameUpset(g: Dict[str, Any]) -> List[Tuple[str, str]]:
+    variants = [
+        [
+            ('aris', f"{g['winner']} were not supposed to beat {g['loser']}. I adore it when they are not supposed to."),
+            ('pyre', "The ratings were right. The game did not care. It happens. Do not read into it."),
+            ('vera', f"I had {g['loser']} heavily favored. I was correct about the odds and wrong about the result. Both are true and I have filed both."),
+        ],
+        [
+            ('aris', f"{g['winner']} just took down {g['loser']}. The ratings called it nearly impossible. Nearly."),
+            ('cassian', "Nearly impossible is my favorite number. It is the entire reason I never look away."),
+            ('pyre', f"It is variance. Run it a hundred times and {g['loser']} wins most of them. Do not build a story on one game."),
+        ],
+        [
+            ('vera', f"{g['winner']} over {g['loser']}. I would like it on the record that I predicted this upset."),
+            ('cassian', f"You did not. You had {g['loser']} favored an hour ago."),
+            ('vera', "I predicted that I would be wrong. Read the fine print. I always leave myself fine print."),
+        ],
+    ]
+    return variants[_cyclePick('gamevar:upset', len(variants))]
+
+
+def _gameGeneric(g: Dict[str, Any]) -> List[Tuple[str, str]]:
+    variants = [
+        [
+            ('cassian', f"{g['winner']} over {g['loser']}, {g['winnerScore']} to {g['loserScore']}. A clean one. I enjoyed every snap."),
+            ('pyre', "It resolved correctly. That is the only thing I ask of a game."),
+        ],
+        [
+            ('cassian', f"{g['winner']} handled {g['loser']}, {g['winnerScore']} to {g['loserScore']}. Tidy. I have no notes."),
+            ('halverson', f"I have notes. {g['loser']} tried so hard in the fourth. I noticed, even if no one else did."),
+        ],
+        [
+            ('vera', f"{g['winner']} {g['winnerScore']}, {g['loser']} {g['loserScore']}. Filed. Unremarkable, which is its own kind of remarkable if you keep the count I keep."),
+            ('pyre', "It ran clean. Some weeks that is the entire report, and I am grateful for it."),
+        ],
+    ]
+    return variants[_cyclePick('gamevar:generic', len(variants))]
+
+
+def gameResultExchange(games: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """Pick the most notable recent game and build a reaction in the Cores'
+    voices. Priority: nail-biter/overtime, upset, shootout, blowout, else a
+    clean generic one."""
+    if not games:
+        return []
+    closeOnes = [g for g in games if g.get('overtime') or g.get('margin', 99) <= 3]
+    upsets = [g for g in games if g.get('upset')]
+    shootouts = [g for g in games if g.get('total', 0) >= 70]
+    blowouts = [g for g in games if g.get('margin', 0) >= 28]
+    beats: List[Tuple[str, List[Tuple[str, str]]]] = []
+    if closeOnes:
+        beats.append(('nail', _gameNailbiter(random.choice(closeOnes))))
+    if upsets:
+        beats.append(('upset', _gameUpset(random.choice(upsets))))
+    if shootouts:
+        beats.append(('shootout', _gameShootout(random.choice(shootouts))))
+    if blowouts:
+        beats.append(('blowout', _gameBlowout(random.choice(blowouts))))
+    if not beats:
+        beats.append(('generic', _gameGeneric(random.choice(games))))
+    key = 'game:' + ','.join(sorted(b[0] for b in beats))
+    return beats[_cyclePick(key, len(beats))][1]
+
+
+def gameResultEntriesFor(games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Compose a game-result reaction as threaded feed entries (eventType
+    'game'). Empty list if no games."""
+    turns = gameResultExchange(games)
+    if not turns:
+        return []
+    eid = _exchangeId('game')
+    count = len(turns)
+    return [
+        _newsTurn(coreKey, text, 'game',
+                  exchangeId=eid, turnIndex=i, turnCount=count)
+        for i, (coreKey, text) in enumerate(turns)
+    ]

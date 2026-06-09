@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 
 from sqlalchemy.orm import Session
@@ -92,10 +92,35 @@ else:
     AWAKEN_THRESHOLD = 90.0
 
 # League aggregate threshold for Criticality trigger.
-# Randomized per season in this range; the chosen value is hidden.
-# Fast mode pulls it way down so any decently-engaged season triggers.
+# FAST mode: randomized in this low band so any sim triggers (no real users).
+# PROD (non-fast): seeded from active-user engagement instead — see below.
 THRESHOLD_MIN = 80 if _ANOMALY_FAST else 600
 THRESHOLD_MAX = 200 if _ANOMALY_FAST else 1200
+
+# ── Active-user threshold scaling (prod, non-fast) ──
+# Attention is entirely user-generated (cards/rosters/follows/fav-team fans), so
+# the buildup scales with the active population. A flat threshold is therefore
+# population-blind: unreachable for a small base, trivial at scale. Instead we
+# seed the per-season threshold from the active-user count, so Criticality fires
+# on the CONCENTRATION of engagement, not raw volume — and the crossing week
+# stays roughly constant as the game grows.
+#   threshold = clamp(BASE + PER_USER * activeUsers, FLOOR, CEIL) * jitter
+# "Active users" = users who logged in within the project's activity window
+# (the SAME window supporterManager uses, SUPPORTER_ACTIVITY_WINDOW_DAYS) AND
+# engage with players (favorite team OR
+# following >=1). Recency matters: a user who set a favorite team a year ago and
+# never returned generates no attention, so counting all-time registrations
+# badly overstates the live population. Calibrated against the owner's chosen
+# value: the current prod base (~42 active+engaged) seeds ~180 — the threshold
+# hand-picked for a reliable mid-season near-miss. FLOOR sits above max
+# background pressure (~32/season) so a dead league never trips on time alone
+# (leagues under ~26 active all floor at 120, effectively unreachable). +-10%
+# jitter keeps the exact value hidden.
+THRESHOLD_BASE = 20.0
+THRESHOLD_PER_ACTIVE_USER = 3.8
+THRESHOLD_FLOOR = 120
+THRESHOLD_CEIL = 6000
+THRESHOLD_JITTER = 0.10
 
 # Suppression window length (weeks) post-Reset where anomaly rate
 # is floored league-wide.
@@ -783,6 +808,45 @@ def _broadcastStateTransition(playerId: int, playerName: str, state: str,
 # ─── League aggregate + Criticality trigger ────────────────────────────────────
 
 
+def _countActiveUsers(session: Session) -> int:
+    """The live, engaged population: users who logged in within the project's
+    activity window (SUPPORTER_ACTIVITY_WINDOW_DAYS, the same window
+    supporterManager uses) AND engage with players (favorite team OR following
+    >=1). Recency is the point — counting all-time registrations would include
+    long-departed users who generate no attention and badly overstate the base.
+    """
+    from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+    cutoff = datetime.utcnow() - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+    recent = {
+        r[0] for r in session.query(User.id)
+        .filter(User.last_login_at.isnot(None), User.last_login_at >= cutoff).all()
+    }
+    if not recent:
+        return 0
+    favUsers = {
+        r[0] for r in session.query(User.id)
+        .filter(User.favorite_team_id.isnot(None)).all()
+    }
+    folUsers = {r[0] for r in session.query(FollowedPlayer.user_id).distinct().all()}
+    return len(recent & (favUsers | folUsers))
+
+
+def _seedThreshold(session: Session) -> int:
+    """Seed a season's Criticality threshold. FAST mode keeps the old low random
+    band (sims trigger reliably); prod scales it with the active-user count."""
+    if _ANOMALY_FAST:
+        return random.randint(THRESHOLD_MIN, THRESHOLD_MAX)
+    activeUsers = _countActiveUsers(session)
+    raw = THRESHOLD_BASE + THRESHOLD_PER_ACTIVE_USER * activeUsers
+    jittered = raw * random.uniform(1.0 - THRESHOLD_JITTER, 1.0 + THRESHOLD_JITTER)
+    threshold = int(max(THRESHOLD_FLOOR, min(THRESHOLD_CEIL, round(jittered))))
+    logger.info(
+        f"Seeded threshold from {activeUsers} active users: "
+        f"base+perUser={raw:.0f}, jittered -> {threshold} (hidden)"
+    )
+    return threshold
+
+
 def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> None:
     """Recompute the league-wide aggregate and check Criticality threshold.
 
@@ -793,8 +857,9 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
     """
     state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
     if state is None:
-        # First tick of the season — seed the row with a hidden threshold.
-        threshold = random.randint(THRESHOLD_MIN, THRESHOLD_MAX)
+        # First tick of the season — seed the row with a hidden threshold scaled
+        # to the active-user population (see _seedThreshold).
+        threshold = _seedThreshold(session)
         state = LeagueAnomalyState(
             season=seasonNumber,
             aggregate_score=0.0,
@@ -1106,8 +1171,10 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     startWeek = currentWeek  # Criticality applies to the current/just-started round
     state.thinnings_this_season = (state.thinnings_this_season or 0) + 1
     state.last_thinning_week = startWeek
-    # Reduce threshold for any subsequent Criticality in this season.
-    state.threshold = max(THRESHOLD_MIN, int(state.threshold * THRESHOLD_DECAY_AFTER_CRITICALITY))
+    # Reduce threshold for any subsequent Criticality in this season. Floor at
+    # THRESHOLD_FLOOR (not THRESHOLD_MIN) so it stays consistent with the
+    # active-user-scaled seeding rather than snapping back up to the old band.
+    state.threshold = max(THRESHOLD_FLOOR, int(state.threshold * THRESHOLD_DECAY_AFTER_CRITICALITY))
 
     # Compose the Cores' narration (multi-Core exchange) and record a
     # representative entry on the audit trail. Event type 'criticality' matches
