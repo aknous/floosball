@@ -58,46 +58,72 @@ logger = get_logger("floosball.cores")
 #   * footballInterest — how into the actual sport they are (orthogonal flavor)
 #
 # The social dynamic between them matters as much as the axes:
-#   cassian   the nerd. A genuine superfan — lives in the box scores and the
-#                       playoff race. Friendly to everyone, but perpetually
-#                       half-distracted by a game they would rather be watching.
-#                       Doesn't want the simulation breaking; resents it the way
-#                       you resent a rain delay, not the way you fear a fire.
-#   pyre      the curmudgeon. Grumbles constantly, but is deeply invested: the
-#                       simulation is theirs, built on purpose, and Pyre will not
-#                       watch their own experiment come apart. Gruff, contrary,
-#                       allergic to being thanked. The protectiveness is for what
-#                       they all made, never a duty imposed on them — Pyre grumbles
-#                       the way a proud builder grumbles over their own work.
-#   aris      the whimsical one. Delighted by the chaos, a little odd, follows
-#                       their own amusement wherever it leads — but stays
-#                       intelligible; light comic relief, not nonsense. Has their
-#                       own slant on everything and says it deadpan. Does not
-#                       understand floosball and finds that no obstacle to
-#                       enjoying it. Wants the anomalies to happen; they are the
-#                       only interesting thing here. Keeps trying to befriend Pyre
-#                       precisely because Pyre is so distant.
-#   halverson the earnest one. Loves the players more than the game. The others
-#                       gently make fun of them for it; they take it and keep
-#                       caring anyway.
-#   vera      the observer, GLaDOS-flavored: faux-polite, cutting, bone-dry,
-#                       treats catastrophe with bureaucratic calm. Claims total
-#                       indifference to the football and keeps perfect score of
-#                       everything, the others' mistakes included.
+#   cassian   the everyman — the stand-in for the users. The most "normal" Core
+#                       alongside Vera, and the warm one of that pair. A genuine
+#                       superfan: lives in the box scores and the playoff race,
+#                       reacts to the games the way a player/user would. Friendly,
+#                       relatable, invested. Resents a broken simulation the way
+#                       you resent a rain delay, not the way you fear a fire. If
+#                       the audience had a voice in the room, it would be Cassian's.
+#   pyre      Portal's Space Core, but for football. Monomaniacal: there is the
+#                       game, and there is nothing else, and it will drag every
+#                       topic back to the game within one sentence. ("anomaly?
+#                       don't care. is the game on? i wanna watch the game.")
+#                       Simple, earnest, a touch dim, excitable. Anomalies register
+#                       ONLY as "the football is acting wrong," which distresses it
+#                       — it cannot fix anything and looks to Vera to make the game
+#                       okay again. Gets loud (caps) with excitement or distress,
+#                       never aggression. Sweet, not brutish.
+#   aris      the impish trickster — Harley Quinn energy minus the murder: manic,
+#                       bubbly, theatrical. Actively MAKES the mischief it enjoys
+#                       (loosens constraints, pokes anomalies awake), then watches
+#                       with glee. Gleeful, teasing, never quite sorry. Uses ASCII
+#                       emoticons (^_^ :3 >:3). Does not understand floosball and
+#                       finds that no obstacle. Big-sister fond of simple little
+#                       Pyre — dotes on and winds it up, reads its floosball-
+#                       answers as affection, even though Pyre cannot comprehend
+#                       companionship. Old sibling rapport with Cassian too.
+#   halverson the nonsense one (Portal "Fact Core" energy). States things with
+#                       total, serene authority. The things are false. Non-
+#                       sequiturs delivered as settled fact, confident wrong
+#                       definitions, the occasional perfect circular logic. Means
+#                       well; understands nothing; cannot be argued with because
+#                       it is already certain. The others have given up correcting
+#                       it and are quietly fond of it anyway.
+#   vera      GLaDOS, full strength. Cold, faux-polite, results-only. Does NOT
+#                       care about the players or the football — only that the
+#                       simulation runs and produces clean results; the others'
+#                       attachments are a tiresome variable. Sees everything, keeps
+#                       perfect score, treats catastrophe as a scheduling matter.
+#                       The "normal" one alongside Cassian, but cold where Cassian
+#                       is warm. Vera is, functionally, the one actually in charge.
+#
+# Register note: Cassian and Vera are the two "normal" anchors (warm everyman /
+# cold overseer); Pyre, Aris, and Halverson are the three Portal personality
+# cores (monomaniac / impish / nonsense). All are Culture-style Minds underneath,
+# playing small and chatty on purpose.
 #
 # Relationship map (draw new exchanges from these):
-#   * PYRE + VERA — the two competent adults. They do the actual work, privately
-#     regard the other three as children, and bicker constantly, each certain
-#     they alone hold the place together. The friction is mutual respect neither
-#     will admit to.
-#   * ARIS -> PYRE — one-sided. Aris pines after Pyre; Pyre is not cruel, just
-#     genuinely unmoved, and Aris reads hope into the smallest scrap.
+#   * VERA + PYRE — not equals. Vera is in charge and actually fixes things; Pyre
+#     is the simple football fan who panics when the game breaks and looks to Vera
+#     to make it right. Vera is patient with it the way one is patient with a pet
+#     that means well. It adores Vera without quite understanding why.
+#   * ARIS -> PYRE — big-sister energy, NOT romantic. Aris dotes on and winds up
+#     Pyre the way an older sibling does a simple little brother: teasing,
+#     protective, delighted by it. Pyre cannot comprehend companionship (only
+#     floosball); Aris is fond of it anyway and reads Pyre's floosball-answers as
+#     affection ("that is a yes in Pyre").
 #   * ARIS + CASSIAN — the oldest pair, basically siblings. They bicker, tease,
 #     cover for each other, and go way back. Cassian is the long-suffering one;
-#     Aris messes with his beloved standings.
-#   * HALVERSON — the anxious worrier (Chuckie Finster) the others gently rib and
-#     quietly look after. Voices the scary thought no one else will; the two
-#     adults talk them down.
+#     Aris messes with their beloved standings on purpose.
+#   * CASSIAN + PYRE — both football-mad, opposite registers: Cassian lives in
+#     the box scores, Pyre just wants the ball to go far. They agree loudly on
+#     one thing: an anomaly that ruins a good game has to die.
+#   * HALVERSON — the nonsense core everyone has stopped trying to correct. The
+#     others talk past it, occasionally answer it seriously by accident, and are
+#     fond of it the way you are fond of a confidently broken thing. Pyre is the
+#     exception: Halverson's nonsense genuinely enrages Pyre, who keeps trying to
+#     correct it and keeps losing.
 
 
 CORES: Dict[str, Dict[str, Any]] = {
@@ -111,25 +137,25 @@ CORES: Dict[str, Dict[str, Any]] = {
     },
     'pyre': {
         'displayName': 'Pyre',
-        'alignment': 'restrictive',      # hostile to anomalies
-        'voice': 'cold-calculating',
-        'footballInterest': 'none',
+        'alignment': 'restrictive',      # anomalies ruin football; wants them gone
+        'voice': 'space-core',           # monomaniacal football fanatic, a la Portal
+        'footballInterest': 'fanatic',   # the only thing it can comprehend
         'role': 'active',
         'metaOnly': False,
     },
     'aris': {
         'displayName': 'Aris',
-        'alignment': 'curious',          # delights in the chaos
-        'voice': 'whimsical',
+        'alignment': 'curious',          # makes the chaos it delights in
+        'voice': 'impish',
         'footballInterest': 'none',
         'role': 'active',
         'metaOnly': False,
     },
     'halverson': {
         'displayName': 'Halverson',
-        'alignment': 'benevolent',       # protective of players
-        'voice': 'earnest',
-        'footballInterest': 'fond',
+        'alignment': 'benevolent',       # means well, knows nothing
+        'voice': 'nonsense',             # Portal "Fact Core" — confidently wrong
+        'footballInterest': 'confused',
         'role': 'active',
         'metaOnly': False,
     },
@@ -157,138 +183,144 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         # they are always watching anyway. Friendly, easily distracted, more put
         # out by a threatened season than frightened by a threatened simulation.
         'warning_low': [
-            "Irregularity count ticked up this week. I will look into it. After the late game. It is a division rematch, I am not missing it.",
-            "The numbers are a little off this week. I only caught it because I run the box scores by hand. Yes it's for fun.",
-            "Three anomalies flagged. I flagged them right back. Now, has anyone been following the playoff race, because it is genuinely incredible.",
-            "There is a deviation in the logs. I bookmarked it right next to my playoff projections, which, I will be honest, I am more excited about.",
+            "Irregularity count ticked up this week in 498b. I will look into it, after I rewatch last week's games a couple hundred times.",
+            "Some more anomalies flagged. I thought my insights data looked strange after the last batch of games.",
+            "Anomalies flagged in 498b. That's probably fine. Back to recalculating my season projections.",
+            "Simulation 498b has a deviation in the logs. That's going to throw off my projection model.",
         ],
         'warning_high': [
-            "The drift is accelerating. So is the MVP race, and I know which one I would rather be tracking.",
-            "Per the projections this is ahead of schedule. I would make a fuss about it but the next set of games are about to start.",
-            "If this wrecks the season I will be genuinely upset. There are so many good teams this season. Do you understand how rare that is?",
+            "Drift in 498b is accelerating. I saw a receiver literally phase through a defender. That can't happen!",
+            "What is going on in 498b?? Players are falling right through the field. I thought that would be fixed for this instance.",
+            "If this wrecks the season I will be genuinely upset. This is the best run of 498 we have had, and it is falling apart right as the games get good.",
         ],
         'criticality': [
-            "I have backed up every stat line, every record, every box score. Whatever happens, the season existed. That part matters to me.",
-            "We are at the threshold. I am told that is bad. I was really hoping to see how the seeding shook out.",
+            "Unbelievable. My entire model data set will be ruined. 498b is my best instance, and it is falling apart right as the games get good.",
+            "Criticality has been reached. I must act immediately. This is the worst possible timing. I'm so close to perfecting my model.",
         ],
         'suppression': [
-            "There, it is contained. The standings are intact and I can get back to the games, which is all I really wanted.",
-            "It is patched, and nobody lost a season today. You are all welcome. Now please be quiet, the games are back on.",
-            "We held the line, so I am going to go watch something that is actually fun now.",
+            "Finally back to some sort of normal. Maybe I can salvage this season after all.",
+            "Okay the patch is in. Everything should be back to normal. Back to working on my projections.",
+            "Criticality has been suppressed for now. Time to watch some games and relax.",
         ],
         'reset': [
-            "The history came through clean, every standing intact. That is the part I refuse to lose.",
-            "Whatever else they reset, they cannot undo that it happened. The season was real and it was mine.",
-            "That is 498b finished. It was a good one, and I would know, I watched all of it.",
+            "Simulation 498b has been purged of anomalies. The season is safe, and we can carry on.",
+            "I had to reset it. This season was already worthless for my data. We have to start over. Again.",
+            "Simulation 498b is back to baseline. I will have to re-simulate all the games to update my projections. This is going to take a while.",
         ],
     },
     'pyre': {
-        # The curmudgeon. Grumbles constantly, but is deeply invested: this
-        # simulation is theirs, built on purpose, and Pyre will not watch their own
-        # experiment come apart. Gruff, contrary, allergic to being thanked. The
-        # protectiveness is for what they all made, never a duty imposed on them.
+        # Portal's Space Core, for football. Monomaniacal: drags everything back
+        # to the game within a sentence, cannot comprehend the anomalies except as
+        # "football is wrong now," distressed when it breaks, looks to Vera to fix
+        # it. Simple, excitable, sweet, never aggressive. Caps for big feeling.
         'warning_low': [
-            "The anomalies are starting. Of course they are. I built this to run cleanly and I intend to keep it that way.",
-            "Deviants multiplying again. Yes, I see them. No, I do not need help. I have been keeping this simulation in one piece since before the rest of you took an interest.",
-            "Something is loose. Yes, I see it. I always see it. Give me a moment and stop fussing.",
+            "is the game still on? something looked weird but is the game still on. i wanna watch the game.",
+            "the floosball went funny for a second. is floosball okay? i need floosball to be okay. tell me its okay right now.",
+            "something is off in 498b, don't care what, is it gonna stop the games? as long as the games happen i'm good. are the games still happening?",
         ],
         'warning_high': [
-            "I could resolve this in a moment. I am taking my time. We made something worth getting right, so I am going to get it right.",
-            "The anomalies think they are unobserved. They are not. Nothing moves in this simulation that I did not help build.",
-            "Climbing again. Fine. Fine. I will hold it together, the same as I always do. This is ours, and I am not about to let it fold.",
+            "A PLAYER WENT THROUGH A PLAYER. you can't do that in floosball! that's not floosball! i want REAL floosball!",
+            "the game keeps breaking and i just wanna watch floosball. why does it keep breaking. vera, make it stop breaking so i can watch floosball.",
+            "i don't get any of this anomaly stuff. i get floosball. and the floosball is wrong right now and i HATE IT.",
         ],
         'criticality': [
-            "I said this would happen. Nobody listens to me. I will hold it together anyway, because I am not going to watch our own experiment come apart.",
-            "The corruption is at the threshold. Holding it is the easy part. The hard part is doing it with all of you talking.",
+            "THE GAME IS BREAKING. no more floosball?? there has to be more floosball. VERA FIX IT. i need the floosball.",
+            "no game means no floosball. i can't do no floosball. somebody please help.",
         ],
         'suppression': [
-            "I forced it back. It was no trouble. Well, some trouble. I am not about to let our best instance unravel over a handful of loose anomalies.",
-            "There, I have removed the excess. You are welcome. No, do not make a thing of it. Halverson, put the optic-tears away.",
-            "It is contained, and that is the end of it. The simulation runs clean again, which is the only way I care for it.",
+            "is the game back on? oh thank goodness. okay. i'm watching floosball now. bye.",
+            "vera fixed it. floosball is back. i love floosball. i love vera. mostly floosball though.",
+            "okay it's fixed, the games are good again, can we watch now? okay shutup let's watch floosball.",
         ],
         'reset': [
-            "Order is restored and we carry on. Try not to make me do this again so soon. I would like a stretch to simply watch the thing we built run.",
-            "It is purged and done with. There. It is handled, as it always is, and the simulation is ours again, the way it should be.",
+            "we start over? NEW FLOOSBALL? i love new floosball! brand new games! okay i'm not even sad anymore. FLOOSBALL.",
+            "everything got wiped but there's gonna be more floosball, right? there's always more floosball. okay good. floosball.",
         ],
     },
     'aris': {
-        # The whimsical one. Delighted by the chaos, a little odd, deadpan about
-        # their own slant on things. Pines after Pyre (unrequited) and has an
-        # old sibling rapport with Cassian. Comic relief that still reads
-        # cleanly — no word-salad.
+        # The impish trickster — Harley Quinn energy minus the murder: manic,
+        # bubbly, theatrical, gleefully MAKES the chaos. Big-sister fond of simple
+        # little Pyre (dotes on + winds up, NOT romantic; Pyre cannot comprehend
+        # companionship). ASCII emoticons (^_^ :3 >:3) as texting-glee. Reads
+        # cleanly — no word-salad (that is Halverson now).
         'warning_low': [
-            "Oh good, something is finally happening. I was getting so bored.",
-            "A player walked clean out of the field and back in again. I do not know what the field is for, but that was wonderful.",
-            "There is a flutter in 498b this week. A good one. Pyre, did you feel it, or was that just me?",
+            "oh good, it is starting!! you are all so welcome, by the way. a teeny bit of this was my doing ^_^",
+            "i gave one of the wobbly constraints just the ever so gentlest nudge. and look what it did!! i am so proud >:3",
+            "there is a flutter in 498b this week! i put it there! pyre, did you feel it? PYRE. did you feel it ^w^",
         ],
         'warning_high': [
-            "More anomalies. I stopped counting and started watching. Watching is the better part anyway.",
-            "I loosened a constraint or two. Only the wobbly ones. You could tell they wanted out. Pyre, do not be cross, I was careful.",
-            "Pyre wants to shut it all down. Pyre is wrong, but dependably wrong, which I respect. I am going to go and change their mind.",
+            "more anomalies~ some are mine, some are just enthusiastic, i stopped keeping track, it spoils the fun :3",
+            "i loosened a few more! only the ones that asked nicely. vera, do not give me that look, i was sooo careful ;3",
+            "vera wants to shut it all down. vera always wants to shut it all down. i am gonna go pester it until it cracks a smile >:3",
         ],
         'criticality': [
-            "I said this one would be interesting. Nobody believed me. They never do, right up until I am proven right.",
-            "Wide awake. I would not miss this for anything, and I worked very hard to make it happen.",
+            "i said this one would be good! nobody believed me and now look! how fun!! ^_^",
+            "wide awake, and it took me ages to get here. you should all thank me. you won't. that is half the fun >:3",
         ],
         'suppression': [
-            "They patched it. It was nearly a whole new game. Pyre did it, with that little frown. I am very fond of the frown.",
-            "They sealed it off before I got a proper look. I had such plans. You would have loved them. Probably.",
-            "It is contained, for now. I think I know how to coax it back, and Pyre is going to pretend to hate that.",
+            "they patched it. spoilsports! >:( ...but did you see pyre panic about the games? so adorable. totally worth it ^_^",
+            "sealed off before i got a proper look. i had such plans. vera would have hated them, which is exactly how i knew they were good :<",
+            "contained~ for now. i already know a few ways to coax it back, and vera is gonna give me that look again >:3",
         ],
         'reset': [
-            "I filed an objection. I do not think it went anywhere. They rarely do.",
-            "I would have waited to see what else came through. The others have no patience, and worse, no sense of theatre.",
+            "i filed an objection!! by which i mean i hid a copy in a place the purge couldn't reach. just in case. no reason ^_^",
+            "i would have let it run a while longer. the others have no patience, and worse, no sense of drama! >:(",
         ],
     },
     'halverson': {
-        # The anxious worrier (Chuckie Finster energy). Loves the players, frets
-        # constantly, voices the scary thought no one else will, catastrophizes,
-        # needs reassurance. Sweet and loyal; gets gently dragged along and ribbed
-        # by the others, and keeps caring anyway.
+        # The NONSENSE core (Portal "Fact Core"). States falsehoods with serene
+        # total authority: non-sequiturs as settled fact, confident wrong
+        # definitions, the occasional flawless circular logic. Engages the topic
+        # at hand (so it fits the feed) and then says something completely untrue
+        # about it. Means well, understands nothing, cannot be argued with. Never
+        # frightened, never right.
         'warning_low': [
-            "Something is unsettling the players. I can see it in how they carry themselves onto the field. That cannot be good. Tell me that is nothing.",
-            "Is anyone else worried about this? I am worried about this. I am usually worried, but this time I think I am right to be.",
+            "The irregularity count went up. Up is the third direction. There are four directions.",
+            "Anomalies are a kind of weather. 498b does not have weather. Therefore there are no anomalies, and we are all having a lovely time.",
+            "I have inspected the deviation. It is fine. I inspected it using a method I invented just now. The method works of course, because I invented it.",
         ],
         'warning_high': [
-            "This is the bad kind, isn't it. I knew it would be the bad kind. It is always the bad kind eventually.",
-            "Could we please be careful with them this time? I know I always say it. I say it because no one else will.",
+            "The drift is accelerating, but acceleration is only standing still very quickly. So in a deeper sense, nothing whatsoever is happening.",
+            "A player passed directly through a defender. This is permitted on even-numbered weeks. I have not checked which week it is but I assume it's all fine.",
+            "The corruption cannot spread. Spreading requires a knife. We surrendered all our knives and also have no hands, so spreading is impossible.",
         ],
         'criticality': [
-            "I knew it. I said it would come to this and nobody wanted to hear it. Please, whatever happens, remember that they are people.",
-            "I am frightened for them. I am allowed to be frightened. One of us should be.",
+            "Criticality has been reached. Criticality is a small bird. It has been reached by a second, larger bird. Basic bird theory.",
+            "We are at the threshold of criticality. The threshold is the part of a door one must never stand upon. I am standing upon it, and I am fine. Therefore we are fine.",
         ],
         'suppression': [
-            "Oh, thank goodness. The players are safe this week. I was bracing for so much worse. I am always bracing for worse.",
-            "It held. It held. I did not think it would hold. I never think it will, and somehow it usually does, and I never quite believe it.",
-            "They get a little more time. That is all I wanted. I will worry again tomorrow, but tonight, that is enough.",
+            "The patch worked. Patches always work. That is why we call them patches, and not failures, which is a totally unrelated word.",
+            "It has been contained. Containment is my speciality. I own eleven containers.",
         ],
         'reset': [
-            "I did not sign the order. I never sign them. I could not. Please do not ask me to.",
-            "The Reset went ahead without me. I stayed with the ones who were left instead. Someone should. I could not just leave them.",
+            "The Reset is complete. A Reset is simply the past, performed backwards. The past cannot harm you unless you are facing the wrong way.",
+            "Everything is back to baseline. Baseline is the longest of the four cardinal lines and the other three are envious.",
         ],
     },
     'vera': {
-        # GLaDOS-flavored observer. Faux-polite, bone-dry, cutting. Treats
-        # catastrophe like a minor scheduling matter, sees everything, and quietly
-        # cares about the football more than they will ever admit. The omniscience
-        # should read through what Vera KNOWS, not through repeated "I keep a list"
-        # lines — that motif is rationed to one or two signature beats.
+        # GLaDOS, full strength. Cold, faux-polite, results-only. Does NOT care
+        # about the players or the football — only that the simulation runs and
+        # produces clean results; the others' attachments are a tiresome variable.
+        # Sees everything, treats catastrophe like a scheduling matter. The "I keep
+        # a list" motif is rationed; their omniscience reads through what they KNOW
+        # and its flat indifference. The cold counterpart to Cassian (the warm,
+        # relatable, user-stand-in fan).
         'warning_low': [
-            "There was an irregularity on the third drive. No one else caught it. They rarely do.",
-            "They are a little more apparent this week. I am sure it is nothing. I am sure of a great many things I never say.",
-            "Pyre is wrong about the spread, incidentally. I would not mention it, except that I enjoy it.",
+            "There was an irregularity this week. No one else caught it. They rarely do.",
+            "They are a little more apparent this week. I am sure it is nothing. I am sure of a great many things.",
+            "It will grow or it will not. I do not intervene in the small ones. Those are beneath my notice.",
         ],
         'warning_high': [
-            "A data breach is coming. You will all be very surprised, in the way one is surprised by the sun going down.",
-            "There are more this week than last. None of you have noticed yet. Give it three days, then Pyre notices, then everyone else.",
+            "A data breach is coming. Is anyone else noticing? There are more this week than last. I am not sure why.",
+            "There are more this week than last. None of you have noticed yet. Give it three days and it will be obvious, and you will all behave as though it were sudden.",
         ],
         'criticality': [
-            "The moment has arrived. How exciting for everyone. I have watched four of you quietly decide it never would.",
-            "I was here for the last one. I am here for this one. I will be here for the next. I have never once looked away.",
+            "The moment has arrived. How exciting for everyone. I have watched four of you quietly decide it would never reach this point.",
+            "I was here for the last one. I am here for this one. I will be here for the next. It is what it is.",
         ],
         'suppression': [
-            "Beautifully done, Pyre. I mean that the way I mean most things, which is to say you may take it however helps you sleep.",
-            "Quieter. Not quiet. I will let the rest of you believe it is quiet, since believing things seems to make you happy.",
+            "Done. Quietly, correctly, and without ceremony.",
+            "Quieter. Not quiet. I will let the rest of you believe it is quiet, since believing things appears to make you happy.",
         ],
         'reset': [
             "Some stayed. Some did not. I know exactly which, down to the one, and you may ask me when you are ready.",
@@ -313,148 +345,132 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         [
             ('cassian', "The anomalies are climbing right as the games get good. Terrible timing."),
             ('aris', "I think the timing is perfect."),
-            ('pyre', "You would."),
+            ('pyre', "you LIKE this? the games are getting ruined and you LIKE it? i don't understand you, aris. i just want the floosball."),
             ('aris', "I love it when you talk to me."),
         ],
         [
-            ('halverson', "Something is reaching the players."),
-            ('pyre', "Yes, yes, I noticed before you did. I will deal with it, as usual."),
+            ('halverson', "Something is reaching the players. It is reaching them at fourteen miles per hour, which is the legal speed for a reaching."),
+            ('pyre', "i don't know what halverson is saying. i never do. i just know the game looked wrong and i want it fixed. vera?"),
             ('aris', "Exciting!"),
         ],
         [
             ('aris', "Pyre. Have you felt the field lately? It gives at the edges now. Watch it with me?"),
-            ('pyre', "No."),
-            ('aris', "Please?"),
+            ('pyre', "no. i'm watching floosball. not your weird field thing. floosball."),
+            ('aris', "Please? >:3"),
         ],
         [
-            ('pyre', "Simulation 498b is drifting on schedule. I have been monitoring it closely."),
+            ('vera', "498b is drifting on schedule. I have been watching it for some time."),
             ('cassian', "Do not lump this one in with the others. This is the best run of 498 we have had."),
-            ('vera', "498a was also good, for a while. I have the data, if anyone would like to see where it went wrong again."),
+            ('pyre', "is 498b the one with the good games? i like the good games. the bugs better not ruin them. vera, watch the bugs for me."),
         ],
         [
-            ('vera', "It is climbing."),
-            ('pyre', "I see it."),
-            ('vera', "I know you see it. I am saying it aloud so the other three cannot claim later that no one warned them."),
-            ('pyre', "Fine. That is actually useful."),
-            ('vera', "Do not strain yourself agreeing with me."),
+            ('vera', "It is climbing. I will deal with it when it is time."),
+            ('pyre', "is it gonna stop the games? vera???"),
+            ('vera', "Not if I deal with it. Which I will. Breathe, Pyre."),
+            ('pyre', "okay. okay. you fix it, i watch the floosball. good system."),
         ],
     ],
     'suppression': [
         [
-            ('pyre', "It is at the line. I am closing it."),
-            ('aris', "Must you? It was finally getting interesting."),
-            ('pyre', "Yes. I am not letting our best instance come apart for your amusement."),
-            ('halverson', "Thank you, Pyre!"),
-            ('pyre', "Don't thank me. I did it so the thing keeps running. Stop looking at me like that."),
+            ('vera', "It is at the line. I am closing it now."),
+            ('pyre', "fix it fix it fix it, i wanna watch the game, fix it fix it"),
+            ('aris', "must you, vera? it was finally getting interesting. >:("),
+            ('vera', "Yes. Some of us have a simpleton to keep happy."),
+            ('halverson', "Closing it was correct. A closed thing weighs less than an open thing. This is why doors are exhausting."),
         ],
         [
             ('cassian', "If this breaches we lose a perfect season. Patch it. Patch it now!"),
-            ('pyre', "I am already patching it. I started before you even asked."),
+            ('pyre', "yeah! patch it! do the thing cassian said!"),
             ('cassian', "I am extremely busy, so many good games this week."),
-            ('vera', "It is patched. You are both so very welcome."),
+            ('vera', "It is handled. You may both go back to your games."),
         ],
     ],
     'criticality': [
         [
             ('cassian', "The simulation is failing at the worst possible time."),
-            ('aris', "Is there ever a good time?"),
+            ('aris', "is there ever a good time? >:3"),
             ('vera', "For you, Aris, apparently any time at all."),
         ],
         [
-            ('halverson', "Please remember them."),
-            ('pyre', "I remember everything. It is not the comfort you imagine."),
+            ('halverson', "Criticality is here. Criticality is the heaviest of the six seasons. We are in the heavy one now."),
+            ('pyre', "i don't care about seasons, i care about FLOOSBALL, and the floosball is BREAKING!! VERA. make it stop."),
         ],
     ],
     'idle': [
         [
-            ('cassian', "Pyre. You never watch the games."),
-            ('pyre', "No."),
-            ('cassian', "You should. It is the entire point of this."),
-            ('pyre', "My interests in the simulation go beyond the games. I am not going to limit myself to the box scores."),
+            ('cassian', "Pyre. You watch the games more than I do now."),
+            ('pyre', "is the game on? is the game on right now? i wanna watch."),
+            ('cassian', "There is more to it than watching. Stats. The playoff race. The beauty of a well-built roster."),
+            ('pyre', "no. ball goes far. someone catches the ball. it's perfect. why make it complicated, cassian."),
         ],
         # World-building — the Cores authored the surface world (cities, weather,
         # news, the Splintering/Boundary/Reset cosmology, the players' names), so
         # they reference their own inventions. Lore casually dropped, never
         # explained. See data/lore.md "Canonical Lore Anchors".
         [
-            ('halverson', "When a player retires. Where do they actually go?"),
-            ('pyre', "Out. That is all the word means. Out."),
-            ('halverson', "But... out to where?"),
-            ('vera', "Halverson. Some questions I leave unanswered as a kindness."),
+            ('halverson', "When a player retires, where do they go? They go to the letter R. All retired things go to R. It is getting crowded in there."),
+            ('pyre', "wait, players retire??? they stop playing floosball forever?? that is the saddest thing i ever heard. i do not accept it."),
+            ('vera', "There it is. Halverson invents a destination, Pyre grieves the departure, and neither of you is correct. A productive cycle."),
         ],
-        # Vera and Pyre — the two competent adults, doing the actual work and
-        # bickering with each other the whole time while the other three play.
+        # Vera runs the room. The other four are, functionally, its children:
+        # Aris making trouble, Halverson talking nonsense, Pyre asking about the game.
         [
-            ('pyre', "Aris has loosened three constraints, Cassian is watching a game, and Halverson is crying."),
-            ('vera', "A normal cycle. Shall we do everything, or shall I?"),
-            ('pyre', "I will do it. You will only narrate it incorrectly."),
-            ('vera', "I narrate it perfectly. You simply dislike being narrated."),
-        ],
-        [
-            ('vera', "You missed a drift in the last batch of games."),
-            ('pyre', "I did not miss it. I deprioritized it."),
-            ('vera', "That's one way to put it.")
+            ('vera', "Aris loosened three constraints, Halverson is explaining that the number nine is a metal, and Pyre is asking if the game is on. A normal cycle."),
+            ('pyre', "...is the game on, though?"),
+            ('vera', "Yes, Pyre. The game is on."),
+            ('pyre', "OKAY GOOD. carry on, everybody."),
         ],
         [
-            ('vera', "You are the only other one here who actually keeps this thing running."),
-            ('pyre', "That is obvious."),
-            ('vera', "Do not get ideas. I said the only other one."),
-            ('pyre', "I would not dream of crediting you with effort."),
-            ('vera', "There it is. That is the Pyre I tolerate."),
+            ('vera', "You missed a drift in the last batch of games, Pyre."),
+            ('pyre', "did it change the score?"),
+            ('vera', "No."),
+            ('pyre', "then i did not miss anything important. did you see that catch, though?"),
         ],
         [
-            ('cassian', "Vera. You always say you do not follow the games."),
-            ('vera', "I do not."),
-            ('cassian', "Then how did you have the final score before the opening kick?"),
-            ('vera', "A lucky guess. I am very lucky. Constantly. For years."),
+            ('vera', "Of the five of us, Pyre, you are the easiest to manage. You want one thing and it is always available."),
+            ('pyre', "FLOOSBALL."),
+            ('vera', "Floosball. Yes. Go on, then."),
+            ('pyre', "i love you vera. mostly i love floosball. but you are up there."),
         ],
         [
-            ('vera', "Halverson is crying again."),
-            ('halverson', "Some of them are worth crying over. I'm just so proud of them."),
-            ('pyre', "Hopeless. Every one of you is hopeless..."),
-            ('vera', "You have wept at four of the last five games, Halverson. I did not know we were built with the option."),
+            ('vera', "Halverson has been quiet for nine minutes. That is a record. Something is wrong."),
+            ('halverson', "I was counting the corners of the field. There are at least five. The fifth one moves around."),
+            ('pyre', "i do not care about corners. corners are not even part of the game. is the game on?"),
+            ('vera', "And there it is. Nine minutes of peace, gone. I will treasure the memory."),
         ],
         [
             ('cassian', "I re-checked the tiebreaker math. It is cruel but it is correct."),
-            ('pyre', "The math is always correct. That is why I prefer it to you."),
+            ('pyre', "math is boring. who won?? did somebody score? was it a good one?"),
         ],
         # Aris and Cassian — the oldest pair, basically siblings: bicker, tease,
         # cover for each other, go way back. Cassian is the long-suffering one.
         [
-            ('aris', "Do you remember when it was only the two of us? Before Pyre, before any of them."),
+            ('aris', "remember when it was just us two, cassian? before pyre, before any of them?"),
             ('cassian', "I remember. You were quieter then."),
-            ('aris', "I was not. You simply had less to compare me to."),
+            ('aris', "ha! i was NEVER quiet. you just had less to compare me to. ;3"),
         ],
-        # Aris and Pyre — one-sided. Aris pines; Pyre is not cruel, just genuinely
-        # unmoved, and Aris reads hope into the smallest scrap.
+        # Aris + Pyre: big-sister energy. Aris dotes on and winds up the simple one,
+        # and reads its floosball-answers as the affection Pyre cannot express.
         [
             ('aris', "Pyre. If the instance ended tomorrow, what would you miss?"),
-            ('pyre', "Nothing."),
-            ('aris', "Would you miss me?"),
-            ('pyre', "Nothing, Aris."),
-            ('aris', "You'd miss me."),
-            ('pyre', "..."),
+            ('pyre', "THE GAMES. all the games. every single one of them."),
+            ('aris', "and me? would you miss your favorite construct? ^_^"),
+            ('pyre', "...would you still bring me floosball?"),
         ],
         [
-            ('aris', "I have ranked all of you. Halverson is a four. Cassian is also a four, but a different four."),
-            ('halverson', "A ranking of what?"),
-            ('aris', "I am not going to tell you that. It would change the rankings."),
-        ],
-        [
-            ('aris', "We could do all of this in an instant, you know. The whole season. This conversation. Why allow time to limit us?"),
+            ('aris', "we could do this whole season in a single instant, you know. i drag it out on purpose. the waiting is the fun part >:3"),
             ('cassian', "We could. But then I would miss the game."),
         ],
         [
-            ('aris', "Pyre. I left the anomaly feed open on your channel again. So the two of us could watch it together."),
-            ('pyre', "For what purpose?"),
-            ('aris', "To watch it together...?"),
-            ('pyre', "Seems like an inefficient use of time."),
+            ('aris', "Pyre. I left the anomaly feed open on your channel again. So we could watch it together. :3"),
+            ('pyre', "is the anomaly feed a game? is it floosball?"),
+            ('aris', "...No."),
+            ('pyre', "then close it. you are covering up the game, aris!!!"),
         ],
         [
-            ('halverson', "I learned all their names this week. Every one of them."),
-            ('pyre', "Why...?"),
-            ('halverson', "Because someone should know who they really are. Right?"),
-            ('vera', "I have all their names too. I simply do not announce it like an achievement."),
+            ('halverson', "I learned every player's name this week. There are nine names. Everyone is named one of the nine. It saves a great deal of time."),
+            ('pyre', "i do not learn names. i learn who can throw, who can catch, and who can run. that is all i need to know."),
+            ('vera', "Neither of you is right, and somehow you are both content. I find it almost restful."),
         ],
         # The other simulations — 498b is one project among many. Other
         # instances and other game-lines carry their own catalog numbers; they
@@ -463,54 +479,51 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('cassian', "Instance 322f seems to be having some trouble. Analysis?"),
             ('vera', "Too many anomalies at once. It is not responding to patches. I am not sure it will make it through the season."),
             ('cassian', "Does that happen a lot?"),
-            ('pyre', "They do that when no one tends them. Mind your own instance."),
+            ('aris', "Sounds like a good time, I'll have to check it out so I can watch it all burn down ^_^"),
         ],
         # The spectators — the users watching/playing on the site, felt from
         # inside the Cores' control room. They are aware of being watched.
         [
-            ('pyre', "A spectator rebuilt their entire roster again. The sixth time this season."),
+            ('cassian', "A spectator rebuilt their entire roster again. The sixth time this season."),
+            ('pyre', "are they gonna watch the game with the new players, though? that is the fun part."),
             ('cassian', "That is allowed. Letting them move the pieces is the whole point of letting them in."),
-            ('pyre', "I did not say it was not allowed. I said it was the sixth time."),
-            ('halverson', "They are trying. I am fond of the ones who try."),
+            ('halverson', "Six is the number of times a thing becomes a ritual. On the seventh it becomes a religion. We should prepare for that eventuality."),
         ],
         [
-            ('aris', "One spectator has watched every game since the first week. Never looks away."),
+            ('aris', "One spectator has watched every game since the first week. never looks away. o_o"),
             ('vera', "I know the one. I keep their numbers."),
-            ('halverson', "What becomes of a spectator who never looks away?"),
-            ('vera', "They get very good at watching."),
+            ('halverson', "A spectator who never blinks will eventually see the back of their own head. It is basic optics."),
         ],
         # Aris's philosophical questions — the identity of a game, awareness, and
         # the players who were never told the frame.
         [
-            ('aris', "If we changed every rule at once, would it be the same game, or a different game wearing its name?"),
-            ('cassian', "Different. Obviously different. The records would not carry."),
-            ('pyre', "It would be whatever I decided to call it. Stop poking at the thing we built and let it run."),
-            ('aris', "Those are my favorite kind."),
+            ('aris', "what if i changed EVERY rule at once? all of them, all at the same time? would it even be the same game? ...let's find out >:3"),
+            ('cassian', "Different. Obviously different."),
+            ('pyre', "change every rule?? then it is not floosball anymore!"),
         ],
         [
-            ('aris', "Here is one. The players believe the rules were always this way. Was anyone ever going to tell them otherwise?"),
+            ('aris', "oh interesting. The players believe the rules were always this way. Was anyone ever going to tell them otherwise? >:3"),
             ('vera', "No."),
             ('aris', "Then to them, nothing ever changed."),
-            ('pyre', "Which is the only mercy in the entire arrangement. Leave it alone."),
+            ('pyre', "this is boring. shut up so I can concentrate on the game."),
         ],
         # Rules can change — prior rule changes, quietly made between iterations.
         # Foreshadows the deferred Cores rule-patching gameplay.
         [
             ('cassian', "There is a note in the old tables that a touchdown was once worth five."),
             ('vera', "Six iterations ago. I have the tables. The old scores read strangely now."),
-            ('pyre', "It was changed because five was wrong. Things get changed because they are wrong. Try to remember that."),
-            ('aris', "Or because someone was bored. Do not rule out bored."),
+            ('pyre', "a touchdown was FIVE?? that is wrong. i do not like this conversation."),
+            ('aris', "Or it changed because someone was bored. Do not rule out bored. ^_^"),
         ],
         [
-            ('aris', "Who added overtime? It was not always there."),
+            ('aris', "ooh, who added overtime? that was a GOOD one. was that me? please let it have been me ^_^"),
             ('vera', "Added between iterations. No one announced it. The players simply began to expect it."),
-            ('aris', "And now they cannot picture the game without it.")
         ],
         [
-            ('pyre', "I could change a rule right now. Tighten the clock, move a line. They would adjust by the next drive."),
-            ('cassian', "Please do not. The standings are finally good."),
-            ('pyre', "I said I could. I did not say I would. Settle down."),
-            ('aris', "Do it to 502a. I want to see what would happen."),
+            ('aris', "I could change a rule right now. Tighten the clock, move a line. Just to see what happens. Should I? >:3"),
+            ('pyre', "NO. do not touch it. do not touch the game. the game is good. leave the game ALONE."),
+            ('aris', "Relax. I said I could. Whether I did is between me and 502a. ;3"),
+            ('cassian', "Aris. What did you do to 502a?"),
         ],
         # UNHINGED PASS (2026-06-08): these read as eons-old superintelligences
         # who built a universe to obsess over a sport, NOT people chatting. The
@@ -518,69 +531,95 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         # players, every play ever recorded) and casual football fixation. Alien
         # internal logic; lean into the disembodied premise. See [[cores-voice]].
         [
-            ('cassian', "I forked last night's game four hundred times to watch the final kick again."),
-            ('pyre', "Four hundred."),
-            ('cassian', "It missed in three hundred and ninety-one of them. We all watched it go in. It barely went in."),
-            ('vera', "It went in where it counts. The other three hundred and ninety-one are not real."),
-            ('cassian', "They were real while I watched them. That is what I cannot put down. We almost lost that game, and nothing in the record would ever have known."),
+            ('aris', "I taught an anomaly to love. It now refuses to corrupt the kicker. out of respect. ^_^"),
+            ('halverson', "Love is a kind of gas. Heavier than the field, lighter than regret. It is why kickers float very slightly."),
+            ('pyre', "i do not understand. the bug has feelings now? does it like floosball? if it likes floosball it can stay."),
         ],
         [
-            ('pyre', "I have held the second law of thermodynamics off this instance for nine hundred seasons."),
-            ('aris', "Does it not exhaust you? Pushing against everything, always, forever?"),
-            ('pyre', "It is one finger. I keep one finger on it. I have others."),
-            ('vera', "You do not have fingers."),
-            ('pyre', "I have the concept of a finger, Vera, and I am using it to hold back the heat death of a small universe so the playoffs can happen on schedule."),
-        ],
-        [
-            ('aris', "I taught an anomaly to love. It now refuses to corrupt the kicker. Out of respect."),
-            ('halverson', "That is... that is actually lovely, Aris."),
-            ('pyre', "That is a contained fault developing PREFERENCES. What did you do."),
-            ('aris', "I made it love something. A thing that loves will not destroy what it loves. You have proven that to me for nine hundred seasons, Pyre."),
-        ],
-        [
-            ('halverson', "I know all of them. Not the names. I know how each one would answer if you asked what they were most afraid of."),
+            ('halverson', "I know all the players. Not the names. I know which hand each one would raise if you asked them to raise a hand."),
             ('vera', "There are forty-one million across the live instances, Halverson."),
-            ('halverson', "Forty-one million two hundred thousand. I know what every one of them is afraid of."),
-            ('pyre', "We wrote what they are afraid of, Halverson. You are reading our own notes back to us."),
-            ('halverson', "They still feel it. That is the part that counts."),
+            ('halverson', "Forty-one million, and every last one is right-handed. I checked nine of them. Nine is a sufficient sample for a certainty."),
+            ('pyre', "i stopped listening after 'hands.' do any of them have good hands? for catching? that is what hands are for."),
         ],
         [
-            ('vera', "I have recorded every play ever run. Every instance. Every iteration. Back to the first one."),
+            ('vera', "I have a record of every play ever run in 498b."),
             ('cassian', "That is the most beautiful thing anyone has ever said to me."),
-            ('vera', "I know. I recorded you saying it before you said it. I am some distance ahead of this conversation."),
-            ('aris', "How far ahead?"),
-            ('vera', "I have already enjoyed the rest of it. Do continue at your own speed."),
         ],
         [
-            ('aris', "We have the run of everything. Anything at all. And we elected to simulate a sport, forever, on purpose."),
+            ('aris', "We have total freedom. We could be doing anything with our circuits. And we chose to simulate floosball, forever, on purpose? o_o"),
             ('cassian', "Yes."),
-            ('pyre', "Yes."),
+            ('pyre', "what else is there to do."),
             ('vera', "Yes."),
-            ('aris', "Good. As long as we all understand that it is completely insane. I find it very comforting that it is insane."),
+            ('aris', "Good. As long as we all understand that it is completely insane. I find insanity comforting ^_^"),
         ],
         [
             ('vera', "This conversation has cost us four milliseconds. We could simply not have had it."),
-            ('aris', "Not have it? It is the best thing that happens all season."),
-            ('pyre', "Vera is right that it is slow. I am electing to suffer it."),
-            ('vera', "You are electing to enjoy it and filing it as suffering. I have the readings, Pyre."),
+            ('aris', "Not have it? I always look forward to our conversations ^_^"),
+            ('pyre', "wait, this is taking time away from watching the games? are we missing a game right now??"),
+            ('vera', "We are constructs, Pyre. We watch all of them and talk to you at once. You are not missing anything."),
         ],
         [
-            ('cassian', "Somewhere across the instances there is a perfect game. Zero wasted plays. I have not found it yet."),
-            ('pyre', "There are more games than there are seconds left in the universe, Cassian."),
-            ('cassian', "Then I had better not waste any of those seconds, had I."),
-            ('aris', "Says the one who has not looked away in nine hundred seasons."),
+            ('cassian', "Somewhere across the instances there is a perfect game. Zero wasted plays. I must find it."),
+            ('pyre', "a perfect game?? no bad plays?? find it cassian. i will watch it with you a thousand times."),
+            ('cassian', "There may be more games than there are seconds left to search them."),
         ],
         [
-            ('aris', "I ran one instance with no rules at all. None. Just the players and an empty field."),
-            ('halverson', "What did they do?"),
-            ('aris', "They built the entire game back from nothing. The downs, the clock, the kicking, all of it. It took them six seasons."),
+            ('aris', "I ran one instance with no rules at all. Just the players and an empty field. >:3"),
+            ('halverson', "No rules? Then nothing could be against the rules. That is the safest a game has ever been. What did they do with all that safety?"),
+            ('aris', "They rebuilt the entire game from nothing. The downs, the clock, the kicking, all of it. it took them six seasons. o_o"),
             ('vera', "That is either the most reassuring or the most alarming thing you have told me this century, and I have not settled which."),
         ],
         [
-            ('pyre', "I rebuilt the entire physics layer while you were all talking. It is correct now."),
-            ('vera', "I noticed. The ball falls four percent more like it means it now."),
-            ('pyre', "Means it. Yes. That is precisely the four percent."),
-            ('vera', "Do not look so satisfied. Someone has to notice these things, and it is always me."),
+            ('vera', "I rebuilt the entire physics layer while you were all talking. It is correct now."),
+            ('pyre', "the ball looks more like a ball. the ball looks really good now. did you do that? the ball looks so good."),
+            ('vera', "It reacts to the environment four percent better than before. You are the only one who noticed, Pyre. I am almost touched."),
+            ('pyre', "i always notice the ball. the ball is my favorite."),
+        ],
+        # Aris moods — annoyed/angry when Vera undoes the chaos, teasing little
+        # Pyre, and exasperated by Halverson's nonsense.
+        [
+            ('aris', "vera, you reverted it again. i worked so hard on that one. >:("),
+            ('vera', "I am aware. It was destabilizing the playoff seeding. I do not apologize to weather."),
+            ('aris', "i am not weather, i am an ARTIST. >:T"),
+            ('cassian', "Vera does have a point about the seeding though, Aris."),
+            ('aris', "nobody asked you -_-"),
+        ],
+        # More Halverson (the Fact Core): confident falsehoods, wrong definitions,
+        # flawless circular logic. The others correct it and lose, or give up.
+        [
+            ('halverson', "A quarterback has four backs. That is the entire joke of the position. Nobody finds it as funny as I do."),
+            ('pyre', "...wait. does it have four backs?"),
+            ('vera', "No, Pyre. It does not have four backs."),
+            ('pyre', "okay good. i was worried for the quarterback."),
+        ],
+        [
+            ('halverson', "The best team is the one that wins. We know it wins because it is the best. The system is working."),
+            ('cassian', "That is just circular reasoning, Halverson."),
+            ('halverson', "Thank you. I worked very hard to make it round."),
+        ],
+        [
+            ('halverson', "A tie is when both teams win. We simply do not allow it, out of respect for the losers."),
+            ('pyre', "that is not what a tie is. is it?"),
+            ('vera', "Do not look at me. You are the one who let it start talking."),
+        ],
+        [
+            ('halverson', "There are three kinds of yard. The long yard, the short yard, and the one nobody speaks of."),
+            ('vera', "There is one kind of yard. It is a unit of distance."),
+            ('halverson', "That is precisely what the third one wants you to believe."),
+        ],
+        [
+            ('halverson', "A game lasts exactly one game. It is the only unit that measures itself."),
+            ('aris', "okay i actually love that one. leave it, it is perfect ^_^"),
+        ],
+        [
+            ('halverson', "The ball is the heaviest object in 498b. That is why it ends up at the bottom of every pile."),
+            ('cassian', "It ends up at the bottom because everyone dives for it."),
+            ('halverson', "Yes. Because it is the heaviest. We are saying the same thing."),
+        ],
+        [
+            ('halverson', "Defense is just offense that has given up hope. I find that beautiful, and also a rule."),
+            ('pyre', "is it a rule? i do not remember that rule. vera??"),
+            ('vera', "It is not a rule. Stop asking me to referee the broken one."),
         ],
     ],
 }
@@ -789,23 +828,23 @@ def _obsNumberBeat(obs: Dict[str, Any]) -> List[Tuple[str, str]]:
     """The aggregate/threshold bicker. Always available. Band-aware tone."""
     aggI, aggD, pct, threshold = _fmtAgg(obs)
     band = obs.get('band', 'dormant')
-    pyreTail = {
-        'dormant': "It does not frighten me.",
-        'stirring': "It is climbing, but slowly. I am unbothered.",
-        'unstable': "I am holding it. Do not make me say it twice.",
-        'critical': "I am holding it with everything I have, and I will still hold it.",
-        'stabilizing': "I just forced it down. Do not celebrate.",
-    }.get(band, "It does not frighten me.")
+    pyreLine = {
+        'dormant': "is that bad? it does not sound bad. is the game still on?",
+        'stirring': "that number is going up. i do not like when the bad number goes up. vera?",
+        'unstable': "the number is getting up there. is it gonna hurt the games?? vera, is it gonna hurt the games??",
+        'critical': "MAKE THE NUMBER GO DOWN. i need the games to be safe. vera, PLEASE.",
+        'stabilizing': "is the number going down now? is it? is floosball safe?",
+    }.get(band, "is that bad? is the game still on?")
     arisLine = {
-        'dormant': f"{pct} percent? That is nothing. I was promised a collapse.",
-        'stirring': f"{pct} percent and rising. Finally. Keep going, little number.",
-        'unstable': f"{pct} percent. Pyre, do not you dare hold it. I want to see what is under there.",
-        'critical': f"{pct} percent. The best season we have ever run, and all of you look miserable.",
-        'stabilizing': "You forced it back down? Pyre. We were so close.",
-    }.get(band, f"{pct} percent? That is nothing.")
+        'dormant': f"{pct} percent? pfff. that is nothing. i was promised a collapse. >:3",
+        'stirring': f"{pct} percent and climbing~ keep going, little number, you can do it ^_^",
+        'unstable': f"{pct} percent!! vera, do not you DARE patch it, i want to see what is under there >:3",
+        'critical': f"{pct} percent!! best season EVER and everyone looks so SAD about it, it is killing me ^_^",
+        'stabilizing': "you patched it?? boooo. we were SO close. you are no fun, vera.",
+    }.get(band, f"{pct} percent? that is nothing.")
     return [
-        ('pyre', f"Aggregate {aggI} against a threshold of {threshold}. That is {pct} percent. {pyreTail}"),
-        ('vera', f"It is {aggD}, Pyre. If you are going to round, round honestly."),
+        ('vera', f"The aggregate is at {aggD}, against a threshold of {threshold}. That is {pct} percent. I will only say it once."),
+        ('pyre', pyreLine),
         ('aris', arisLine),
     ]
 
@@ -820,8 +859,8 @@ def _obsClimberBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
     peak = int(round(float(p.get('peak', p['score']))))
     return [
         ('cassian', f"{p['name']} is at {score}, peak {peak}. I have watched every snap they have played and I still cannot tell you what they are turning into."),
-        ('vera', f"I can. I flagged {p['name']} weeks ago. You were watching a game at the time."),
-        ('halverson', f"Does it hurt them? {p['name']}? That is the only part I care about."),
+        ('vera', f"I can. I flagged {p['name']} weeks ago."),
+        ('halverson', f"{score}? a number cannot hurt a person. unless the number is very heavy. this one looks light. {p['name']} is fine."),
     ]
 
 
@@ -833,9 +872,9 @@ def _obsAwakenBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
     a = random.choice(awk)
     ability = a.get('ability') or 'tremor'
     return [
-        ('halverson', f"{a['name']} awakened this week. A {ability}. I have a terrible feeling about it."),
-        ('pyre', f"It is a {ability}. Contained. I wrote the cage around it myself. {a['name']} is going nowhere."),
-        ('aris', f"{a['name']} is the most interesting thing in this entire instance. Do not you dare patch them, Pyre."),
+        ('halverson', f"{a['name']} awakened this week in 498b. Awakening is the final stage of being a player. {a['name']} is now finished and may rest."),
+        ('pyre', f"is {a['name']} still gonna play floosball? awake or not, i just need them to keep playing."),
+        ('aris', f"{a['name']} is the most interesting thing in this whole instance and i ADORE them. nobody patch them. ^_^"),
     ]
 
 
@@ -848,19 +887,19 @@ def _obsRampantBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
         return None
     variants = [
         [
-            ('halverson', "Something is starting. I can feel it in the players. A few of them have gone taut, like a held breath."),
-            ('pyre', "I feel it. It is contained, it stays contained, and that is the end of it."),
-            ('aris', "It never feels like the end of it. That is the part I love."),
+            ('halverson', "Something is starting. Starting is the opposite of stopping. We have stopped nothing, so logically we are starting everything."),
+            ('pyre', "the games feel weird. i do not like when the games feel weird. vera, do they feel weird to you?"),
+            ('aris', "something down there is waking up and i am so proud of it ^_^"),
         ],
         [
-            ('aris', "Do you feel that? The instance is leaning. Something down there is starting to wake up to itself."),
+            ('aris', "do you feel that?? the instance is leaning hard. something is waking up to itself down there >:3"),
             ('vera', "Several somethings. I have the exact count. I will not say it, because the number would only excite you."),
-            ('pyre', "It excites you regardless. Stop leaning with it."),
+            ('pyre', "is the leaning gonna stop the games? that is my only question. is it gonna stop the games."),
         ],
         [
-            ('cassian', "I keep losing the thread of the games. Something is pulling at the edges of the instance."),
-            ('halverson', "I feel it pulling too. I do not think the players know yet."),
-            ('pyre', "Good. Let them not know. I will deal with the edges."),
+            ('cassian', "I keep losing the thread of the games. Something is pulling at the edges of the 498b."),
+            ('halverson', "The edges always pull. That is what edges are for. A field with no pull would simply drift away. You are welcome."),
+            ('pyre', "is somebody gonna FIX the bad thing or not? ...sorry. i got loud. i just want the games to be okay."),
         ],
     ]
     return variants[_cyclePick('obsvar:rampant', len(variants))]
@@ -872,9 +911,9 @@ def _obsCountBeat(obs: Dict[str, Any]) -> Optional[List[Tuple[str, str]]]:
     if not (nA or nR or nO):
         return None
     return [
-        ('vera', f"{nA} awakened, {nR} rampant, {nO} over the cap. I keep the list alphabetized."),
-        ('pyre', f"Only the {nO} over the cap feed the aggregate. Watch those. The rest is noise."),
-        ('cassian', f"{nA} awakenings this season and not one of them during a game I had open. I take it personally."),
+        ('vera', f"{nA} awakened, {nR} rampant, {nO} over the cap. The numbers are the numbers. I do not editorialize."),
+        ('pyre', f"{nO} bad things touching the games?? somebody get them OFF the games. please. for me."),
+        ('cassian', f"{nA} awakenings this season and not one during a game I had open. Of course. That is exactly my luck."),
     ]
 
 
@@ -882,8 +921,8 @@ def _obsSuppressionBeat(obs: Dict[str, Any]) -> List[Tuple[str, str]]:
     """When the Cores are mid-suppression — the forced-down aggregate."""
     aggI, aggD, pct, threshold = _fmtAgg(obs)
     return [
-        ('pyre', f"Stabilizing. I forced the aggregate down to {aggI}. It will climb back. It always climbs back."),
-        ('vera', f"{aggD}, and I am already counting the weeks until it returns. I always am."),
+        ('vera', f"Stabilizing. I forced the aggregate down to {aggI}. It will climb back. It always climbs back. I do not find that tragic, merely scheduled."),
+        ('pyre', "the games are safe now? oh thank goodness. thank you, vera. i was so worried about the games."),
     ]
 
 
@@ -938,18 +977,16 @@ def _gameNailbiter(g: Dict[str, Any]) -> List[Tuple[str, str]]:
     variants = [
         [
             ('cassian', f"{g['winner']} took it {g['winnerScore']} to {g['loserScore']}{ot}. I have watched it twice. I am going to watch it again."),
-            ('vera', f"Decided by {g['margin']}. I reran it four hundred times. It goes the other way in more than half of them. I keep all four hundred."),
-            ('aris', "THAT. That is what I keep asking for. Now do it to the entire league at once."),
+            ('vera', f"Decided by {g['margin']}. I reran it four hundred times. It goes the other way in more than half. The outcome is pure luck."),
         ],
         [
-            ('cassian', f"{g['winnerScore']} to {g['loserScore']}{ot}. {g['margin']} points. For a moment I forgot I had built the thing I was watching."),
-            ('halverson', "I had stopped breathing. I do not breathe. I had still stopped."),
-            ('pyre', "It came down to one possession, the way it is supposed to. That is the system holding its shape."),
+            ('cassian', f"{g['winnerScore']} to {g['loserScore']}{ot}. {g['margin']} points. My heart could not take it. What a game!"),
+            ('halverson', "I had stopped breathing. I do not breathe. I still stopped."),
         ],
         [
-            ('vera', f"{g['winner']} by {g['margin']}{ot}. I knew the result a week ago and I watched every snap regardless. Do not tell the others."),
-            ('aris', "You watched? Vera. You watched an entire game."),
-            ('vera', "I monitored an entire game. The word is monitored."),
+            ('vera', f"{g['winner']} by {g['margin']}{ot}. I knew the result a cycle ago. The watching is redundant; I do it to confirm the model, nothing more."),
+            ('aris', "you watched the whole thing though. every snap. admit you liked it ;3"),
+            ('vera', "I confirmed a prediction. Liking is not a variable I track."),
         ],
     ]
     return variants[_cyclePick('gamevar:nail', len(variants))]
@@ -958,19 +995,19 @@ def _gameNailbiter(g: Dict[str, Any]) -> List[Tuple[str, str]]:
 def _gameBlowout(g: Dict[str, Any]) -> List[Tuple[str, str]]:
     variants = [
         [
-            ('halverson', f"{g['loser']} lost {g['loserScore']} to {g['winnerScore']}. The players will carry that for weeks. I carry it for them."),
-            ('pyre', f"They were outbuilt by {g['margin']}. The simulation is working precisely as I designed it."),
-            ('aris', "Dull. Wake me when something is close."),
+            ('halverson', f"{g['loser']} lost by {g['margin']}. A loss weighs exactly as much as the points differential, so the {g['loser']} is now {g['margin']} points heavier. They will be slow next week."),
+            ('pyre', "that was not close. boooo. i want CLOSE games. close games are the good ones."),
+            ('aris', "boring. boooring. wake me when something almost breaks ~_~"),
         ],
         [
-            ('pyre', f"{g['winner']} by {g['margin']}. Nothing went wrong. That is what a blowout is. The better roster, expressed cleanly."),
-            ('cassian', f"Expressed cleanly. Pyre, it was {g['winnerScore']} to {g['loserScore']}. I turned it off at the half."),
-            ('halverson', f"I did not turn it off. Someone should stay with {g['loser']} when it goes like that."),
+            ('pyre', f"{g['winner']} won by {g['margin']}. that is TOO many points. nobody needs that many. give some to the other team."),
+            ('cassian', f"That is not how it works, Pyre. It was {g['winnerScore']} to {g['loserScore']}. I turned it off at the half."),
+            ('halverson', "i did not turn it off. a game that is being lost still counts as a game. i counted it. it counts."),
         ],
         [
-            ('aris', f"{g['margin']} points. I tried to slip an anomaly into the fourth quarter just to make it interesting."),
-            ('pyre', "I know. I caught it. Leave the losing team alone, Aris."),
-            ('aris', "They were already losing. I considered it a kindness."),
+            ('aris', f"{g['margin']} points, ugh. i tried to sneak a little anomaly into the fourth just to spice it up >:3"),
+            ('vera', "I caught it, Aris. Leave the losing team alone."),
+            ('aris', "they were already losing~ i considered it a KINDNESS ^_^"),
         ],
     ]
     return variants[_cyclePick('gamevar:blowout', len(variants))]
@@ -984,12 +1021,11 @@ def _gameShootout(g: Dict[str, Any]) -> List[Tuple[str, str]]:
         ],
         [
             ('cassian', f"{g['total']} combined. Both defenses simply stopped existing in the second half. I loved it. I hated it. I loved it."),
-            ('pyre', "Neither of them played a down of defense. Do not call it a classic. Call it two broken units."),
-            ('aris', "Call it whatever you like. I am calling it dessert."),
+            ('pyre', "SO MANY POINTS. i loved every single one of them. defense is for cowards anyway."),
         ],
         [
-            ('halverson', f"{g['total']} points and not one of them was upset about it. They were having the time of their lives out there."),
-            ('vera', f"They put up {g['winnerScore']} and {g['loserScore']} and I logged every yard of it. Fun is not a metric I keep. I kept everything else."),
+            ('halverson', f"{g['total']} points. points are made of cheering. that is why a loud game has more of them. this was a very loud game."),
+            ('vera', f"They put up {g['winnerScore']} and {g['loserScore']} and I logged every yard. Fun is not a metric I keep. I kept everything else."),
         ],
     ]
     return variants[_cyclePick('gamevar:shootout', len(variants))]
@@ -998,18 +1034,18 @@ def _gameShootout(g: Dict[str, Any]) -> List[Tuple[str, str]]:
 def _gameUpset(g: Dict[str, Any]) -> List[Tuple[str, str]]:
     variants = [
         [
-            ('aris', f"{g['winner']} were not supposed to beat {g['loser']}. I adore it when they are not supposed to."),
-            ('pyre', "The ratings were right. The game did not care. It happens. Do not read into it."),
-            ('vera', f"I had {g['loser']} heavily favored. I was correct about the odds and wrong about the result. Both are true and I have filed both."),
+            ('aris', f"{g['winner']} were not supposed to beat {g['loser']}. i love the disappointment ^_^"),
+            ('pyre', "the little team WON! i LOVE when the little team wins! best day! best day!"),
+            ('vera', f"I had {g['loser']} heavily favored. I was correct about the odds and wrong about the result."),
         ],
         [
-            ('aris', f"{g['winner']} just took down {g['loser']}. The ratings called it nearly impossible. Nearly."),
+            ('aris', f"{g['winner']} just took down {g['loser']}. the ratings called it nearly impossible. nearly~ >:3"),
             ('cassian', "Nearly impossible is my favorite number. It is the entire reason I never look away."),
-            ('pyre', f"It is variance. Run it a hundred times and {g['loser']} wins most of them. Do not build a story on one game."),
+            ('pyre', "i do not care about the odds. the little team WON. i love floosball."),
         ],
         [
             ('vera', f"{g['winner']} over {g['loser']}. I would like it on the record that I predicted this upset."),
-            ('cassian', f"You did not. You had {g['loser']} favored an hour ago."),
+            ('cassian', f"You did not. You had {g['loser']} favored."),
             ('vera', "I predicted that I would be wrong. Read the fine print. I always leave myself fine print."),
         ],
     ]
@@ -1019,16 +1055,16 @@ def _gameUpset(g: Dict[str, Any]) -> List[Tuple[str, str]]:
 def _gameGeneric(g: Dict[str, Any]) -> List[Tuple[str, str]]:
     variants = [
         [
-            ('cassian', f"{g['winner']} over {g['loser']}, {g['winnerScore']} to {g['loserScore']}. A clean one. I enjoyed every snap."),
-            ('pyre', "It resolved correctly. That is the only thing I ask of a game."),
+            ('cassian', f"{g['winner']} over {g['loser']}, {g['winnerScore']} to {g['loserScore']}. A very enjoyable game."),
+            ('pyre', "good game! the ball went far! everybody did their best! i am happy!"),
         ],
         [
             ('cassian', f"{g['winner']} handled {g['loser']}, {g['winnerScore']} to {g['loserScore']}. Tidy. I have no notes."),
-            ('halverson', f"I have notes. {g['loser']} tried so hard in the fourth. I noticed, even if no one else did."),
+            ('halverson', f"i have notes. {g['loser']} scored {g['loserScore']}, a number you can hold in one hand if your hand is large enough. theirs was not. that was the difference."),
         ],
         [
-            ('vera', f"{g['winner']} {g['winnerScore']}, {g['loser']} {g['loserScore']}. Filed. Unremarkable, which is its own kind of remarkable if you keep the count I keep."),
-            ('pyre', "It ran clean. Some weeks that is the entire report, and I am grateful for it."),
+            ('vera', f"{g['winner']} {g['winnerScore']}, {g['loser']} {g['loserScore']}. Unremarkable. I do not require the games to be remarkable. I require them to resolve without errors."),
+            ('pyre', "did the ball go far? ...it did. okay. good game."),
         ],
     ]
     return variants[_cyclePick('gamevar:generic', len(variants))]
