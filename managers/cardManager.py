@@ -965,13 +965,30 @@ class CardManager:
         effect = self._effectName(target)
         atMax = target.tier >= CARD_TIER_MAX
         nextTier = target.tier + 1
+        # A card is "expired" if it was created in a prior season.
+        targetActive = target.card_template.season_created == currentSeason
         # Eligible offerings: any OTHER owned card with the same effect that
         # isn't vaulted (vaulted cards are permanent and can't be fed/consumed).
+        # Expired cards cannot feed an ACTIVE card's upgrade — but if the target
+        # is itself expired, that restriction lifts and any same-effect card works.
         offerings = [
             c for c in cardRepo.getByUser(userId)
             if c.id != target.id and not getattr(c, "vaulted", False)
             and self._effectName(c) == effect
+            and (not targetActive or c.card_template.season_created == currentSeason)
         ]
+        # Preview: serialize the card AS IF it were already at the next tier so
+        # the UI can show what the upgrade buys (tiered detail / tagline /
+        # tierNote / combineValue) before the user commits. Read-only — restore
+        # the tier immediately; this method never commits.
+        preview = None
+        if not atMax:
+            originalTier = target.tier
+            try:
+                target.tier = nextTier
+                preview = self.serializeCard(target, currentSeason)
+            finally:
+                target.tier = originalTier
         return {
             "cardId": target.id,
             "effectName": effect,
@@ -981,6 +998,9 @@ class CardManager:
             "nextTier": None if atMax else nextTier,
             "cost": None if atMax else self._tierUpgradeCost(target, nextTier),
             "eligibleOfferings": [self.serializeCard(c, currentSeason) for c in offerings],
+            # Card serialized at nextTier (None at max). The UI diffs this against
+            # the current card to show the increase.
+            "preview": preview,
         }
 
     def levelUpCard(self, session, userId: int, targetCardId: int,
@@ -1014,6 +1034,12 @@ class CardManager:
             raise ValueError("Card is already at max tier")
         if self._effectName(target) != self._effectName(offering):
             raise ValueError("Offering must have the same effect as the target")
+        # Expired cards (created a prior season) cannot feed an ACTIVE card's
+        # upgrade. If the target is itself expired, the restriction lifts.
+        targetActive = target.card_template.season_created == currentSeason
+        offeringActive = offering.card_template.season_created == currentSeason
+        if targetActive and not offeringActive:
+            raise ValueError("An expired card cannot be used to upgrade an active card")
 
         toTier = target.tier + 1
         cost = self._tierUpgradeCost(target, toTier)
@@ -1513,6 +1539,23 @@ class CardManager:
             session.flush()
 
         revealed = [self._serializeTemplate(t, currentSeason) for t in drawnTemplates]
+
+        # Annotate each revealed card with how many of that EFFECT the user
+        # already owns (non-vaulted — vaulted cards can't be fed or upgraded), so
+        # the reveal UI can flag duplicates for upgrade planning: a same-effect
+        # duplicate is exactly what Level Up consumes.
+        from collections import Counter
+        from database.repositories.card_repositories import UserCardRepository
+        ownedCounts: Counter = Counter()
+        for c in UserCardRepository(session).getByUser(userId):
+            if getattr(c, "vaulted", False):
+                continue
+            en = self._effectName(c)
+            if en:
+                ownedCounts[en] += 1
+        for r in revealed:
+            r["ownedEffectCount"] = ownedCounts.get(r.get("effectName") or "", 0)
+
         return {
             "pendingId": pending.id,
             "packName": packType.display_name,
