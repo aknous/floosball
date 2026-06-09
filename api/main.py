@@ -7561,6 +7561,14 @@ def getCardCollection(
             result.sort(key=lambda d: (_num(d, "tier"), _num(d, "id")), reverse=True)
         elif sort == "name":
             result.sort(key=lambda d: ((d.get("playerName") or "").lower(), _num(d, "id")))
+        elif sort == "effect":
+            # Group same-effect cards adjacently so duplicates (the feed for
+            # Level Up / Combine) are easy to spot. effectName is the canonical
+            # duplicate key; displayName is the visible label fallback.
+            result.sort(key=lambda d: (
+                (d.get("effectName") or d.get("displayName") or "").lower(),
+                _num(d, "id"),
+            ))
         elif sort == "team":
             result.sort(key=lambda d: (_num(d, "teamId"), (d.get("playerName") or "").lower(), _num(d, "id")))
         elif sort == "position":
@@ -7710,6 +7718,11 @@ def levelUpCard(cardId: int, req: LevelUpRequest, user: _User = Depends(_getCurr
     from database.connection import get_session
     from managers.cardManager import CardManager
     from managers import achievementManager as _am
+
+    # Cards are locked while games are running — no upgrades mid-slate (mirrors
+    # the equip/roster lock). Avoids changing a card's power after it's in play.
+    if _areGamesStarted():
+        raise HTTPException(status_code=409, detail="Cards are locked while games are in progress")
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
