@@ -424,6 +424,10 @@ class GmManager:
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "cut_player", "targetPlayerName": playerName,
+                    "targetPlayerId": playerId,
+                    "targetPosition": (player.position.name if player and getattr(player, 'position', None) else None),
+                    "targetRating": (getattr(player, 'playerRating', None) if player else None),
+                    "targetTier": (player.playerTier.name if player and getattr(player, 'playerTier', None) else None),
                     "totalVotes": yea, "votesAgainst": nay, "threshold": threshold,
                     "probability": probability, "outcome": outcome,
                 })
