@@ -439,8 +439,10 @@ class PackTypeRepository:
         functional necessity, not a rarity upsell.
         """
         # Single source of truth for all-pack rarity weights. Per-draw:
-        #   ~70.7% base / ~24.1% holo / ~4.3% prismatic / ~0.9% diamond
-        commonRarityWeights = {'base': 82, 'holographic': 28, 'prismatic': 5, 'diamond': 1}
+        #   ~69.2% base / ~23.6% holo / ~5.9% prismatic / ~1.3% diamond
+        # Prismatic/diamond nudged up next-season (5→7, 1→1.5) — they'd grown
+        # too rare once the guarantees came off Grand/Exquisite.
+        commonRarityWeights = {'base': 82, 'holographic': 28, 'prismatic': 7, 'diamond': 1.5}
 
         defaults = [
             PackType(
@@ -466,7 +468,7 @@ class PackTypeRepository:
             PackType(
                 name='grand',
                 display_name='Grand Pack',
-                cost=100,
+                cost=90,
                 cards_per_pack=5,
                 cards_kept=3,
                 guaranteed_rarity=None,
@@ -476,7 +478,7 @@ class PackTypeRepository:
             PackType(
                 name='exquisite',
                 display_name='Exquisite Pack',
-                cost=150,
+                cost=130,
                 cards_per_pack=7,
                 cards_kept=4,
                 guaranteed_rarity=None,
@@ -489,7 +491,7 @@ class PackTypeRepository:
         # Themed packs use the same rarity weights as Humble/Grand/Exquisite.
         # Value comes from the player / position filter, not rarity odds.
         themedRarityWeights = commonRarityWeights
-        themedCost = 150
+        themedCost = 75  # keep-2 targeted — a light premium over Humble, below Grand
         themedCardsPerPack = 3
         themedCardsKept = 2
 
@@ -551,7 +553,7 @@ class PackTypeRepository:
         defaults.append(PackType(
             name='themed_champion',
             display_name='Champion Pack',
-            cost=250,
+            cost=110,
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='holographic',
@@ -563,7 +565,7 @@ class PackTypeRepository:
         defaults.append(PackType(
             name='themed_allpro',
             display_name='All-Pro Pack',
-            cost=250,
+            cost=110,
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='holographic',
@@ -611,16 +613,23 @@ class PackTypeRepository:
         if not eligibleTeamIds:
             return 0
 
-        themedRarityWeights = {'base': 75, 'holographic': 20, 'prismatic': 4, 'diamond': 1}
+        themedRarityWeights = {'base': 75, 'holographic': 20, 'prismatic': 5, 'diamond': 1.5}
+        teamPackCost = 75  # match the other themed packs (themedCost above)
         added = 0
         for team in self.session.query(Team).filter(Team.id.in_(eligibleTeamIds)).all():
             name = f'themed_team_{team.id}'
-            if self.getByName(name):
+            existing = self.getByName(name)
+            if existing:
+                # Already seeded — refresh rarity weights + cost so the next-season
+                # prismatic/diamond bump and the price rework reach existing prod
+                # team packs too (these rows aren't upserted like the standard tiers).
+                existing.rarity_weights = themedRarityWeights
+                existing.cost = teamPackCost
                 continue
             self.session.add(PackType(
                 name=name,
                 display_name=f'{team.name} Pack',
-                cost=150,
+                cost=teamPackCost,
                 cards_per_pack=3,
                 cards_kept=2,
                 guaranteed_rarity=None,

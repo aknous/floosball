@@ -1119,48 +1119,77 @@ class PlayerManager:
         self.retiredPlayers.append(player)
         self.newlyRetiredPlayers.append(player)
 
-    def computeRetirementRisk(self, player) -> str:
-        """Classify a player's end-of-season retirement risk.
+    def computeRetirementOdds(self, player):
+        """Single source of truth for whether a rostered player is eligible to
+        retire THIS offseason and at what probability. Used by both the actual
+        roll (seasonManager._evaluateRetirementCandidates) and the displayed
+        risk tier (computeRetirementRisk), so the two never drift.
 
-        Retirements only fire for players whose contract expires this offseason
-        (termRemaining == 1) — mid-contract aging players are NOT eligible and
-        return 'safe'. Once Front Office opens and the retirement roll happens,
-        flagged players return 'retiring' (locked-in). Returns:
-          - 'retiring'    — decision is locked, player WILL retire this offseason
-          - 'very_likely' — age 15+ past longevity on walk year (90% to retire)
-          - 'likely'      — age 10+ past longevity on walk year (65%)
-          - 'possible'    — age 7+ past longevity on walk year (5%)
-          - 'safe'        — not yet eligible, or contract doesn't expire this offseason
+        Bands key off `yearsPast = seasonsPlayed - longevity` (longevity is the
+        intended retirement clock; absolute seasonsPlayed can't grow past league
+        age). Phased contract gate: a player only enters retirement territory on
+        their walk season (termRemaining == 1), but once they're
+        RETIREMENT_MIDCONTRACT_YEARS_PAST seasons past longevity they retire even
+        mid-contract.
+
+        Returns (chancePct: int, eligible: bool, yearsPast: int). When not
+        eligible this offseason, chancePct is 0.
         """
         from constants import (
-            RETIREMENT_HIGH_AGE_SEASONS,
-            RETIREMENT_MID_AGE_SEASONS, RETIREMENT_EARLY_AGE_SEASONS,
+            RETIREMENT_YEARS_PAST_HIGH, RETIREMENT_YEARS_PAST_MID,
+            RETIREMENT_YEARS_PAST_EARLY, RETIREMENT_CHANCE_HIGH,
+            RETIREMENT_CHANCE_MID, RETIREMENT_CHANCE_EARLY,
+            RETIREMENT_MIDCONTRACT_YEARS_PAST,
+        )
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        attrs = getattr(player, 'attributes', None)
+        longevity = getattr(attrs, 'longevity', 99) if attrs else 99
+        termRemaining = getattr(player, 'termRemaining', 1) or 0
+        yearsPast = seasons - longevity
+
+        # Not yet at end of longevity → not a candidate.
+        if yearsPast < RETIREMENT_YEARS_PAST_EARLY:
+            return 0, False, yearsPast
+
+        # Phased contract gate: walk-season only until deep past longevity.
+        isWalkSeason = (termRemaining == 1)
+        midContractOk = yearsPast >= RETIREMENT_MIDCONTRACT_YEARS_PAST
+        if not isWalkSeason and not midContractOk:
+            return 0, False, yearsPast
+
+        if yearsPast >= RETIREMENT_YEARS_PAST_HIGH:
+            return RETIREMENT_CHANCE_HIGH, True, yearsPast
+        if yearsPast >= RETIREMENT_YEARS_PAST_MID:
+            return RETIREMENT_CHANCE_MID, True, yearsPast
+        return RETIREMENT_CHANCE_EARLY, True, yearsPast
+
+    def computeRetirementRisk(self, player) -> str:
+        """Classify a player's end-of-season retirement risk (display tier).
+
+        Mirrors computeRetirementOdds exactly so the surfaced label always
+        matches the real roll. Returns:
+          - 'retiring'    — decision is locked, player WILL retire this offseason
+          - 'very_likely' — 3+ seasons past longevity & eligible (90%)
+          - 'likely'      — 1-2 past & eligible (65%)
+          - 'possible'    — just reached longevity & eligible (25%)
+          - 'safe'        — not yet eligible this offseason
+        """
+        from constants import (
+            RETIREMENT_YEARS_PAST_HIGH, RETIREMENT_YEARS_PAST_MID,
         )
         # Locked-in retirement (set during _evaluateRetirementCandidates when
         # the GM window opens) overrides any predictive tier.
         if getattr(player, 'willRetire', False):
             return 'retiring'
 
-        seasons = getattr(player, 'seasonsPlayed', 0) or 0
-        attrs = getattr(player, 'attributes', None)
-        longevity = getattr(attrs, 'longevity', 99) if attrs else 99
-        termRemaining = getattr(player, 'termRemaining', 1) or 0
-
-        # Must be past longevity before any retirement check fires
-        if seasons <= longevity:
+        _chance, eligible, yearsPast = self.computeRetirementOdds(player)
+        if not eligible:
             return 'safe'
-        # Retirements only happen at end of contract — mid-contract aging vets
-        # are locked in for another year, so don't surface them as at-risk.
-        if termRemaining > 1:
-            return 'safe'
-
-        if seasons > RETIREMENT_HIGH_AGE_SEASONS:
-            return 'very_likely'   # 90%
-        if seasons > RETIREMENT_MID_AGE_SEASONS:
-            return 'likely'        # 65%
-        if seasons >= RETIREMENT_EARLY_AGE_SEASONS:
-            return 'possible'      # 5%
-        return 'safe'
+        if yearsPast >= RETIREMENT_YEARS_PAST_HIGH:
+            return 'very_likely'
+        if yearsPast >= RETIREMENT_YEARS_PAST_MID:
+            return 'likely'
+        return 'possible'
 
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
         """Promote retired player to Hall of Fame. HoFers stay on the
@@ -3013,13 +3042,22 @@ class PlayerManager:
             
         logger.info(f"Moved {len(expiredPlayers)} players with expired contracts to free agency")
     
-    def _processFreeAgentRetirements(self, currentSeason: int, leagueHighlights: List) -> None:
-        """Process retirements of long-term free agents"""
+    def _processFreeAgentRetirements(self, currentSeason: int, leagueHighlights: List,
+                                     preIncrement: bool = False) -> None:
+        """Process retirements of long-term free agents.
+
+        preIncrement=True: caller runs BEFORE the offseason free-agent-years
+        increment (i.e. at week GM_ACTIVE_WEEK), so tenure is evaluated as
+        freeAgentYears + 1 to match the post-increment eligibility the offseason
+        path used. This lets the FA pool be finalized by week 22 (retirees removed
+        up front) so the supply check + FA ballots see the real pool.
+        """
         retirements = []
-        
+        bump = 1 if preIncrement else 0
+
         for player in self.freeAgents[:]:  # Use slice copy for safe iteration
-            freeAgentYears = getattr(player, 'freeAgentYears', 0)
-            
+            freeAgentYears = getattr(player, 'freeAgentYears', 0) + bump
+
             if freeAgentYears >= 3:
                 # Base retirement chance by tier
                 baseTierChance = 0
@@ -3171,6 +3209,89 @@ class PlayerManager:
         # Count high-tier players for logging (after tiers are assigned)
         highTierCount = sum(1 for p in self.freeAgents[-numOfPlayers:] if p.playerTier.name in ['TierA', 'TierS'])
         logger.info(f"Generated {numOfPlayers} replacement players ({numRetired} retired, {max(0, minNewPlayers - numRetired)} additional, {highTierCount} tier A/S)")
+
+    def ensurePositionSupply(self, numTeams: int, buffer: int = None) -> dict:
+        """Guarantee enough living players AT EACH POSITION to fill every roster
+        slot, generating only the per-position deficit into the free-agent pool.
+
+        Supply = all active, non-retiring players (rostered + FAs + prospects +
+        upcoming rookies) by position; retiring players (`willRetire`) and
+        already-retired players are excluded. Demand = numTeams × slots-at-position
+        (WR is ×2) plus a small cushion (ROSTER_SUPPLY_BUFFER_PER_POSITION).
+
+        No-op in the normal case (the pool is far deeper than demand); only a
+        genuinely thinned position triggers generation. Idempotent: already-
+        generated FAs count toward supply, so re-running only fills what's still
+        short. Returns {positionName: countGenerated} for the positions topped up.
+        """
+        import numpy as np
+        from random import randint
+        from constants import ROSTER_SUPPLY_BUFFER_PER_POSITION
+        if buffer is None:
+            buffer = ROSTER_SUPPLY_BUFFER_PER_POSITION
+
+        slotsPerPosition = {
+            FloosPlayer.Position.QB: 1,
+            FloosPlayer.Position.RB: 1,
+            FloosPlayer.Position.WR: 2,
+            FloosPlayer.Position.TE: 1,
+            FloosPlayer.Position.K: 1,
+        }
+
+        # Living, non-retiring, slot-fillable supply by position.
+        supply = {pos: 0 for pos in slotsPerPosition}
+        for p in self.activePlayers:
+            if getattr(p, 'willRetire', False):
+                continue
+            pos = getattr(p, 'position', None)
+            if pos in supply:
+                supply[pos] += 1
+
+        deficits = {}
+        for pos, perTeam in slotsPerPosition.items():
+            demand = numTeams * perTeam + buffer
+            short = demand - supply[pos]
+            if short > 0:
+                deficits[pos] = short
+
+        if not deficits:
+            return {}
+
+        # Generate the shortfall as free agents (same seed/createPlayer idiom as
+        # _generateReplacementPlayers so the new players are valid, signable FAs).
+        total = sum(deficits.values())
+        meanPlayerSkill, stdDevPlayerSkill = 78, 7
+        physicalSeeds = np.clip(np.random.normal(meanPlayerSkill, stdDevPlayerSkill, total), 60, 100).tolist()
+        mentalSeeds = np.clip(np.random.normal(meanPlayerSkill, stdDevPlayerSkill, total), 60, 100).tolist()
+        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
+
+        generated = {}
+        for pos, count in deficits.items():
+            for _ in range(count):
+                physicalSeed = int(physicalSeeds.pop()) if physicalSeeds else meanPlayerSkill
+                mentalSeed = int(mentalSeeds.pop()) if mentalSeeds else meanPlayerSkill
+                newPlayer = self.createPlayer(pos, physicalSeed, mentalSeed)
+                if not newPlayer:
+                    continue
+                newPlayer.id = nextPlayerId
+                nextPlayerId += 1
+                newPlayer.team = 'Free Agent'
+                newPlayer.freeAgentYears = 0
+                self.freeAgents.append(newPlayer)
+                if newPlayer not in self.activePlayers:
+                    self.activePlayers.append(newPlayer)
+                self.addToPositionList(newPlayer)
+                generated[pos.name] = generated.get(pos.name, 0) + 1
+
+        # Assign tiers/contracts to the new free agents.
+        self.sortPlayersByPosition()
+        if generated:
+            logger.info(
+                f"Roster supply top-up: generated {generated} "
+                f"(supply was {{ {', '.join(f'{k.name}:{v}' for k, v in supply.items())} }}, "
+                f"{numTeams} teams, buffer {buffer})"
+            )
+        return generated
 
     # ── Prospect Pipeline: rookie class generation + draft ──────────────
 

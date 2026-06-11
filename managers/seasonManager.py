@@ -496,10 +496,13 @@ class SeasonManager:
 
             logger.info(f"Simulating {nextWeekText} in {self.timingManager.getModeString()} mode")
 
-            # Select weekly modifier
+            # Select weekly modifier (and pre-roll the rest of this calendar
+            # day's slot modifiers so the day's full slate can be announced
+            # ahead of time — see getDayModifierSchedule).
             weeklyModifier = self._selectWeeklyModifier(
                 self.currentSeason.seasonNumber, nextWeek
             )
+            self._ensureDayModifiers(self.currentSeason.seasonNumber, nextWeek)
 
             # Notify users whose power-ups (Accession / Conscription) just expired
             self._notifyExpiredPowerups(
@@ -849,6 +852,19 @@ class SeasonManager:
             from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
             if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
                 self._evaluateRetirementCandidates()
+                # Retire long-tenured free agents now too (preIncrement=True
+                # anticipates the offseason FA-years bump) so the FA pool is
+                # FINALIZED by week 22 — retirees gone, not just flagged. With
+                # rostered retirements flagged and the rookie class known since
+                # season start, the supply picture is now complete.
+                faHighlights = self.currentSeason.leagueHighlights if hasattr(self.currentSeason, 'leagueHighlights') else []
+                self.playerManager._processFreeAgentRetirements(
+                    self.currentSeason.seasonNumber, faHighlights, preIncrement=True
+                )
+                # With all retirements accounted for, top up any thin position
+                # into the FA pool now so the gaps are filled BEFORE fans ballot
+                # the FA draft (they can rank the new players).
+                self._ensurePositionSupply(reason='week-22 supply check')
                 # Snapshot per-team active fan counts at this moment so
                 # the GM vote threshold doesn't shift if new fans log in
                 # for the first time after the front office opens.
@@ -4904,13 +4920,13 @@ class SeasonManager:
         if faOrderForPredraft:
             await self._runPreDraftPass(faOrderForPredraft, gmResults)
 
-        # STEP 3.80: Process FA retirements + harvest rookie pool, broadcast
-        # the rookie pool BEFORE the noon-ET wait. This populates the right-
-        # panel rookie list during the wait so users can browse prospects in
-        # advance instead of seeing an empty board until picks start.
-        logger.info("Step 3.80: FA retirements + rookie pool preview broadcast")
+        # STEP 3.80: Harvest rookie pool + broadcast it BEFORE the noon-ET wait.
+        # This populates the right-panel rookie list during the wait so users can
+        # browse prospects in advance instead of seeing an empty board until picks
+        # start. (FA retirements already ran at week GM_ACTIVE_WEEK so the FA pool
+        # was finalized before ballots — see the week-22 hook.)
+        logger.info("Step 3.80: rookie pool preview broadcast")
         seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
-        self.playerManager._processFreeAgentRetirements(seasonNum, [])
 
         rookies = [p for p in self.playerManager.activePlayers
                    if getattr(p, 'is_upcoming_rookie', False)]
@@ -5148,6 +5164,12 @@ class SeasonManager:
             # promoted prospects fill their slots first.
             logger.info("Step 5.75: Apply fan-voted prospect promotions")
             await self._applyFanVotedPromotions()
+
+            # STEP 5.9: Final supply guarantee — now that FA retirements, cuts,
+            # expiries and the rookie draft are all resolved, top up any position
+            # still short of filling every roster slot. Catches FA retirements
+            # decided after the week-22 check. Idempotent with that earlier pass.
+            self._ensurePositionSupply(reason='pre-FA-draft guarantee')
 
             # STEP 6: FA Draft
             logger.info("Step 6: Free agency draft")
@@ -5970,9 +5992,11 @@ class SeasonManager:
         """Decide which players will retire after this season.
 
         Runs late in the regular season so users see retirements coming and
-        can plan replacements via FA ballots. Only flags players whose
-        contracts expire this offseason (termRemaining == 1) — no mid-contract
-        retirements. Probability bands match the prior expired-contract logic.
+        can plan replacements via FA ballots. Eligibility + probability come
+        from playerManager.computeRetirementOdds (shared with the displayed
+        risk tier so they never drift): bands key off yearsPast = seasonsPlayed
+        - longevity, gated to walk seasons until a player is well past longevity,
+        at which point they retire mid-contract too.
         Returns the list of players newly flagged as retiring.
         """
         from random import randint
@@ -5988,20 +6012,11 @@ class SeasonManager:
                     continue
                 if getattr(player, 'willRetire', False):
                     continue
-                if player.termRemaining != 1:
-                    continue
-                if player.seasonsPlayed <= player.attributes.longevity:
-                    continue
 
-                shouldRetire = False
-                if player.seasonsPlayed > 15:
-                    shouldRetire = randint(1, 100) > 10  # 90%
-                elif player.seasonsPlayed > 10:
-                    shouldRetire = randint(1, 100) > 35  # 65%
-                elif player.seasonsPlayed >= 7:
-                    shouldRetire = randint(1, 100) > 95  # 5%
-
-                if shouldRetire:
+                chancePct, eligible, _yearsPast = self.playerManager.computeRetirementOdds(player)
+                if not eligible:
+                    continue
+                if randint(1, 100) <= chancePct:
                     player.willRetire = True
                     flagged.append((player, team))
 
@@ -6016,6 +6031,27 @@ class SeasonManager:
                 logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
 
         return flagged
+
+    def _ensurePositionSupply(self, reason: str = '') -> dict:
+        """Guarantee enough living players at each position to fill all roster
+        slots (see playerManager.ensurePositionSupply). No-op unless a position
+        is genuinely short. Surfaces a league-news note when it has to generate."""
+        teamManager = self.serviceContainer.getService('team_manager')
+        numTeams = len(teamManager.teams) if teamManager else 24
+        try:
+            generated = self.playerManager.ensurePositionSupply(numTeams)
+        except Exception as e:
+            logger.error(f"ensurePositionSupply failed ({reason}): {e}")
+            return {}
+        if generated:
+            total = sum(generated.values())
+            detail = ', '.join(f'{n} {pos}' for pos, n in generated.items())
+            logger.info(f"Position supply top-up ({reason}): +{total} FAs — {detail}")
+            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+                self.currentSeason.leagueHighlights.insert(0, {
+                    'event': {'text': f'{total} free agent(s) entered the pool to cover thin positions ({detail})'}
+                })
+        return generated
 
     def _executePlayerRetirement(self, player, team, position, leagueHighlights):
         """Execute the retirement of a player from a team roster"""
@@ -7506,6 +7542,84 @@ class SeasonManager:
                 session.close()
         except ImportError:
             return "steady"
+
+    # Slot ET start hours within a calendar day, indexed by `week % 7`
+    # (mirrors getWeekStartTime). list[0] == 12pm is the day's first slot.
+    _SLOT_ET_HOURS = [12, 13, 14, 15, 16, 17, 18]
+
+    @staticmethod
+    def _dayOfWeek(week: int) -> int:
+        """Calendar day index a sim-week belongs to. Slots in the same calendar
+        day share `week // 7` (matches getWeekStartTime's dayNumber). Robust to
+        the day-0 quirk (weeks 1-6) and week 28 spilling to day 4."""
+        return week // 7
+
+    def _slotWeeksForDay(self, week: int) -> list:
+        """All regular-season sim-weeks that play on the same calendar day as
+        `week`, ordered by kickoff (ET hour ascending)."""
+        dayNum = self._dayOfWeek(week)
+        slots = [w for w in range(1, 29) if self._dayOfWeek(w) == dayNum]
+        slots.sort(key=lambda w: self._SLOT_ET_HOURS[w % 7])
+        return slots
+
+    def _ensureDayModifiers(self, season: int, anchorWeek: int) -> None:
+        """Pre-select weekly modifiers for every slot in anchorWeek's calendar
+        day so the whole day can be announced ahead of time. Idempotent — rolls
+        only missing slots, in kickoff order so within-day repeats are avoided
+        by _selectWeeklyModifier's look-back. No-op outside the regular season."""
+        if not anchorWeek or anchorWeek < 1 or anchorWeek > 28:
+            return
+        for w in self._slotWeeksForDay(anchorWeek):
+            self._selectWeeklyModifier(season, w)
+
+    def getDayModifierSchedule(self, currentWeek: int) -> dict:
+        """The current calendar day's modifier slate (all slots), with the
+        active slot and the 'next up' slot flagged. Pre-selects any unrolled
+        slots for the day. Regular season only — returns empty during playoffs/
+        offseason (no per-slot modifiers there)."""
+        if self.currentSeason is None or not currentWeek or currentWeek < 1 or currentWeek > 28:
+            return {"day": None, "slots": []}
+        season = self.currentSeason.seasonNumber
+        self._ensureDayModifiers(season, currentWeek)
+
+        slotWeeks = self._slotWeeksForDay(currentWeek)
+        modByWeek = {}
+        try:
+            from database.connection import get_session
+            from database.models import WeeklyModifier
+            session = get_session()
+            try:
+                rows = (
+                    session.query(WeeklyModifier)
+                    .filter(WeeklyModifier.season == season)
+                    .filter(WeeklyModifier.week.in_(slotWeeks))
+                    .all()
+                )
+                modByWeek = {r.week: r.modifier for r in rows}
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"getDayModifierSchedule lookup failed: {e}")
+
+        nextWeek = next((w for w in slotWeeks if w > currentWeek), None)
+        slots = []
+        for w in slotWeeks:
+            mod = modByWeek.get(w, "steady")
+            etHour = self._SLOT_ET_HOURS[w % 7]
+            display = (etHour - 12) if etHour > 12 else 12
+            ampm = "PM" if etHour >= 12 else "AM"
+            slots.append({
+                "week": w,
+                "etHour": etHour,
+                "label": f"{display if display != 0 else 12}:00 {ampm}",
+                "modifier": mod,
+                "displayName": self.MODIFIER_DISPLAY.get(mod, mod.title()),
+                "description": self.MODIFIER_DESCRIPTIONS.get(mod, ""),
+                "isActive": (w == currentWeek),
+                "isPast": (w < currentWeek),
+                "isNext": (w == nextWeek),
+            })
+        return {"day": self._dayOfWeek(currentWeek), "slots": slots}
 
     # ─── Floobits Economy ─────────────────────────────────────────────────────
 

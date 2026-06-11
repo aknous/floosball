@@ -11386,6 +11386,72 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 
 
+def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
+    """Build a single pick-em matchup dict (teams, pickability, multipliers)
+    from a live/scheduled game object. Shared by the per-slot and whole-day
+    endpoints. Caller overlays the user's pick afterward."""
+    from constants import (PICKEM_QUARTER_MULTIPLIERS, calculateUnderdogMultiplier,
+                           calculateCertaintyMultiplier, calculateWinProbMultiplier)
+    rawStatus = getattr(liveGame, 'status', None)
+    statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+    homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+    awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+
+    if statusVal == 3:  # Final
+        pickable = False
+        currentMultiplier = 0.0
+    elif statusVal == 2:  # Active
+        pickable = True
+        quarter = getattr(liveGame, 'currentQuarter', 1)
+        homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+        currentMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
+    else:  # Scheduled / pre-game
+        pickable = True
+        currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
+    if statusVal == 2:
+        liveWp = (getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0) / 100.0
+        underdogInfo = {
+            "homeMultiplier": calculateWinProbMultiplier(liveWp),
+            "awayMultiplier": calculateWinProbMultiplier(1.0 - liveWp),
+        }
+    else:
+        underdogInfo = {
+            "homeMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, True),
+            "awayMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, False),
+        }
+
+    matchup = {
+        "gameIndex": gameIndex,
+        "homeTeam": {
+            "id": liveGame.homeTeam.id,
+            "name": liveGame.homeTeam.name,
+            "abbr": liveGame.homeTeam.abbr,
+            "color": liveGame.homeTeam.color,
+            "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
+            "elo": homeElo,
+        },
+        "awayTeam": {
+            "id": liveGame.awayTeam.id,
+            "name": liveGame.awayTeam.name,
+            "abbr": liveGame.awayTeam.abbr,
+            "color": liveGame.awayTeam.color,
+            "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
+            "elo": awayElo,
+        },
+        "userPick": None,
+        "pointsMultiplier": None,
+        "underdogMultiplier": None,
+        "pickable": pickable,
+        "currentMultiplier": currentMultiplier,
+        "underdogInfo": underdogInfo,
+        "result": None,
+    }
+    if statusVal == 3 and getattr(liveGame, 'winningTeam', None):
+        matchup["result"] = {"winnerId": liveGame.winningTeam.id}
+    return matchup
+
+
 @app.get("/api/pickem/week")
 def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
     """Get this week's matchups with the user's existing picks (if any).
@@ -11776,6 +11842,250 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         raise HTTPException(500, "Failed to submit pick")
     finally:
         session.close()
+
+
+@app.get("/api/pickem/day")
+def get_pickem_day(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
+    """All of the current calendar day's game slots in one payload, so a
+    once-a-day user can prognosticate every game at once. Each slot carries its
+    games (with per-game pickability + multipliers) and the user's existing
+    picks. Slots are labeled by week number. A calendar day = up to 7 slots
+    (sim-weeks sharing `week // 7`). Playoffs collapse to the single active round.
+    (Fantasy modifiers are surfaced separately on the fantasy page — not here.)
+    """
+    response.headers["Cache-Control"] = "public, max-age=10"
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        return build_success_response({"season": 0, "day": None, "currentWeek": 0, "slots": []})
+
+    seasonNum = currentSeason.seasonNumber
+    week = sm._getPickemWeek()
+    schedule = currentSeason.schedule
+    playoffRound = getattr(currentSeason, 'currentPlayoffRound', None)
+
+    slots = []
+    dayNum = None
+    if playoffRound or (isinstance(week, int) and week > 28):
+        # Playoffs: the "day" is a single round — surface it as one slot.
+        displayGames = currentSeason.activeGames or currentSeason.completedWeekGames or []
+        games = [_buildPickemMatchup(g, i) for i, g in enumerate(displayGames)]
+        slots.append({
+            "week": week,
+            "label": sm.playoffRoundLabel(week) if hasattr(sm, 'playoffRoundLabel') else f"Week {week}",
+            "isActive": True, "isPast": False, "isNext": False,
+            "games": games,
+        })
+    elif isinstance(week, int) and 1 <= week <= 28:
+        dayNum = sm._dayOfWeek(week)
+        slotWeeks = sm._slotWeeksForDay(week)
+        nextWeek = next((w for w in slotWeeks if w > week), None)
+        for w in slotWeeks:
+            scheduleGames = schedule[w - 1].get('games', []) if 0 < w <= len(schedule) else []
+            # For the live slot, prefer activeGames (has live status/quarter).
+            activeGames = currentSeason.activeGames if w == week else None
+            games = []
+            for i, g in enumerate(scheduleGames):
+                liveGame = activeGames[i] if (activeGames and i < len(activeGames)) else g
+                games.append(_buildPickemMatchup(liveGame, i))
+            slots.append({
+                "week": w,
+                "label": f"Week {w}",
+                "isActive": (w == week),
+                "isPast": (w < week),
+                "isNext": (w == nextWeek),
+                "games": games,
+            })
+
+    # Overlay the user's existing picks per slot.
+    if user and slots:
+        from database.connection import get_session
+        from database.repositories.pickem_repository import PickEmRepository
+        session = get_session()
+        try:
+            pickemRepo = PickEmRepository(session)
+            for slot in slots:
+                picks = pickemRepo.getUserPicks(user.id, seasonNum, slot["week"])
+                pickMap = {p.game_index: p for p in picks}
+                pickedCount = 0
+                for g in slot["games"]:
+                    pk = pickMap.get(g["gameIndex"])
+                    if pk:
+                        pickedCount += 1
+                        g["userPick"] = pk.picked_team_id
+                        g["pointsMultiplier"] = pk.points_multiplier
+                        g["underdogMultiplier"] = pk.underdog_multiplier
+                        if pk.correct is not None:
+                            g["result"] = g.get("result") or {}
+                            g["result"]["correct"] = pk.correct
+                            g["result"]["pointsEarned"] = pk.points_earned or 0
+                slot["pickedCount"] = pickedCount
+        finally:
+            session.close()
+
+    return build_success_response({
+        "season": seasonNum,
+        "day": dayNum,
+        "currentWeek": week,
+        "slots": slots,
+    })
+
+
+@app.post("/api/pickem/picks")
+def submit_pickem_picks(body: dict, user: _User = Depends(_getCurrentUser)):
+    """Bulk submit/update picks across multiple slots in one call (the whole-day
+    prognostication flow). Body: {"picks": [{"week", "gameIndex", "pickedTeamId"}]}.
+    Per-game lock still applies — Final games are skipped and reported in `skipped`.
+    Multipliers are recomputed server-side per game (same rules as single-pick).
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    from constants import (PICKEM_QUARTER_MULTIPLIERS, calculateUnderdogMultiplier,
+                           calculateCertaintyMultiplier, calculateWinProbMultiplier)
+
+    picks = body.get("picks")
+    if not isinstance(picks, list) or not picks:
+        raise HTTPException(400, "picks (a non-empty list) required")
+    if len(picks) > 200:
+        raise HTTPException(400, "Too many picks in one request (max 200)")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        raise HTTPException(400, "No active season")
+
+    seasonNum = currentSeason.seasonNumber
+    schedule = currentSeason.schedule
+    playoffRound = getattr(currentSeason, 'currentPlayoffRound', None)
+    activeWeek = sm._getPickemWeek()
+
+    from database.connection import get_session
+    from database.repositories.pickem_repository import PickEmRepository
+    session = get_session()
+    saved = []
+    skipped = []
+    try:
+        pickemRepo = PickEmRepository(session)
+        for item in picks:
+            w = item.get("week")
+            gameIndex = item.get("gameIndex")
+            pickedTeamId = item.get("pickedTeamId")
+            if w is None or gameIndex is None or pickedTeamId is None:
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "missing fields"})
+                continue
+
+            # Resolve the live/scheduled game object for this slot+index.
+            if playoffRound and w == activeWeek:
+                displayGames = currentSeason.activeGames or currentSeason.completedWeekGames or []
+                if gameIndex < 0 or gameIndex >= len(displayGames):
+                    skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid gameIndex"})
+                    continue
+                liveGame = displayGames[gameIndex]
+            else:
+                if not isinstance(w, int) or w < 1 or w > len(schedule):
+                    skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid week"})
+                    continue
+                scheduleGames = schedule[w - 1].get('games', [])
+                if gameIndex < 0 or gameIndex >= len(scheduleGames):
+                    skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid gameIndex"})
+                    continue
+                game = scheduleGames[gameIndex]
+                activeGames = currentSeason.activeGames if w == activeWeek else None
+                liveGame = activeGames[gameIndex] if (activeGames and gameIndex < len(activeGames)) else game
+
+            rawStatus = getattr(liveGame, 'status', None)
+            statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+            if statusVal == 3:  # Final — locked
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "final"})
+                continue
+
+            homeTeamId = liveGame.homeTeam.id
+            awayTeamId = liveGame.awayTeam.id
+            if pickedTeamId not in (homeTeamId, awayTeamId):
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid team"})
+                continue
+
+            pickedIsHome = (pickedTeamId == homeTeamId)
+            if statusVal == 2:  # Active — live quarter + win prob
+                quarter = getattr(liveGame, 'currentQuarter', 1)
+                homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+                pointsMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
+                pickedWp = (homeWinProb / 100.0) if pickedIsHome else (1.0 - homeWinProb / 100.0)
+                underdogMultiplier = calculateWinProbMultiplier(pickedWp)
+            else:  # Pre-game — full timing multiplier + ELO underdog
+                pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+                homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+                awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+                underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
+
+            pickemRepo.submitPick(
+                user.id, seasonNum, w, gameIndex,
+                homeTeamId, awayTeamId, pickedTeamId,
+                pointsMultiplier=pointsMultiplier,
+                underdogMultiplier=underdogMultiplier,
+            )
+            saved.append({"week": w, "gameIndex": gameIndex, "pickedTeamId": pickedTeamId})
+
+        # Achievement hooks — run once for the whole batch, not per pick.
+        if saved:
+            from managers import achievementManager as _am
+            from database.models import PickEmPick as _PickEmPick
+            from sqlalchemy import func, distinct
+            _am.onPickEmSubmitted(session, user.id, isAutoPick=False)
+            manualWeeks = session.query(func.count(distinct(_PickEmPick.week))).filter(
+                _PickEmPick.user_id == user.id,
+                _PickEmPick.season == seasonNum,
+                _PickEmPick.is_auto.is_(False),
+            ).scalar() or 0
+            for _key in ("dedicated_i", "dedicated_ii", "dedicated_iii", "dedicated_iv", "dedicated_v", "dedicated_vi"):
+                _am.recordProgress(session, user.id, _key, absolute=manualWeeks, currentSeason=seasonNum)
+            favTeamId = getattr(user, "favorite_team_id", None)
+            if favTeamId:
+                againstFav = session.query(func.count(_PickEmPick.id)).filter(
+                    _PickEmPick.user_id == user.id,
+                    _PickEmPick.season == seasonNum,
+                    _PickEmPick.is_auto.is_(False),
+                    ((_PickEmPick.home_team_id == favTeamId) | (_PickEmPick.away_team_id == favTeamId)),
+                    _PickEmPick.picked_team_id != favTeamId,
+                ).scalar() or 0
+                if againstFav >= 5:
+                    _am.unlockSecret(session, user.id, "cold_blooded")
+
+        session.commit()
+        return build_success_response({
+            "saved": saved,
+            "skipped": skipped,
+            "savedCount": len(saved),
+            "skippedCount": len(skipped),
+        })
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Pick-em bulk submit error: {e}")
+        raise HTTPException(500, "Failed to submit picks")
+    finally:
+        session.close()
+
+
+@app.get("/api/fantasy/modifier-schedule")
+def get_fantasy_modifier_schedule(response: Response):
+    """The current calendar day's fantasy-modifier slate (all slots) with the
+    active and 'next up' slots flagged, so users can plan cards/rosters ahead.
+    Number-free, public. Empty during playoffs/offseason (no per-slot modifiers).
+    """
+    response.headers["Cache-Control"] = "public, max-age=15"
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        return build_success_response({"season": 0, "day": None, "slots": []})
+    week = sm._getPickemWeek()
+    sched = sm.getDayModifierSchedule(week if isinstance(week, int) else 0)
+    return build_success_response({"season": currentSeason.seasonNumber, **sched})
 
 
 @app.get("/api/pickem/leaderboard")

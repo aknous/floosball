@@ -209,22 +209,22 @@ ROSTER_MIN_PLAYERS = 3
 #   SCALE     — overall payout scale (raises floor + ceiling together)
 #   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
 # Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
-# then bumped ~33% across the board in v0.16.1 — payouts felt too thin
-# relative to pack prices. Shape (exponent) unchanged so the high-end
-# taper still prevents runaway whales while floors and middle play
-# benefit too. Sample profile (default):
-#   100 FP →  16 F
-#   500 FP →  54 F
-#  1000 FP →  93 F
-#  3000 FP → 217 F
-WEEKLY_FP_FLOOBIT_SCALE = 0.43
+# bumped ~33% in v0.16.1, then nudged up another ~12% next-season — payouts
+# still felt a touch thin against pack/upgrade prices. Shape (exponent)
+# unchanged so the high-end taper still prevents runaway whales while
+# floors and middle play benefit too. Sample profile (default):
+#   100 FP →  17 F
+#   500 FP →  61 F
+#  1000 FP → 105 F
+#  3000 FP → 247 F
+WEEKLY_FP_FLOOBIT_SCALE = 0.48
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 # Endowment (income_boost powerup) replaces the curve with a flatter one.
 # Less taper = monster weeks pay more; low weeks pay roughly the same.
 # Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
 # at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
 # proportionally with the standard curve.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.27
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.30
 WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
@@ -376,14 +376,36 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
-# ---- Retirement Risk Telegraphing ----
-# Surfaces during the season so fans can pre-vote replacements. Mirrors the
-# actual retirement rolls in seasonManager._evaluateRetirementCandidates.
+# ---- Retirement (keyed to yearsPast = seasonsPlayed - longevity) ----
+# `longevity` (randint 4-10 per player) is the intended retirement clock, so we
+# band on how many seasons a player is PAST it — not absolute seasonsPlayed,
+# which can't grow past league age (a young league would otherwise never retire
+# its vets). These bands are the SINGLE SOURCE OF TRUTH for both the actual roll
+# (seasonManager._evaluateRetirementCandidates) and the displayed risk tier
+# (playerManager.computeRetirementRisk / computeRetirementOdds), so the label a
+# user sees always matches the real odds.
 # Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'retiring' (locked)
-# Retirements only fire for players whose contract expires this offseason.
-RETIREMENT_HIGH_AGE_SEASONS = 15    # 90% chance on walk year
-RETIREMENT_MID_AGE_SEASONS = 10     # 65% chance on walk year
-RETIREMENT_EARLY_AGE_SEASONS = 7    # 5% chance on walk year
+RETIREMENT_YEARS_PAST_HIGH  = 3     # 3+ seasons past longevity → very_likely
+RETIREMENT_YEARS_PAST_MID   = 1     # 1-2 past → likely
+RETIREMENT_YEARS_PAST_EARLY = 0     # just reached longevity → possible
+RETIREMENT_CHANCE_HIGH  = 90        # % chance once eligible (yearsPast >= HIGH)
+RETIREMENT_CHANCE_MID   = 65        # % chance (yearsPast >= MID)
+RETIREMENT_CHANCE_EARLY = 25        # % chance (yearsPast >= EARLY)
+# Phased contract gate: a player only newly enters retirement territory on their
+# walk season (termRemaining == 1). But once they're this many seasons past
+# longevity and still playing, they retire even mid-contract.
+RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
+
+# ---- Roster Supply Floor ----
+# After retirements are known, guarantee the league has enough living players at
+# EACH position to fill every roster slot (24 teams × {QB1,RB1,WR2,TE1,K1}),
+# else a position run (many retirements at one spot + a thin rookie class) could
+# leave slots permanently empty. The supply check (playerManager.ensurePositionSupply)
+# tops up only the per-position deficit into the FA pool — a no-op in the normal
+# case where the pool is already deep. This buffer is the small cushion kept
+# ABOVE exact slot demand so the FA draft has some choice and late FA retirements
+# don't re-open a gap. Only matters when a position is genuinely short.
+ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly
@@ -455,14 +477,14 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Bumps your weekly FP-to-Floobits curve to a flatter taper for 4 weeks. Big weeks pay more; routine weeks roughly the same.",
+    "description": "Increases your weekly fantasy Floobit payout for 4 weeks.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
     # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
     # small dip on low-FP weeks for a meaningful bump on monster weeks
-    # (e.g. 500 FP: 67 F normal → 73 F endowment; 1000 FP: 121 → 142;
-    # 5000 FP: 474 → 653).
+    # (e.g. 500 FP: 61 F normal → 70 F endowment; 1000 FP: 105 → 132;
+    # 5000 FP: 423 → 596).
     "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
     "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
 }
@@ -514,7 +536,7 @@ CARD_TIER_DIVIDEND_FLOOBITS = {
 # Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
 # the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
 # a day-one rush (the same-effect duplicate requirement is the primary gate).
-CARD_TIER_UPGRADE_COST = {2: 80, 3: 250, 4: 600}
+CARD_TIER_UPGRADE_COST = {2: 72, 3: 225, 4: 540}
 CARD_TIER_EDITION_COST_MULT = {
     "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
 }
@@ -543,7 +565,13 @@ SHOWCASE_GRADE_THRESHOLDS = [
     ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
 ]
 # Grade → flat Floobit payout at season end.
-SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 50, "C": 120, "B": 250, "A": 450, "S": 800}
+# Calibrated next-season to read as a strong second income against a season of
+# fantasy, without eclipsing it (showcase pays once/season and clears, and the
+# permanent-vault cost — vaulted cards can't be equipped/sold — justifies it).
+# S capped at 3000 (a first pass at 5000 ran too hot). Old table was
+# 50/120/250/450/800, below even a casual fantasy season. Re-tune via
+# tune_showcase.py / simcheck.
+SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 250, "C": 600, "B": 1200, "A": 2000, "S": 3000}
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
