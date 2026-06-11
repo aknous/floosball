@@ -24,6 +24,34 @@ FIELD_LENGTH = 100
 MIN_ATTRIBUTE_VALUE = 60
 MAX_ATTRIBUTE_VALUE = 100
 
+# ---- Career-arc development (player_development.py) ----
+# Players rise toward a per-player PEAK season (a jittered fraction of their
+# longevity), plateau, then decline — decline is decoupled from the retirement
+# clock so it actually shows. The phase SIGN is intrinsic (seasonsPlayed vs
+# peakSeason); coach playerDevelopment + market tier (devBias) only modulate how
+# fast/much a RISING player climbs (= realized peak height), never reversing the
+# decline. This replaces the old prime/decline binary that let ratings ratchet
+# upward forever (league inflated to all-5-star by ~season 9).
+DEV_PEAK_FRACTION_LOW = 0.55     # peak season ≈ this..HIGH × longevity, jittered per player
+DEV_PEAK_FRACTION_HIGH = 0.65
+DEV_PEAK_SEASON_MIN = 2          # even short-longevity players get a brief rise
+# Per-attribute change ranges (min, max) BEFORE devBias / ceiling cap / prospect spread.
+DEV_RISE_RANGE = (-1, 5)         # pre-peak: skews up (devBias added here)
+DEV_PEAK_RANGE = (-2, 2)         # at peak: roughly flat
+DEV_DECLINE_RANGE = (-5, 1)      # post-peak base: skews down (steepens over time)
+# Decline steepens with seasons past peak; each season shifts the range down by
+# this, plus an extra kick once past longevity, capped so it can't run away.
+DEV_DECLINE_STEEPEN_PER_SEASON = 1
+DEV_DECLINE_PAST_LONGEVITY_KICK = 2
+DEV_DECLINE_MAX_STEEPEN = 6
+# Prospects / early-career players are boom-or-bust: widen both ends; good dev
+# (positive devBias) skews the spread toward boom.
+DEV_PROSPECT_SPREAD = 4
+DEV_PROSPECT_SEASONS = 1         # seasonsPlayed <= this (or is_prospect) → volatile
+# Trained attributes can fade this low in decline (below MIN_ATTRIBUTE_VALUE so
+# aging vets actually drop into lower tiers and the league spreads out).
+DEV_ATTRIBUTE_FLOOR = 55
+
 # Random Generation Ranges
 TIER_S_MIN = 95
 TIER_S_MAX = 100
