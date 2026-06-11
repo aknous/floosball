@@ -58,7 +58,7 @@ managers/
   achievementManager.py           # Achievement progress, grants, pending rewards, secret unlocks, WS toasts
   emailManager.py                 # Transactional emails via Resend (NOT SES)
 database/
-  models.py                       # All SQLAlchemy models (59 classes)
+  models.py                       # All SQLAlchemy models (60 classes)
   connection.py                   # DB init, seeds, inline migrations, backfills, clear_db
   config.py                       # DB path config
   repositories/                   # Repository pattern (base, card, game, gm, notification, pickem, shop)
@@ -215,13 +215,13 @@ Link via `/api/bot/link` (short-lived code → `users.discord_id`); opt-in DM re
 ## REST API (`api/main.py`)
 ~140 REST endpoints + 3 WebSocket. Response envelope (`api_response_builders.py`): success `{success:true, message, data}`, error via `HTTPException`. Some list endpoints (currentGames, standings, highlights, league-news) return raw payloads.
 
-Endpoint groups (grep `@app.` in `main.py` for the full list): Teams, Players (incl. follow, quotes, anomaly, rating-history), Games/Season (incl. reactions, rally), History/Records, Stats (leaders, mvp-rankings), League markets, Fantasy (roster/lock/swap/remove/snapshot/leaderboard/modifier/card-projection), Cards (collection/sell/blend/equipped/template-projection), Packs (types/pending/reveal/select/starter), Shop (featured/buy-card/reroll/powerups), Pick-Em, GM/Front Office (vote/undo/summary/eligible/fa-scouting/fa-ballot/rookie-ballot/votes/results), Achievements, Currency, Users (me/username/preferences/favorite-team), Notifications, Bot/Discord, Beta access, Cores (`/api/cores/status` — public, number-free Criticality band; `/api/cores/conversation` — ambient Cores banter), Debug (anomaly, ungated), **Admin** (gated by `_checkAdminAuth` — JWT `is_admin` OR `X-Admin-Password` header).
+Endpoint groups (grep `@app.` in `main.py` for the full list): Teams, Players (incl. follow, quotes, anomaly, rating-history), Games/Season (incl. reactions, rally), History/Records, **Recap** (`/api/recap?season=` — consolidated Season Recap: awards/standings/leaders/transactions/user-leaderboards/showcase, defaults to current; `seasonsAvailable` = seasons with a recap event log), Stats (leaders, mvp-rankings), League markets, Fantasy (roster/lock/swap/remove/snapshot/leaderboard/modifier/card-projection), Cards (collection/sell/blend/equipped/template-projection), Packs (types/pending/reveal/select/starter), Shop (featured/buy-card/reroll/powerups), Pick-Em, GM/Front Office (vote/undo/summary/eligible/fa-scouting/fa-ballot/rookie-ballot/votes/results), Achievements, Currency, Users (me/username/preferences/favorite-team), Notifications, Bot/Discord, Beta access, Cores (`/api/cores/status` — public, number-free Criticality band; `/api/cores/conversation` — ambient Cores banter), Debug (anomaly, ungated), **Admin** (gated by `_checkAdminAuth` — JWT `is_admin` OR `X-Admin-Password` header).
 
 ## Auth (`api/auth.py`)
 Clerk RS256 JWT verified via JWKS. `getCurrentUser` maps `clerk_id` → local `User`, auto-creating + provisioning a starter pack on first sight (100 Floobits + 5 base cards, one per position; handles Clerk-instance email migration + race conditions). `getOptionalUser` / `getAdminUser` variants. Beta gate (when enabled) requires the email in `BetaAllowlist`. Usernames are generated (adjective+noun+number, unique-checked), set once.
 
 ## Database
-- SQLite at `data/floosball.db`. **59 SQLAlchemy models** in `models.py` (domains: game/season/stats, players/attributes, user/economy, cards, fantasy, pick-em, shop, achievements, GM, team funding, anomaly, misc). `grep "class .*(Base)" models.py` for the list.
+- SQLite at `data/floosball.db`. **60 SQLAlchemy models** in `models.py` (domains: game/season/stats, players/attributes, user/economy, cards, fantasy, pick-em, shop, achievements, GM, team funding, anomaly, misc). `grep "class .*(Base)" models.py` for the list.
 - **Two migration systems**: `alembic/versions/` (~38 files, canonical schema history for local/fresh setups) and **inline migrations** in `connection.py::_runPendingMigrations()` (idempotent `ALTER TABLE ADD COLUMN` / `CREATE TABLE IF NOT EXISTS`). **Inline migrations are what runs in prod** on every boot — alembic is not auto-run on deploy. New columns need an inline migration to land on existing prod DBs.
 - `init_database()`: create_all → inline migrations → seeds (`_seedPackTypes`, `_seedBetaAllowlist`, `_seedAchievements`, `_seedUnusedNames`) → backfills (funding tiers, player season/career stats from games, team peak streaks, card output types).
 - `clear_db()` (fresh start) **preserves** `users`, `beta_allowlist`, `app_settings`, `unused_names`; nulls per-season user flags (`starter_pack_claimed_season`, `favorite_team_locked_season`). After fresh start, existing users get re-provisioned starter packs in `startNewSeason()`.
