@@ -804,6 +804,40 @@ class Season(Base):
         return f"<Season(season={self.season_number}, week={self.current_week})>"
 
 
+class SeasonRecapEvent(Base):
+    """Durable per-season log of offseason transactions + announcements that
+    feed the Season Recap. Written live as the offseason resolves (so the recap
+    survives the in-memory lists clearing) and queried per season. Awards,
+    standings, and stat leaders are NOT stored here — they're derivable from the
+    Season row / games / player_season_stats; only this movement/announcement
+    log needed new persistence."""
+    __tablename__ = "season_recap_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # rookie_pick | fa_pick | cut | resign | promotion | retirement |
+    # hof_induction | coach_fire | coach_hire
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    team_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    team_abbr: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    team_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    player_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    player_name: Mapped[Optional[str]] = mapped_column(String(96), nullable=True)
+    position: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tier: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # coach name, skip reason, seasons, etc.
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)  # stable display order within a season
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_recap_event_season", "season", "sort_order"),
+    )
+
+    def __repr__(self):
+        return f"<SeasonRecapEvent(season={self.season}, type={self.event_type}, player={self.player_name})>"
+
+
 class Record(Base):
     """Records table - stores all-time, season, and game records."""
     __tablename__ = "records"

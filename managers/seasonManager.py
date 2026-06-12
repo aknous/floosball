@@ -4701,6 +4701,9 @@ class SeasonManager:
         # in-flight data that the FA / draft phases depend on.
         if not resumeFromOffseason:
             self._offseasonTransactions = []
+            # Wipe this season's recap log for a clean rebuild (resume keeps it).
+            if self.currentSeason:
+                self._clearRecapEvents(self.currentSeason.seasonNumber)
             self._offseasonGmResults = []
             self._offseasonFaVoteResults = {}
             self.playerManager._gmFaDirectives = {}
@@ -5031,6 +5034,10 @@ class SeasonManager:
                             'player': entry['playerName'], 'position': entry['position'],
                             'rating': entry['rating'], 'tier': entry['tier'],
                         })
+                        self._recordOffseasonEvent(
+                            'rookie_pick', teamName=entry['teamName'], teamAbbr=entry['teamAbbr'],
+                            playerId=entry.get('playerId'), playerName=entry['playerName'],
+                            position=entry['position'], rating=entry['rating'], tier=entry['tier'])
                     elif kind == 'skip':
                         if BROADCASTING_AVAILABLE and broadcaster:
                             await broadcaster.broadcast_season_event({
@@ -5618,6 +5625,10 @@ class SeasonManager:
                     'slot': promo.get('slot'),
                 }
                 self._offseasonTransactions.append(entry)
+                self._recordOffseasonEvent(
+                    'promotion', teamName=team.name, teamAbbr=teamAbbr, teamId=getattr(team, 'id', None),
+                    playerId=promo.get('id'), playerName=promo['name'], position=promo['position'],
+                    rating=promo['rating'], tier=promo['tier'])
                 if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
                     try:
                         await broadcaster.broadcast_season_event(
@@ -5761,6 +5772,11 @@ class SeasonManager:
                             )
                         )
                         self._offseasonTransactions.append(entry)
+                        self._recordOffseasonEvent(
+                            'promotion' if entry.get('isPromotion') else 'fa_pick',
+                            teamName=entry['team'], teamAbbr=entry['teamAbbr'],
+                            playerId=entry.get('playerId'), playerName=entry['player'],
+                            position=entry['position'], rating=entry['rating'], tier=entry['tier'])
                         # Small yield so the pick lands as its own React render
                         # tick before the next team's on_clock fires. Without
                         # this, pick → on_clock can collapse into one update
@@ -5788,10 +5804,70 @@ class SeasonManager:
 
         logger.info("Free agency complete")
     
+    def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
+                              teamId=None, teamAbbr=None, teamName=None,
+                              playerId=None, playerName=None, position=None,
+                              rating=None, tier=None) -> None:
+        """Persist one offseason transaction/announcement for the Season Recap.
+        Best-effort + idempotent per (season, eventType, playerId|teamId) so an
+        offseason resume/restart never duplicates or breaks the offseason.
+        Pass `player`/`team` objects to auto-extract fields."""
+        try:
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            if not season:
+                return
+            if team is not None:
+                teamId = getattr(team, 'id', teamId)
+                tn = getattr(team, 'name', None)
+                teamName = tn or teamName
+                teamAbbr = getattr(team, 'abbr', None) or (tn[:3].upper() if tn else teamAbbr)
+            if player is not None:
+                playerId = getattr(player, 'id', playerId)
+                playerName = getattr(player, 'name', playerName)
+                pos = getattr(player, 'position', None)
+                position = position or (pos.name if pos is not None and hasattr(pos, 'name') else position)
+                if rating is None:
+                    rating = getattr(player, 'playerRating', None)
+                t = getattr(player, 'playerTier', None)
+                tier = tier or (t.name if t is not None and hasattr(t, 'name') else tier)
+            from database.connection import get_session
+            from database.models import SeasonRecapEvent
+            s = get_session()
+            try:
+                q = s.query(SeasonRecapEvent).filter_by(season=season, event_type=eventType)
+                q = q.filter_by(player_id=playerId) if playerId is not None else q.filter_by(team_id=teamId)
+                if q.first():
+                    return  # already recorded (resume/restart safety)
+                s.add(SeasonRecapEvent(
+                    season=season, event_type=eventType, team_id=teamId, team_abbr=teamAbbr,
+                    team_name=teamName, player_id=playerId, player_name=playerName,
+                    position=position, rating=rating, tier=tier, detail=detail,
+                ))
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.warning(f"recap event record failed ({eventType}): {e}")
+
+    def _clearRecapEvents(self, season: int) -> None:
+        """Wipe a season's recap event log (called on FRESH offseason entry so a
+        rebuild starts clean; skipped on resume)."""
+        try:
+            from database.connection import get_session
+            from database.models import SeasonRecapEvent
+            s = get_session()
+            try:
+                s.query(SeasonRecapEvent).filter_by(season=season).delete()
+                s.commit()
+            finally:
+                s.close()
+        except Exception as e:
+            logger.warning(f"clear recap events failed: {e}")
+
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
         from random import randint
-        
+
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
@@ -5829,6 +5905,8 @@ class SeasonManager:
                         'event': {'text': f'{player.name} re-signed with {team.name} for {player.term} season(s) (GM vote)'}
                     })
                     logger.info(f"GM re-sign: {player.name} renewed with {team.name} for {player.term} seasons")
+                    self._recordOffseasonEvent('resign', player=player, team=team,
+                                               detail=f"{player.term} season(s)")
                 elif player.termRemaining <= 0:
                     # Contract expired - move to free agency
                     player.previousTeam = team.name
@@ -5841,12 +5919,15 @@ class SeasonManager:
                     # Only add to free agents if not already there (defensive check)
                     if player not in self.playerManager.freeAgents:
                         self.playerManager.freeAgents.append(player)
+                    self._recordOffseasonEvent('walked', player=player,
+                                               teamId=team.id, teamAbbr=getattr(team, 'abbr', None),
+                                               teamName=team.name)
                     team.rosterDict[position] = None
-                    
+
                     leagueHighlights.insert(0, {
                         'event': {'text': f'{player.name} has become a Free Agent'}
                     })
-    
+
     def _validateRosterIntegrity(self) -> None:
         """Fix player-team reference mismatches after FA draft.
 
@@ -5938,6 +6019,8 @@ class SeasonManager:
 
     def _executePlayerRetirement(self, player, team, position, leagueHighlights):
         """Execute the retirement of a player from a team roster"""
+        self._recordOffseasonEvent('retirement', player=player, team=team,
+                                   detail=f"{getattr(player, 'seasonsPlayed', 0)} seasons")
         player.previousTeam = team.name
         player.seasonPerformanceRating = 0
         # TODO: capHit feature not fully developed - disabled for now
@@ -6105,6 +6188,10 @@ class SeasonManager:
             gmResults.extend(fireResults)
             for r in fireResults:
                 logger.info(f"GM fire_coach result: {r['teamName']} → {r['outcome']}")
+                if r.get('outcome') == 'success':
+                    self._recordOffseasonEvent(
+                        'coach_fire', teamId=r.get('teamId'), teamName=r.get('teamName'),
+                        detail=r.get('oldCoachName') or r.get('coachName'))
 
             # Phase 2: Resolve hire votes for teams that fired their coach
             if firedTeamIds:
@@ -6114,6 +6201,10 @@ class SeasonManager:
                 gmResults.extend(hireResults)
                 for r in hireResults:
                     logger.info(f"GM hire_coach result: {r['teamName']} → {r['outcome']}")
+                    if r.get('outcome') in ('success', 'hired'):
+                        self._recordOffseasonEvent(
+                            'coach_hire', teamId=r.get('teamId'), teamName=r.get('teamName'),
+                            detail=r.get('coachName') or r.get('newCoachName') or r.get('hiredCoachName'))
 
             # Phase 3: Wipe leftover candidates for teams whose fire vote
             # FAILED. Their pre-generated slate is no longer needed and we
@@ -6196,6 +6287,13 @@ class SeasonManager:
             )
             session.commit()
             gmResults.extend(results)
+            for r in results:
+                if r.get('voteType') == 'cut_player' and r.get('outcome') == 'success':
+                    self._recordOffseasonEvent(
+                        'cut', teamId=r.get('teamId'), teamName=r.get('teamName'),
+                        playerId=r.get('targetPlayerId'), playerName=r.get('targetPlayerName'),
+                        position=r.get('targetPosition'), rating=r.get('targetRating'),
+                        tier=r.get('targetTier'))
         except Exception as e:
             session.rollback()
             logger.error(f"GM cut resolution error: {e}")

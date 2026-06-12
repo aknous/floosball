@@ -1983,6 +1983,10 @@ class PlayerManager:
                     }
                 }
                 seasonManager.currentSeason.leagueHighlights.insert(0, highlight)
+                if hasattr(seasonManager, '_recordOffseasonEvent'):
+                    seasonManager._recordOffseasonEvent(
+                        'hof_induction', player=player,
+                        teamName=getattr(player, 'previousTeam', None), detail=f"{pts} pts")
 
         self.newlyRetiredPlayers.clear()
     
