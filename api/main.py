@@ -2638,9 +2638,15 @@ _RECAP_LEADER_CATEGORIES = [
 ]
 
 
+# Player.position is stored as an int enum (1=QB … 5=K).
+_RECAP_POS_NAMES = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+
+
 def _recapPlayerStub(session, playerId, teamId=None):
-    """Resolve a player + their season team into a compact recap stub."""
+    """Resolve a player + their season team into a compact recap stub
+    (position name, team, numeric rating + star count)."""
     from database.models import Player as DBPlayer, Team as DBTeam
+    from api_response_builders import PlayerResponseBuilder
     if not playerId:
         return None
     p = session.get(DBPlayer, playerId)
@@ -2648,13 +2654,37 @@ def _recapPlayerStub(session, playerId, teamId=None):
         return {"id": playerId, "name": f"Player#{playerId}"}
     team = session.get(DBTeam, teamId) if teamId else (session.get(DBTeam, p.team_id) if getattr(p, 'team_id', None) else None)
     pos = getattr(p, 'position', None)
+    if isinstance(pos, str):
+        posName = pos
+    elif pos is not None and hasattr(pos, 'name'):
+        posName = pos.name
+    else:
+        posName = _RECAP_POS_NAMES.get(pos)
+    rating = getattr(p, 'player_rating', None)
     return {
         "id": p.id, "name": p.name,
-        "position": pos if isinstance(pos, str) else (pos.name if pos is not None and hasattr(pos, 'name') else None),
+        "position": posName,
         "teamId": team.id if team else None,
         "teamAbbr": team.abbr if team else None,
         "teamColor": team.color if team else None,
+        "rating": rating,
+        "stars": PlayerResponseBuilder.calculateStarRating(rating) if rating is not None else None,
     }
+
+
+def _recapFavoriteTeam(session, userId, cache):
+    """A user's favorite team stub (cached per request)."""
+    if userId in cache:
+        return cache[userId]
+    from database.models import User as DBUser, Team as DBTeam
+    ft = None
+    u = session.get(DBUser, userId)
+    if u and getattr(u, 'favorite_team_id', None):
+        t = session.get(DBTeam, u.favorite_team_id)
+        if t:
+            ft = {"teamId": t.id, "teamAbbr": t.abbr, "teamColor": t.color}
+    cache[userId] = ft
+    return ft
 
 
 def _recapAwards(session, sm, target, currentSeason):
@@ -2723,6 +2753,19 @@ def _recapStandingsByLeague(session, target):
     return leagues
 
 
+def _recapLeagueChampions(session, target):
+    """Team IDs that won their league championship — i.e. the two Floos Bowl
+    participants (the cross-league final is played between the two league
+    champions). Returns [] if the season hasn't reached the Floos Bowl."""
+    from database.models import Game as DBGame
+    fb = (session.query(DBGame)
+          .filter(DBGame.season == target, DBGame.is_playoff == True, DBGame.status == 'final')
+          .order_by(DBGame.week.desc()).first())
+    if not fb:
+        return []
+    return [fb.home_team_id, fb.away_team_id]
+
+
 def _recapLeaders(session, target):
     """Top-5 per curated stat category for a season (from player_season_stats)."""
     from database.models import PlayerSeasonStats as PSS
@@ -2763,14 +2806,55 @@ def _recapPickemLeaderboard(session, target):
     return out
 
 
-def _recapShowcase(session, target):
-    """Top showcase of the season (rank 1 by hidden score), number-free."""
+def _recapBracketLeaderboard(session, target):
+    """Season playoff bracket-challenge leaderboard (top entries)."""
+    from database.models import User as DBUser
+    try:
+        from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+        board = PlayoffBracketRepository(session).getLeaderboard(target)[:10]
+    except Exception:
+        return []
+    out = []
+    for rk, b in enumerate(board, start=1):
+        u = session.get(DBUser, b.user_id)
+        out.append({
+            "rank": rk, "userId": b.user_id,
+            "username": (getattr(u, 'username', None) or f"User{b.user_id}") if u else f"User{b.user_id}",
+            "totalPoints": getattr(b, 'points', 0), "correct": getattr(b, 'correct_count', None),
+        })
+    return out
+
+
+def _recapFundingLeaderboard(session, target):
+    """Top fans by Floobits contributed to team funding this season."""
+    from database.models import CurrencyTransaction, User as DBUser
+    from sqlalchemy import func
+    try:
+        rows = (session.query(
+                    DBUser.id, DBUser.username,
+                    func.coalesce(func.sum(-CurrencyTransaction.amount), 0).label('total'))
+                .join(CurrencyTransaction, CurrencyTransaction.user_id == DBUser.id)
+                .filter(CurrencyTransaction.transaction_type == 'team_contribution',
+                        CurrencyTransaction.season == target)
+                .group_by(DBUser.id, DBUser.username)
+                .order_by(func.sum(-CurrencyTransaction.amount).desc())
+                .limit(10).all())
+    except Exception:
+        return []
+    return [{
+        "rank": i + 1, "userId": r[0], "username": r[1] or f"User{r[0]}",
+        "totalPoints": int(r[2] or 0),
+    } for i, r in enumerate(rows) if (r[2] or 0) > 0]
+
+
+def _recapShowcaseLeaderboard(session, target):
+    """Season Vault-Showcase leaderboard (top entries by the hidden score, which
+    drives the grade). Number-free — only grade / payout / card count exposed."""
     from database.models import ShowcaseSlot, User as DBUser
     from managers import showcaseManager
     userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
         ShowcaseSlot.season == target).distinct().all()]
-    best = None
-    bestScore = None
+    rows = []
     for uid in userIds:
         try:
             infos = showcaseManager.loadShowcaseCardInfos(session, uid, target)
@@ -2779,25 +2863,30 @@ def _recapShowcase(session, target):
             ev = showcaseManager.evaluate(infos, target)
         except Exception:
             continue
-        if bestScore is None or ev["score"] > bestScore:
-            bestScore = ev["score"]
-            u = session.get(DBUser, uid)
-            best = {
-                "userId": uid,
-                "username": (getattr(u, 'username', None) or "Anonymous") if u else "Anonymous",
-                "grade": ev["grade"], "estimatedPayout": ev["payout"],
-                "cardCount": len(infos), "activeSets": ev.get("activeSets", []),
-            }
-    return best
+        u = session.get(DBUser, uid)
+        rows.append({
+            "userId": uid,
+            "username": (getattr(u, 'username', None) or f"User{uid}") if u else f"User{uid}",
+            "grade": ev["grade"], "estimatedPayout": ev["payout"],
+            "cardCount": len(infos), "_score": ev["score"],
+        })
+    rows.sort(key=lambda r: r["_score"], reverse=True)
+    out = []
+    for rk, r in enumerate(rows[:10], start=1):
+        r.pop("_score", None)
+        r["rank"] = rk
+        out.append(r)
+    return out
 
 
 @app.get("/api/recap")
-def get_season_recap(season: Optional[int] = None, response: Response = None):
-    """Consolidated Season Recap (offseason fixture). Defaults to the current/
-    just-ended season. Sections: results (champion/MVP/All-Pro + standings by
-    league), stat leaders, transactions/announcements, user leaderboards
-    (fantasy + pick-em, with a swept-both callout), and the top showcase.
-    `seasonsAvailable` lists seasons with a recap event log (this feature on)."""
+def get_season_recap(response: Response = None):
+    """Consolidated Season Recap for the current/just-ended season (offseason
+    fixture). Sections: results (champion/MVP/All-Pro + standings by league),
+    stat leaders, transactions/announcements, fan leaderboards (fantasy, pick-em,
+    bracket, funding — with a swept-both callout), and the top showcase. The
+    SeasonRecapEvent log keeps it durable through the offseason; no historical
+    archive (current season only)."""
     if response is not None:
         response.headers["Cache-Control"] = "public, max-age=15"
     if floosball_app is None:
@@ -2809,12 +2898,7 @@ def get_season_recap(season: Optional[int] = None, response: Response = None):
     from database.models import SeasonRecapEvent
     session = get_session()
     try:
-        availRows = session.query(SeasonRecapEvent.season).distinct().all()
-        avail = {r[0] for r in availRows}
-        if currentSeason:
-            avail.add(currentSeason)
-        seasonsAvailable = sorted(avail, reverse=True)
-        target = season if (season and season > 0) else currentSeason
+        target = currentSeason
 
         events = (session.query(SeasonRecapEvent)
                   .filter_by(season=target).order_by(SeasonRecapEvent.id).all())
@@ -2824,8 +2908,16 @@ def get_season_recap(season: Optional[int] = None, response: Response = None):
             "position": e.position, "rating": e.rating, "tier": e.tier, "detail": e.detail,
         } for e in events]
 
-        fantasyLb = (_computeLeaderboardData(target) or {}).get("leaderboard", [])[:10]
-        pickemLb = _recapPickemLeaderboard(session, target)
+        ftCache: dict = {}
+        def _enrich(board):
+            for e in board:
+                e["favoriteTeam"] = _recapFavoriteTeam(session, e.get("userId"), ftCache)
+            return board
+        fantasyLb = _enrich((_computeLeaderboardData(target) or {}).get("leaderboard", [])[:10])
+        pickemLb = _enrich(_recapPickemLeaderboard(session, target))
+        bracketLb = _enrich(_recapBracketLeaderboard(session, target))
+        fundingLb = _enrich(_recapFundingLeaderboard(session, target))
+        showcaseLb = _enrich(_recapShowcaseLeaderboard(session, target))
         sweptBoth = None
         if fantasyLb and pickemLb and fantasyLb[0].get("userId") == pickemLb[0].get("userId"):
             sweptBoth = {"userId": fantasyLb[0]["userId"], "username": fantasyLb[0].get("username")}
@@ -2833,13 +2925,15 @@ def get_season_recap(season: Optional[int] = None, response: Response = None):
         return build_success_response({
             "season": target,
             "currentSeason": currentSeason,
-            "seasonsAvailable": seasonsAvailable,
             "awards": _recapAwards(session, sm, target, currentSeason),
             "standings": _recapStandingsByLeague(session, target),
+            "leagueChampions": _recapLeagueChampions(session, target),
             "leaders": _recapLeaders(session, target),
             "transactions": transactions,
-            "userLeaderboards": {"fantasy": fantasyLb, "pickem": pickemLb, "sweptBoth": sweptBoth},
-            "showcase": _recapShowcase(session, target),
+            "userLeaderboards": {
+                "fantasy": fantasyLb, "pickem": pickemLb, "bracket": bracketLb,
+                "funding": fundingLb, "showcase": showcaseLb, "sweptBoth": sweptBoth,
+            },
         })
     finally:
         session.close()
