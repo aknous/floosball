@@ -641,6 +641,14 @@ GM_VOTE_BASE_MIN = {
     "hire_coach": 2,
 }
 
+# Fire / cut / resign pass threshold as a fraction of the team's active fanbase.
+# net (yea − nay) votes must reach ceil(fanCount × GM_PASS_FRACTION) to pass —
+# a majority of the fanbase, not the whole of it. 0.5 = simple majority; raise
+# toward 1.0 for a stricter near-consensus bar. ceil() keeps a tiny fanbase
+# honest (e.g. 1 fan still needs net 1). Single-vote means each fan contributes
+# at most ±1, so this is a genuine "majority of fans agree" gate.
+GM_PASS_FRACTION = 0.5
+
 # Per-user GM limits.
 #
 # LEGACY: the per-season / per-type / per-target caps below are retired. The
