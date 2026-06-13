@@ -7283,6 +7283,13 @@ class Game:
         totalGameTime = 3600
         timeElapsed = totalGameTime - total_seconds
         gameProgress = min(1.0, timeElapsed / totalGameTime)
+        # Overtime is past regulation: force full progress so the ELO prior floors
+        # (eloWeight → 0.05) and the score logistic maxes (k → ~0.40). Without this
+        # the regulation 3600s math leaves gameProgress ~0.83 in OT, leaking a ~21%
+        # ELO prior into the implicit-else OT path (first team scored, second
+        # responding). total_seconds stays = OT clock remaining for the EP/possession math.
+        if self.currentQuarter >= 5:
+            gameProgress = 1.0
 
         # ELO weight: 1.0 pre-game (pure ELO baseline), decays smoothly to 0.05 by end
         # Stays meaningful through the first half, minor effect in Q4
@@ -7381,7 +7388,9 @@ class Game:
 
         # Overtime win probability — replaces generic formula above
         if self.currentQuarter >= 5:
-            isSuddenDeath = self.otSecondPossComplete
+            # Match checkOvertimeEnd: 2nd+ OT is sudden death outright; 1st OT becomes
+            # sudden death once both guaranteed possessions are done.
+            isSuddenDeath = self.otPeriod >= 2 or self.otSecondPossComplete
             homeHasBall = self.offensiveTeam == self.homeTeam
 
             if isSuddenDeath and scoreDiff != 0:
@@ -7403,15 +7412,17 @@ class Game:
                 # In FG range, WP should reflect the near-certainty of a made kick.
                 yte = self.yardsToEndzone
                 fgDist = yte + 17
-                # Estimate FG make probability using same formula as fieldGoalTry
-                baseFgProb = 1 / (1 + math.exp(0.12 * (fgDist - 52)))
+                # Estimate FG make probability using the SAME constants as fieldGoalTry()
+                # (slope 0.18, skill 0.52 + ×0.85, chip +0.10 under 30, cap 0.96) so OT-tied
+                # WP matches the kick the engine will actually roll.
+                baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 if kicker:
                     normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-                    fgProb = baseFgProb * (0.4 + normalizedSkill * 1.5)
+                    fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
                     if fgDist < 30:
-                        fgProb = min(1.0, fgProb + 0.15)
-                    fgProb = max(0.05, min(1.0, fgProb))
+                        fgProb = min(0.96, fgProb + 0.10)
+                    fgProb = max(0.05, min(0.96, fgProb))
                 else:
                     fgProb = baseFgProb
                 # Continuous scoring probability: union of two paths —

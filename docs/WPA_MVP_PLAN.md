@@ -61,14 +61,18 @@ kicker WPA on their highest-leverage kicks. Replace 7404-7416 with the real cons
                     fgProb = baseFgProb
 ```
 
-### Fix B — OT uses the regulation 900s clock for time math
-The OT branch (lines 7273-7274) sets `total_seconds = self.gameClockSeconds` but the surrounding
-`gameProgress`/`k`/`eloWeight` math is anchored to regulation (3600/900), so at OT kickoff
-`gameProgress≈0.833` (not ~1.0) → `eloWeight≈0.21` leaks an ELO prior into OT, and `k` is depressed.
-Use the real OT period length (`self.gameRules.overtimeLengthSeconds` = 600, `game_rules.py:54`):
+### Fix B — OT `gameProgress` should be 1.0 (DONE — corrected from the original plan)
+The OT bug: `gameProgress = min(1.0, (3600 - total_seconds)/3600)` with `total_seconds = gameClockSeconds`
+(OT-remaining, ≤600) leaves `gameProgress ≈ 0.833` at OT kickoff → `eloWeight ≈ 0.21` leaks an ELO prior
+into the implicit-else OT path (first team scored, second responding), and `k` is depressed.
+**Correction:** the original plan said set `total_seconds = overtimeLengthSeconds` — but that pins
+`gameProgress` at a static 0.833 (doesn't fix it) and breaks the OT possession/clock math that correctly
+uses `gameClockSeconds`. The right fix is to **clamp `gameProgress = 1.0` in OT** and leave
+`total_seconds = gameClockSeconds` for the EP/possession math:
 ```python
-        else:  # Overtime
-            total_seconds = self.gameRules.overtimeLengthSeconds  # OT period length (600), not regulation 900
+        gameProgress = min(1.0, timeElapsed / totalGameTime)
+        if self.currentQuarter >= 5:   # OT is past regulation → ELO floors, k maxes
+            gameProgress = 1.0
 ```
 
 ### Fix C — `isSuddenDeath` one-liner (match `checkOvertimeEnd`)
