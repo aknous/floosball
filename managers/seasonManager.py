@@ -384,6 +384,9 @@ class SeasonManager:
         # Select MVP and All-Pro based on regular season performance
         await self._selectSeasonMVP()
         await self._selectSeasonAllPro()
+        # Defensive awards (WPA value metric)
+        await self._selectSeasonDpoy()
+        await self._selectSeasonAllDefense()
 
         # End-of-regular-season cleanup (unequip cards, etc.)
         self._processEndOfRegularSeason()
@@ -9989,7 +9992,75 @@ class SeasonManager:
                 await broadcaster.broadcast_season_event(
                     SeasonEvent.allProAnnouncement(allProList, self.currentSeason.seasonNumber)
                 )
-    
+
+    def _defenderById(self, playerId: int):
+        """Resolve a player object by id across the offensive lists (which double
+        as the defense). Used to award defensive honors after selection."""
+        for grp in (self.playerManager.activeQbs, self.playerManager.activeRbs,
+                    self.playerManager.activeWrs, self.playerManager.activeTes):
+            for p in grp:
+                if p.id == playerId:
+                    return p
+        return None
+
+    async def _selectSeasonDpoy(self) -> None:
+        """Select Defensive Player of the Year — highest defensive value (WPA + box)."""
+        dpoy = self.playerManager.selectDpoy()
+        if not dpoy:
+            logger.warning("Could not determine DPOY — not enough eligible defenders")
+            return
+        seasonNum = self.currentSeason.seasonNumber
+        dpoyPlayer = self._defenderById(dpoy['id'])
+        if dpoyPlayer is not None:
+            if not hasattr(dpoyPlayer, 'dpoyAwards') or dpoyPlayer.dpoyAwards is None:
+                dpoyPlayer.dpoyAwards = []
+            if any(a.get('Season') == seasonNum for a in dpoyPlayer.dpoyAwards):
+                logger.info(f"DPOY already selected for S{seasonNum}, skipping")
+                return
+            dpoyPlayer.dpoyAwards.append({
+                'Season': seasonNum, 'team': dpoy.get('teamAbbr', ''),
+                'teamColor': dpoy.get('teamColor', '#334155'),
+            })
+        self.currentSeason.dpoy = dpoy
+        dpoyText = f"Season {seasonNum} Defensive Player of the Year: {dpoy['name']} ({dpoy.get('defGroup', '')}, {dpoy['team']})"
+        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': dpoyText}})
+        logger.info(dpoyText)
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            if LeagueNewsEvent:
+                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(dpoyText))
+            if SeasonEvent:
+                await broadcaster.broadcast_season_event(
+                    SeasonEvent.dpoyAnnouncement(dpoy, seasonNum)
+                )
+
+    async def _selectSeasonAllDefense(self) -> None:
+        """Select the All-Defense team — top defensive value per group (S/LB/CB/CB/DE)."""
+        allDef = self.playerManager.selectAllDefense()
+        if not allDef:
+            logger.warning("Could not determine All-Defense — not enough eligible defenders")
+            return
+        seasonNum = self.currentSeason.seasonNumber
+        for entry in allDef:
+            p = self._defenderById(entry['id'])
+            if p is None:
+                continue
+            if not hasattr(p, 'allDefenseSeasons') or p.allDefenseSeasons is None:
+                p.allDefenseSeasons = []
+            if seasonNum not in p.allDefenseSeasons:
+                p.allDefenseSeasons.append(seasonNum)
+        self.currentSeason.allDefense = allDef
+        names = [f"{c['name']} ({c.get('defGroup', '')})" for c in allDef]
+        allDefText = f"Season {seasonNum} All-Defense Team: {', '.join(names)}"
+        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': allDefText}})
+        logger.info(allDefText)
+        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
+            if LeagueNewsEvent:
+                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(allDefText))
+            if SeasonEvent:
+                await broadcaster.broadcast_season_event(
+                    SeasonEvent.allDefenseAnnouncement(allDef, seasonNum)
+                )
+
     def _updateStandings(self) -> None:
         """Update league standings"""
         for league in self.leagueManager.leagues:

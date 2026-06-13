@@ -153,7 +153,8 @@ def _runPendingMigrations():
         # Career awards (v0.17). Same in-memory-only problem as is_hof —
         # MVP / All-Pro / championship lists reset on restart and the
         # player profile page goes empty. Persist as JSON columns.
-        for col in ['mvp_awards', 'all_pro_seasons', 'league_championships']:
+        for col in ['mvp_awards', 'all_pro_seasons', 'league_championships',
+                    'dpoy_awards', 'all_defense_seasons']:
             try:
                 conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} JSON"))
                 conn.commit()

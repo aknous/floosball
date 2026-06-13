@@ -188,6 +188,9 @@ class Player(Base):
     mvp_awards: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     all_pro_seasons: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     league_championships: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    # Defensive awards (WPA value metric): DPOY award entries + All-Defense seasons.
+    dpoy_awards: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    all_defense_seasons: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

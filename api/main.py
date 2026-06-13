@@ -3485,6 +3485,25 @@ async def get_mvp_rankings(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/stats/defensive-rankings", response_model=Dict[str, Any])
+async def get_defensive_rankings(
+    response: Response,
+    limit: int = Query(default=10, ge=1, le=50),
+):
+    """Get the DPOY race — players ranked by defensive value (WPA + box stats),
+    pooled within defensive position group (S/LB/CB/DE)."""
+    response.headers["Cache-Control"] = "public, max-age=120"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    try:
+        rankings = floosball_app.playerManager.getDefensiveRankings(limit=limit)
+        return build_success_response({'rankings': rankings})
+    except Exception as e:
+        logger.error(f"Error getting defensive rankings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # REST API - WEBSOCKET INFO
 # ============================================================================
