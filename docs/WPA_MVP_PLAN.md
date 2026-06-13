@@ -1,9 +1,15 @@
-# WPA-based MVP — Build-Ready Implementation Plan
+# WPA-based MVP — Implementation Plan + Build Log
 
-> Status: **planned, not built** (designed 2026-06-13, `next-season`). Replaces the current MVP
-> selection (position-pooled z-score of `seasonPerformanceRating`) with a value metric driven by
-> **Win Probability Added (WPA)**, blended with the existing performance rating.
-> Grounded in a multi-agent audit of the win-probability model + exact code-anchor extraction.
+> Status: **BUILT + validated** (2026-06-13, `next-season`). Replaces MVP selection (position-pooled
+> z-score of `seasonPerformanceRating`) with a value metric: total = offense (perf+WPA) + defensive
+> value, all pooled-z. Adds DPOY + All-Defense. Grounded in a multi-agent WP-model audit.
+>
+> **Commits (backend next-season):** P0 OT WP fixes `eb23485` · P1 per-play WPA+attribution `e059b0c` ·
+> P2 persistence `bbac0e2` · P3/4a value-MVP+DPOY/All-Defense selection `e599827` · P4c awards lifecycle
+> + `/api/stats/defensive-rankings` `ac54f3a` · recap/player exposure `02dee7a`.
+> **Frontend next-season:** DPOY/All-Defense in Recap + player trophy case `5e51b76`.
+> Each phase validated on fresh fast sims (zero-sum WPA, intuitive MVP, DPOY/All-Defense persisted +
+> served). Not on `main` — ships when `next-season` does.
 
 ## 0. Goal & headline decision
 
