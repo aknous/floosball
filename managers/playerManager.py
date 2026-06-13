@@ -1166,16 +1166,26 @@ class PlayerManager:
     def computeRetirementRisk(self, player) -> str:
         """Classify a player's end-of-season retirement risk (display tier).
 
-        Mirrors computeRetirementOdds exactly so the surfaced label always
-        matches the real roll. Returns:
+        Two distinct ideas are surfaced here. The lowest tier ('possible') is an
+        intrinsic AGE signal — the player is past their personal longevity clock
+        — and is NOT contract-gated, so it survives a re-sign (re-signing a vet
+        doesn't make them younger). The louder tiers ('likely' / 'very_likely' /
+        'retiring') are RETIREMENT-IMMINENCE signals: they only fire when the
+        player is actually eligible to retire this offseason (walk season, or
+        deep past longevity — see computeRetirementOdds), so re-signing a
+        walk-year vet correctly steps them back down to the plain AGE signal.
+
+        Returns:
           - 'retiring'    — decision is locked, player WILL retire this offseason
-          - 'very_likely' — 3+ seasons past longevity & eligible (90%)
-          - 'likely'      — 1-2 past & eligible (65%)
-          - 'possible'    — just reached longevity & eligible (25%)
-          - 'safe'        — not yet eligible this offseason
+          - 'very_likely' — 3+ past longevity & retirement-eligible (90%)
+          - 'likely'      — 1-2 past & retirement-eligible (65%)
+          - 'possible'    — past longevity (aging); not retirement-eligible yet,
+                            OR eligible but only just reached longevity
+          - 'safe'        — still before their longevity clock
         """
         from constants import (
             RETIREMENT_YEARS_PAST_HIGH, RETIREMENT_YEARS_PAST_MID,
+            RETIREMENT_YEARS_PAST_EARLY,
         )
         # Locked-in retirement (set during _evaluateRetirementCandidates when
         # the GM window opens) overrides any predictive tier.
@@ -1183,8 +1193,14 @@ class PlayerManager:
             return 'retiring'
 
         _chance, eligible, yearsPast = self.computeRetirementOdds(player)
-        if not eligible:
+        # Still in their prime — before the longevity clock — no age signal.
+        if yearsPast < RETIREMENT_YEARS_PAST_EARLY:
             return 'safe'
+        # Past longevity but locked into a contract this offseason (mid-deal /
+        # just re-signed): intrinsically aging, but not up for retirement yet.
+        if not eligible:
+            return 'possible'
+        # Retirement-eligible this offseason → escalate by how far past longevity.
         if yearsPast >= RETIREMENT_YEARS_PAST_HIGH:
             return 'very_likely'
         if yearsPast >= RETIREMENT_YEARS_PAST_MID:
