@@ -1471,6 +1471,10 @@ class PlayerManager:
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                         will_retire=bool(getattr(player, 'willRetire', False)),
+                        is_hof=bool(getattr(player, 'is_hof', False)),
+                        mvp_awards=list(getattr(player, 'mvpAwards', None) or []),
+                        all_pro_seasons=list(getattr(player, 'allProSeasons', None) or []),
+                        league_championships=list(getattr(player, 'leagueChampionships', None) or []),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1999,14 +2003,29 @@ class PlayerManager:
         }
 
     def inductHallOfFame(self) -> None:
-        """Score each newly-retired player against the HoF criteria. Induct
-        anyone clearing HOF_INDUCT_THRESHOLD. The signature legacy criteria
-        (TierS auto / TierA with championship) are now subsumed by the
-        points system."""
-        if not self.newlyRetiredPlayers:
-            return
+        """Score retired players against the HoF criteria and induct anyone
+        clearing HOF_INDUCT_THRESHOLD.
 
-        for player in self.newlyRetiredPlayers:
+        Scans the union of this session's newly-retired players AND all
+        persisted retirees, skipping anyone already inducted (`is_hof`). Career
+        awards and `is_hof` both persist, so this is self-healing: a worthy
+        retiree is never permanently missed just because the sim restarted
+        between their retirement and this end-of-offseason step (which would
+        wipe the in-memory `newlyRetiredPlayers` list). The signature legacy
+        criteria (TierS auto / TierA with a ring) are subsumed by the points
+        system.
+        """
+        seen: set = set()
+        candidates = []
+        for player in [*self.newlyRetiredPlayers, *self.retiredPlayers]:
+            pid = getattr(player, 'id', None)
+            if pid in seen or getattr(player, 'is_hof', False):
+                continue
+            seen.add(pid)
+            candidates.append(player)
+
+        inducted = []
+        for player in candidates:
             pts, breakdown = self._computeHofPoints(player)
             if pts < self.HOF_INDUCT_THRESHOLD:
                 logger.debug(
@@ -2016,6 +2035,7 @@ class PlayerManager:
 
             self.hallOfFame.append(player)
             player.is_hof = True
+            inducted.append(player)
             logger.info(
                 f"HoF induction: {player.name} ({pts}pts) — {breakdown}"
             )
@@ -2034,6 +2054,16 @@ class PlayerManager:
                         teamName=getattr(player, 'previousTeam', None), detail=f"{pts} pts")
 
         self.newlyRetiredPlayers.clear()
+
+        # Persist immediately so the is_hof flag (and career awards) reach the
+        # DB this offseason. The HoF UI reads is_hof, and there's otherwise no
+        # guaranteed player save between here and the next season's games, so
+        # without this a restart could drop the inductions from storage.
+        if inducted:
+            try:
+                self.savePlayerData()
+            except Exception as e:
+                logger.error(f"Failed to persist Hall of Fame inductions: {e}")
     
     def calculatePerformanceRatings(self, currentWeek: int) -> None:
         """
