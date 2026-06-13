@@ -16,6 +16,14 @@ away (only a team-level `big_plays` count survives). The plan: **attribute per-p
 accumulate a season total, and blend its position-pooled z-score with the existing performance rating
 (0.6 perf + 0.4 WPA).**
 
+**Defense is in scope (added 2026-06-13).** The same 6 roster players double as the defense
+(QB→S, RB→LB, WR→CB×2, TE→DE; K sits), so "defensive performance" is those players' defensive
+contribution. Box stats undervalue coverage (a shutdown CB generates no stats), so the backbone is
+**defensive WPA**: WPA is zero-sum, so every play's defense-side swing is the mirror of the offense
+side, and the 5 on-field defenders are always known — credit the defense-side WPA across them. A
+player's **total MVP value = offensive value + defensive value**, and defensive value also drives a
+new **Defensive Player of the Year + All-Defense** award. See **Phase 4**.
+
 **Verdict from the WP audit:** the regulation-time WP model is *sound enough to build on* (pre-game WP
 matches the ELO logistic; monotonic in lead and clock-drain; continuous quarter boundaries; sane
 late-game pull — all empirically confirmed). The blockers are **infrastructure, not WP accuracy**:
@@ -153,6 +161,34 @@ WPA; event/no-player plays produce no credits.
 
 **Snaps:** count a "snap" for each player credited on a real play (for the per-snap secondary + min gate).
 
+### 1c. Defensive WPA (unit-share) — the defense side of the same plays
+WPA is zero-sum, so the **defending team's** signed WPA on a scrimmage play is `-offenseSignedWpa`
+(when the defense forces a bad outcome, the offense's WPA is negative → the defense's is positive).
+The defending team is `homeTeam`/`awayTeam` ≠ `self.offensiveTeam`; its **5 defenders are always known** —
+the roster players with a `defensivePosition` (QB→S, RB→LB, WR1/WR2→CB, TE→DE; K excluded). No new
+lineup tracking is needed because it's always the same five.
+
+Distribute `defenseSignedWpa` across the 5 defenders, weighted by each player's `defensiveRating`
+(set at player init: QB 932 / RB 989 / WR 1034 / TE 1079 in `floosball_player.py`), with a **bonus
+multiplier for the tagged play-maker** (`sackedBy`/`interceptedBy`/`forcedFumbleBy`/`tackledBy`):
+```python
+# only on real scrimmage downs (PlayType.Run / PlayType.Pass) — skip punts/kickoffs/FG attempts,
+# whose WP swings are special-teams, not defense
+defenders = [p for p in defendingTeam.rosterDict.values()
+             if p is not None and getattr(p, 'defensivePosition', None) is not None]
+playMaker = play.sackedBy or play.interceptedBy or play.forcedFumbleBy or play.tackledBy
+weights = {d: max(1.0, getattr(d, 'defensiveRating', 60)) for d in defenders}
+if playMaker in weights:
+    weights[playMaker] *= DEF_PLAYMAKER_BONUS   # e.g. 2.0
+totalW = sum(weights.values())
+for d in defenders:
+    d.seasonDefWpa += defenseSignedWpa * (weights[d] / totalW)
+    d.defSnaps += 1
+```
+This gives **every defender a share on every scrimmage snap** (stuffs, incompletions, forced punts —
+not just splashy plays), weighted by skill + playmaking. Negative shares on plays the defense got beaten
+on are kept (net defensive WPA = value added). Constant `DEF_PLAYMAKER_BONUS` in `constants.py`.
+
 ---
 
 ## Phase 2 — persist + aggregate
@@ -160,11 +196,16 @@ WPA; event/no-player plays produce no credits.
 ### New columns (mirror the `q4_scoring_plays` migration pattern)
 - `GamePlayerStats` (`models.py:623-658`): add after `q4_scoring_plays` (line 644):
   ```python
-      season_wpa: Mapped[float] = mapped_column(Float, default=0.0)   # net WPA credited this game
+      season_wpa: Mapped[float] = mapped_column(Float, default=0.0)       # net offensive WPA this game
       snaps: Mapped[int] = mapped_column(Integer, default=0)
+      season_def_wpa: Mapped[float] = mapped_column(Float, default=0.0)   # net defensive WPA share this game
+      def_snaps: Mapped[int] = mapped_column(Integer, default=0)
   ```
   (`Float` already imported.)
-- `PlayerSeasonStats` (`models.py:361-411`): add `season_wpa` / `snaps` after `tackles` (line 386).
+- `PlayerSeasonStats` (`models.py:361-411`): add `season_wpa` / `snaps` / `season_def_wpa` / `def_snaps`
+  after `tackles` (line 386). The defensive box stats (`sacks`/`interceptions`/`tackles` denormalized +
+  `defense_stats` JSON: `tfl`/`forcedFumbles`/`passBreakups`) are already persisted — no new columns
+  needed for the box-stat rating, only for defensive WPA.
 - **Inline migrations** (`connection.py::_runPendingMigrations`, def @66): mirror the
   `q4_*` ALTERs at `connection.py:195-209` for `game_player_stats` (`ADD COLUMN season_wpa REAL DEFAULT 0`,
   `ADD COLUMN snaps INTEGER DEFAULT 0`); append the season columns to the batched
@@ -199,15 +240,75 @@ log line at `seasonManager.py:7305` reads it).
    `positionData[pos] = (eligible, ratingMean, wpaMean)`.
 2. After `pooledStd`: `pooledWpaStd = float(np.std(allWpas)) or 1.0` (degrade to perf-only if 0).
 3. Second pass: `perfZ = (rating - posMean)/pooledStd`; `wpaZ = (seasonWpa - posWpaMean)/pooledWpaStd`;
-   `blendedScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*wpaZ`. Add `wpaScore`, `blendedScore`,
+   `offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*wpaZ`. Add `wpaScore`, `offenseScore`,
    `seasonWpa` to the candidate dict; keep `zScore` = `perfZ`.
-4. Re-sort on `blendedScore`.
-5. **Eligibility gate:** require a min snaps/games floor (reuse the `seasonPerformanceRating > 0` filter
+4. **Total value = offense + defense:** `mvpScore = offenseScore + defValue` where `defValue` is the
+   defensive blend from **Phase 4** (`defValue = 0.7*defWpaZ + 0.3*defBoxZ`, z-scored within defensive
+   position group). Both terms are ~standard-normal z-scores so they sum on a comparable scale; a
+   pure-offense QB has `defValue ≈ 0`, a two-way standout gets both. Add `defValue`, `mvpScore` to the
+   dict. **Eligibility now spans both phases** — a player qualifies if they cleared the offense filter
+   *or* have meaningful defensive snaps.
+5. Re-sort on `mvpScore`.
+6. **Eligibility gate:** require a min snaps/games floor (reuse the `seasonPerformanceRating > 0` filter
    + a games-played minimum) so a 3-week hot streak can't top a full season.
-6. Constants in `constants.py`: `MVP_PERF_WEIGHT = 0.6`, `MVP_WPA_WEIGHT = 0.4`.
-7. WPA **reset** alongside `seasonPerformanceRating = 0` (`seasonManager.py:5243-5244` and `6061`).
-8. Surface **WPA-per-snap** as a secondary (exposes good-player-on-a-bad-team); keep **playoff WPA on a
+7. Constants in `constants.py`: `MVP_PERF_WEIGHT = 0.6`, `MVP_WPA_WEIGHT = 0.4` (offense blend);
+   `MVP_DEF_WPA_WEIGHT = 0.7`, `MVP_DEF_BOX_WEIGHT = 0.3` (defensive blend); `DEF_PLAYMAKER_BONUS = 2.0`.
+8. WPA **reset** (offensive + defensive) alongside `seasonPerformanceRating = 0`
+   (`seasonManager.py:5243-5244` and `6061`).
+9. Surface **WPA-per-snap** as a secondary (exposes good-player-on-a-bad-team); keep **playoff WPA on a
    separate track** (don't fold wk29-32 into the regular-season MVP total — it advantages contenders).
+
+---
+
+## Phase 4 — defensive value, DPOY & All-Defense
+
+The same 6 players are the defense (QB→S, RB→LB, WR1/WR2→CB, TE→DE; K none — map at
+`floosball_player.py:29-35`). Defensive value has two parts, blended.
+
+### 4a. Defensive box-stat rating (`seasonDefensivePerformanceRating`)
+Mirror `calculatePerformanceRatings` (`playerManager.py:2068-2326`, currently offense-only) but pool by
+**defensive position group** (S / LB / CB / DE) over the tracked per-player defensive stats — the
+`defense` dict (`floosball_player.py:111-118`: `sacks`, `ints`, `tackles`, `tfl`, `forcedFumbles`,
+`passBreakups`; denormalized `sacks`/`interceptions`/`tackles` + `defense_stats` JSON already persist).
+Position-appropriate percentile weights (tunable):
+- **DE** (pass rush): sacks + tfl heavy, forced fumbles, tackles.
+- **LB** (run D / blitz): tackles + tfl + sacks + forced fumbles.
+- **CB** (coverage): pass breakups + INTs (few tackles — box can't see coverage; WPA carries it).
+- **S** (coverage / center field): INTs + pass breakups + tackles.
+
+Box stats *systematically miss* shutdown coverage, which is exactly why box-stat is only **30%** of the
+blend — the WPA backbone (4b) carries the value that box scores can't see.
+
+### 4b. Defensive value = blend, z-scored within position group
+Per defender: `defWpaZ` = pooled-z of `seasonDefWpa` within defensive position group;
+`defBoxZ` = pooled-z of `seasonDefensivePerformanceRating` within group. Then
+`defValue = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ` (0.7 / 0.3). This `defValue` is the
+term Phase 3 step 4 adds to `mvpScore`, and it's the ranking key for the defensive awards below.
+(Pool within group so a CB is compared to CBs, an LB to LBs — same structural defense against
+cross-position bias the offense side uses.)
+
+### 4c. Awards: Defensive Player of the Year + All-Defense
+Mirror the existing **All-Pro** selection (`seasonManager.py:9923-9977`, which crowns the top
+`_computeMvpCandidates` candidate per offensive position and stores `Season.allProPlayerIds` /
+`Player.allProSeasons`):
+- **DPOY** = highest `defValue` across all defenders (one award), parallel to the MVP at
+  `_selectSeasonMVP` (`seasonManager.py:7276-7316`). Store `Player.dpoyAwards` (mirror `mvpAwards`,
+  persisted JSON column like `mvp_awards` at `models.py:188`).
+- **All-Defense team** = top `defValue` at each defensive group: **S, LB, CB, CB, DE** (5 players,
+  two CBs). Store `Player.allDefenseSeasons` (mirror `all_pro_seasons`).
+- New helpers `_computeDefensiveCandidates()` (the 4b z-score, pooled by defensive group) and
+  `selectDpoy()` / All-Defense selection alongside the existing offensive ones in `playerManager.py`.
+- Broadcast + recap: add `dpoy_announcement` / `all_defense_announcement` events (mirror
+  `mvp_announcement`/`all_pro_announcement`) and surface in the Season Recap awards section + a defensive
+  block in `MvpRankings.tsx`-style UI. Persist via the migrate-skill pattern (`dpoy_awards`,
+  `all_defense_seasons` JSON columns, load/save mirroring `mvpAwards`/`allProSeasons`).
+
+### Defensive WPA caveats (design-honest)
+- Shared credit means **the same unit's 5 defenders get correlated WPA** — the `defensiveRating`
+  weighting + the play-maker bonus are what differentiate them; tune `DEF_PLAYMAKER_BONUS`.
+- "Good unit" correlates with "good roster," so defensive WPA partly tracks team strength (true of real
+  defenses too). The per-snap secondary helps separate a great defender on a weak unit.
+- Only scrimmage downs (Run/Pass) accrue defensive WPA; special-teams swings are excluded (no defense).
 
 ---
 
@@ -219,16 +320,25 @@ log line at `seasonManager.py:7305` reads it).
 - **Mode independence:** confirm WPA accumulates in a non-broadcasting mode (e.g. `turbo-silent`) after
   the Phase-1 move.
 - **WP regression:** after Phase 0, OT WP (tied FG range, sudden death) behaves sanely.
+- **Defensive WPA:** per play, the 5 defenders' shares sum to `defenseSignedWpa`; over a season a strong
+  defensive unit's players show clearly positive net defWPA, a sieve shows negative. DPOY + All-Defense
+  picks look plausible (the All-Defense S/LB/CB/CB/DE are genuinely good defenders, not just tackle
+  volume). A dominant two-way player can crack the MVP top-5.
 
 ## Open design decisions (owner)
 - **Pure net-WPA vs blend** — recommended **blend 0.6/0.4** (anchors in box-score, adds leverage). Pure
   net cumulative WPA is the alternative if you want a "true value" headline; needs the eligibility gate
   + per-snap secondary to stay sane.
-- **Defense representation** — named defenders get sack/INT/forced-fumble WPA, but routine
-  coverage/run-stuffing/forced-punts land on no-player events, so defenders are **structurally
-  under-credited**. Consider crediting forced-three-and-out WP swings to the defensive *unit* and/or a
-  separate offensive/defensive value track rather than one raw sum.
-- **Pass split ratio** (60/40) and the **blend weights** — tune against a few simulated seasons.
+- **Defensive credit sharing** (RESOLVED 2026-06-13): defensive WPA = the defense-side swing of every
+  scrimmage play, **shared across the 5 on-field defenders weighted by `defensiveRating` + a play-maker
+  bonus** (Phase 1c). Surfaced **both** ways — folded into MVP total value (offense+defense) AND a
+  dedicated **DPOY + All-Defense** (Phase 4). Defensive value itself = **0.7 defensive-WPA + 0.3
+  box-stat** blend.
+- **Tunables to validate against simulated seasons:** pass split (60/40), offense blend (0.6/0.4),
+  defense blend (0.7/0.3), `DEF_PLAYMAKER_BONUS` (2.0), and whether to weight the defensive share by
+  `defensiveRating` vs even-split.
+- **Defensive WPA tracks team strength** somewhat (good unit ⇒ all 5 share) — the per-snap secondary and
+  the box-stat term are the differentiators; accept it as a feature (real defenses work the same).
 
 ## File / anchor index
 - WP model + Phase-0 fixes: `floosball_game.py` — `calculateWinProbability` 7256-7465 (OT FG 7404-7416,
@@ -242,3 +352,7 @@ log line at `seasonManager.py:7305` reads it).
   migrations `connection.py` 66 / example 195-209 / batched 494-497; backfill `connection.py:1374`.
 - MVP: `playerManager.py` `_computeMvpCandidates` 2502-2568, `calculatePerformanceRatings` set-sites
   2111/2155/2209/2263/2305; `_selectSeasonMVP` `seasonManager.py:7276-7316`; endpoint `main.py:3470-3485`.
+- Defense: position map `floosball_player.py:29-35`; `defensiveRating` set QB 932 / RB 989 / WR 1034 /
+  TE 1079; defense box dict `floosball_player.py:111-118`; mirror `calculatePerformanceRatings` for the
+  defensive rating; All-Pro selection to mirror for All-Defense `seasonManager.py:9923-9977`
+  (`Season.allProPlayerIds` / `Player.allProSeasons`, `mvp_awards` JSON col `models.py:188`).
