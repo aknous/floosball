@@ -2516,18 +2516,19 @@ class PlayerManager:
         return ratings
 
     def _computeMvpCandidates(self) -> List[Dict[str, Any]]:
-        """Compute MVP scores using pooled-std z-scores of performance rating.
+        """Compute MVP value: total contribution = offense + defense.
 
-        Each position uses its own mean (comparing within peers) but all
-        positions share a pooled standard deviation.  This prevents small
-        position groups (TE, K) from producing inflated z-scores due to
-        tight within-group variance, while staying position-neutral
-        (no FP-based weighting that would favour scoring-formula advantages).
-
-        Returns all eligible candidates sorted by zScore descending.
+        offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ, where
+        perfZ/offenseWpaZ are pooled-std z-scores of the season performance rating
+        and the season offensive WPA, each measured against the player's own
+        position mean (position-neutral). mvpScore = offenseScore + defValue, where
+        defValue is the defensive blend from _computeDefValues (0.7 def-WPA-z +
+        0.3 box-z, pooled within defensive group). A pure-offense star has
+        defValue ~ 0; a dominant two-way player gets both. Sorted by mvpScore desc.
         """
         import numpy as np
         from api_response_builders import PlayerResponseBuilder
+        from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT
 
         positionGroups = {
             'QB': self.activeQbs,
@@ -2536,11 +2537,12 @@ class PlayerManager:
             'TE': self.activeTes,
             'K': self.activeKs,
         }
+        defValues = self._computeDefValues()
 
-        # First pass: collect eligible players and per-position means
-        positionData = {}  # position -> (eligible, mean)
+        # First pass: eligible players + per-position rating & offensive-WPA means
+        positionData = {}  # position -> (eligible, ratingMean, wpaMean)
         allRatings = []
-
+        allWpas = []
         for position, players in positionGroups.items():
             eligible = [p for p in players
                         if getattr(p, 'seasonPerformanceRating', 0) > 0
@@ -2548,21 +2550,28 @@ class PlayerManager:
             if len(eligible) < 2:
                 continue
             ratings = [p.seasonPerformanceRating for p in eligible]
-            positionData[position] = (eligible, float(np.mean(ratings)))
+            wpas = [float(getattr(p, 'seasonWpa', 0.0)) for p in eligible]
+            positionData[position] = (eligible, float(np.mean(ratings)), float(np.mean(wpas)))
             allRatings.extend(ratings)
+            allWpas.extend(wpas)
 
         if not allRatings:
             return []
 
-        # Pooled std across all positions — same yardstick for everyone
+        # Pooled stds across all positions — same yardstick for everyone
         pooledStd = float(np.std(allRatings))
         if pooledStd == 0:
             return []
+        pooledWpaStd = float(np.std(allWpas)) or 1.0
 
         candidates = []
-        for position, (eligible, posMean) in positionData.items():
+        for position, (eligible, posMean, posWpaMean) in positionData.items():
             for player in eligible:
-                zScore = (player.seasonPerformanceRating - posMean) / pooledStd
+                perfZ = (player.seasonPerformanceRating - posMean) / pooledStd
+                wpaZ = (float(getattr(player, 'seasonWpa', 0.0)) - posWpaMean) / pooledWpaStd
+                offenseScore = MVP_PERF_WEIGHT * perfZ + MVP_WPA_WEIGHT * wpaZ
+                defValue = defValues.get(player.id, {}).get('defValue', 0.0)
+                mvpScore = offenseScore + defValue
                 hasTeamObj = hasattr(player.team, 'name')
                 candidates.append({
                     'player': player,
@@ -2574,14 +2583,151 @@ class PlayerManager:
                     'teamColor': getattr(player.team, 'color', '#334155') if hasTeamObj else '#334155',
                     'teamId': player.team.id if hasTeamObj else None,
                     'seasonPerformanceRating': player.seasonPerformanceRating,
-                    'zScore': round(zScore, 3),
+                    'zScore': round(perfZ, 3),            # kept: _selectSeasonMVP logs it + frontend
+                    'wpaScore': round(wpaZ, 3),
+                    'offenseScore': round(offenseScore, 3),
+                    'defValue': round(defValue, 3),
+                    'mvpScore': round(mvpScore, 3),
+                    'seasonWpa': round(float(getattr(player, 'seasonWpa', 0.0)), 2),
                     'gamesPlayed': getattr(player, 'gamesPlayed', 0),
                     'fantasyPoints': player.seasonStatsDict.get('fantasyPoints', 0),
                     'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
                 })
 
-        candidates.sort(key=lambda x: x['zScore'], reverse=True)
-        return candidates
+        candidates.sort(key=lambda x: x['mvpScore'], reverse=True)
+        # Dedup by player id — the active position lists can transiently hold a
+        # player twice; keep the (already top-sorted) first occurrence.
+        seen, deduped = set(), []
+        for c in candidates:
+            if c['id'] in seen:
+                continue
+            seen.add(c['id'])
+            deduped.append(c)
+        return deduped
+
+    def _computeDefValues(self) -> Dict[int, Dict[str, Any]]:
+        """Per-player defensive value, pooled within defensive position group
+        (S/LB/CB/DE). Blends season defensive WPA (z) with a position-weighted
+        box-stat composite (z): defValue = MVP_DEF_WPA_WEIGHT*defWpaZ +
+        MVP_DEF_BOX_WEIGHT*defBoxZ. The within-group z-score re-centers the
+        leaguewide-negative raw def WPA, so a defender above their group's mean
+        scores positive. Returns {playerId: {defValue, defWpaZ, defBoxZ,
+        defGroup, seasonDefWpa, boxScore}}."""
+        import numpy as np
+        from constants import MVP_DEF_WPA_WEIGHT, MVP_DEF_BOX_WEIGHT, DEF_BOX_WEIGHTS
+
+        # The roster's offensive players double as the defense (K excluded).
+        defenders = []  # (player, group, defWpa, boxScore)
+        seenDef = set()
+        for players in (self.activeQbs, self.activeRbs, self.activeWrs, self.activeTes):
+            for p in players:
+                if p.id in seenDef:   # active lists can transiently hold a player twice
+                    continue
+                dpos = getattr(p, 'defensivePosition', None)
+                if dpos is None:
+                    continue
+                if not (hasattr(p, 'team') and p.team != 'Free Agent'):
+                    continue
+                if int(getattr(p, 'seasonDefWpaSnaps', 0)) <= 0:
+                    continue
+                seenDef.add(p.id)
+                grp = dpos.name if hasattr(dpos, 'name') else str(dpos)
+                defWpa = float(getattr(p, 'seasonDefWpa', 0.0))
+                box = (p.seasonStatsDict.get('defense', {}) or {}) if hasattr(p, 'seasonStatsDict') else {}
+                w = DEF_BOX_WEIGHTS.get(grp, {})
+                boxScore = sum(wt * float(box.get(k, 0) or 0) for k, wt in w.items())
+                defenders.append((p, grp, defWpa, boxScore))
+
+        if len(defenders) < 2:
+            return {}
+
+        # Pooled stds across all defenders; means per defensive group
+        pooledWpaStd = float(np.std([d for _, _, d, _ in defenders])) or 1.0
+        pooledBoxStd = float(np.std([b for _, _, _, b in defenders])) or 1.0
+        groupWpaMean, groupBoxMean = {}, {}
+        for grp in set(g for _, g, _, _ in defenders):
+            vals = [(d, b) for _, g, d, b in defenders if g == grp]
+            groupWpaMean[grp] = float(np.mean([d for d, _ in vals]))
+            groupBoxMean[grp] = float(np.mean([b for _, b in vals]))
+
+        out: Dict[int, Dict[str, Any]] = {}
+        for p, grp, defWpa, boxScore in defenders:
+            defWpaZ = (defWpa - groupWpaMean[grp]) / pooledWpaStd
+            defBoxZ = (boxScore - groupBoxMean[grp]) / pooledBoxStd
+            defValue = MVP_DEF_WPA_WEIGHT * defWpaZ + MVP_DEF_BOX_WEIGHT * defBoxZ
+            out[p.id] = {
+                'defValue': round(defValue, 3),
+                'defWpaZ': round(defWpaZ, 3),
+                'defBoxZ': round(defBoxZ, 3),
+                'defGroup': grp,
+                'seasonDefWpa': round(defWpa, 2),
+                'boxScore': round(boxScore, 1),
+            }
+        return out
+
+    def _computeDefensiveCandidates(self) -> List[Dict[str, Any]]:
+        """Defensive-value rankings for DPOY / All-Defense, sorted by defValue desc."""
+        from api_response_builders import PlayerResponseBuilder
+        defValues = self._computeDefValues()
+        if not defValues:
+            return []
+        byId = {}
+        for players in (self.activeQbs, self.activeRbs, self.activeWrs, self.activeTes):
+            for p in players:
+                byId[p.id] = p
+        out = []
+        for pid, dv in defValues.items():
+            p = byId.get(pid)
+            if p is None:
+                continue
+            hasTeamObj = hasattr(p.team, 'name')
+            out.append({
+                'player': p,
+                'name': p.name,
+                'id': p.id,
+                'defGroup': dv['defGroup'],
+                'position': p.position.name if hasattr(getattr(p, 'position', None), 'name') else None,
+                'team': p.team.name if hasTeamObj else 'FA',
+                'teamAbbr': getattr(p.team, 'abbr', '') if hasTeamObj else '',
+                'teamColor': getattr(p.team, 'color', '#334155') if hasTeamObj else '#334155',
+                'teamId': p.team.id if hasTeamObj else None,
+                'defValue': dv['defValue'],
+                'defWpaScore': dv['defWpaZ'],
+                'defBoxScore': dv['defBoxZ'],
+                'seasonDefWpa': dv['seasonDefWpa'],
+                'gamesPlayed': getattr(p, 'gamesPlayed', 0),
+                'ratingStars': PlayerResponseBuilder.calculateStarRating(p.playerRating),
+            })
+        out.sort(key=lambda x: x['defValue'], reverse=True)
+        seen, deduped = set(), []
+        for c in out:
+            if c['id'] in seen:
+                continue
+            seen.add(c['id'])
+            deduped.append(c)
+        return deduped
+
+    def selectDpoy(self) -> Optional[Dict[str, Any]]:
+        """Defensive Player of the Year — highest defValue across all defenders."""
+        cands = self._computeDefensiveCandidates()
+        if not cands:
+            return None
+        d = dict(cands[0])
+        d.pop('player', None)
+        return d
+
+    def selectAllDefense(self) -> List[Dict[str, Any]]:
+        """All-Defense team — top defValue per defensive group: S, LB, CB, CB, DE."""
+        cands = self._computeDefensiveCandidates()
+        chosen, used = [], set()
+        for grp, n in [('S', 1), ('LB', 1), ('CB', 2), ('DE', 1)]:
+            picks = [c for c in cands if c['defGroup'] == grp and c['id'] not in used][:n]
+            for c in picks:
+                used.add(c['id'])
+                d = dict(c)
+                d.pop('player', None)
+                chosen.append(d)
+        return chosen
 
     def selectMVP(self) -> Optional[Dict[str, Any]]:
         """Select the MVP — the candidate with the highest z-score."""

@@ -102,6 +102,25 @@ CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
+# MVP / DPOY value-metric blend weights (z-scores, pooled within position group).
+# MVP total value = offenseScore + defValue, where:
+#   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
+#   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
+MVP_PERF_WEIGHT = 0.6        # season performance rating (box-score percentile) share of offense score
+MVP_WPA_WEIGHT = 0.4         # offensive WPA share of offense score
+MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
+MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
+
+# Per-defensive-position weights for the box-stat composite (z-scored within
+# group). Coverage value is invisible to the box, so CB/S lean on ints/PBUs and
+# the WPA term carries the rest.
+DEF_BOX_WEIGHTS = {
+    'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
+    'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
+    'CB': {'passBreakups': 2.0, 'ints': 3.0, 'tackles': 0.5, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.0},
+    'S':  {'ints': 2.5, 'passBreakups': 2.0, 'tackles': 1.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.5},
+}
+
 # Momentum system
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
 MOMENTUM_BLOWOUT_DECAY_RATE = 0.08     # Accelerated decay in blowouts (22+ diff)
