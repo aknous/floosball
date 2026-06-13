@@ -45,6 +45,7 @@ from constants import (
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
     MOMENTUM_PUNT,
+    WPA_PASS_QB_SHARE, DEF_PLAYMAKER_BONUS,
 )
 
 # Import TimingManager for game-level timing control
@@ -6489,6 +6490,110 @@ class Game:
         self._sidelineCutawaysFired += 1
         return eventDict
 
+    def _resolvePlayWpa(self):
+        """Compute win-probability + WPA for the just-resolved play, store it on the
+        play, fire the WPA-derived momentum/clutch effects, attribute the WPA to the
+        players involved, and advance the WP baseline. Runs ONCE per play, BEFORE the
+        broadcast early-returns, so WPA + player attribution are independent of timing
+        mode (TURBO / silent modes previously skipped this). Idempotent per play.
+        Returns (newHomeWp, newAwayWp, homeWpa, awayWpa)."""
+        if getattr(self.play, '_wpaResolved', False):
+            return (self.homeTeamWinProbability, self.awayTeamWinProbability,
+                    getattr(self.play, 'homeWpa', 0.0), getattr(self.play, 'awayWpa', 0.0))
+
+        winProb = self.calculateWinProbability()
+        newHomeWp = winProb['home']
+        newAwayWp = winProb['away']
+        homeWpa = float(newHomeWp - self.previousHomeWinProbability)
+        awayWpa = float(newAwayWp - self.previousAwayWinProbability)
+
+        # Persist WP/WPA on the play (gameFeed holds the play by reference)
+        self.play.homeWinProbability = newHomeWp
+        self.play.awayWinProbability = newAwayWp
+        self.play.homeWpa = round(homeWpa, 2)
+        self.play.awayWpa = round(awayWpa, 2)
+        self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+
+        # Momentum: big-play bonus to the team that benefited from the swing
+        if self.play.isBigPlay:
+            benefitingTeam = self.homeTeam if homeWpa > 0 else self.awayTeam
+            self._applyMomentumEvent(MOMENTUM_BIG_PLAY_BONUS, benefitingTeam)
+
+        # Keep clutch/choke tags only if the play had meaningful WP impact
+        wpImpact = max(abs(homeWpa), abs(awayWpa))
+        if self.play.isClutchPlay and wpImpact < CLUTCH_WPA_THRESHOLD:
+            self.play.isClutchPlay = False
+        if self.play.isChokePlay and wpImpact < CHOKE_WPA_THRESHOLD:
+            self.play.isChokePlay = False
+
+        # Attribute this play's WP swing to the players involved (offense + defense unit)
+        try:
+            self._attributeWpa(self.play, homeWpa, awayWpa)
+        except Exception as e:
+            logging.debug(f"WPA attribution skipped on play {getattr(self.play, 'playNumber', '?')}: {e}")
+
+        # Advance the WP baseline (next play's delta + API display). Events between
+        # plays do NOT call this, so the next play's WPA is measured from this play's
+        # WP, not from intervening clock/possession drift.
+        self.homeTeamWinProbability = newHomeWp
+        self.awayTeamWinProbability = newAwayWp
+        self.previousHomeWinProbability = newHomeWp
+        self.previousAwayWinProbability = newAwayWp
+        self.play._wpaResolved = True
+        return (newHomeWp, newAwayWp, homeWpa, awayWpa)
+
+    def _attributeWpa(self, play, homeWpa, awayWpa):
+        """Credit this play's win-probability swing to the players involved and
+        accumulate it onto in-memory season totals (offense: `seasonWpa`/`wpaSnaps`;
+        defense: `seasonDefWpa`/`defWpaSnaps`). Persistence is wired in a later phase.
+        See docs/WPA_MVP_PLAN.md for the attribution table."""
+        offense = getattr(play, 'offense', None) or self.offensiveTeam
+        defense = getattr(play, 'defense', None) or self.defensiveTeam
+        if offense is None:
+            return
+        # Signed WPA from the offense's perspective (zero-sum: defense gets the mirror)
+        offenseWpa = homeWpa if offense is self.homeTeam else awayWpa
+
+        def creditOff(pl, amt):
+            if pl is None:
+                return
+            pl.seasonWpa = float(getattr(pl, 'seasonWpa', 0.0)) + amt
+            pl.wpaSnaps = int(getattr(pl, 'wpaSnaps', 0)) + 1
+
+        pt = getattr(play, 'playType', None)
+        # ── Offense ──
+        if pt is PlayType.Run:
+            creditOff(getattr(play, 'runner', None), offenseWpa)
+        elif pt is PlayType.Pass:
+            if getattr(play, 'isPassCompletion', False) and getattr(play, 'receiver', None) is not None:
+                creditOff(getattr(play, 'passer', None), offenseWpa * WPA_PASS_QB_SHARE)
+                creditOff(play.receiver, offenseWpa * (1.0 - WPA_PASS_QB_SHARE))
+            else:
+                # incompletion / sack / throwaway → all on the QB
+                creditOff(getattr(play, 'passer', None), offenseWpa)
+        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint):
+            creditOff(getattr(play, 'kicker', None), offenseWpa)
+        # Punt / Spike / Kneel / penalty: no single offensive actor — uncredited.
+
+        # ── Defense (unit-share) — scrimmage downs only ──
+        if pt in (PlayType.Run, PlayType.Pass) and defense is not None:
+            defWpa = -offenseWpa
+            defenders = [p for p in defense.rosterDict.values()
+                         if p is not None and getattr(p, 'defensivePosition', None) is not None]
+            if defenders:
+                playMaker = (getattr(play, 'sackedBy', None) or getattr(play, 'interceptedBy', None)
+                             or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
+                weights = {}
+                for d in defenders:
+                    w = max(1.0, float(getattr(d, 'defensiveRating', 60) or 60))
+                    if d is playMaker:
+                        w *= DEF_PLAYMAKER_BONUS
+                    weights[d] = w
+                totalW = sum(weights.values()) or 1.0
+                for d in defenders:
+                    d.seasonDefWpa = float(getattr(d, 'seasonDefWpa', 0.0)) + defWpa * (weights[d] / totalW)
+                    d.defWpaSnaps = int(getattr(d, 'defWpaSnaps', 0)) + 1
+
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """
         Broadcast comprehensive game state after a play or game event.
@@ -6506,6 +6611,19 @@ class Game:
         if includeLastPlay and hasattr(self, 'play') and self.play and eventMessage is None:
             self._buildPersonalityEvent()
 
+        # Resolve WP + WPA + player attribution BEFORE the broadcast early-returns, so
+        # they run on every play regardless of timing mode (TURBO / silent previously
+        # skipped them). Real-play broadcasts only — standalone event broadcasts keep
+        # the last play's WP and contribute no WPA.
+        isRealPlay = includeLastPlay and hasattr(self, 'play') and self.play and eventMessage is None
+        if isRealPlay:
+            newHomeWp, newAwayWp, homeWpa, awayWpa = self._resolvePlayWpa()
+        else:
+            newHomeWp = self.homeTeamWinProbability
+            newAwayWp = self.awayTeamWinProbability
+            homeWpa = 0.0
+            awayWpa = 0.0
+
         if not BROADCASTING_AVAILABLE or not broadcaster.is_enabled():
             return
 
@@ -6519,12 +6637,8 @@ class Game:
         if self.status != GameStatus.Final and self.isGameOver():
             self.status = GameStatus.Final
 
-        # Calculate win probabilities
-        winProb = self.calculateWinProbability()
-        newHomeWp = winProb['home']
-        newAwayWp = winProb['away']
-        homeWpa = float(newHomeWp - self.previousHomeWinProbability)
-        awayWpa = float(newAwayWp - self.previousAwayWinProbability)
+        # (WP/WPA computed above in _resolvePlayWpa for real plays; newHomeWp/newAwayWp/
+        # homeWpa/awayWpa are already set.)
 
         # Compute upset alert: pre-game underdog (35% or less) is now favored by 65%+, starting Q2.
         # Only qualifies as an upset if the pre-game favorite is currently in a playoff spot
@@ -6590,27 +6704,10 @@ class Game:
                     'insights': getattr(playObj, 'insights', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
-            # Store WP data on the Play object so it persists in gameFeed references
-            # (gameFeed stores {'play': self.play} by reference)
-            self.play.homeWinProbability = newHomeWp
-            self.play.awayWinProbability = newAwayWp
-            self.play.homeWpa = round(homeWpa, 2)
-            self.play.awayWpa = round(awayWpa, 2)
-            self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
-
-            # Momentum: big play bonus (team that benefited from WPA swing)
-            if self.play.isBigPlay:
-                benefitingTeam = self.homeTeam if homeWpa > 0 else self.awayTeam
-                self._applyMomentumEvent(MOMENTUM_BIG_PLAY_BONUS, benefitingTeam)
-
-            # Only keep clutch/choke tags if the play had meaningful WP impact
-            # Asymmetric: clutch needs bigger WPA swing than choke
-            wpImpact = max(abs(homeWpa), abs(awayWpa))
-            if self.play.isClutchPlay and wpImpact < CLUTCH_WPA_THRESHOLD:
-                self.play.isClutchPlay = False
-            if self.play.isChokePlay and wpImpact < CHOKE_WPA_THRESHOLD:
-                self.play.isChokePlay = False
-
+            # WP/WPA, the momentum big-play bonus, and the clutch/choke WP-impact
+            # filter were already applied in _resolvePlayWpa() above (runs in all
+            # timing modes). The play already carries homeWpa/awayWpa/isBigPlay; just
+            # build the broadcast payload here.
             lastPlayData = {
                 'playNumber': self.totalPlays,
                 'quarter': self.play.quarter if hasattr(self.play, 'quarter') else self.currentQuarter,
@@ -6746,12 +6843,10 @@ class Game:
         # Create and broadcast event
         event = GameEvent.gameState(gameId=self.id, gameState=gameStateData)
         broadcaster.broadcast_sync(self.id, event)
-        
-        # Update win probabilities for API access and next WPA calculation
-        self.homeTeamWinProbability = newHomeWp
-        self.awayTeamWinProbability = newAwayWp
-        self.previousHomeWinProbability = newHomeWp
-        self.previousAwayWinProbability = newAwayWp
+
+        # (WP baseline already advanced in _resolvePlayWpa for real plays; event
+        # broadcasts intentionally do not advance it, so the next play's WPA is
+        # measured from the prior play rather than from intervening clock drift.)
 
         # Store WP and WPA in the most recent gameFeed play entry so the REST API can return it
         if self.gameFeed and 'play' in self.gameFeed[0]:

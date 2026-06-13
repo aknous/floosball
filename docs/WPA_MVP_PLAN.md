@@ -103,19 +103,24 @@ So WPA is silently absent in `turbo`, `turbo-silent`, `test-scheduled`, `offseas
 be mode-independent.) The "previous WP" baseline is also advanced on *every* broadcast incl. non-play
 events (`6750-6754`), and seeded once in `playGame()` at `4043-4045`.
 
-**Change:** extract a helper `_resolvePlayWpa()` containing the 6522-6527 math + the
-`self.play.homeWpa/awayWpa/isBigPlay/...` assignments + the `previousHomeWinProbability` advance, and
-call it from the **always-run play-resolution point** in `playGame()`, right after the play is counted:
-```python
-4627                self.totalPlays += 1
-4628                self.play.playNumber = self.totalPlays
-                    self._resolvePlayWpa()          # NEW: compute + store WPA on every play, all modes
-```
-`broadcastGameState` then *reads* `self.play.homeWpa/awayWpa` instead of computing them. **Critical:**
-the prev-WP advance must move with it — non-play event broadcasts must STOP advancing prev-WP (else an
-event between plays zeroes the next play's delta). Tying the advance to play resolution is more correct
-than today. (Optionally capture a dedicated pre-play WP snapshot so WPA is fully broadcast-cadence
-invariant — `wpa-derive-1`, nice-to-have.)
+**Change (DONE — corrected location):** the plan originally said call a helper from `playGame()` at
+`totalPlays += 1` (4627). But that point is **before** the play executes (4642+: fieldGoalTry/run/pass),
+so WPA there would be ~0 (no outcome yet). The actual post-resolution point is `broadcastGameState`
+itself, which is already called after each play resolves — the only bug was the early returns skipping
+the WPA math. So the refactor lives **inside `broadcastGameState`**: a `_resolvePlayWpa()` helper
+(compute WP/WPA + store on play + momentum big-play bonus + clutch/choke WP-impact filter + attribute to
+players + advance the WP baseline) is called **above the early returns**, gated to real-play broadcasts
+(`includeLastPlay and self.play and eventMessage is None`), and **idempotent per play** (`_wpaResolved`
+guard). It now runs in every timing mode. The old compute/store/advance lines were removed; the broadcast
+code reads the stored values. The prev-WP advance moved into the helper, so non-play event broadcasts no
+longer advance the baseline (fixes the clock-drift leak `wpa-derive-1`/`math-7`). Attribution is
+`_attributeWpa(play, homeWpa, awayWpa)` (offense table + defensive unit-share, 1c). Constants
+`WPA_PASS_QB_SHARE=0.6`, `DEF_PLAYMAKER_BONUS=2.0` in `constants.py`.
+
+**Validated:** a headless single game (broadcasting off — the no-broadcast path) confirmed attribution
+runs with zero errors, scrimmage-down WPA is exactly zero-sum (net = the kickers' special-teams WPA),
+and results are intuitive (winners +, losers −, the game's star RB leads). A broadcast-mode fast season
++ playoffs ran clean.
 
 ### 1b. Per-play attribution: `attributeWpa(play, homeWpa, awayWpa) -> list[(playerId, signedWpa)]`
 Credit only off real `Play` objects with real actors — **never event broadcasts** (this is what

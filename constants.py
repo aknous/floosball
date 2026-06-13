@@ -96,6 +96,12 @@ CHOKE_MODIFIER_THRESHOLD = 1.5    # Min abs(keyPressureMod) for choke
 CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
 CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 
+# WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
+# probability swing is credited to the players involved and accumulated into a
+# season total that feeds the MVP / DPOY value metrics.
+WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
+DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
+
 # Momentum system
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
 MOMENTUM_BLOWOUT_DECAY_RATE = 0.08     # Accelerated decay in blowouts (22+ diff)
