@@ -10743,6 +10743,10 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
         # want a clean feed regardless.
         seenPlayerIds: set = set()
         for p in pm.freeAgents:
+            # A retiring player isn't a signable free agent (defensive — they
+            # should already be off the FA list once retirement processes).
+            if getattr(p, 'willRetire', False):
+                continue
             if p.id in seenPlayerIds:
                 continue
             seenPlayerIds.add(p.id)
@@ -10775,6 +10779,11 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
             """
             termRem = getattr(rp, 'termRemaining', 99)
             pid = rp.id
+            # Retiring players leave the league entirely — they never reach the
+            # FA pool, so they must not be projected as signable free agents
+            # (retirement overrides a walk year or a cut vote).
+            if getattr(rp, 'willRetire', False):
+                return (False, None)
             if likelyCut(teamId, pid):
                 return (True, 'cut_vote')
             if termRem <= 1 and not likelyResigned(teamId, pid):
