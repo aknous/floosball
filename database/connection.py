@@ -208,6 +208,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Per-game WPA value (offense + defensive unit-share) + snaps on
+        # game_player_stats — feeds the season WPA MVP/DPOY metric.
+        for _wpaCol, _wpaType in (
+            ("wpa", "REAL DEFAULT 0"),
+            ("def_wpa", "REAL DEFAULT 0"),
+            ("wpa_snaps", "INTEGER DEFAULT 0"),
+            ("def_snaps", "INTEGER DEFAULT 0"),
+        ):
+            try:
+                conn.execute(text(f"ALTER TABLE game_player_stats ADD COLUMN {_wpaCol} {_wpaType}"))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
         # Initial-player snapshot on fantasy_rosters — Loyalty card reads this
         try:
             conn.execute(text("ALTER TABLE fantasy_rosters ADD COLUMN initial_player_ids TEXT"))
@@ -504,6 +518,8 @@ def _runPendingMigrations():
                 ('receptions', 'INTEGER DEFAULT 0'),
                 ('sacks', 'INTEGER DEFAULT 0'), ('interceptions', 'INTEGER DEFAULT 0'),
                 ('tackles', 'INTEGER DEFAULT 0'),
+                ('wpa', 'REAL DEFAULT 0'), ('def_wpa', 'REAL DEFAULT 0'),
+                ('wpa_snaps', 'INTEGER DEFAULT 0'), ('def_snaps', 'INTEGER DEFAULT 0'),
             ]),
             ('player_career_stats', [
                 ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),

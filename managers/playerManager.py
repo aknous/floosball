@@ -1367,6 +1367,13 @@ class PlayerManager:
                 }
                 # Restore the direct gamesPlayed attribute used by MVP/All-Pro eligibility
                 player.gamesPlayed = row.games_played or 0
+                # Restore the season WPA value totals (plain attributes, not in the
+                # stats dict) so mid-season resume continues accumulating from the
+                # persisted total instead of restarting at 0.
+                player.seasonWpa = float(getattr(row, 'wpa', 0.0) or 0.0)
+                player.seasonDefWpa = float(getattr(row, 'def_wpa', 0.0) or 0.0)
+                player.seasonWpaSnaps = int(getattr(row, 'wpa_snaps', 0) or 0)
+                player.seasonDefWpaSnaps = int(getattr(row, 'def_snaps', 0) or 0)
                 # Keep StatTracker pointing at the restored dict so stats accumulated
                 # during subsequent games go to the right place.
                 player.stat_tracker.season_stats_dict = player.seasonStatsDict
@@ -1724,6 +1731,11 @@ class PlayerManager:
                                     sacks=s_defense.get('sacks', 0),
                                     interceptions=s_defense.get('ints', 0),
                                     tackles=s_defense.get('tackles', 0),
+                                    # Season WPA value totals (on the player object, not season_dict)
+                                    wpa=float(getattr(player, 'seasonWpa', 0.0)),
+                                    def_wpa=float(getattr(player, 'seasonDefWpa', 0.0)),
+                                    wpa_snaps=int(getattr(player, 'seasonWpaSnaps', 0)),
+                                    def_snaps=int(getattr(player, 'seasonDefWpaSnaps', 0)),
                                     # JSON for detailed stats
                                     passing_stats=season_dict.get('passing'),
                                     rushing_stats=season_dict.get('rushing'),
@@ -1754,6 +1766,10 @@ class PlayerManager:
                                 db_season_stats.sacks = s_defense.get('sacks', 0)
                                 db_season_stats.interceptions = s_defense.get('ints', 0)
                                 db_season_stats.tackles = s_defense.get('tackles', 0)
+                                db_season_stats.wpa = float(getattr(player, 'seasonWpa', 0.0))
+                                db_season_stats.def_wpa = float(getattr(player, 'seasonDefWpa', 0.0))
+                                db_season_stats.wpa_snaps = int(getattr(player, 'seasonWpaSnaps', 0))
+                                db_season_stats.def_snaps = int(getattr(player, 'seasonDefWpaSnaps', 0))
                                 # Update JSON — wrap with dict() AND use
                                 # flag_modified() because the in-memory dict
                                 # we mutate IS the same object SQLAlchemy

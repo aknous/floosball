@@ -203,18 +203,25 @@ on are kept (net defensive WPA = value added). Constant `DEF_PLAYMAKER_BONUS` in
 ## Phase 2 — persist + aggregate
 
 ### New columns (mirror the `q4_scoring_plays` migration pattern)
-- `GamePlayerStats` (`models.py:623-658`): add after `q4_scoring_plays` (line 644):
-  ```python
-      season_wpa: Mapped[float] = mapped_column(Float, default=0.0)       # net offensive WPA this game
-      snaps: Mapped[int] = mapped_column(Integer, default=0)
-      season_def_wpa: Mapped[float] = mapped_column(Float, default=0.0)   # net defensive WPA share this game
-      def_snaps: Mapped[int] = mapped_column(Integer, default=0)
-  ```
-  (`Float` already imported.)
-- `PlayerSeasonStats` (`models.py:361-411`): add `season_wpa` / `snaps` / `season_def_wpa` / `def_snaps`
-  after `tackles` (line 386). The defensive box stats (`sacks`/`interceptions`/`tackles` denormalized +
-  `defense_stats` JSON: `tfl`/`forcedFumbles`/`passBreakups`) are already persisted — no new columns
-  needed for the box-stat rating, only for defensive WPA.
+**DONE (Phase 2).** Columns named `wpa` / `def_wpa` / `wpa_snaps` / `def_snaps` (clearer than the
+original `season_wpa`; on `GamePlayerStats` they're per-game, on `PlayerSeasonStats` season totals):
+- `GamePlayerStats` (after `q4_scoring_plays`): `wpa`/`def_wpa` (Float), `wpa_snaps`/`def_snaps` (Integer).
+- `PlayerSeasonStats` (after `tackles`): same four. The defensive box stats (`sacks`/`interceptions`/
+  `tackles` denormalized + `defense_stats` JSON: `tfl`/`forcedFumbles`/`passBreakups`) already persist —
+  no new columns for the box-stat rating, only for WPA.
+- Accumulation: `_attributeWpa` writes per-game `_gameWpa`/`_gameDefWpa`(+snaps); `_accumulatePostgameStats`
+  preserves `_lastGameWpa` (for the per-game DB row), rolls into `player.seasonWpa`/`seasonDefWpa`
+  (regular season only — playoff WPA stays a separate track), and resets the per-game accumulators
+  (mirrors the `_lastGameFantasyPoints` flow). Persisted via `_extractPlayerStatsFromGame` /
+  `_savePlayerGameStats` (per-game) and `_savePlayersToDatabase` (season rollup). Restored on
+  mid-season resume in `restorePlayerSeasonStatsFromDb`; reset at season start (STEP 9). Inline
+  migrations mirror the `q4_*` pattern. **WPA not backfillable for S1–S8** — current-season-forward only.
+
+> **Important for Phase 3/4:** raw `def_wpa` skews **negative leaguewide** (offenses net-positive on
+> scrimmage downs, so the mirrored defense side nets negative). Do NOT use raw def WPA in the MVP total —
+> z-score it **within the defensive position group** (Phase 4), which re-centers it so a defender above
+> the defensive mean scores positive. Validated: persistence clean, values sane (stars lead, kickers
+> offense-only/zero def snaps), scrimmage WPA zero-sum (net = special-teams FG/XP).
 - **Inline migrations** (`connection.py::_runPendingMigrations`, def @66): mirror the
   `q4_*` ALTERs at `connection.py:195-209` for `game_player_stats` (`ADD COLUMN season_wpa REAL DEFAULT 0`,
   `ADD COLUMN snaps INTEGER DEFAULT 0`); append the season columns to the batched

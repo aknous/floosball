@@ -3914,6 +3914,23 @@ class Game:
             # (which sums season + game) doesn't double-count between games
             gd['fantasyPoints'] = 0
 
+        # WPA: preserve this game's per-player value for the DB row, roll it into
+        # the season total (regular season only — playoff WPA is a separate track),
+        # then reset the per-game accumulators. Mirrors the fantasy-points flow.
+        player._lastGameWpa = float(getattr(player, '_gameWpa', 0.0))
+        player._lastGameDefWpa = float(getattr(player, '_gameDefWpa', 0.0))
+        player._lastGameWpaSnaps = int(getattr(player, '_gameWpaSnaps', 0))
+        player._lastGameDefWpaSnaps = int(getattr(player, '_gameDefWpaSnaps', 0))
+        if self.isRegularSeasonGame:
+            player.seasonWpa = float(getattr(player, 'seasonWpa', 0.0)) + player._lastGameWpa
+            player.seasonDefWpa = float(getattr(player, 'seasonDefWpa', 0.0)) + player._lastGameDefWpa
+            player.seasonWpaSnaps = int(getattr(player, 'seasonWpaSnaps', 0)) + player._lastGameWpaSnaps
+            player.seasonDefWpaSnaps = int(getattr(player, 'seasonDefWpaSnaps', 0)) + player._lastGameDefWpaSnaps
+        player._gameWpa = 0.0
+        player._gameDefWpa = 0.0
+        player._gameWpaSnaps = 0
+        player._gameDefWpaSnaps = 0
+
         # Game-level derived stats (always computed)
         if gd['passing']['att'] > 0 and gd['passing']['comp'] > 0:
             gd['passing']['ypc'] = round(gd['passing']['yards'] / gd['passing']['comp'], 2)
@@ -6557,8 +6574,10 @@ class Game:
         def creditOff(pl, amt):
             if pl is None:
                 return
-            pl.seasonWpa = float(getattr(pl, 'seasonWpa', 0.0)) + amt
-            pl.wpaSnaps = int(getattr(pl, 'wpaSnaps', 0)) + 1
+            # Per-game accumulators; rolled into the season total + persisted at
+            # postgame (mirrors _lastGameFantasyPoints). Reset each game.
+            pl._gameWpa = float(getattr(pl, '_gameWpa', 0.0)) + amt
+            pl._gameWpaSnaps = int(getattr(pl, '_gameWpaSnaps', 0)) + 1
 
         pt = getattr(play, 'playType', None)
         # ── Offense ──
@@ -6591,8 +6610,8 @@ class Game:
                     weights[d] = w
                 totalW = sum(weights.values()) or 1.0
                 for d in defenders:
-                    d.seasonDefWpa = float(getattr(d, 'seasonDefWpa', 0.0)) + defWpa * (weights[d] / totalW)
-                    d.defWpaSnaps = int(getattr(d, 'defWpaSnaps', 0)) + 1
+                    d._gameDefWpa = float(getattr(d, '_gameDefWpa', 0.0)) + defWpa * (weights[d] / totalW)
+                    d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
 
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """

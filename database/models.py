@@ -384,7 +384,13 @@ class PlayerSeasonStats(Base):
     sacks: Mapped[int] = mapped_column(Integer, default=0, index=True)
     interceptions: Mapped[int] = mapped_column(Integer, default=0, index=True)
     tackles: Mapped[int] = mapped_column(Integer, default=0)
-    
+    # Season WPA value totals (offense + defensive unit-share) + snap counts.
+    # The MVP / DPOY value metrics read these. See docs/WPA_MVP_PLAN.md.
+    wpa: Mapped[float] = mapped_column(Float, default=0.0)
+    def_wpa: Mapped[float] = mapped_column(Float, default=0.0)
+    wpa_snaps: Mapped[int] = mapped_column(Integer, default=0)
+    def_snaps: Mapped[int] = mapped_column(Integer, default=0)
+
     # Stats stored as JSON for flexibility (detailed breakdown)
     passing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     rushing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -642,6 +648,13 @@ class GamePlayerStats(Base):
     # Drives the Walk Off card effect (pays per late-game scoring play
     # by a roster player).
     q4_scoring_plays: Mapped[int] = mapped_column(Integer, default=0)
+    # Win Probability Added credited to this player in this game (offense + the
+    # defensive unit-share), with snap counts. Feeds the season WPA value metric
+    # (MVP / DPOY). See docs/WPA_MVP_PLAN.md.
+    wpa: Mapped[float] = mapped_column(Float, default=0.0)
+    def_wpa: Mapped[float] = mapped_column(Float, default=0.0)
+    wpa_snaps: Mapped[int] = mapped_column(Integer, default=0)
+    def_snaps: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     game: Mapped["Game"] = relationship("Game", back_populates="player_stats")

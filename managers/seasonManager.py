@@ -3019,6 +3019,12 @@ class SeasonManager:
                         'fantasyPoints': gameFP,
                         'q4FantasyPoints': q4FP,
                         'q4ScoringPlays': q4Scores,
+                        # Per-game WPA value (preserved on the player at postgame,
+                        # like _lastGameFantasyPoints — gameStatsDict is regenerated)
+                        'wpa': float(getattr(player, '_lastGameWpa', 0.0)),
+                        'defWpa': float(getattr(player, '_lastGameDefWpa', 0.0)),
+                        'wpaSnaps': int(getattr(player, '_lastGameWpaSnaps', 0)),
+                        'defSnaps': int(getattr(player, '_lastGameDefWpaSnaps', 0)),
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -3039,6 +3045,10 @@ class SeasonManager:
                         fantasy_points=stats.get('fantasyPoints', 0),
                         q4_fantasy_points=stats.get('q4FantasyPoints', 0),
                         q4_scoring_plays=stats.get('q4ScoringPlays', 0),
+                        wpa=stats.get('wpa', 0.0),
+                        def_wpa=stats.get('defWpa', 0.0),
+                        wpa_snaps=stats.get('wpaSnaps', 0),
+                        def_snaps=stats.get('defSnaps', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
                         receiving_stats=stats.get('receiving'),
@@ -5237,11 +5247,15 @@ class SeasonManager:
                 logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
                 self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
 
-            # STEP 9: Reset season performance ratings
+            # STEP 9: Reset season performance ratings + season WPA value totals
             logger.info("Step 9: Reset season performance ratings")
             for player in self.playerManager.activePlayers:
                 if hasattr(player, 'seasonPerformanceRating'):
                     player.seasonPerformanceRating = 0
+                player.seasonWpa = 0.0
+                player.seasonDefWpa = 0.0
+                player.seasonWpaSnaps = 0
+                player.seasonDefWpaSnaps = 0
 
             # STEP 10: Update team ratings and defenses after roster changes
             logger.info("Step 10: Update team ratings")
