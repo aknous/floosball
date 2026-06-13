@@ -1014,6 +1014,9 @@ async def get_player(player_id: int, response: Response):
         player_dict['ratingValue'] = player.playerRating
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
+        player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
+        player_dict['dpoyAwards'] = getattr(player, 'dpoyAwards', [])
+        player_dict['allDefenseSeasons'] = getattr(player, 'allDefenseSeasons', [])
         player_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
         # Build stats history: current live season + past seasons from DB
         sm = floosball_app.seasonManager
@@ -2708,7 +2711,40 @@ def _recapAwards(session, sm, target, currentSeason):
                 allPro = [s for s in (_recapPlayerStub(session, pid) for pid in ids) if s]
             except Exception:
                 allPro = []
-    return {"champion": champion, "mvp": mvp, "allPro": allPro}
+
+    # DPOY + All-Defense: derived from the persisted per-player defensive awards
+    # for this season (no separate Season-row columns). Each defender's group
+    # (S/LB/CB/DE) is mapped from their offensive position (QB->S, RB->LB,
+    # WR->CB, TE->DE).
+    from database.models import Player as DBPlayer
+    _DEF_GROUP = {1: 'S', 2: 'LB', 3: 'CB', 4: 'DE'}
+    _DEF_ORDER = {'S': 0, 'LB': 1, 'CB': 2, 'DE': 3}
+
+    def _withGroup(pid):
+        s = _recapPlayerStub(session, pid)
+        if s:
+            p = session.get(DBPlayer, pid)
+            s['defGroup'] = _DEF_GROUP.get(getattr(p, 'position', None)) if p else None
+        return s
+
+    dpoy = None
+    allDefense = []
+    try:
+        for p in session.query(DBPlayer).filter(DBPlayer.dpoy_awards.isnot(None)).all():
+            if any((a or {}).get('Season') == target for a in (p.dpoy_awards or [])):
+                dpoy = _withGroup(p.id)
+                break
+        for p in session.query(DBPlayer).filter(DBPlayer.all_defense_seasons.isnot(None)).all():
+            if target in (p.all_defense_seasons or []):
+                s = _withGroup(p.id)
+                if s:
+                    allDefense.append(s)
+        allDefense.sort(key=lambda s: _DEF_ORDER.get(s.get('defGroup'), 9))
+    except Exception:
+        dpoy, allDefense = None, []
+
+    return {"champion": champion, "mvp": mvp, "allPro": allPro,
+            "dpoy": dpoy, "allDefense": allDefense}
 
 
 def _recapStandingsByLeague(session, target):
