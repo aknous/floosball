@@ -44,9 +44,7 @@ class EventType(Enum):
     # Awards
     MVP_ANNOUNCEMENT = "mvp_announcement"
     ALL_PRO_ANNOUNCEMENT = "all_pro_announcement"
-    DPOY_ANNOUNCEMENT = "dpoy_announcement"
-    ALL_DEFENSE_ANNOUNCEMENT = "all_defense_announcement"
-    
+
     # Player events
     PLAYER_STAT_UPDATE = "player_stat_update"
     PLAYER_INJURY = "player_injury"
@@ -431,32 +429,12 @@ class SeasonEvent:
 
     @staticmethod
     def allProAnnouncement(allProData: List[Dict[str, Any]], seasonNumber: int) -> Dict[str, Any]:
-        """Broadcast All-Pro team announcement after regular season"""
+        """Broadcast the combined All-Pro team (offense + defense) after the regular season"""
         return {
             'event': EventType.ALL_PRO_ANNOUNCEMENT.value,
             'seasonNumber': seasonNumber,
             'allPro': allProData,
             'message': f"Season {seasonNumber} All-Pro Team: {', '.join(p['name'] + ' (' + p['position'] + ')' for p in allProData)}"
-        }
-
-    @staticmethod
-    def dpoyAnnouncement(dpoyData: Dict[str, Any], seasonNumber: int) -> Dict[str, Any]:
-        """Broadcast Defensive Player of the Year announcement after regular season"""
-        return {
-            'event': EventType.DPOY_ANNOUNCEMENT.value,
-            'seasonNumber': seasonNumber,
-            'dpoy': dpoyData,
-            'message': f"Season {seasonNumber} DPOY: {dpoyData['name']} ({dpoyData.get('defGroup', '')}, {dpoyData['team']})"
-        }
-
-    @staticmethod
-    def allDefenseAnnouncement(allDefenseData: List[Dict[str, Any]], seasonNumber: int) -> Dict[str, Any]:
-        """Broadcast All-Defense team announcement after regular season"""
-        return {
-            'event': EventType.ALL_DEFENSE_ANNOUNCEMENT.value,
-            'seasonNumber': seasonNumber,
-            'allDefense': allDefenseData,
-            'message': f"Season {seasonNumber} All-Defense Team: {', '.join(p['name'] + ' (' + p.get('defGroup', '') + ')' for p in allDefenseData)}"
         }
 
 

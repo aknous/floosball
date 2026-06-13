@@ -249,8 +249,6 @@ class PlayerManager:
             # Load awards/accolades
             player.mvpAwards = player_data.get('mvpAwards', [])
             player.allProSeasons = player_data.get('allProSeasons', [])
-            player.dpoyAwards = player_data.get('dpoyAwards', [])
-            player.allDefenseSeasons = player_data.get('allDefenseSeasons', [])
             player.leagueChampionships = player_data.get('leagueChampionships', [])
 
             # Set up season stats dict if not present
@@ -392,8 +390,6 @@ class PlayerManager:
             player.is_hof = bool(getattr(db_player, 'is_hof', False))
             player.mvpAwards = list(getattr(db_player, 'mvp_awards', None) or [])
             player.allProSeasons = list(getattr(db_player, 'all_pro_seasons', None) or [])
-            player.dpoyAwards = list(getattr(db_player, 'dpoy_awards', None) or [])
-            player.allDefenseSeasons = list(getattr(db_player, 'all_defense_seasons', None) or [])
             player.leagueChampionships = list(getattr(db_player, 'league_championships', None) or [])
             
             # Load tier if present
@@ -1486,8 +1482,6 @@ class PlayerManager:
                         mvp_awards=list(getattr(player, 'mvpAwards', None) or []),
                         all_pro_seasons=list(getattr(player, 'allProSeasons', None) or []),
                         league_championships=list(getattr(player, 'leagueChampionships', None) or []),
-                        dpoy_awards=list(getattr(player, 'dpoyAwards', None) or []),
-                        all_defense_seasons=list(getattr(player, 'allDefenseSeasons', None) or []),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1518,8 +1512,6 @@ class PlayerManager:
                     db_player.mvp_awards = list(getattr(player, 'mvpAwards', None) or [])
                     db_player.all_pro_seasons = list(getattr(player, 'allProSeasons', None) or [])
                     db_player.league_championships = list(getattr(player, 'leagueChampionships', None) or [])
-                    db_player.dpoy_awards = list(getattr(player, 'dpoyAwards', None) or [])
-                    db_player.all_defense_seasons = list(getattr(player, 'allDefenseSeasons', None) or [])
 
                 # Save or update attributes
                 db_attrs = self.db_session.query(DBPlayerAttributes).filter_by(player_id=player.id).first()
@@ -1867,8 +1859,6 @@ class PlayerManager:
                     playerDict['attributes'] = {}
             playerDict['mvpAwards'] = getattr(player, 'mvpAwards', [])
             playerDict['allProSeasons'] = getattr(player, 'allProSeasons', [])
-            playerDict['dpoyAwards'] = getattr(player, 'dpoyAwards', [])
-            playerDict['allDefenseSeasons'] = getattr(player, 'allDefenseSeasons', [])
             playerDict['leagueChampionships'] = getattr(player, 'leagueChampionships', [])
             playerDict['careerStats'] = player.careerStatsDict
             
@@ -2676,7 +2666,7 @@ class PlayerManager:
         return out
 
     def _computeDefensiveCandidates(self) -> List[Dict[str, Any]]:
-        """Defensive-value rankings for DPOY / All-Defense, sorted by defValue desc."""
+        """Defensive-value rankings (feed the All-Pro defense slots), sorted by defValue desc."""
         from api_response_builders import PlayerResponseBuilder
         defValues = self._computeDefValues()
         if not defValues:
@@ -2717,17 +2707,8 @@ class PlayerManager:
             deduped.append(c)
         return deduped
 
-    def selectDpoy(self) -> Optional[Dict[str, Any]]:
-        """Defensive Player of the Year — highest defValue across all defenders."""
-        cands = self._computeDefensiveCandidates()
-        if not cands:
-            return None
-        d = dict(cands[0])
-        d.pop('player', None)
-        return d
-
     def selectAllDefense(self) -> List[Dict[str, Any]]:
-        """All-Defense team — top defValue per defensive group: S, LB, CB, CB, DE."""
+        """Defensive half of the All-Pro team — top defValue per defensive group: S, LB, CB, CB, DE."""
         cands = self._computeDefensiveCandidates()
         chosen, used = [], set()
         for grp, n in [('S', 1), ('LB', 1), ('CB', 2), ('DE', 1)]:
@@ -2751,17 +2732,6 @@ class PlayerManager:
     def getMvpRankings(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get top MVP candidates ranked by z-score for the dashboard."""
         candidates = self._computeMvpCandidates()
-        results = []
-        for rank, c in enumerate(candidates[:limit], 1):
-            entry = dict(c)
-            entry.pop('player', None)
-            entry['rank'] = rank
-            results.append(entry)
-        return results
-
-    def getDefensiveRankings(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get top defensive-value candidates (DPOY race) for the dashboard."""
-        candidates = self._computeDefensiveCandidates()
         results = []
         for rank, c in enumerate(candidates[:limit], 1):
             entry = dict(c)

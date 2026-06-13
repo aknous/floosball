@@ -381,12 +381,10 @@ class SeasonManager:
         # Simulate regular season
         await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
 
-        # Select MVP and All-Pro based on regular season performance
+        # Select MVP and the combined All-Pro team (offense + defense) based on
+        # regular-season value.
         await self._selectSeasonMVP()
         await self._selectSeasonAllPro()
-        # Defensive awards (WPA value metric)
-        await self._selectSeasonDpoy()
-        await self._selectSeasonAllDefense()
 
         # End-of-regular-season cleanup (unequip cards, etc.)
         self._processEndOfRegularSeason()
@@ -9938,128 +9936,98 @@ class SeasonManager:
     # ─── Awards ────────────────────────────────────────────────────────────────
 
     async def _selectSeasonAllPro(self) -> None:
-        """Select All-Pro players — top performer at each position from the current season."""
+        """Select the combined All-Pro team for the current season: an offensive
+        squad (top value per offensive slot QB/RB/WR/WR/TE/K) plus a defensive
+        squad (top defensive value per group S/LB/CB/CB/DE). The roster plays
+        both ways, so a dominant two-way star can hold both an offense and a
+        defense slot — they're listed in each."""
         candidates = self.playerManager._computeMvpCandidates()
         if not candidates:
             logger.warning("Could not determine All-Pro — not enough eligible players")
             return
+        seasonNum = self.currentSeason.seasonNumber
 
-        # Group by position, take the top candidate(s) per position
-        # WR gets 2 slots to match team roster composition
+        # ── Offense: top value per offensive slot (WR gets 2) ──
         positionOrder = ['QB', 'RB', 'WR', 'WR', 'TE', 'K']
         positionSlots = {'QB': 1, 'RB': 1, 'WR': 2, 'TE': 1, 'K': 1}
         bestByPosition: dict = {}
         for c in candidates:
             pos = c['position']
-            if pos not in bestByPosition:
-                bestByPosition[pos] = []
+            bestByPosition.setdefault(pos, [])
             if len(bestByPosition[pos]) < positionSlots.get(pos, 1):
                 bestByPosition[pos].append(c)
 
-        allProIds = {c['id'] for picks in bestByPosition.values() for c in picks}
-        self.currentSeason.allProPlayerIds = allProIds
-
-        # Store All-Pro award on each player object (persists across restarts)
-        seasonNum = self.currentSeason.seasonNumber
-        for picks in bestByPosition.values():
-            for pick in picks:
-                playerObj = pick.get('player')
-                if playerObj:
-                    if not hasattr(playerObj, 'allProSeasons'):
-                        playerObj.allProSeasons = []
-                    if seasonNum not in playerObj.allProSeasons:
-                        playerObj.allProSeasons.append(seasonNum)
-
-        # Build broadcast-safe list (no player objects), ordered by position
         allProList = []
         for pos in dict.fromkeys(positionOrder):
             for pick in bestByPosition.get(pos, []):
-                entry = dict(pick)
-                entry.pop('player', None)
-                allProList.append(entry)
+                allProList.append({
+                    'id': pick['id'], 'name': pick['name'],
+                    'position': pick['position'], 'side': 'offense',
+                    'value': round(float(pick.get('mvpScore', 0.0)), 2),
+                    'team': pick['team'], 'teamAbbr': pick['teamAbbr'],
+                    'teamColor': pick['teamColor'], 'teamId': pick['teamId'],
+                    'ratingStars': pick['ratingStars'],
+                    'seasonPerformanceRating': pick.get('seasonPerformanceRating'),
+                    'mvpScore': pick.get('mvpScore'), 'zScore': pick.get('zScore'),
+                })
+
+        # ── Defense: top defensive value per group (S/LB/CB/CB/DE) ──
+        for d in self.playerManager.selectAllDefense():
+            allProList.append({
+                'id': d['id'], 'name': d['name'],
+                'position': d.get('defGroup'), 'side': 'defense',
+                'value': round(float(d.get('defValue', 0.0)), 2),
+                'defGroup': d.get('defGroup'),
+                'team': d['team'], 'teamAbbr': d['teamAbbr'],
+                'teamColor': d['teamColor'], 'teamId': d['teamId'],
+                'ratingStars': d['ratingStars'],
+                'seasonDefWpa': d.get('seasonDefWpa'),
+            })
+
+        # Credit the All-Pro season on every unique honoree (offense or defense)
+        # so the player profile shows a single All-Pro accolade.
+        for pid in {e['id'] for e in allProList}:
+            playerObj = self._defenderById(pid)
+            if playerObj is not None:
+                if not getattr(playerObj, 'allProSeasons', None):
+                    playerObj.allProSeasons = []
+                if seasonNum not in playerObj.allProSeasons:
+                    playerObj.allProSeasons.append(seasonNum)
+
+        # Flat id union (cards/classification + resume) and the rich team
+        # (offense/defense split) for durable recap rebuild.
+        self.currentSeason.allProPlayerIds = {e['id'] for e in allProList}
         self.currentSeason.allPro = allProList
+        self.currentSeason.allProTeam = [
+            {'id': e['id'], 'side': e['side'], 'position': e['position'], 'value': e['value']}
+            for e in allProList
+        ]
 
         allProNames = [f"{c['name']} ({c['position']})" for c in allProList]
-        logger.info(f"Season {self.currentSeason.seasonNumber} All-Pro: {', '.join(allProNames)}")
+        logger.info(f"Season {seasonNum} All-Pro: {', '.join(allProNames)}")
 
-        # Add to league highlight feed and broadcast
-        allProText = f"Season {self.currentSeason.seasonNumber} All-Pro Team: {', '.join(allProNames)}"
+        allProText = f"Season {seasonNum} All-Pro Team: {', '.join(allProNames)}"
         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': allProText}})
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             if LeagueNewsEvent:
                 await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(allProText))
             if SeasonEvent:
                 await broadcaster.broadcast_season_event(
-                    SeasonEvent.allProAnnouncement(allProList, self.currentSeason.seasonNumber)
+                    SeasonEvent.allProAnnouncement(allProList, seasonNum)
                 )
 
     def _defenderById(self, playerId: int):
-        """Resolve a player object by id across the offensive lists (which double
-        as the defense). Used to award defensive honors after selection."""
+        """Resolve an active player object by id across every roster position
+        (QB/RB/WR/TE/K — the offense, which also doubles as the defense). Used
+        to credit All-Pro honors after selection; kickers are All-Pro-eligible
+        on offense even though they have no defensive position."""
         for grp in (self.playerManager.activeQbs, self.playerManager.activeRbs,
-                    self.playerManager.activeWrs, self.playerManager.activeTes):
+                    self.playerManager.activeWrs, self.playerManager.activeTes,
+                    self.playerManager.activeKs):
             for p in grp:
                 if p.id == playerId:
                     return p
         return None
-
-    async def _selectSeasonDpoy(self) -> None:
-        """Select Defensive Player of the Year — highest defensive value (WPA + box)."""
-        dpoy = self.playerManager.selectDpoy()
-        if not dpoy:
-            logger.warning("Could not determine DPOY — not enough eligible defenders")
-            return
-        seasonNum = self.currentSeason.seasonNumber
-        dpoyPlayer = self._defenderById(dpoy['id'])
-        if dpoyPlayer is not None:
-            if not hasattr(dpoyPlayer, 'dpoyAwards') or dpoyPlayer.dpoyAwards is None:
-                dpoyPlayer.dpoyAwards = []
-            if any(a.get('Season') == seasonNum for a in dpoyPlayer.dpoyAwards):
-                logger.info(f"DPOY already selected for S{seasonNum}, skipping")
-                return
-            dpoyPlayer.dpoyAwards.append({
-                'Season': seasonNum, 'team': dpoy.get('teamAbbr', ''),
-                'teamColor': dpoy.get('teamColor', '#334155'),
-            })
-        self.currentSeason.dpoy = dpoy
-        dpoyText = f"Season {seasonNum} Defensive Player of the Year: {dpoy['name']} ({dpoy.get('defGroup', '')}, {dpoy['team']})"
-        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': dpoyText}})
-        logger.info(dpoyText)
-        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
-            if LeagueNewsEvent:
-                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(dpoyText))
-            if SeasonEvent:
-                await broadcaster.broadcast_season_event(
-                    SeasonEvent.dpoyAnnouncement(dpoy, seasonNum)
-                )
-
-    async def _selectSeasonAllDefense(self) -> None:
-        """Select the All-Defense team — top defensive value per group (S/LB/CB/CB/DE)."""
-        allDef = self.playerManager.selectAllDefense()
-        if not allDef:
-            logger.warning("Could not determine All-Defense — not enough eligible defenders")
-            return
-        seasonNum = self.currentSeason.seasonNumber
-        for entry in allDef:
-            p = self._defenderById(entry['id'])
-            if p is None:
-                continue
-            if not hasattr(p, 'allDefenseSeasons') or p.allDefenseSeasons is None:
-                p.allDefenseSeasons = []
-            if seasonNum not in p.allDefenseSeasons:
-                p.allDefenseSeasons.append(seasonNum)
-        self.currentSeason.allDefense = allDef
-        names = [f"{c['name']} ({c.get('defGroup', '')})" for c in allDef]
-        allDefText = f"Season {seasonNum} All-Defense Team: {', '.join(names)}"
-        self.currentSeason.leagueHighlights.insert(0, {'event': {'text': allDefText}})
-        logger.info(allDefText)
-        if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
-            if LeagueNewsEvent:
-                await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(allDefText))
-            if SeasonEvent:
-                await broadcaster.broadcast_season_event(
-                    SeasonEvent.allDefenseAnnouncement(allDef, seasonNum)
-                )
 
     def _updateStandings(self) -> None:
         """Update league standings"""
@@ -10199,6 +10167,10 @@ class SeasonManager:
             if allProIds:
                 import json
                 db_season.all_pro_player_ids = json.dumps(list(allProIds))
+            allProTeam = getattr(self.currentSeason, 'allProTeam', None)
+            if allProTeam:
+                import json
+                db_season.all_pro_team = json.dumps(allProTeam)
 
             self.db_session.add(db_season)
             self.db_session.commit()

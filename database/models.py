@@ -186,11 +186,10 @@ class Player(Base):
     # profile page reads these to render the awards section; without
     # persistence they reset on every server restart.
     mvp_awards: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    # All-Pro is a combined offense+defense team (defense slots picked by the
+    # WPA defensive-value metric); a season here means the player made either side.
     all_pro_seasons: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     league_championships: Mapped[Optional[list]] = mapped_column(JSON, default=list)
-    # Defensive awards (WPA value metric): DPOY award entries + All-Defense seasons.
-    dpoy_awards: Mapped[Optional[list]] = mapped_column(JSON, default=list)
-    all_defense_seasons: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -388,7 +387,7 @@ class PlayerSeasonStats(Base):
     interceptions: Mapped[int] = mapped_column(Integer, default=0, index=True)
     tackles: Mapped[int] = mapped_column(Integer, default=0)
     # Season WPA value totals (offense + defensive unit-share) + snap counts.
-    # The MVP / DPOY value metrics read these. See docs/WPA_MVP_PLAN.md.
+    # The MVP + All-Pro defense value metrics read these. See docs/WPA_MVP_PLAN.md.
     wpa: Mapped[float] = mapped_column(Float, default=0.0)
     def_wpa: Mapped[float] = mapped_column(Float, default=0.0)
     wpa_snaps: Mapped[int] = mapped_column(Integer, default=0)
@@ -653,7 +652,7 @@ class GamePlayerStats(Base):
     q4_scoring_plays: Mapped[int] = mapped_column(Integer, default=0)
     # Win Probability Added credited to this player in this game (offense + the
     # defensive unit-share), with snap counts. Feeds the season WPA value metric
-    # (MVP / DPOY). See docs/WPA_MVP_PLAN.md.
+    # (MVP + All-Pro defense). See docs/WPA_MVP_PLAN.md.
     wpa: Mapped[float] = mapped_column(Float, default=0.0)
     def_wpa: Mapped[float] = mapped_column(Float, default=0.0)
     wpa_snaps: Mapped[int] = mapped_column(Integer, default=0)
@@ -798,7 +797,10 @@ class Season(Base):
     playoffs_started: Mapped[bool] = mapped_column(Boolean, default=False)
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
     mvp_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
-    all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs
+    all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs (offense+defense union)
+    # Rich, durable All-Pro team: JSON list of {id, side, position, value} so the
+    # recap can rebuild the offense/defense split (the flat id list above can't).
+    all_pro_team: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Snapshot of per-team active fan counts taken when the Front Office
     # opens (week 22). JSON object: {teamId: activeFanCount}. Used as the
     # GM vote threshold so a fan who logs in for the first time after the

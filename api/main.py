@@ -1015,8 +1015,6 @@ async def get_player(player_id: int, response: Response):
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
-        player_dict['dpoyAwards'] = getattr(player, 'dpoyAwards', [])
-        player_dict['allDefenseSeasons'] = getattr(player, 'allDefenseSeasons', [])
         player_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
         # Build stats history: current live season + past seasons from DB
         sm = floosball_app.seasonManager
@@ -2691,13 +2689,15 @@ def _recapFavoriteTeam(session, userId, cache):
 
 
 def _recapAwards(session, sm, target, currentSeason):
-    """Champion / MVP / All-Pro for a season (Season row, with in-memory
-    fallback for the current/just-ended season if the row isn't written yet)."""
+    """Champion / MVP / combined All-Pro team (offense + defense) for a season,
+    rebuilt from the durable Season row."""
     import json
     from database.models import Season as DBSeason, Team as DBTeam
     row = session.get(DBSeason, target)
     champion = mvp = None
     allPro = []
+    # Offense slots first (QB/RB/WR/TE/K), then defense (S/LB/CB/DE).
+    _ORDER = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'K': 4, 'S': 5, 'LB': 6, 'CB': 7, 'DE': 8}
     if row:
         if row.champion_team_id:
             t = session.get(DBTeam, row.champion_team_id)
@@ -2705,54 +2705,48 @@ def _recapAwards(session, sm, target, currentSeason):
                 champion = {"id": t.id, "name": t.name, "abbr": t.abbr, "color": t.color, "city": t.city}
         if row.mvp_player_id:
             mvp = _recapPlayerStub(session, row.mvp_player_id)
-        if row.all_pro_player_ids:
+        # Prefer the rich offense/defense team; fall back to the flat id list
+        # (legacy offense-only seasons) when the rich team isn't stored.
+        team = None
+        if getattr(row, 'all_pro_team', None):
+            try:
+                team = json.loads(row.all_pro_team)
+            except Exception:
+                team = None
+        if team:
+            for e in team:
+                stub = _recapPlayerStub(session, e.get('id'))
+                if not stub:
+                    continue
+                side = e.get('side', 'offense')
+                pos = e.get('position') or stub.get('position')
+                stub['position'] = pos
+                stub['side'] = side
+                if side == 'defense':
+                    stub['defGroup'] = pos
+                stub['value'] = e.get('value')
+                allPro.append(stub)
+            allPro.sort(key=lambda s: _ORDER.get(s.get('position'), 9))
+        elif row.all_pro_player_ids:
             try:
                 ids = json.loads(row.all_pro_player_ids)
                 allPro = [s for s in (_recapPlayerStub(session, pid) for pid in ids) if s]
             except Exception:
                 allPro = []
 
-    # DPOY + All-Defense: derived from the persisted per-player defensive awards
-    # for this season (no separate Season-row columns). Each defender's group
-    # (S/LB/CB/DE) is mapped from their offensive position (QB->S, RB->LB,
-    # WR->CB, TE->DE).
-    from database.models import Player as DBPlayer
-    _DEF_GROUP = {1: 'S', 2: 'LB', 3: 'CB', 4: 'DE'}
-    _DEF_ORDER = {'S': 0, 'LB': 1, 'CB': 2, 'DE': 3}
-
-    def _withGroup(pid):
-        s = _recapPlayerStub(session, pid)
-        if s:
-            p = session.get(DBPlayer, pid)
-            s['defGroup'] = _DEF_GROUP.get(getattr(p, 'position', None)) if p else None
-        return s
-
-    dpoy = None
-    allDefense = []
-    try:
-        for p in session.query(DBPlayer).filter(DBPlayer.dpoy_awards.isnot(None)).all():
-            if any((a or {}).get('Season') == target for a in (p.dpoy_awards or [])):
-                dpoy = _withGroup(p.id)
-                break
-        for p in session.query(DBPlayer).filter(DBPlayer.all_defense_seasons.isnot(None)).all():
-            if target in (p.all_defense_seasons or []):
-                s = _withGroup(p.id)
-                if s:
-                    allDefense.append(s)
-        allDefense.sort(key=lambda s: _DEF_ORDER.get(s.get('defGroup'), 9))
-    except Exception:
-        dpoy, allDefense = None, []
-
-    return {"champion": champion, "mvp": mvp, "allPro": allPro,
-            "dpoy": dpoy, "allDefense": allDefense}
+    return {"champion": champion, "mvp": mvp, "allPro": allPro}
 
 
 def _recapStandingsByLeague(session, target):
     """Final regular-season standings for a season, grouped by league."""
-    from database.models import Game as DBGame, Team as DBTeam, League as DBLeague
+    from database.models import (Game as DBGame, Team as DBTeam, League as DBLeague,
+                                 TeamSeasonStats as DBTeamSeasonStats)
     games = session.query(DBGame).filter(
         DBGame.season == target, DBGame.is_playoff == False, DBGame.status == 'final',
     ).all()
+    # Per-season ELO snapshot (falls back to the team's current ELO if missing).
+    eloByTeam = {ts.team_id: ts.elo for ts in session.query(DBTeamSeasonStats).filter(
+        DBTeamSeasonStats.season == target).all()}
     rec = {}
     for g in games:
         for tid in (g.home_team_id, g.away_team_id):
@@ -2777,10 +2771,14 @@ def _recapStandingsByLeague(session, target):
         if getattr(team, 'league_id', None):
             lg = session.get(DBLeague, team.league_id)
             lname = lg.name if lg else f"League {team.league_id}"
+        elo = eloByTeam.get(tid)
+        if elo is None:
+            elo = getattr(team, 'elo', None)
         byLeague.setdefault((team.league_id, lname), []).append({
             "teamId": tid, "teamName": team.name, "teamAbbr": team.abbr, "teamColor": team.color,
             "wins": r["w"], "losses": r["l"], "ties": r["t"],
             "pointsFor": r["pf"], "pointsAgainst": r["pa"], "winPct": round(winPct, 3),
+            "pointDiff": r["pf"] - r["pa"], "elo": int(elo) if elo is not None else None,
         })
     leagues = []
     for (lid, lname), teams in sorted(byLeague.items(), key=lambda kv: (kv[0][0] or 0)):
@@ -3518,25 +3516,6 @@ async def get_mvp_rankings(
         return build_success_response({'rankings': rankings})
     except Exception as e:
         logger.error(f"Error getting MVP rankings: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/stats/defensive-rankings", response_model=Dict[str, Any])
-async def get_defensive_rankings(
-    response: Response,
-    limit: int = Query(default=10, ge=1, le=50),
-):
-    """Get the DPOY race — players ranked by defensive value (WPA + box stats),
-    pooled within defensive position group (S/LB/CB/DE)."""
-    response.headers["Cache-Control"] = "public, max-age=120"
-    if floosball_app is None:
-        raise HTTPException(status_code=503, detail="Application not initialized")
-
-    try:
-        rankings = floosball_app.playerManager.getDefensiveRankings(limit=limit)
-        return build_success_response({'rankings': rankings})
-    except Exception as e:
-        logger.error(f"Error getting defensive rankings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

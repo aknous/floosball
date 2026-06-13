@@ -98,11 +98,11 @@ CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
-# season total that feeds the MVP / DPOY value metrics.
+# season total that feeds the MVP + All-Pro defense value metrics.
 WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
-# MVP / DPOY value-metric blend weights (z-scores, pooled within position group).
+# MVP + All-Pro defense value-metric blend weights (z-scores, pooled within position group).
 # MVP total value = offenseScore + defValue, where:
 #   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
 #   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ

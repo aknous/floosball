@@ -72,6 +72,8 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # Rich All-Pro team (offense+defense split) for durable recap rebuild.
+            ('all_pro_team', 'TEXT'),
             # GM threshold snapshot: per-team active fan count frozen at
             # the front-office open (week 22) so post-week-22 logins
             # don't inflate the threshold mid-vote.
@@ -153,8 +155,7 @@ def _runPendingMigrations():
         # Career awards (v0.17). Same in-memory-only problem as is_hof —
         # MVP / All-Pro / championship lists reset on restart and the
         # player profile page goes empty. Persist as JSON columns.
-        for col in ['mvp_awards', 'all_pro_seasons', 'league_championships',
-                    'dpoy_awards', 'all_defense_seasons']:
+        for col in ['mvp_awards', 'all_pro_seasons', 'league_championships']:
             try:
                 conn.execute(text(f"ALTER TABLE players ADD COLUMN {col} JSON"))
                 conn.commit()
@@ -210,7 +211,7 @@ def _runPendingMigrations():
             conn.rollback()
 
         # Per-game WPA value (offense + defensive unit-share) + snaps on
-        # game_player_stats — feeds the season WPA MVP/DPOY metric.
+        # game_player_stats — feeds the season WPA MVP + All-Pro defense metric.
         for _wpaCol, _wpaType in (
             ("wpa", "REAL DEFAULT 0"),
             ("def_wpa", "REAL DEFAULT 0"),
