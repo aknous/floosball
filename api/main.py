@@ -1015,6 +1015,16 @@ async def get_player(player_id: int, response: Response):
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
+        player_dict['isHof'] = bool(getattr(player, 'is_hof', False))
+        player_dict['hofSeason'] = getattr(player, 'hof_season', None)
+        # League records this player currently holds (shown on the profile).
+        try:
+            _rm = floosball_app.playerManager.serviceContainer.getService('records_manager')
+            _records = _rm.getRecords() if _rm else None
+        except Exception:
+            _records = None
+        player_dict['recordsHeld'] = _recordsHeldByPlayer(
+            player.id, _records, getattr(floosball_app.playerManager, '_HOF_POSITIVE_RECORD_KEYS', {}))
         player_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
         # Build stats history: current live season + past seasons from DB
         sm = floosball_app.seasonManager
@@ -1039,7 +1049,8 @@ async def get_player(player_id: int, response: Response):
                 seasonFilter = DBPlayerSeasonStats.season < currentSeasonNum if currentSeasonNum else True
             pastRows = dbSession.query(DBPlayerSeasonStats).filter(
                 DBPlayerSeasonStats.player_id == player.id,
-                seasonFilter
+                seasonFilter,
+                DBPlayerSeasonStats.games_played > 0,  # skip the empty row the sim persists the year a player retires
             ).order_by(DBPlayerSeasonStats.season.desc()).all()
             for row in pastRows:
                 # Look up team name/color
@@ -1067,8 +1078,13 @@ async def get_player(player_id: int, response: Response):
         except Exception:
             allSeasons = list(player.seasonStatsArchive) if player.seasonStatsArchive else []
 
-        # Only prepend live current-season entry if the season is still in progress
-        if not seasonIsComplete and currentSeasonNum:
+        # Only prepend a live current-season entry if the season is still in
+        # progress AND the player is actually active. A retired player isn't
+        # playing the current season, so prepending their stale seasonStatsDict
+        # produced a phantom "current season · FA" row on their profile.
+        from floosball_player import PlayerServiceTime as _PST
+        isRetired = getattr(player, 'serviceTime', None) == _PST.Retired
+        if not seasonIsComplete and currentSeasonNum and not isRetired:
             currentSeasonEntry = dict(player.seasonStatsDict)
             currentSeasonEntry['season'] = currentSeasonNum
             currentSeasonEntry['team'] = teamName
@@ -3498,6 +3514,169 @@ async def get_stat_leaders(
 
     except Exception as e:
         logger.error(f"Error getting stat leaders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_HOF_SCOPE_LABEL = {'career': 'Career', 'season': 'Season', 'game': 'Game'}
+_HOF_SCOPE_ORDER = {'career': 0, 'season': 1, 'game': 2}
+
+
+def _recordsHeldByPlayer(playerId, records, positiveKeys) -> List[str]:
+    """League records this player currently holds, as scope-prefixed labels
+    (e.g. 'Career Pass Yards'). Only positive records count (not INTs/fumbles).
+    Records nest as records['players'][category][scope][key] -> {record, id, value}."""
+    out = []
+    players = (records or {}).get('players', {}) or {}
+    for category, scopes in players.items():
+        keys = (positiveKeys or {}).get(category, set())
+        if not keys or not isinstance(scopes, dict):
+            continue
+        for scope, entries in scopes.items():
+            if not isinstance(entries, dict):
+                continue
+            for key, entry in entries.items():
+                if key not in keys or not isinstance(entry, dict):
+                    continue
+                if entry.get('id') == playerId and (entry.get('value') or 0) > 0:
+                    label = entry.get('record') or key
+                    out.append((_HOF_SCOPE_ORDER.get(scope, 9),
+                                f"{_HOF_SCOPE_LABEL.get(scope, scope.title())} {label}"))
+    out.sort()
+    return [label for _, label in out]
+
+
+def _hofInducteeDict(player, teamMgr, pm, records=None, positiveKeys=None, seasonsByPlayer=None) -> Dict[str, Any]:
+    """Enriched Hall of Fame inductee: every team they earned an accolade with,
+    awards, induction class, HoF credentials, and the league records they hold."""
+    from api_response_builders import PlayerResponseBuilder
+    from collections import Counter
+    position = player.position.name if hasattr(player.position, 'name') else str(player.position)
+
+    mvps = [a for a in (getattr(player, 'mvpAwards', None) or []) if isinstance(a, dict)]
+    rings = [a for a in (getattr(player, 'leagueChampionships', None) or []) if isinstance(a, dict)]
+    allPros = list(getattr(player, 'allProSeasons', None) or [])
+
+    def _resolveTeam(abbr):
+        return next((t for t in getattr(teamMgr, 'teams', []) if getattr(t, 'abbr', None) == abbr), None) if teamMgr else None
+
+    # Every club where the player earned ANY accolade (MVP, ring, or All-Pro
+    # entry that carries a team), ordered most-decorated first (tiebreak: most
+    # recent). Award entries keep team abbr + color, which survives a retiree
+    # losing team_id on reload, so journeymen show all their teams.
+    awardTeamEntries = [a for a in (mvps + rings + [x for x in allPros if isinstance(x, dict)]) if a.get('team')]
+    teams = []
+    if awardTeamEntries:
+        counts = Counter(a['team'] for a in awardTeamEntries)
+        recent = {}
+        for a in awardTeamEntries:
+            recent[a['team']] = max(recent.get(a['team'], 0), a.get('Season') or 0)
+        for abbr in sorted(counts, key=lambda t: (-counts[t], -recent[t])):
+            color = next((a.get('teamColor') for a in awardTeamEntries if a['team'] == abbr and a.get('teamColor')), None)
+            tobj = _resolveTeam(abbr)
+            teams.append({'abbr': abbr, 'id': getattr(tobj, 'id', None),
+                          'name': getattr(tobj, 'name', None) or abbr,
+                          'color': color or getattr(tobj, 'color', None) or '#334155'})
+    else:
+        # Award-less inductee (records/longevity): show their last team if known.
+        team = getattr(player, 'team', None)
+        tobj = team if (team and not isinstance(team, str)) else None
+        if tobj is None:
+            nm = getattr(player, 'previousTeam', None) or (team if isinstance(team, str) else None)
+            if nm and teamMgr:
+                tobj = next((t for t in getattr(teamMgr, 'teams', []) if getattr(t, 'name', None) == nm), None)
+        if tobj is not None:
+            teams.append({'abbr': tobj.abbr, 'id': tobj.id, 'name': tobj.name, 'color': tobj.color or '#334155'})
+
+    primary = teams[0] if teams else {'abbr': None, 'id': None,
+                                       'name': getattr(player, 'previousTeam', None), 'color': '#334155'}
+
+    try:
+        pts, _breakdown = pm._computeHofPoints(player)
+    except Exception:
+        pts = 0
+
+    # Actual seasons played = number of seasons with stats (the stored
+    # seasons_played overcounts by one — it includes the season the player
+    # retired in, which has no stat line).
+    seasonsPlayed = (seasonsByPlayer or {}).get(player.id) or getattr(player, 'seasonsPlayed', 0)
+
+    # Season lists normalized to ints: legacy data mixes bare ints with
+    # {'Season': n, ...} dicts in the same list (esp. all_pro_seasons).
+    def _seasonNum(x):
+        return x.get('Season') if isinstance(x, dict) else x
+    mvpSeasonNums = sorted(s for s in (_seasonNum(a) for a in mvps) if isinstance(s, int))
+    ringSeasonNums = sorted(s for s in (_seasonNum(a) for a in rings) if isinstance(s, int))
+    allProSeasonNums = sorted(s for s in (_seasonNum(a) for a in allPros) if isinstance(s, int))
+
+    return {
+        'id': player.id, 'name': player.name, 'position': position,
+        'teams': teams,
+        'teamId': primary['id'], 'teamAbbr': primary['abbr'],
+        'teamColor': primary['color'], 'teamName': primary['name'],
+        'playerRating': player.playerRating,
+        'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
+        'seasonsPlayed': seasonsPlayed,
+        'hofSeason': getattr(player, 'hof_season', None),
+        'hofPoints': pts,
+        'awards': {
+            'mvps': len(mvps), 'championships': len(rings), 'allPros': len(allPros),
+            'mvpSeasons': mvpSeasonNums,
+            'championshipSeasons': ringSeasonNums,
+            'allProSeasons': allProSeasonNums,
+        },
+        'recordsHeld': _recordsHeldByPlayer(player.id, records, positiveKeys),
+    }
+
+
+@app.get("/api/hall-of-fame", response_model=Dict[str, Any])
+async def get_hall_of_fame(response: Response):
+    """Enriched Hall of Fame inductees for the plaque gallery — each with every
+    team they earned an accolade with, their awards, induction class, HoF
+    credentials, and the league records they hold. Sorted newest induction class
+    first (null class last), then by credentials. The client groups by `hofSeason`."""
+    response.headers["Cache-Control"] = "public, max-age=120"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    try:
+        pm = floosball_app.playerManager
+        teamMgr = getattr(floosball_app, 'teamManager', None)
+
+        # League records (once) for the records-held line.
+        records = None
+        try:
+            rm = pm.serviceContainer.getService('records_manager')
+            records = rm.getRecords() if rm else None
+        except Exception:
+            records = None
+        positiveKeys = getattr(pm, '_HOF_POSITIVE_RECORD_KEYS', {})
+
+        # Actual seasons played per inductee = count of season stat rows in which
+        # they actually appeared (games_played > 0). This excludes the empty
+        # season row the sim persists for a player the year they retire, which
+        # otherwise overcounts seasons by one.
+        seasonsByPlayer = {}
+        try:
+            from database.connection import get_session
+            from database.models import PlayerSeasonStats as _DBPSS
+            from sqlalchemy import func as _func
+            ids = [p.id for p in pm.hallOfFame]
+            if ids:
+                s = get_session()
+                rows = (s.query(_DBPSS.player_id, _func.count(_DBPSS.season))
+                        .filter(_DBPSS.player_id.in_(ids), _DBPSS.games_played > 0)
+                        .group_by(_DBPSS.player_id).all())
+                seasonsByPlayer = {pid: cnt for pid, cnt in rows}
+                s.close()
+        except Exception:
+            seasonsByPlayer = {}
+
+        inductees = [_hofInducteeDict(p, teamMgr, pm, records, positiveKeys, seasonsByPlayer)
+                     for p in pm.hallOfFame]
+        inductees.sort(key=lambda d: (
+            d['hofSeason'] is None, -(d['hofSeason'] or 0), -d['hofPoints'], -d['playerRating']))
+        return build_success_response({'inductees': inductees, 'count': len(inductees)})
+    except Exception as e:
+        logger.error(f"Error getting hall of fame: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

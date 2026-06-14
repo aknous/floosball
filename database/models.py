@@ -182,6 +182,10 @@ class Player(Base):
     # hallOfFame list resets on every server restart and the HoF tab
     # goes empty until brand-new retirees are inducted.
     is_hof: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Season the player was inducted (the just-ended season at offseason
+    # induction time) — drives the "Class of Season N" grouping in the Hall of
+    # Fame gallery. Null for players inducted before this column existed.
+    hof_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Career awards — same in-memory-only problem as is_hof. The player
     # profile page reads these to render the awards section; without
     # persistence they reset on every server restart.

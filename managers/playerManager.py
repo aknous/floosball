@@ -388,6 +388,7 @@ class PlayerManager:
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
             player.is_hof = bool(getattr(db_player, 'is_hof', False))
+            player.hof_season = getattr(db_player, 'hof_season', None)
             player.mvpAwards = list(getattr(db_player, 'mvp_awards', None) or [])
             player.allProSeasons = list(getattr(db_player, 'all_pro_seasons', None) or [])
             player.leagueChampionships = list(getattr(db_player, 'league_championships', None) or [])
@@ -1479,6 +1480,7 @@ class PlayerManager:
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                         will_retire=bool(getattr(player, 'willRetire', False)),
                         is_hof=bool(getattr(player, 'is_hof', False)),
+                        hof_season=getattr(player, 'hof_season', None),
                         mvp_awards=list(getattr(player, 'mvpAwards', None) or []),
                         all_pro_seasons=list(getattr(player, 'allProSeasons', None) or []),
                         league_championships=list(getattr(player, 'leagueChampionships', None) or []),
@@ -1509,6 +1511,7 @@ class PlayerManager:
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
                     db_player.is_hof = bool(getattr(player, 'is_hof', False))
+                    db_player.hof_season = getattr(player, 'hof_season', None)
                     db_player.mvp_awards = list(getattr(player, 'mvpAwards', None) or [])
                     db_player.all_pro_seasons = list(getattr(player, 'allProSeasons', None) or [])
                     db_player.league_championships = list(getattr(player, 'leagueChampionships', None) or [])
@@ -2051,6 +2054,14 @@ class PlayerManager:
 
             self.hallOfFame.append(player)
             player.is_hof = True
+            # Stamp the induction class (the just-ended season). Guarded so a
+            # missing season manager never blocks the induction itself.
+            try:
+                sm = self.serviceContainer.getService('season_manager')
+                if sm and getattr(sm, 'currentSeason', None) is not None:
+                    player.hof_season = sm.currentSeason.seasonNumber
+            except Exception:
+                pass
             inducted.append(player)
             logger.info(
                 f"HoF induction: {player.name} ({pts}pts) — {breakdown}"

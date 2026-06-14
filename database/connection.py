@@ -163,6 +163,14 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # HoF induction season — drives the "Class of Season N" grouping.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN hof_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added players.hof_season")
+        except Exception:
+            conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist
