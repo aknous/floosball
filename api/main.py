@@ -1025,6 +1025,11 @@ async def get_player(player_id: int, response: Response):
             _records = None
         player_dict['recordsHeld'] = _recordsHeldByPlayer(
             player.id, _records, getattr(floosball_app.playerManager, '_HOF_POSITIVE_RECORD_KEYS', {}))
+        # This-season offense/defense impact tiers (hybrid archetype layer).
+        try:
+            player_dict['seasonImpact'] = floosball_app.playerManager.getPlayerImpact(player.id)
+        except Exception:
+            player_dict['seasonImpact'] = None
         player_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
         # Build stats history: current live season + past seasons from DB
         sm = floosball_app.seasonManager

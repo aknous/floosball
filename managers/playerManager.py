@@ -2751,6 +2751,32 @@ class PlayerManager:
             results.append(entry)
         return results
 
+    def getPlayerImpact(self, playerId: int) -> Optional[Dict[str, Any]]:
+        """This-season impact tiers for a player's offense and defense, from the
+        same pooled-z value metrics that drive MVP / All-Pro (offenseScore vs
+        defValue). Returns None if the player isn't an eligible active
+        contributor this season (e.g. retired / insufficient snaps)."""
+        def _tier(z):
+            if z is None:
+                return None
+            if z >= 1.0:
+                return 'Elite'
+            if z >= 0.3:
+                return 'Strong'
+            if z >= -0.3:
+                return 'Average'
+            return 'Quiet'
+        offScore = next((c.get('offenseScore') for c in self._computeMvpCandidates()
+                         if c['id'] == playerId), None)
+        defVal = (self._computeDefValues().get(playerId) or {}).get('defValue')
+        if offScore is None and defVal is None:
+            return None
+        return {
+            'offenseTier': _tier(offScore), 'defenseTier': _tier(defVal),
+            'offenseScore': round(offScore, 2) if offScore is not None else None,
+            'defenseValue': round(defVal, 2) if defVal is not None else None,
+        }
+
     def conductFreeAgencySimulation(self, freeAgencyOrder: List, currentSeason: int, leagueHighlights: List = None, eventLog: List = None, skipRetirements: bool = False) -> Dict[str, Any]:
         """
         Complete Free Agency Simulation System - replaces original free agency logic from offseason() function

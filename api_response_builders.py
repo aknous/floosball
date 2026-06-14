@@ -403,7 +403,26 @@ class PlayerResponseBuilder(ResponseBuilder):
             'defensiveRating': player.defensiveRating,
             'defensiveRatingStars': PlayerResponseBuilder.calculateStarRating(player.defensiveRating),
             'defensivePosition': player.defensivePosition.value if player.defensivePosition else None,
+            'archetype': PlayerResponseBuilder.classifyArchetype(
+                PlayerResponseBuilder.calculateStarRating(player.offensiveRating),
+                PlayerResponseBuilder.calculateStarRating(player.defensiveRating),
+                player.defensivePosition is not None),
         }
+
+    @staticmethod
+    def classifyArchetype(offStars, defStars, hasDefense):
+        """Stable two-way identity from offensive vs defensive star ratings.
+        'strong' = 4+ stars (rating >= 84). Kickers (no defense) get no archetype."""
+        if not hasDefense or defStars is None:
+            return None
+        o, d = (offStars or 0), (defStars or 0)
+        if o >= 4 and d >= 4:
+            return 'two_way'
+        if o >= 4 and d <= 3:
+            return 'offensive_weapon'
+        if d >= 4 and o <= 3:
+            return 'defensive_specialist'
+        return None
     
     @staticmethod
     def buildPlayerWithAttributes(player) -> Dict[str, Any]:
