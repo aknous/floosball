@@ -11664,9 +11664,11 @@ def _mvpStatLine(player, position):
                 {"label": "TD", "value": p.get('tds', 0)},
                 {"label": "INT", "value": p.get('ints', 0)}]
     if position == 'RB':
-        return [{"label": "Rush", "value": r.get('yards', 0)},
+        carries = r.get('carries', 0) or 0
+        ypc = round(r.get('yards', 0) / carries, 1) if carries else 0
+        return [{"label": "Yds", "value": r.get('yards', 0)},
                 {"label": "TD", "value": r.get('tds', 0)},
-                {"label": "Rec", "value": rc.get('receptions', 0)}]
+                {"label": "YPC", "value": ypc}]
     if position in ('WR', 'TE'):
         return [{"label": "Rec", "value": rc.get('receptions', 0)},
                 {"label": "Yds", "value": rc.get('yards', 0)},
