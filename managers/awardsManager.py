@@ -165,14 +165,24 @@ class AwardsManager:
         retiredPlayers): the ballot opens at week 22 while these players are
         STILL ACTIVE on rosters during their farewell run, so they haven't
         moved to retiredPlayers yet."""
+        from api_response_builders import PlayerResponseBuilder
         out = []
         for entry in self.ballotRepo.getActive():
             player = self.playerManager.getPlayerById(entry.player_id)
             pts, breakdown = (self.playerManager._computeHofPoints(player)
                               if player is not None else (0, {}))
+            # Team + rating from the resolved player (still-active candidates
+            # carry their team; retired carryovers may have none → null).
+            team = getattr(player, 'team', None) if player is not None else None
+            hasTeamObj = hasattr(team, 'name')
             out.append({
                 'playerId': entry.player_id,
                 'name': getattr(player, 'name', None),
+                'position': player.position.name if player is not None and getattr(player, 'position', None) else None,
+                'teamAbbr': getattr(team, 'abbr', '') if hasTeamObj else '',
+                'teamId': team.id if hasTeamObj else None,
+                'teamColor': getattr(team, 'color', '#334155') if hasTeamObj else '#334155',
+                'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating) if player is not None else 0,
                 'seasonsRemaining': entry.seasons_remaining,
                 'firstEligibleSeason': entry.first_eligible_season,
                 'points': pts,
