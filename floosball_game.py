@@ -3377,7 +3377,36 @@ class Game:
                 play.insights['players'].append(playerEntry)
 
         text = None
-        if self.play.playType is PlayType.Run:
+        if getattr(self.play, 'isScramble', False):
+            # QB ran instead of passing (resolves as a run, narrated as a scramble).
+            # Phrasing matches the trigger: 'pressure' = escaped a would-be sack,
+            # 'coverage' = no one open, pulled it down and ran.
+            yds = self.play.yardage
+            reason = getattr(self.play, 'scrambleReason', 'pressure')
+            if reason == 'coverage':
+                runPhrases = ['finds no one open and takes off for', 'pulls it down and runs for',
+                              'can\'t find a target, tucks it and runs for', 'scans, nobody open, scrambles for',
+                              'holds it, then takes off for']
+                noGain = '{} pulls it down and runs but is stopped for no gain'.format(self.play.runner.name)
+            else:
+                runPhrases = ['escapes the pocket and scrambles for', 'slips the rush and takes off for',
+                              'spins free of pressure and scrambles for', 'dodges the sack and runs for',
+                              'sidesteps the rush and scrambles for']
+                noGain = '{} escapes the rush but is dragged down for no gain'.format(self.play.runner.name)
+            if yds <= 0:
+                text = noGain
+            else:
+                text = '{} {} {} yards'.format(self.play.runner.name, choice(runPhrases), yds)
+            if self.play.isFumble:
+                forcedBy = self.play.forcedFumbleBy
+                if self.play.isFumbleLost:
+                    text += (', {} forces the fumble, {} recover'.format(forcedBy.name, self.play.defense.abbr)
+                             if forcedBy else ', fumbles, {} recover'.format(self.play.defense.abbr))
+                else:
+                    text += ', fumbles but recovers it'
+            elif self.play.tackledBy and not self.play.isTd:
+                text += ', tackled by {}'.format(self.play.tackledBy.name)
+        elif self.play.playType is PlayType.Run:
             # Select description list based on gap type
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
@@ -8102,6 +8131,8 @@ class Play():
         self.kicker: FloosPlayer.PlayerK = None
         self.isPassCompletion = False
         self.isSack = False
+        self.isScramble = False          # QB ran instead of passing
+        self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
@@ -8810,7 +8841,96 @@ class Play():
         # the play before it leaves the QB's hand.
         capMax = 28 if dropbackDepth >= 6 else 15
         return max(0.5, min(capMax, probability))
-    
+
+    def _qbEscapesSack(self) -> bool:
+        """A pressured QB escapes a would-be sack (and then scrambles). AGILITY
+        gates it — a pocket QB almost never gets out. Speed is irrelevant here;
+        it only drives the scramble yardage once they're loose."""
+        from constants import (QB_SCRAMBLE_ENABLED, QB_SCRAMBLE_AGILITY_THRESHOLD,
+                               QB_SCRAMBLE_CHANCE_PER_AGILITY, QB_SCRAMBLE_MAX_CHANCE)
+        if not QB_SCRAMBLE_ENABLED:
+            return False
+        agility = self.passer.gameAttributes.agility
+        escapePct = min(QB_SCRAMBLE_MAX_CHANCE,
+                        max(0.0, (agility - QB_SCRAMBLE_AGILITY_THRESHOLD) * QB_SCRAMBLE_CHANCE_PER_AGILITY))
+        return batched_randint(1, 100) <= escapePct
+
+    def _qbTucksAndRuns(self) -> bool:
+        """No one is open. A mobile QB tucks and runs instead of throwing it away.
+        This is the primary scramble path (sacks are too rare to matter). AGILITY
+        gates the decision; a pocket QB just throws it away."""
+        from constants import (QB_SCRAMBLE_ENABLED, QB_SCRAMBLE_AGILITY_THRESHOLD,
+                               QB_SCRAMBLE_OPEN_RUN_PER_AGILITY, QB_SCRAMBLE_OPEN_RUN_MAX)
+        if not QB_SCRAMBLE_ENABLED:
+            return False
+        agility = self.passer.gameAttributes.agility
+        runPct = min(QB_SCRAMBLE_OPEN_RUN_MAX,
+                     max(0.0, (agility - QB_SCRAMBLE_AGILITY_THRESHOLD) * QB_SCRAMBLE_OPEN_RUN_PER_AGILITY))
+        return batched_randint(1, 100) <= runPct
+
+    def _pickScrambleTackler(self, coverageAssignments):
+        """The defender who brings down a tuck-and-run scramble. Prefer the LB
+        (the te-slot assignment), then the safety (rb slot), then any defender."""
+        tackler = coverageAssignments.get('te') or coverageAssignments.get('rb')
+        if tackler is None:
+            for d in coverageAssignments.values():
+                if d is not None:
+                    tackler = d
+                    break
+        return tackler
+
+    def _resolveQbScramble(self, tackler, reason='pressure') -> None:
+        """The QB runs instead of passing. Resolves as a run with the QB as
+        the carrier, so clock / TD / WPA / box-score / fantasy all flow through
+        the existing run paths. SPEED drives the yardage (small agility bonus for
+        shaking the first defender). Not a sack and not a pass attempt.
+
+        `reason` distinguishes the two triggers so the play-by-play is accurate:
+        'pressure' = escaped a would-be sack, 'coverage' = no one open, tucked it."""
+        from constants import (QB_SCRAMBLE_BASE_YARDS, QB_SCRAMBLE_SPEED_PIVOT,
+                               QB_SCRAMBLE_YARDS_PER_SPEED, QB_SCRAMBLE_OOB_CHANCE,
+                               QB_SCRAMBLE_FUMBLE_CHANCE)
+        isReg = self.game.isRegularSeasonGame
+        self.playType = PlayType.Run
+        self.runner = self.passer
+        self.isScramble = True
+        self.scrambleReason = reason
+        self.insights.setdefault('pass', {})['scrambled'] = True
+
+        spd = self.passer.gameAttributes.speed
+        agi = self.passer.gameAttributes.agility
+        mean = max(1.5, QB_SCRAMBLE_BASE_YARDS + (spd - QB_SCRAMBLE_SPEED_PIVOT) * QB_SCRAMBLE_YARDS_PER_SPEED)
+        yds = int(round(np.random.exponential(mean))) + int(round((agi - 80) / 20.0))
+        yds = max(0, yds)
+        if yds > self.yardsToEndzone:
+            yds = self.yardsToEndzone
+        self.yardage = yds
+        self.isInBounds = batched_randint(1, 100) > QB_SCRAMBLE_OOB_CHANCE
+        self.tackledBy = tackler
+
+        # Credit the QB's rush via the same methods the run path uses.
+        self.passer.addRushYards(yds, isReg)
+        self.passer.addCarry(isReg)
+        self.defense.gameDefenseStats['runYardsAlwd'] += yds
+        self.defense.gameDefenseStats['totalYardsAlwd'] += yds
+        if yds >= 20:
+            self.passer.gameStatsDict['rushing']['20+'] += 1
+        if yds > self.passer.gameStatsDict['rushing']['longest']:
+            self.passer.gameStatsDict['rushing']['longest'] = yds
+        if tackler and hasattr(tackler, 'stat_tracker'):
+            tackler.stat_tracker.add_tackle(isReg)
+
+        # Small fumble chance on the scramble (credit the tackler if lost).
+        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE):
+            self.isFumble = True
+            if batched_randint(1, 100) <= 50:
+                self.isFumbleLost = True
+                self.forcedFumbleBy = tackler
+                self.defense.gameDefenseStats['fumRec'] += 1
+                self.playResult = PlayResult.Fumble
+                if tackler and hasattr(tackler, 'stat_tracker'):
+                    tackler.stat_tracker.add_forced_fumble(isReg)
+
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
         Calculate throw quality degradation from defensive pressure.
@@ -9297,7 +9417,14 @@ class Play():
             'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
         }
 
-        if sackRoll <= sackProbability:
+        # A would-be sack: an agile QB can escape the pocket and scramble
+        # (agility gates the escape; speed drives the yardage). The would-be
+        # sacker (passRusher) becomes the tackler on the run.
+        wouldBeSacked = sackRoll <= sackProbability
+        qbScrambles = wouldBeSacked and self._qbEscapesSack()
+        if qbScrambles:
+            self._resolveQbScramble(passRusher, reason='pressure')
+        elif wouldBeSacked:
             self.insights['pass']['wasSacked'] = True
             # Name the sacker based on blitz package
             coverageAssignmentsForSack = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
@@ -9506,7 +9633,13 @@ class Play():
                             self.targetSideline = False  # 30% chance to freelance
 
             # Handle throw away
-            if self.passType == PassType.throwAway:
+            if self.passType == PassType.throwAway and not mustThrow and self._qbTucksAndRuns():
+                # No one open: a mobile QB tucks and runs instead of throwing it
+                # away. The dropback became a rush, so un-charge the pass attempt
+                # booked at the top of this branch.
+                self.passer.stat_tracker.remove_pass_attempt(self.game.isRegularSeasonGame)
+                self._resolveQbScramble(self._pickScrambleTackler(coverageAssignments), reason='coverage')
+            elif self.passType == PassType.throwAway:
                 self.insights['pass']['wasSacked'] = False
                 self.insights['pass']['throwAway'] = True
                 self.insights['pass']['targets'] = [

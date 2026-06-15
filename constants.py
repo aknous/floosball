@@ -488,6 +488,26 @@ MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
 LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
 LEAGUE_COMPRESSION_MEAN = 80        # Center of the curve
 
+# ── QB scrambles ──────────────────────────────────────────────────────────
+# A pressured QB can escape a would-be sack and run instead. AGILITY gates the
+# escape (whether they scramble at all); SPEED drives the yardage. A pocket QB
+# (low agility) almost never gets out and still takes the sack. Tunable; flip
+# QB_SCRAMBLE_ENABLED to disable without code changes.
+QB_SCRAMBLE_ENABLED = True
+QB_SCRAMBLE_AGILITY_THRESHOLD = 78    # below this agility → essentially no scrambling
+QB_SCRAMBLE_CHANCE_PER_AGILITY = 2.0  # % escape chance per agility point above the threshold
+QB_SCRAMBLE_MAX_CHANCE = 65           # cap on escape chance (% of would-be sacks)
+QB_SCRAMBLE_BASE_YARDS = 4.0          # mean scramble yards at the speed pivot
+QB_SCRAMBLE_SPEED_PIVOT = 78          # speed at which base yards apply
+QB_SCRAMBLE_YARDS_PER_SPEED = 0.25    # mean yards added per speed point above the pivot
+QB_SCRAMBLE_OOB_CHANCE = 20           # % a scramble goes out of bounds (stops the clock)
+QB_SCRAMBLE_FUMBLE_CHANCE = 3         # % a scramble ends in a fumble
+# Sacks are rare (~0.8/game), so sack-escape scrambles alone barely register. The
+# realistic primary trigger is "no one open": instead of throwing it away, a mobile
+# QB tucks and runs. This is the dominant scramble path; agility gates the decision.
+QB_SCRAMBLE_OPEN_RUN_PER_AGILITY = 3.0  # % tuck-and-run chance per agility pt above the threshold
+QB_SCRAMBLE_OPEN_RUN_MAX = 75           # cap on the tuck-and-run chance (% of would-be throwaways)
+
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
