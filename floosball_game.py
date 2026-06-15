@@ -4081,6 +4081,15 @@ class Game:
             player.gameAttributes = copy.deepcopy(player.attributes)
             player.reset_game_stats()
 
+        # Reset team-level defensive accumulators for this game. Players'
+        # gameStatsDict is reset above, but gameDefenseStats (interceptions,
+        # sacks, fumble recoveries, ...) was only ever reset in the dead
+        # postgame() path — so it carried over across every game the team object
+        # lived through, inflating the box score and the DB-stored per-game team
+        # INTs that feed the pre-game matchup averages.
+        self.homeTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
+        self.awayTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
+
         # League compression — pull every player's leaf attributes
         # toward the league mean so the 95-vs-65 gap doesn't auto-win
         # plays. Runs RIGHT AFTER the deepcopy so all downstream
@@ -6074,7 +6083,10 @@ class Game:
                     rushCarries += p.gameStatsDict['rushing']['carries']
                     fumbleLost  += p.gameStatsDict['rushing']['fumblesLost']
 
-            turnovers = passInts + fumbleLost
+            # QB lost fumbles (sack-strips / scramble fumbles) count as turnovers
+            # too — the loop above only covers the skill positions.
+            qbFumblesLost = qb.gameStatsDict['rushing']['fumblesLost'] if qb else 0
+            turnovers = passInts + fumbleLost + qbFumblesLost
             defense   = team.gameDefenseStats
 
             def playerDict(p, statsKey):
