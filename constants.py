@@ -722,6 +722,17 @@ GM_TRIBUNE_VOTE_THRESHOLD = 6
 # FrontOfficePanel.tsx — keep them in sync.
 GM_ACTIVE_WEEK = 22
 
+# ── Fan-voted awards (MVP & Hall of Fame) — see docs/AWARDS_VOTING_PLAN.md ──
+# Voting is free. Below the quorum (and in fast/sim modes, where no one votes),
+# the awards fall back to the algorithm: value-metric MVP, HoF-points induction.
+AWARD_MVP_QUORUM = 3                # min distinct voters before the fan MVP stands
+AWARD_MVP_BALLOT_PER_POSITION = 3   # top N per position on the MVP ballot
+AWARD_HOF_QUORUM = 3                # min distinct voters before fan induction stands
+AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
+AWARD_HOF_CLASS_CAP = 5             # max inductions per season
+AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
+AWARD_HOF_APPROVAL_FRACTION = 0.5   # fraction of HoF voters who must approve to be induct-eligible
+
 # FA ballot
 GM_FA_BALLOT_COST = 15
 GM_FA_BALLOT_MAX_RANKINGS = 18  # 6 roster slots × 3 ranked candidates each

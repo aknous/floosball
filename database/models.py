@@ -1738,6 +1738,73 @@ class GmFaBallot(Base):
         return f"<GmFaBallot(user={self.user_id}, team={self.team_id}, season={self.season})>"
 
 
+class AwardVote(Base):
+    """Fan vote for a league-wide season award (MVP / Hall of Fame).
+
+    League-wide, so unlike GmVote there is no team_id. Single net vote per
+    (user, award_type, target_player) — withdraw to change. MVP is a single
+    pick per user (one row); HoF is approval (one 'yea' row per approved
+    player). See docs/AWARDS_VOTING_PLAN.md.
+    """
+    __tablename__ = "award_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    award_type: Mapped[str] = mapped_column(String(8), nullable=False)  # 'mvp' | 'hof'
+    target_player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user: Mapped["User"] = relationship("User")
+    target_player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        # MVP: one pick per user per season (enforced in the repo by replacing).
+        # HoF: at most one approval per (user, player) per season.
+        UniqueConstraint("user_id", "season", "award_type", "target_player_id",
+                         name="uq_award_vote"),
+        Index("idx_award_votes_season_type", "season", "award_type"),
+        Index("idx_award_votes_user_season", "user_id", "season"),
+    )
+
+    def __repr__(self):
+        return (f"<AwardVote(user={self.user_id}, season={self.season}, "
+                f"type='{self.award_type}', player={self.target_player_id})>")
+
+
+class HofBallotEntry(Base):
+    """Rolling Hall of Fame ballot state for one player across seasons.
+
+    Seeded the season a qualifying player retires; carries forward each
+    offseason until inducted, dropped (tenure exhausted), and re-runs the vote
+    each year. See docs/AWARDS_VOTING_PLAN.md.
+    """
+    __tablename__ = "hof_ballot_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    first_eligible_season: Mapped[int] = mapped_column(Integer, nullable=False)
+    seasons_remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'on_ballot' | 'inducted' | 'dropped'
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="on_ballot")
+    inducted_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        UniqueConstraint("player_id", name="uq_hof_ballot_player"),
+        Index("idx_hof_ballot_status", "status"),
+    )
+
+    def __repr__(self):
+        return (f"<HofBallotEntry(player={self.player_id}, "
+                f"status='{self.status}', left={self.seasons_remaining})>")
+
+
 class PlayoffBracket(Base):
     """A user's playoff bracket-challenge entry for a season.
 

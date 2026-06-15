@@ -799,6 +799,61 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Fan-voted awards — MVP & Hall of Fame (feature/awards-voting).
+        # League-wide votes (no team_id) + rolling HoF ballot state.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS award_votes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "award_type VARCHAR(8) NOT NULL, "
+                "target_player_id INTEGER NOT NULL, "
+                "created_at DATETIME, "
+                "UNIQUE(user_id, season, award_type, target_player_id))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_award_votes_season_type "
+                "ON award_votes(season, award_type)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_award_votes_user_season "
+                "ON award_votes(user_id, season)"
+            ))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS hof_ballot_entries ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "player_id INTEGER NOT NULL UNIQUE, "
+                "first_eligible_season INTEGER NOT NULL, "
+                "seasons_remaining INTEGER NOT NULL, "
+                "status VARCHAR(12) NOT NULL DEFAULT 'on_ballot', "
+                "inducted_season INTEGER, "
+                "created_at DATETIME, "
+                "updated_at DATETIME)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_hof_ballot_status "
+                "ON hof_ballot_entries(status)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured award_votes + hof_ballot_entries tables")
+        except Exception:
+            conn.rollback()
+
+        # Clear stale will_retire on already-retired players. The flag is set at
+        # week 22 and (historically) never reset, so retirees kept carrying it.
+        # Idempotent.
+        try:
+            res = conn.execute(text(
+                "UPDATE players SET will_retire = 0 "
+                "WHERE service_time = 'Retired' AND will_retire = 1"
+            ))
+            conn.commit()
+            if res.rowcount:
+                logger.info(f"  Migration: cleared stale will_retire on {res.rowcount} retired player(s)")
+        except Exception:
+            conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared
