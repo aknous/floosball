@@ -11769,8 +11769,19 @@ def get_hof_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
         # Hide approval counts WHILE voting is open; reveal only after the window
         # closes (induction) so there's no bandwagoning toward an early leader.
         tally = None if hofOpen else am.voteRepo.getTally(season, 'hof')
+        # The specific league records each candidate holds (hover detail, same
+        # source as the HoF plaques).
+        pm = floosball_app.playerManager if floosball_app else None
+        records = None
+        try:
+            rm = pm.serviceContainer.getService('records_manager') if pm else None
+            records = rm.getRecords() if rm else None
+        except Exception:
+            records = None
+        positiveKeys = getattr(pm, '_HOF_POSITIVE_RECORD_KEYS', {}) if pm else {}
         for entry in ballot:
             entry['approvals'] = None if tally is None else tally.get(entry['playerId'], 0)
+            entry['recordsHeld'] = _recordsHeldByPlayer(entry['playerId'], records, positiveKeys)
         myApprovals = sorted(am.voteRepo.getHofApprovals(user.id, season)) if user else []
         from constants import AWARD_HOF_CLASS_CAP
         return build_success_response({
