@@ -6153,6 +6153,14 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
+                # QB scrambles: the QB flattens 'passing', so its rushing line
+                # would otherwise be invisible. Attach it as a nested block so
+                # the box score can list a scrambling QB in the rushing section.
+                if statsKey == 'passing':
+                    qbRush = dict(p.gameStatsDict['rushing'])
+                    qbCarries = qbRush.get('carries', 0)
+                    qbRush['ypc'] = round(qbRush.get('yards', 0) / qbCarries, 1) if qbCarries > 0 else 0.0
+                    result['rushing'] = qbRush
                 # Per-player pre-game mental modifier breakdown — always
                 # included when snapshots exist, even if every stage netted
                 # zero. "Nothing is dragging this player" is itself useful
