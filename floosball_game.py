@@ -1882,7 +1882,12 @@ class Game:
         Only fires when trailing/tied in Q2 or Q4. Probability scales with
         time urgency, timeout availability, and coach clock management quality.
         """
-        if scoreDiff > 0 or self.currentQuarter not in (2, 4):
+        if self.currentQuarter not in (2, 4):
+            return False
+        # A leading team late in Q4 wants the clock RUNNING — never stop it.
+        # But in Q2 a leading team still stops the clock to score before the
+        # half (the half ends regardless, so there's no lead to protect).
+        if self.currentQuarter == 4 and scoreDiff > 0:
             return False
         if self._isGarbageTime(scoreDiff):
             return False
@@ -1955,8 +1960,11 @@ class Game:
         defIsHome = (self.defensiveTeam == self.homeTeam)
         defScore = self.homeScore if defIsHome else self.awayScore
         offScore = self.awayScore if defIsHome else self.homeScore
-        if defScore >= offScore:
-            return  # defense is winning or tied — no need
+        # Q4/OT: only a trailing defense burns timeouts (a leading/tied defense
+        # wants the clock to run out). Q2: any team stops the clock to get the
+        # ball back and try to score before the half, regardless of score.
+        if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
+            return
         deficit = offScore - defScore
         # Don't waste timeouts in an unwinnable game
         defScoreDiff = defScore - offScore  # negative when trailing
@@ -2744,19 +2752,18 @@ class Game:
                 _mul('long',   1 - 0.5 * protectUrgency)
                 _mul('deep',   1 - 0.7 * protectUrgency)
 
-        # Q2 two-minute drill: trailing team goes pass-heavy to score before halftime
-        if q == 2 and scoreDiff < 0 and secs < 120:
-            _mul('run', 0.3)
+        # Q2 two-minute drill: REGARDLESS of score, push to score before the
+        # half. A leading team does NOT sit on the ball in Q2 (clock-milking is
+        # a Q4 behavior — the half ends either way, so there's no lead to
+        # protect by draining time). Trailing teams lean a touch more on the
+        # deep shot; everyone goes pass-first and hurries. Coach-scaled via _mul.
+        if q == 2 and secs < 120:
+            deepBoost = 2.0 if scoreDiff < 0 else 1.6
+            _mul('run', 0.35)
             _mul('short', 1.2)
             _mul('medium', 1.4)
             _mul('long', 1.6)
-            _mul('deep', 2.0)            # shot before halftime
-
-        # Q2 end-of-half: leading team milks clock into halftime
-        if q == 2 and scoreDiff > 0 and secs < 120:
-            _mul('run', 1.4)
-            _mul('long', 0.5)
-            _mul('deep', 0.3)
+            _mul('deep', deepBoost)      # shot before halftime
 
         # Field position adjustments — not clock-related, always full strength
         if self.yardsToEndzone <= 15:
