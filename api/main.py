@@ -11779,9 +11779,27 @@ def get_hof_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
         except Exception:
             records = None
         positiveKeys = getattr(pm, '_HOF_POSITIVE_RECORD_KEYS', {}) if pm else {}
+        # Corrected seasons-played per candidate: stored seasons_played overcounts
+        # by one (it includes the empty retirement season). Count seasons with
+        # games actually played, same as the HoF gallery.
+        seasonsByPlayer = {}
+        try:
+            from database.models import PlayerSeasonStats as _PSS
+            from sqlalchemy import func as _func
+            ids = [e['playerId'] for e in ballot]
+            if ids:
+                rows = (session.query(_PSS.player_id, _func.count(_PSS.season))
+                        .filter(_PSS.player_id.in_(ids), _PSS.games_played > 0)
+                        .group_by(_PSS.player_id).all())
+                seasonsByPlayer = {pid: cnt for pid, cnt in rows}
+        except Exception:
+            seasonsByPlayer = {}
         for entry in ballot:
             entry['approvals'] = None if tally is None else tally.get(entry['playerId'], 0)
             entry['recordsHeld'] = _recordsHeldByPlayer(entry['playerId'], records, positiveKeys)
+            corrected = seasonsByPlayer.get(entry['playerId'])
+            if corrected and isinstance(entry.get('case'), dict):
+                entry['case']['seasons'] = corrected
         myApprovals = sorted(am.voteRepo.getHofApprovals(user.id, season)) if user else []
         from constants import AWARD_HOF_CLASS_CAP
         return build_success_response({
