@@ -13222,6 +13222,44 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
                 expires_at_week=expiresAtWeek,
             )
             session.add(purchase)
+
+            # Apply the IMMEDIATE-effect one-shots, mirroring the shop buy path.
+            # Duration powerups (temp_flex, etc.) need no extra work — the
+            # ShopPurchase row IS the effect, read while active. But extra_swap
+            # and modifier_nullifier take effect on acquisition, and the claim
+            # path previously only recorded the purchase, so a claimed roster
+            # swap never reached the swap pool.
+            extraData = {}
+            if reward.slug == "extra_swap":
+                from database.models import FantasyRoster
+                roster = session.query(FantasyRoster).filter_by(
+                    user_id=user.id, season=currentSeason
+                ).first()
+                # No roster yet → the swap has nowhere to land. Block the claim
+                # (rolls back, reward stays pending) rather than consuming it for
+                # nothing; the user can claim once they've set a roster.
+                if roster is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Set your fantasy roster this season before claiming a roster swap",
+                    )
+                roster.purchased_swaps = (roster.purchased_swaps or 0) + 1
+                extraData["purchasedSwaps"] = roster.purchased_swaps
+                extraData["totalSwapsAvailable"] = (roster.swaps_available or 0) + roster.purchased_swaps
+                if (roster.swaps_available or 0) + (roster.purchased_swaps or 0) >= 3:
+                    try:
+                        from managers import achievementManager as _amArs
+                        _amArs.unlockSecret(session, user.id, "arsenal")
+                    except Exception:
+                        pass
+            elif reward.slug == "modifier_nullifier":
+                from database.repositories.shop_repository import ModifierOverrideRepository
+                ModifierOverrideRepository(session).createOverride(
+                    userId=user.id, season=currentSeason,
+                    week=currentWeek, modifier="steady",
+                )
+                extraData["overrideModifier"] = "steady"
+
             reward.claimed_at = datetime.utcnow()
             session.commit()
             return build_success_response({
@@ -13229,6 +13267,7 @@ def claimPendingReward(rewardId: int, user: _User = Depends(_getCurrentUser)):
                 "slug": reward.slug,
                 "name": powerupInfo.get("name", reward.slug),
                 "expiresAtWeek": expiresAtWeek,
+                **extraData,
             })
 
         raise HTTPException(status_code=500, detail=f"Unknown reward kind: {reward.kind}")
