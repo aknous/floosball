@@ -3557,10 +3557,12 @@ class PlayerManager:
         """Guarantee enough living players AT EACH POSITION to fill every roster
         slot, generating only the per-position deficit into the free-agent pool.
 
-        Supply = all active, non-retiring players (rostered + FAs + prospects +
-        upcoming rookies) by position; retiring players (`willRetire`) and
-        already-retired players are excluded. Demand = numTeams × slots-at-position
-        (WR is ×2) plus a small cushion (ROSTER_SUPPLY_BUFFER_PER_POSITION).
+        Supply = genuinely DRAFTABLE players by position: rostered + free agents.
+        Excludes retiring players (`willRetire`), already-retired players, AND
+        prospects / the upcoming rookie class (`is_prospect`) — prospects are
+        locked to their drafting team and can't fill another team's vacancy, so
+        counting them overstated availability. Demand = numTeams × slots-at-
+        position (WR is ×2) plus a cushion (ROSTER_SUPPLY_BUFFER_PER_POSITION).
 
         No-op in the normal case (the pool is far deeper than demand); only a
         genuinely thinned position triggers generation. Idempotent: already-
@@ -3581,10 +3583,21 @@ class PlayerManager:
             FloosPlayer.Position.K: 1,
         }
 
-        # Living, non-retiring, slot-fillable supply by position.
+        # Draftable supply by position. Excludes:
+        #  - retiring players (`willRetire`) — gone in the offseason;
+        #  - prospects / the upcoming rookie class (`is_prospect`) — each is
+        #    LOCKED to its drafting team (only that team can promote it), so a
+        #    prospect does nothing for another team's vacancy. Counting them
+        #    overstated availability and let the FA pool come up short, forcing
+        #    the draft's last-resort generation. Excluding them makes the floor
+        #    generate enough genuine free agents (over-generating slightly when
+        #    prospects do get promoted, which is harmless — the extra FAs just
+        #    sit in the pool).
         supply = {pos: 0 for pos in slotsPerPosition}
         for p in self.activePlayers:
             if getattr(p, 'willRetire', False):
+                continue
+            if getattr(p, 'is_prospect', False):
                 continue
             pos = getattr(p, 'position', None)
             if pos in supply:
