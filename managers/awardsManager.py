@@ -169,6 +169,10 @@ class AwardsManager:
         out = []
         for entry in self.ballotRepo.getActive():
             player = self.playerManager.getPlayerById(entry.player_id)
+            # Defense-in-depth: never show an already-enshrined player on the
+            # ballot, even if one slipped onto it (the seed already skips is_hof).
+            if player is not None and getattr(player, 'is_hof', False):
+                continue
             pts, breakdown = (self.playerManager._computeHofPoints(player)
                               if player is not None else (0, {}))
             # Team + rating from the resolved player (still-active candidates
@@ -188,4 +192,6 @@ class AwardsManager:
                 'points': pts,
                 'case': breakdown,
             })
+        # Strongest cases first.
+        out.sort(key=lambda e: e['points'], reverse=True)
         return out

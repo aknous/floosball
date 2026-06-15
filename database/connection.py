@@ -840,6 +840,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Clear stale will_retire on already-retired players. The flag is set at
+        # week 22 and (historically) never reset, so retirees kept carrying it.
+        # Idempotent.
+        try:
+            res = conn.execute(text(
+                "UPDATE players SET will_retire = 0 "
+                "WHERE service_time = 'Retired' AND will_retire = 1"
+            ))
+            conn.commit()
+            if res.rowcount:
+                logger.info(f"  Migration: cleared stale will_retire on {res.rowcount} retired player(s)")
+        except Exception:
+            conn.rollback()
+
         # Offseason-in-progress checkpoint flag (feature/prospects-pipeline)
         # Protects against the "deploy during offseason → season replays on
         # restart" bug. Set True just before handleOffseason() runs, cleared

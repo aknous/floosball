@@ -6136,7 +6136,11 @@ class SeasonManager:
             team.playerNumbersList.remove(player.currentNumber)
         player.team = 'Retired'
         player.serviceTime = FloosPlayer.PlayerServiceTime.Retired
-        
+        # The retirement decision has now been carried out — clear the flag so a
+        # retired player never carries a stale willRetire (it's set at wk22 and
+        # otherwise never reset).
+        player.willRetire = False
+
         self.playerManager.retiredPlayers.append(player)
         self.playerManager.newlyRetiredPlayers.append(player)
         if player in self.playerManager.activePlayers:
