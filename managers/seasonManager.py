@@ -7634,23 +7634,25 @@ class SeasonManager:
         except ImportError:
             return "steady"
 
-    # Slot ET start hours within a calendar day, indexed by `week % 7`
-    # (mirrors getWeekStartTime). list[0] == 12pm is the day's first slot.
+    # Slot ET start hours within a calendar day, indexed by `(week-1) % 7`.
+    # list[0] == 12pm is the day's first slot (week 1 → noon, week 7 → 6pm).
     _SLOT_ET_HOURS = [12, 13, 14, 15, 16, 17, 18]
 
     @staticmethod
     def _dayOfWeek(week: int) -> int:
-        """Calendar day index a sim-week belongs to. Slots in the same calendar
-        day share `week // 7` (matches getWeekStartTime's dayNumber). Robust to
-        the day-0 quirk (weeks 1-6) and week 28 spilling to day 4."""
-        return week // 7
+        """Zero-based calendar day a 1-indexed sim-week (1-28) belongs to.
+        Mirrors the season loop's `roundIndex // 7` (week = roundIndex + 1):
+        weeks 1-7 → day 0, 8-14 → day 1, 15-21 → day 2, 22-28 → day 3 — four
+        even days of 7. (The old `week // 7` was off by one, giving day 0 only
+        weeks 1-6 and orphaning week 7 onto the next day.)"""
+        return (week - 1) // 7
 
     def _slotWeeksForDay(self, week: int) -> list:
         """All regular-season sim-weeks that play on the same calendar day as
         `week`, ordered by kickoff (ET hour ascending)."""
         dayNum = self._dayOfWeek(week)
         slots = [w for w in range(1, 29) if self._dayOfWeek(w) == dayNum]
-        slots.sort(key=lambda w: self._SLOT_ET_HOURS[w % 7])
+        slots.sort(key=lambda w: self._SLOT_ET_HOURS[(w - 1) % 7])
         return slots
 
     def _ensureDayModifiers(self, season: int, anchorWeek: int) -> None:
