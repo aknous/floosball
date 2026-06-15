@@ -2021,7 +2021,7 @@ class PlayerManager:
             'gameRecords':   records['game'],
         }
 
-    def inductHallOfFame(self) -> None:
+    def inductHallOfFame(self, excludePlayerIds: set = None) -> None:
         """Score retired players against the HoF criteria and induct anyone
         clearing HOF_INDUCT_THRESHOLD.
 
@@ -2033,12 +2033,19 @@ class PlayerManager:
         wipe the in-memory `newlyRetiredPlayers` list). The signature legacy
         criteria (TierS auto / TierA with a ring) are subsumed by the points
         system.
+
+        `excludePlayerIds`: when fan-voted awards are active, the AwardsManager
+        owns everyone who reached the HoF ballot (vote + class cap). This call
+        then runs as a points-only SAFETY NET for NOT-on-ballot retirees only
+        (first-deploy backlog / stragglers), so a balloted player who missed the
+        cap or was dropped is never back-doored in.
         """
+        exclude = excludePlayerIds or set()
         seen: set = set()
         candidates = []
         for player in [*self.newlyRetiredPlayers, *self.retiredPlayers]:
             pid = getattr(player, 'id', None)
-            if pid in seen or getattr(player, 'is_hof', False):
+            if pid in seen or pid in exclude or getattr(player, 'is_hof', False):
                 continue
             seen.add(pid)
             candidates.append(player)

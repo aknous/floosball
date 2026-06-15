@@ -133,6 +133,13 @@ class HofBallotRepository:
             .all()
         )
 
+    def getAllPlayerIds(self) -> Set[int]:
+        """Every player who has ever been on the ballot (any status). Used as the
+        safety-net exclusion so the points fallback only catches NOT-on-ballot
+        retirees — the voted path owns everyone who reached the ballot."""
+        rows = self.session.query(HofBallotEntry.player_id).all()
+        return {r[0] for r in rows}
+
     def getEntry(self, playerId: int) -> Optional[HofBallotEntry]:
         return (
             self.session.query(HofBallotEntry)

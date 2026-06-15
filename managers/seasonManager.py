@@ -877,6 +877,15 @@ class SeasonManager:
                 # resolution, so this isn't a net drain.
                 self._generateCoachCandidatesForFA()
 
+            # Open the Hall of Fame ballot: the retiring set is final at week 22,
+            # so fans get the longest window (farewell games, playoffs, drafts)
+            # to vote. Runs every week from 22 on (idempotent) rather than only
+            # AT wk22, so a deploy AFTER week 22 still seeds the ballot before the
+            # offseason induction — otherwise the class would skip the cap via
+            # the points safety net. See AWARDS_VOTING_PLAN.md.
+            if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK:
+                self._seedHofBallot()
+
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
             # the week replays on restart (stats get overwritten — safe).
@@ -5264,7 +5273,26 @@ class SeasonManager:
 
             # STEP 11: Induct Hall of Fame players
             logger.info("Step 11: Hall of Fame inductions")
-            self.playerManager.inductHallOfFame()
+            # Fan-voted path owns the ballot (vote + class cap, or points
+            # fallback below quorum). Then inductHallOfFame runs as a points-only
+            # SAFETY NET for NOT-on-ballot retirees (first-deploy / stragglers).
+            ballotIds = set()
+            try:
+                from database.connection import get_session
+                from managers.awardsManager import AwardsManager
+                hofSeason = self.currentSeason.seasonNumber if self.currentSeason else 0
+                _s = get_session()
+                try:
+                    am = AwardsManager(_s, self.playerManager, lowQuorum=self._isTestMode)
+                    inducted = am.resolveHofInductions(hofSeason)
+                    ballotIds = am.ballotRepo.getAllPlayerIds()
+                    _s.commit()
+                    logger.info(f"HoF: {len(inducted)} inducted via ballot (S{hofSeason})")
+                finally:
+                    _s.close()
+            except Exception as e:
+                logger.error(f"HoF ballot induction failed, safety net only: {e}")
+            self.playerManager.inductHallOfFame(excludePlayerIds=ballotIds)
 
             # STEP 12: Save unused names
             self.playerManager.saveUnusedNames()
@@ -6046,6 +6074,34 @@ class SeasonManager:
                 logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
 
         return flagged
+
+    def _seedHofBallot(self) -> None:
+        """Seed the rolling Hall of Fame ballot with this season's just-flagged
+        retirees (the willRetire rostered set), pre-filtered by HoF points. Opens
+        HoF voting for the wk22 -> offseason-induction window. Best-effort: a
+        failure here must never block the week-22 transition."""
+        try:
+            from database.connection import get_session
+            from managers.awardsManager import AwardsManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            if not teamManager:
+                return
+            retirees = [p for team in teamManager.teams
+                        for p in team.rosterDict.values()
+                        if p is not None and getattr(p, 'willRetire', False)]
+            if not retirees:
+                return
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            session = get_session()
+            try:
+                am = AwardsManager(session, self.playerManager, lowQuorum=self._isTestMode)
+                seeded = am.seedHofBallot(season, retirees)
+                session.commit()
+                logger.info(f"HoF ballot opened: {len(seeded)} candidate(s) seeded for S{season}")
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"HoF ballot seeding failed (non-fatal): {e}")
 
     def _ensurePositionSupply(self, reason: str = '') -> dict:
         """Guarantee enough living players at each position to fill all roster
@@ -7295,7 +7351,23 @@ class SeasonManager:
             logger.warning("Could not determine MVP — not enough eligible players")
             return
 
+        # Fan-voted MVP: AwardsManager elects from the top-N-per-position ballot,
+        # falling back to the top value-metric candidate below quorum / in sims.
         winner = candidates[0]
+        try:
+            from database.connection import get_session
+            from managers.awardsManager import AwardsManager
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            _s = get_session()
+            try:
+                am = AwardsManager(_s, self.playerManager, lowQuorum=self._isTestMode)
+                voted = am.resolveMvp(season)
+                if voted and voted.get('player') is not None:
+                    winner = voted
+            finally:
+                _s.close()
+        except Exception as e:
+            logger.error(f"MVP vote resolution failed, using value-metric pick: {e}")
         mvpPlayer = winner['player']
 
         # Idempotency: skip if already awarded this season (replay safety)
