@@ -11609,6 +11609,240 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
 
 
 # ============================================================================
+# FAN-VOTED AWARDS (MVP & HALL OF FAME)
+# ============================================================================
+# See docs/AWARDS_VOTING_PLAN.md. Voting is free. Windows are DERIVED from the
+# season position (no persisted flag): MVP opens at regular-season end (wk 28)
+# through the season-end announcement; HoF opens at wk 22 and stays open through
+# the playoffs/drafts until the offseason induction step.
+
+REGULAR_SEASON_END_WEEK = 28  # 28-week regular season; playoffs are weeks 29-32
+
+
+class _MvpVoteRequest(BaseModel):
+    playerId: int
+
+
+class _HofVoteRequest(BaseModel):
+    playerId: int
+
+
+def _awardWindows():
+    """(season, mvpOpen, hofOpen) derived from the current season position."""
+    from constants import GM_ACTIVE_WEEK
+    sm = floosball_app.seasonManager if floosball_app else None
+    if not sm or not sm.currentSeason:
+        return 0, False, False
+    season = sm.currentSeason.seasonNumber
+    cw = sm.currentSeason.currentWeek
+    phase = getattr(sm, '_offseasonFlowPhase', None)
+    if isinstance(cw, int):
+        # In-season: MVP votable from regular-season end through playoffs;
+        # HoF votable from week 22 onward.
+        mvpOpen = cw >= REGULAR_SEASON_END_WEEK
+        hofOpen = cw >= GM_ACTIVE_WEEK
+    else:
+        # Offseason: MVP is already resolved; HoF stays open until induction
+        # (the 'training' phase, last step) runs.
+        mvpOpen = False
+        hofOpen = phase not in ('training', None)
+    return season, mvpOpen, hofOpen
+
+
+def _mvpStatLine(player, position):
+    """A compact, position-specific season stat line for the MVP ballot, so
+    voters can compare candidates. Returns a list of {label, value} dicts."""
+    if player is None:
+        return []
+    s = getattr(player, 'seasonStatsDict', {}) or {}
+    p = s.get('passing', {}) or {}
+    r = s.get('rushing', {}) or {}
+    rc = s.get('receiving', {}) or {}
+    k = s.get('kicking', {}) or {}
+    if position == 'QB':
+        return [{"label": "Yds", "value": p.get('yards', 0)},
+                {"label": "TD", "value": p.get('tds', 0)},
+                {"label": "INT", "value": p.get('ints', 0)}]
+    if position == 'RB':
+        carries = r.get('carries', 0) or 0
+        ypc = round(r.get('yards', 0) / carries, 1) if carries else 0
+        return [{"label": "Yds", "value": r.get('yards', 0)},
+                {"label": "TD", "value": r.get('tds', 0)},
+                {"label": "YPC", "value": ypc}]
+    if position in ('WR', 'TE'):
+        return [{"label": "Rec", "value": rc.get('receptions', 0)},
+                {"label": "Yds", "value": rc.get('yards', 0)},
+                {"label": "TD", "value": rc.get('tds', 0)}]
+    if position == 'K':
+        return [{"label": "FG", "value": f"{k.get('fgs', 0)}/{k.get('fgAtt', 0)}"},
+                {"label": "Long", "value": k.get('longest', 0)}]
+    return []
+
+
+def _awardsManager(session):
+    from managers.awardsManager import AwardsManager
+    pm = floosball_app.playerManager if floosball_app else None
+    lowQuorum = bool(getattr(floosball_app.seasonManager, '_isTestMode', False)) if floosball_app and floosball_app.seasonManager else False
+    return AwardsManager(session, pm, lowQuorum=lowQuorum)
+
+
+@app.get("/api/awards/status")
+def get_awards_status():
+    """Lightweight window state for the nav — is MVP or HoF voting open? Lets the
+    frontend surface the Awards entry only when a window is live."""
+    season, mvpOpen, hofOpen = _awardWindows()
+    return build_success_response({
+        "season": season,
+        "mvpOpen": mvpOpen,
+        "hofOpen": hofOpen,
+        "anyOpen": bool(mvpOpen or hofOpen),
+    })
+
+
+@app.get("/api/awards/mvp/ballot")
+def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
+    """MVP ballot: top-N-per-position candidates, the user's current vote, and
+    the live tally. Number-free gating handled client-side; tally is included so
+    the UI can show standings once voting is live."""
+    from database.connection import get_session
+    season, mvpOpen, _ = _awardWindows()
+    session = get_session()
+    try:
+        am = _awardsManager(session)
+        ballot = am.getMvpBallot()
+        # Strip the non-serializable Player object, attaching a position-specific
+        # season stat line so voters can compare candidates directly.
+        cleaned = []
+        for c in ballot:
+            entry = {k: v for k, v in c.items() if k != 'player'}
+            entry['stats'] = _mvpStatLine(c.get('player'), c.get('position'))
+            cleaned.append(entry)
+        myVote = am.voteRepo.getMvpVote(user.id, season) if user else None
+        # Hide the tally WHILE voting is open (no bandwagoning); reveal only once
+        # the window has closed and the result is final.
+        tally = None if mvpOpen else am.voteRepo.getTally(season, 'mvp')
+        return build_success_response({
+            "season": season,
+            "windowOpen": mvpOpen,
+            "candidates": cleaned,
+            "tally": tally,
+            "myVote": myVote,
+            "voterCount": am.voteRepo.getVoterCount(season, 'mvp'),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/awards/mvp/vote")
+def cast_mvp_vote(req: _MvpVoteRequest, user: _User = Depends(_getCurrentUser)):
+    """Cast (or change) the user's single MVP pick. Must be a ballot-eligible
+    candidate, and the MVP window must be open."""
+    from database.connection import get_session
+    season, mvpOpen, _ = _awardWindows()
+    if not mvpOpen:
+        raise HTTPException(400, "MVP voting is not open right now")
+    session = get_session()
+    try:
+        am = _awardsManager(session)
+        eligible = {c['id'] for c in am.getMvpBallot()}
+        if req.playerId not in eligible:
+            raise HTTPException(400, "That player is not on the MVP ballot")
+        am.voteRepo.setMvpVote(user.id, season, req.playerId)
+        session.commit()
+        return build_success_response({
+            "season": season,
+            "myVote": req.playerId,
+            "tally": am.voteRepo.getTally(season, 'mvp'),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/awards/hof/ballot")
+def get_hof_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
+    """Hall of Fame ballot: active candidates with their case + seasons
+    remaining, the user's approvals, and the live tally."""
+    from database.connection import get_session
+    season, _, hofOpen = _awardWindows()
+    session = get_session()
+    try:
+        am = _awardsManager(session)
+        ballot = am.getHofBallot()
+        # Hide approval counts WHILE voting is open; reveal only after the window
+        # closes (induction) so there's no bandwagoning toward an early leader.
+        tally = None if hofOpen else am.voteRepo.getTally(season, 'hof')
+        # The specific league records each candidate holds (hover detail, same
+        # source as the HoF plaques).
+        pm = floosball_app.playerManager if floosball_app else None
+        records = None
+        try:
+            rm = pm.serviceContainer.getService('records_manager') if pm else None
+            records = rm.getRecords() if rm else None
+        except Exception:
+            records = None
+        positiveKeys = getattr(pm, '_HOF_POSITIVE_RECORD_KEYS', {}) if pm else {}
+        # Corrected seasons-played per candidate: stored seasons_played overcounts
+        # by one (it includes the empty retirement season). Count seasons with
+        # games actually played, same as the HoF gallery.
+        seasonsByPlayer = {}
+        try:
+            from database.models import PlayerSeasonStats as _PSS
+            from sqlalchemy import func as _func
+            ids = [e['playerId'] for e in ballot]
+            if ids:
+                rows = (session.query(_PSS.player_id, _func.count(_PSS.season))
+                        .filter(_PSS.player_id.in_(ids), _PSS.games_played > 0)
+                        .group_by(_PSS.player_id).all())
+                seasonsByPlayer = {pid: cnt for pid, cnt in rows}
+        except Exception:
+            seasonsByPlayer = {}
+        for entry in ballot:
+            entry['approvals'] = None if tally is None else tally.get(entry['playerId'], 0)
+            entry['recordsHeld'] = _recordsHeldByPlayer(entry['playerId'], records, positiveKeys)
+            corrected = seasonsByPlayer.get(entry['playerId'])
+            if corrected and isinstance(entry.get('case'), dict):
+                entry['case']['seasons'] = corrected
+        myApprovals = sorted(am.voteRepo.getHofApprovals(user.id, season)) if user else []
+        from constants import AWARD_HOF_CLASS_CAP
+        return build_success_response({
+            "season": season,
+            "windowOpen": hofOpen,
+            "classCap": AWARD_HOF_CLASS_CAP,
+            "candidates": ballot,
+            "myApprovals": myApprovals,
+            "voterCount": am.voteRepo.getVoterCount(season, 'hof'),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/awards/hof/vote")
+def cast_hof_vote(req: _HofVoteRequest, user: _User = Depends(_getCurrentUser)):
+    """Toggle the user's HoF approval for a ballot candidate (approve / withdraw).
+    The HoF window must be open and the player must be on the active ballot."""
+    from database.connection import get_session
+    season, _, hofOpen = _awardWindows()
+    if not hofOpen:
+        raise HTTPException(400, "Hall of Fame voting is not open right now")
+    session = get_session()
+    try:
+        am = _awardsManager(session)
+        active = {e.player_id for e in am.ballotRepo.getActive()}
+        if req.playerId not in active:
+            raise HTTPException(400, "That player is not on the Hall of Fame ballot")
+        nowApproved = am.voteRepo.toggleHofApproval(user.id, season, req.playerId)
+        session.commit()
+        return build_success_response({
+            "season": season,
+            "playerId": req.playerId,
+            "approved": nowApproved,
+            "approvals": am.voteRepo.getTally(season, 'hof').get(req.playerId, 0),
+        })
+    finally:
+        session.close()
+
+
+# ============================================================================
 # PICK-EM ("PROGNOSTICATIONS")
 # ============================================================================
 
