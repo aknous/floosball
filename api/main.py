@@ -11669,8 +11669,10 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
         ballot = am.getMvpBallot()
         # Strip the non-serializable Player object from each candidate.
         cleaned = [{k: v for k, v in c.items() if k != 'player'} for c in ballot]
-        tally = am.voteRepo.getTally(season, 'mvp')
         myVote = am.voteRepo.getMvpVote(user.id, season) if user else None
+        # Hide the tally WHILE voting is open (no bandwagoning); reveal only once
+        # the window has closed and the result is final.
+        tally = None if mvpOpen else am.voteRepo.getTally(season, 'mvp')
         return build_success_response({
             "season": season,
             "windowOpen": mvpOpen,
@@ -11718,9 +11720,11 @@ def get_hof_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
     try:
         am = _awardsManager(session)
         ballot = am.getHofBallot()
-        tally = am.voteRepo.getTally(season, 'hof')
+        # Hide approval counts WHILE voting is open; reveal only after the window
+        # closes (induction) so there's no bandwagoning toward an early leader.
+        tally = None if hofOpen else am.voteRepo.getTally(season, 'hof')
         for entry in ballot:
-            entry['approvals'] = tally.get(entry['playerId'], 0)
+            entry['approvals'] = None if tally is None else tally.get(entry['playerId'], 0)
         myApprovals = sorted(am.voteRepo.getHofApprovals(user.id, season)) if user else []
         from constants import AWARD_HOF_CLASS_CAP
         return build_success_response({
