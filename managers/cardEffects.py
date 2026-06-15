@@ -989,7 +989,11 @@ SHARED_EFFECT_POOL = [
     "advantage", "catalyst",
     # strategy-warping
     "home_alone", "closer", "dark_horse",
-    "vagabond", "fat_cat", "surplus", "bonsai",
+    # NOTE: "surplus" retired from circulation — it was built to raise the old
+    # weekly Floobit income cap, which no longer exists. Removed from the minting
+    # pool so no new copies are created; the effect handler + display + payout
+    # reader are kept so the existing owned copies still render and pay out.
+    "vagabond", "fat_cat", "bonsai",
     # New cards (FP/FPx rebalance)
     "anthem", "conductor",
     "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
