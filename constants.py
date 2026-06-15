@@ -24,6 +24,34 @@ FIELD_LENGTH = 100
 MIN_ATTRIBUTE_VALUE = 60
 MAX_ATTRIBUTE_VALUE = 100
 
+# ---- Career-arc development (player_development.py) ----
+# Players rise toward a per-player PEAK season (a jittered fraction of their
+# longevity), plateau, then decline — decline is decoupled from the retirement
+# clock so it actually shows. The phase SIGN is intrinsic (seasonsPlayed vs
+# peakSeason); coach playerDevelopment + market tier (devBias) only modulate how
+# fast/much a RISING player climbs (= realized peak height), never reversing the
+# decline. This replaces the old prime/decline binary that let ratings ratchet
+# upward forever (league inflated to all-5-star by ~season 9).
+DEV_PEAK_FRACTION_LOW = 0.55     # peak season ≈ this..HIGH × longevity, jittered per player
+DEV_PEAK_FRACTION_HIGH = 0.65
+DEV_PEAK_SEASON_MIN = 2          # even short-longevity players get a brief rise
+# Per-attribute change ranges (min, max) BEFORE devBias / ceiling cap / prospect spread.
+DEV_RISE_RANGE = (-1, 5)         # pre-peak: skews up (devBias added here)
+DEV_PEAK_RANGE = (-2, 2)         # at peak: roughly flat
+DEV_DECLINE_RANGE = (-5, 1)      # post-peak base: skews down (steepens over time)
+# Decline steepens with seasons past peak; each season shifts the range down by
+# this, plus an extra kick once past longevity, capped so it can't run away.
+DEV_DECLINE_STEEPEN_PER_SEASON = 1
+DEV_DECLINE_PAST_LONGEVITY_KICK = 2
+DEV_DECLINE_MAX_STEEPEN = 6
+# Prospects / early-career players are boom-or-bust: widen both ends; good dev
+# (positive devBias) skews the spread toward boom.
+DEV_PROSPECT_SPREAD = 4
+DEV_PROSPECT_SEASONS = 1         # seasonsPlayed <= this (or is_prospect) → volatile
+# Trained attributes can fade this low in decline (below MIN_ATTRIBUTE_VALUE so
+# aging vets actually drop into lower tiers and the league spreads out).
+DEV_ATTRIBUTE_FLOOR = 55
+
 # Random Generation Ranges
 TIER_S_MIN = 95
 TIER_S_MAX = 100
@@ -67,6 +95,31 @@ CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
 CHOKE_MODIFIER_THRESHOLD = 1.5    # Min abs(keyPressureMod) for choke
 CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
 CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
+
+# WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
+# probability swing is credited to the players involved and accumulated into a
+# season total that feeds the MVP + All-Pro defense value metrics.
+WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
+DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
+
+# MVP + All-Pro defense value-metric blend weights (z-scores, pooled within position group).
+# MVP total value = offenseScore + defValue, where:
+#   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
+#   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
+MVP_PERF_WEIGHT = 0.6        # season performance rating (box-score percentile) share of offense score
+MVP_WPA_WEIGHT = 0.4         # offensive WPA share of offense score
+MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
+MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
+
+# Per-defensive-position weights for the box-stat composite (z-scored within
+# group). Coverage value is invisible to the box, so CB/S lean on ints/PBUs and
+# the WPA term carries the rest.
+DEF_BOX_WEIGHTS = {
+    'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
+    'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
+    'CB': {'passBreakups': 2.0, 'ints': 3.0, 'tackles': 0.5, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.0},
+    'S':  {'ints': 2.5, 'passBreakups': 2.0, 'tackles': 1.0, 'sacks': 1.0, 'tfl': 0.5, 'forcedFumbles': 1.5},
+}
 
 # Momentum system
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
@@ -209,22 +262,22 @@ ROSTER_MIN_PLAYERS = 3
 #   SCALE     — overall payout scale (raises floor + ceiling together)
 #   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
 # Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
-# then bumped ~33% across the board in v0.16.1 — payouts felt too thin
-# relative to pack prices. Shape (exponent) unchanged so the high-end
-# taper still prevents runaway whales while floors and middle play
-# benefit too. Sample profile (default):
-#   100 FP →  16 F
-#   500 FP →  54 F
-#  1000 FP →  93 F
-#  3000 FP → 217 F
-WEEKLY_FP_FLOOBIT_SCALE = 0.43
+# bumped ~33% in v0.16.1, then nudged up another ~12% next-season — payouts
+# still felt a touch thin against pack/upgrade prices. Shape (exponent)
+# unchanged so the high-end taper still prevents runaway whales while
+# floors and middle play benefit too. Sample profile (default):
+#   100 FP →  17 F
+#   500 FP →  61 F
+#  1000 FP → 105 F
+#  3000 FP → 247 F
+WEEKLY_FP_FLOOBIT_SCALE = 0.48
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 # Endowment (income_boost powerup) replaces the curve with a flatter one.
 # Less taper = monster weeks pay more; low weeks pay roughly the same.
 # Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
 # at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
 # proportionally with the standard curve.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.27
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.30
 WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
@@ -376,14 +429,36 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
-# ---- Retirement Risk Telegraphing ----
-# Surfaces during the season so fans can pre-vote replacements. Mirrors the
-# actual retirement rolls in seasonManager._evaluateRetirementCandidates.
+# ---- Retirement (keyed to yearsPast = seasonsPlayed - longevity) ----
+# `longevity` (randint 4-10 per player) is the intended retirement clock, so we
+# band on how many seasons a player is PAST it — not absolute seasonsPlayed,
+# which can't grow past league age (a young league would otherwise never retire
+# its vets). These bands are the SINGLE SOURCE OF TRUTH for both the actual roll
+# (seasonManager._evaluateRetirementCandidates) and the displayed risk tier
+# (playerManager.computeRetirementRisk / computeRetirementOdds), so the label a
+# user sees always matches the real odds.
 # Tiers: 'safe' | 'possible' | 'likely' | 'very_likely' | 'retiring' (locked)
-# Retirements only fire for players whose contract expires this offseason.
-RETIREMENT_HIGH_AGE_SEASONS = 15    # 90% chance on walk year
-RETIREMENT_MID_AGE_SEASONS = 10     # 65% chance on walk year
-RETIREMENT_EARLY_AGE_SEASONS = 7    # 5% chance on walk year
+RETIREMENT_YEARS_PAST_HIGH  = 3     # 3+ seasons past longevity → very_likely
+RETIREMENT_YEARS_PAST_MID   = 1     # 1-2 past → likely
+RETIREMENT_YEARS_PAST_EARLY = 0     # just reached longevity → possible
+RETIREMENT_CHANCE_HIGH  = 90        # % chance once eligible (yearsPast >= HIGH)
+RETIREMENT_CHANCE_MID   = 65        # % chance (yearsPast >= MID)
+RETIREMENT_CHANCE_EARLY = 25        # % chance (yearsPast >= EARLY)
+# Phased contract gate: a player only newly enters retirement territory on their
+# walk season (termRemaining == 1). But once they're this many seasons past
+# longevity and still playing, they retire even mid-contract.
+RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
+
+# ---- Roster Supply Floor ----
+# After retirements are known, guarantee the league has enough living players at
+# EACH position to fill every roster slot (24 teams × {QB1,RB1,WR2,TE1,K1}),
+# else a position run (many retirements at one spot + a thin rookie class) could
+# leave slots permanently empty. The supply check (playerManager.ensurePositionSupply)
+# tops up only the per-position deficit into the FA pool — a no-op in the normal
+# case where the pool is already deep. This buffer is the small cushion kept
+# ABOVE exact slot demand so the FA draft has some choice and late FA retirements
+# don't re-open a gap. Only matters when a position is genuinely short.
+ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly
@@ -412,6 +487,26 @@ MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
 # disable.
 LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
 LEAGUE_COMPRESSION_MEAN = 80        # Center of the curve
+
+# ── QB scrambles ──────────────────────────────────────────────────────────
+# A pressured QB can escape a would-be sack and run instead. AGILITY gates the
+# escape (whether they scramble at all); SPEED drives the yardage. A pocket QB
+# (low agility) almost never gets out and still takes the sack. Tunable; flip
+# QB_SCRAMBLE_ENABLED to disable without code changes.
+QB_SCRAMBLE_ENABLED = True
+QB_SCRAMBLE_AGILITY_THRESHOLD = 78    # below this agility → essentially no scrambling
+QB_SCRAMBLE_CHANCE_PER_AGILITY = 2.0  # % escape chance per agility point above the threshold
+QB_SCRAMBLE_MAX_CHANCE = 65           # cap on escape chance (% of would-be sacks)
+QB_SCRAMBLE_BASE_YARDS = 4.0          # mean scramble yards at the speed pivot
+QB_SCRAMBLE_SPEED_PIVOT = 78          # speed at which base yards apply
+QB_SCRAMBLE_YARDS_PER_SPEED = 0.25    # mean yards added per speed point above the pivot
+QB_SCRAMBLE_OOB_CHANCE = 20           # % a scramble goes out of bounds (stops the clock)
+QB_SCRAMBLE_FUMBLE_CHANCE = 3         # % a scramble ends in a fumble
+# Sacks are rare (~0.8/game), so sack-escape scrambles alone barely register. The
+# realistic primary trigger is "no one open": instead of throwing it away, a mobile
+# QB tucks and runs. This is the dominant scramble path; agility gates the decision.
+QB_SCRAMBLE_OPEN_RUN_PER_AGILITY = 3.0  # % tuck-and-run chance per agility pt above the threshold
+QB_SCRAMBLE_OPEN_RUN_MAX = 75           # cap on the tuck-and-run chance (% of would-be throwaways)
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
@@ -455,14 +550,14 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Bumps your weekly FP-to-Floobits curve to a flatter taper for 4 weeks. Big weeks pay more; routine weeks roughly the same.",
+    "description": "Increases your weekly fantasy Floobit payout for 4 weeks.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
     # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
     # small dip on low-FP weeks for a meaningful bump on monster weeks
-    # (e.g. 500 FP: 67 F normal → 73 F endowment; 1000 FP: 121 → 142;
-    # 5000 FP: 474 → 653).
+    # (e.g. 500 FP: 61 F normal → 70 F endowment; 1000 FP: 105 → 132;
+    # 5000 FP: 423 → 596).
     "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
     "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
 }
@@ -514,7 +609,7 @@ CARD_TIER_DIVIDEND_FLOOBITS = {
 # Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
 # the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
 # a day-one rush (the same-effect duplicate requirement is the primary gate).
-CARD_TIER_UPGRADE_COST = {2: 80, 3: 250, 4: 600}
+CARD_TIER_UPGRADE_COST = {2: 72, 3: 225, 4: 540}
 CARD_TIER_EDITION_COST_MULT = {
     "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
 }
@@ -543,7 +638,13 @@ SHOWCASE_GRADE_THRESHOLDS = [
     ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
 ]
 # Grade → flat Floobit payout at season end.
-SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 50, "C": 120, "B": 250, "A": 450, "S": 800}
+# Calibrated next-season to read as a strong second income against a season of
+# fantasy, without eclipsing it (showcase pays once/season and clears, and the
+# permanent-vault cost — vaulted cards can't be equipped/sold — justifies it).
+# S capped at 3000 (a first pass at 5000 ran too hot). Old table was
+# 50/120/250/450/800, below even a casual fantasy season. Re-tune via
+# tune_showcase.py / simcheck.
+SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 250, "C": 600, "B": 1200, "A": 2000, "S": 3000}
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
@@ -584,6 +685,14 @@ GM_VOTE_BASE_MIN = {
     "sign_fa": 2,
     "hire_coach": 2,
 }
+
+# Fire / cut / resign pass threshold as a fraction of the team's active fanbase.
+# net (yea − nay) votes must reach ceil(fanCount × GM_PASS_FRACTION) to pass —
+# a majority of the fanbase, not the whole of it. 0.5 = simple majority; raise
+# toward 1.0 for a stricter near-consensus bar. ceil() keeps a tiny fanbase
+# honest (e.g. 1 fan still needs net 1). Single-vote means each fan contributes
+# at most ±1, so this is a genuine "majority of fans agree" gate.
+GM_PASS_FRACTION = 0.5
 
 # Per-user GM limits.
 #

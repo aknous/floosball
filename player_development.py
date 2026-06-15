@@ -1,326 +1,220 @@
-"""Player development service for offseason training logic"""
+"""Player development service for offseason training.
 
+Career-arc model: each player has a PEAK season (a jittered fraction of their
+longevity). They RISE toward peak, PLATEAU, then DECLINE — and the decline is
+decoupled from the retirement clock so it actually manifests while the player is
+still rostered. The phase sign (up vs down) is INTRINSIC to where the player is
+in their arc; coach playerDevelopment + market tier (devBias) only modulate how
+fast/much a RISING player climbs (their realized peak height), never reversing
+the aging decline. This replaces the old prime/decline binary that let ratings
+ratchet upward forever (the league inflated to all-5-star by ~season 9).
+"""
+
+import random
 from random import randint
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 from dataclasses import dataclass
 from enum import Enum
-from constants import MIN_ATTRIBUTE_VALUE, MAX_ATTRIBUTE_VALUE
+from constants import (
+    MIN_ATTRIBUTE_VALUE, MAX_ATTRIBUTE_VALUE,
+    DEV_PEAK_FRACTION_LOW, DEV_PEAK_FRACTION_HIGH, DEV_PEAK_SEASON_MIN,
+    DEV_RISE_RANGE, DEV_PEAK_RANGE, DEV_DECLINE_RANGE,
+    DEV_DECLINE_STEEPEN_PER_SEASON, DEV_DECLINE_PAST_LONGEVITY_KICK,
+    DEV_DECLINE_MAX_STEEPEN, DEV_PROSPECT_SPREAD, DEV_PROSPECT_SEASONS,
+    DEV_ATTRIBUTE_FLOOR,
+)
 from logger_config import get_logger
 
 logger = get_logger("floosball.development")
 
-class XFactorTier(Enum):
-    ELITE = "elite"    # > 90
-    GOOD = "good"      # 75-90  
-    AVERAGE = "average" # <= 75
 
-class AttributeLevel(Enum):
-    HIGH = "high"      # >= 95
-    LOW = "low"        # <= 70
-    MEDIUM = "medium"  # 71-94
+class CareerPhase(Enum):
+    RISING = "rising"
+    PEAK = "peak"
+    DECLINING = "declining"
+
 
 @dataclass
-class AttributeModifier:
-    """Defines the range of attribute change for different conditions"""
-    min_change: int
-    max_change: int
+class DevContext:
+    """Everything the per-attribute change needs for one player this offseason."""
+    phase: CareerPhase
+    intensity: int        # decline steepening (0 while rising/at peak)
+    isProspect: bool      # boom/bust volatility
+    devBias: int          # coach + market-tier push (applied to the climb only)
 
-@dataclass  
-class DevelopmentRules:
-    """Rules for attribute development based on performance and potential"""
-    elite_performance: Dict[AttributeLevel, AttributeModifier]
-    good_performance: Dict[AttributeLevel, AttributeModifier]
-    average_performance: Dict[AttributeLevel, AttributeModifier]
-    declining_performance: Dict[AttributeLevel, AttributeModifier]
 
 class PlayerDevelopment:
-    """Service class for handling player development during offseason"""
-    
-    # Development rules for players in their prime (before longevity threshold)
-    PRIME_RULES = DevelopmentRules(
-        elite_performance={
-            AttributeLevel.HIGH: AttributeModifier(0, 2),
-            AttributeLevel.LOW: AttributeModifier(0, 10), 
-            AttributeLevel.MEDIUM: AttributeModifier(0, 5)
-        },
-        good_performance={
-            AttributeLevel.HIGH: AttributeModifier(-1, 2),
-            AttributeLevel.LOW: AttributeModifier(0, 7),
-            AttributeLevel.MEDIUM: AttributeModifier(-2, 3)
-        },
-        average_performance={
-            AttributeLevel.HIGH: AttributeModifier(-5, 1),
-            AttributeLevel.LOW: AttributeModifier(0, 5),
-            AttributeLevel.MEDIUM: AttributeModifier(-5, 5)
-        },
-        declining_performance={
-            AttributeLevel.HIGH: AttributeModifier(-3, 0),
-            AttributeLevel.LOW: AttributeModifier(-1, 5),
-            AttributeLevel.MEDIUM: AttributeModifier(-3, 3)
-        }
-    )
-    
-    # Development rules for players past their prime (after longevity threshold)  
-    DECLINING_RULES = DevelopmentRules(
-        elite_performance={
-            AttributeLevel.HIGH: AttributeModifier(-3, 0),
-            AttributeLevel.LOW: AttributeModifier(-1, 5),
-            AttributeLevel.MEDIUM: AttributeModifier(-3, 3)
-        },
-        good_performance={
-            AttributeLevel.HIGH: AttributeModifier(-5, 0), 
-            AttributeLevel.LOW: AttributeModifier(-2, 3),
-            AttributeLevel.MEDIUM: AttributeModifier(-5, 2)
-        },
-        average_performance={
-            AttributeLevel.HIGH: AttributeModifier(-8, -2),
-            AttributeLevel.LOW: AttributeModifier(-3, 2),
-            AttributeLevel.MEDIUM: AttributeModifier(-8, 1)
-        },
-        declining_performance={
-            AttributeLevel.HIGH: AttributeModifier(-10, -5),
-            AttributeLevel.LOW: AttributeModifier(-5, 0),
-            AttributeLevel.MEDIUM: AttributeModifier(-10, -2)
-        }
-    )
-    
+    """Service class for handling player development during offseason."""
+
     @staticmethod
-    def get_x_factor_tier(x_factor: int) -> XFactorTier:
-        """Determine X-Factor performance tier"""
-        if x_factor > 90:
-            return XFactorTier.ELITE
-        elif x_factor > 75:
-            return XFactorTier.GOOD
-        else:
-            return XFactorTier.AVERAGE
-    
+    def peakSeason(player: Any) -> int:
+        """The season a player peaks — a jittered fraction of longevity, stable
+        per player (seeded off id) so it doesn't wander between offseasons. No
+        DB storage needed."""
+        attrs = getattr(player, 'attributes', None)
+        longevity = getattr(attrs, 'longevity', 6) if attrs else 6
+        pid = getattr(player, 'id', None)
+        seed = int(pid) if pid else (abs(hash(getattr(player, 'name', ''))) % (2 ** 31))
+        rng = random.Random((seed * 2654435761) & 0xFFFFFFFF)
+        frac = rng.uniform(DEV_PEAK_FRACTION_LOW, DEV_PEAK_FRACTION_HIGH)
+        return max(DEV_PEAK_SEASON_MIN, round(longevity * frac))
+
     @staticmethod
-    def get_attribute_level(attribute_value: int) -> AttributeLevel:
-        """Determine attribute level category"""
-        if attribute_value >= 95:
-            return AttributeLevel.HIGH
-        elif attribute_value <= 70:
-            return AttributeLevel.LOW
-        else:
-            return AttributeLevel.MEDIUM
-    
-    @staticmethod
-    def _applyDevBias(modifier: AttributeModifier, devBias: int) -> AttributeModifier:
-        """Shift modifier range by coach development quality bias."""
-        return AttributeModifier(
-            min_change=modifier.min_change + devBias,
-            max_change=modifier.max_change + devBias
+    def careerContext(player: Any, devBias: int) -> DevContext:
+        """Resolve the player's current arc phase + decline steepening."""
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        attrs = getattr(player, 'attributes', None)
+        longevity = getattr(attrs, 'longevity', 6) if attrs else 6
+        peak = PlayerDevelopment.peakSeason(player)
+        isProspect = (
+            bool(getattr(player, 'is_prospect', False))
+            or seasons <= DEV_PROSPECT_SEASONS
         )
 
+        if seasons < peak:
+            phase = CareerPhase.RISING
+            intensity = 0
+        elif seasons == peak:
+            phase = CareerPhase.PEAK
+            intensity = 0
+        else:
+            phase = CareerPhase.DECLINING
+            steepen = (seasons - peak) * DEV_DECLINE_STEEPEN_PER_SEASON
+            if seasons > longevity:
+                steepen += DEV_DECLINE_PAST_LONGEVITY_KICK
+            intensity = min(DEV_DECLINE_MAX_STEEPEN, steepen)
+
+        return DevContext(phase=phase, intensity=intensity,
+                          isProspect=isProspect, devBias=devBias)
+
     @staticmethod
-    def apply_attribute_change(current_value: int, modifier: AttributeModifier,
-                                potential: int = MAX_ATTRIBUTE_VALUE) -> int:
-        """Apply random attribute change within the modifier range, capped by potential."""
-        change = randint(modifier.min_change, modifier.max_change)
-        new_value = current_value + change
+    def developAttribute(current: int, potential: int, ctx: DevContext) -> int:
+        """Apply one offseason's change to a single trained attribute.
 
-        # Positive growth is capped at potential ceiling
+        Phase sets the base direction; devBias accelerates the climb (rising
+        only); prospects get a boom/bust spread; positive growth is capped at the
+        attribute's potential ceiling; decline can fade below MIN_ATTRIBUTE_VALUE
+        down to DEV_ATTRIBUTE_FLOOR.
+        """
+        if ctx.phase == CareerPhase.RISING:
+            lo, hi = DEV_RISE_RANGE
+            lo += ctx.devBias
+            hi += ctx.devBias
+        elif ctx.phase == CareerPhase.PEAK:
+            lo, hi = DEV_PEAK_RANGE
+        else:  # DECLINING — intrinsic aging, devBias deliberately NOT applied
+            lo, hi = DEV_DECLINE_RANGE
+            lo -= ctx.intensity
+            hi -= ctx.intensity
+
+        if ctx.isProspect:
+            # Boom/bust: widen both tails; good dev skews the top tail up.
+            lo -= DEV_PROSPECT_SPREAD
+            hi += DEV_PROSPECT_SPREAD + max(0, ctx.devBias)
+
+        change = randint(lo, hi)
+        # Positive growth is capped by the player's potential ceiling (so the
+        # climb tapers as they approach it — realized peak height). Decline is
+        # uncapped on the downside (to the floor).
         if change > 0:
-            new_value = min(new_value, potential)
+            change = min(change, max(0, potential - current))
 
-        return max(MIN_ATTRIBUTE_VALUE, min(MAX_ATTRIBUTE_VALUE, new_value))
-    
+        return max(DEV_ATTRIBUTE_FLOOR, min(MAX_ATTRIBUTE_VALUE, current + change))
+
     @staticmethod
     def update_intangible_attributes(attributes: Any) -> None:
-        """Update attitude and discipline with random changes"""
-        # Attitude change
-        attitude_change = randint(-5, 5)
-        attributes.attitude = max(0, min(100, attributes.attitude + attitude_change))
-        
-        # Discipline change  
-        discipline_change = randint(-5, 5)
-        attributes.discipline = max(0, min(100, attributes.discipline + discipline_change))
-        
-        # Recalculate intangibles
+        """Update attitude and discipline with small random changes."""
+        attributes.attitude = max(0, min(100, attributes.attitude + randint(-5, 5)))
+        attributes.discipline = max(0, min(100, attributes.discipline + randint(-5, 5)))
         if hasattr(attributes, 'calculateIntangibles'):
             attributes.calculateIntangibles()
-    
+
     @staticmethod
-    def develop_quarterback_attributes(attributes: Any, x_factor_tier: XFactorTier,
-                                       is_prime: bool, devBias: int = 0) -> None:
-        """Develop QB-specific attributes: armStrength, accuracy, agility"""
-        rules = PlayerDevelopment.PRIME_RULES if is_prime else PlayerDevelopment.DECLINING_RULES
+    def _dev(attributes: Any, attrName: str, potentialName: str, ctx: DevContext) -> None:
+        """Develop one named attribute in place against its potential ceiling."""
+        current = getattr(attributes, attrName, 0)
+        potential = getattr(attributes, potentialName, MAX_ATTRIBUTE_VALUE)
+        setattr(attributes, attrName,
+                PlayerDevelopment.developAttribute(current, potential, ctx))
 
-        if x_factor_tier == XFactorTier.ELITE:
-            rule_set = rules.elite_performance
-        elif x_factor_tier == XFactorTier.GOOD:
-            rule_set = rules.good_performance
-        else:
-            rule_set = rules.average_performance
-
-        arm_level = PlayerDevelopment.get_attribute_level(attributes.armStrength)
-        attributes.armStrength = PlayerDevelopment.apply_attribute_change(
-            attributes.armStrength,
-            PlayerDevelopment._applyDevBias(rule_set[arm_level], devBias),
-            getattr(attributes, 'potentialArmStrength', MAX_ATTRIBUTE_VALUE))
-
-        acc_level = PlayerDevelopment.get_attribute_level(attributes.accuracy)
-        attributes.accuracy = PlayerDevelopment.apply_attribute_change(
-            attributes.accuracy,
-            PlayerDevelopment._applyDevBias(rule_set[acc_level], devBias),
-            getattr(attributes, 'potentialAccuracy', MAX_ATTRIBUTE_VALUE))
-
-        agi_level = PlayerDevelopment.get_attribute_level(attributes.agility)
-        attributes.agility = PlayerDevelopment.apply_attribute_change(
-            attributes.agility,
-            PlayerDevelopment._applyDevBias(rule_set[agi_level], devBias),
-            getattr(attributes, 'potentialAgility', MAX_ATTRIBUTE_VALUE))
-    
     @staticmethod
-    def develop_skill_position_attributes(attributes: Any, x_factor_tier: XFactorTier,
-                                          is_prime: bool, position_type: str,
-                                          devBias: int = 0) -> None:
-        """Develop attributes for RB/WR/TE: speed, power/hands, agility"""
-        rules = PlayerDevelopment.PRIME_RULES if is_prime else PlayerDevelopment.DECLINING_RULES
+    def develop_quarterback_attributes(attributes: Any, ctx: DevContext) -> None:
+        PlayerDevelopment._dev(attributes, 'armStrength', 'potentialArmStrength', ctx)
+        PlayerDevelopment._dev(attributes, 'accuracy', 'potentialAccuracy', ctx)
+        PlayerDevelopment._dev(attributes, 'agility', 'potentialAgility', ctx)
 
-        if x_factor_tier == XFactorTier.ELITE:
-            rule_set = rules.elite_performance
-        elif x_factor_tier == XFactorTier.GOOD:
-            rule_set = rules.good_performance
-        else:
-            rule_set = rules.average_performance
-
-        speed_level = PlayerDevelopment.get_attribute_level(attributes.speed)
-        attributes.speed = PlayerDevelopment.apply_attribute_change(
-            attributes.speed,
-            PlayerDevelopment._applyDevBias(rule_set[speed_level], devBias),
-            getattr(attributes, 'potentialSpeed', MAX_ATTRIBUTE_VALUE))
-
+    @staticmethod
+    def develop_skill_position_attributes(attributes: Any, position_type: str, ctx: DevContext) -> None:
+        PlayerDevelopment._dev(attributes, 'speed', 'potentialSpeed', ctx)
         if position_type == "RB":
-            power_level = PlayerDevelopment.get_attribute_level(attributes.power)
-            attributes.power = PlayerDevelopment.apply_attribute_change(
-                attributes.power,
-                PlayerDevelopment._applyDevBias(rule_set[power_level], devBias),
-                getattr(attributes, 'potentialPower', MAX_ATTRIBUTE_VALUE))
-        else:  # WR/TE
-            hands_level = PlayerDevelopment.get_attribute_level(attributes.hands)
-            attributes.hands = PlayerDevelopment.apply_attribute_change(
-                attributes.hands,
-                PlayerDevelopment._applyDevBias(rule_set[hands_level], devBias),
-                getattr(attributes, 'potentialHands', MAX_ATTRIBUTE_VALUE))
-
-        agi_level = PlayerDevelopment.get_attribute_level(attributes.agility)
-        attributes.agility = PlayerDevelopment.apply_attribute_change(
-            attributes.agility,
-            PlayerDevelopment._applyDevBias(rule_set[agi_level], devBias),
-            getattr(attributes, 'potentialAgility', MAX_ATTRIBUTE_VALUE))
-
-        # Reach develops for all skill positions (WR/TE/RB)
-        reachLevel = PlayerDevelopment.get_attribute_level(getattr(attributes, 'reach', 0))
-        attributes.reach = PlayerDevelopment.apply_attribute_change(
-            getattr(attributes, 'reach', 0),
-            PlayerDevelopment._applyDevBias(rule_set[reachLevel], devBias),
-            getattr(attributes, 'potentialReach', MAX_ATTRIBUTE_VALUE))
+            PlayerDevelopment._dev(attributes, 'power', 'potentialPower', ctx)
+        else:  # WR / TE
+            PlayerDevelopment._dev(attributes, 'hands', 'potentialHands', ctx)
+        PlayerDevelopment._dev(attributes, 'agility', 'potentialAgility', ctx)
+        PlayerDevelopment._dev(attributes, 'reach', 'potentialReach', ctx)
 
     @staticmethod
-    def develop_kicker_attributes(attributes: Any, x_factor_tier: XFactorTier,
-                                   is_prime: bool, devBias: int = 0) -> None:
-        """Develop kicker-specific attributes: legStrength, accuracy"""
-        rules = PlayerDevelopment.PRIME_RULES if is_prime else PlayerDevelopment.DECLINING_RULES
+    def develop_kicker_attributes(attributes: Any, ctx: DevContext) -> None:
+        PlayerDevelopment._dev(attributes, 'legStrength', 'potentialLegStrength', ctx)
+        PlayerDevelopment._dev(attributes, 'accuracy', 'potentialAccuracy', ctx)
 
-        if x_factor_tier == XFactorTier.ELITE:
-            rule_set = rules.elite_performance
-        elif x_factor_tier == XFactorTier.GOOD:
-            rule_set = rules.good_performance
-        else:
-            rule_set = rules.average_performance
-
-        leg_level = PlayerDevelopment.get_attribute_level(attributes.legStrength)
-        attributes.legStrength = PlayerDevelopment.apply_attribute_change(
-            attributes.legStrength,
-            PlayerDevelopment._applyDevBias(rule_set[leg_level], devBias),
-            getattr(attributes, 'potentialLegStrength', MAX_ATTRIBUTE_VALUE))
-
-        acc_level = PlayerDevelopment.get_attribute_level(attributes.accuracy)
-        attributes.accuracy = PlayerDevelopment.apply_attribute_change(
-            attributes.accuracy,
-            PlayerDevelopment._applyDevBias(rule_set[acc_level], devBias),
-            getattr(attributes, 'potentialAccuracy', MAX_ATTRIBUTE_VALUE))
-    
     @staticmethod
     def apply_offseason_training(player: Any, position_type: str = None,
                                  coachDevRating: int = 50, fundingDevBonus: int = 0) -> Dict[str, Any]:
-        """
-        Main method to apply offseason training to a player.
-        coachDevRating (0-100): coach's playerDevelopment attribute — shifts modifier ranges.
-        fundingDevBonus: additive bonus from team funding tier (-1 to +2).
-        Returns a dictionary with development details for logging.
+        """Apply one offseason's training to a player.
+
+        coachDevRating (0-100): coach's playerDevelopment attribute.
+        fundingDevBonus: market-tier bonus (-1..+1). Together they form devBias,
+        which accelerates a RISING player's climb (and skews prospect booms) but
+        does NOT slow the aging decline.
+        Returns a dict of development details for logging.
         """
         try:
-            # -4 to +4 bias from coach, plus funding tier bonus (-1 to +2)
+            # devBias: coach (60→0, 80→+2, 100→+4) + funding tier (-1..+1).
             devBias = round((coachDevRating - 60) / 10) + fundingDevBonus
 
-            # Store original values for comparison
-            original_values = {
-                'attitude': getattr(player.attributes, 'attitude', 0),
-                'discipline': getattr(player.attributes, 'discipline', 0)
-            }
-
-            # Update intangible attributes
             PlayerDevelopment.update_intangible_attributes(player.attributes)
 
-            # Determine if player is in prime or declining phase
-            is_prime = player.seasonsPlayed <= player.attributes.longevity
-            x_factor_tier = PlayerDevelopment.get_x_factor_tier(player.attributes.xFactor)
+            ctx = PlayerDevelopment.careerContext(player, devBias)
 
-            # Apply position-specific development
+            # Snapshot the trained attributes for change-logging.
+            tracked = {
+                "QB": ['armStrength', 'accuracy', 'agility'],
+                "RB": ['speed', 'power', 'agility', 'reach'],
+                "WR": ['speed', 'hands', 'agility', 'reach'],
+                "TE": ['speed', 'hands', 'agility', 'reach'],
+                "K":  ['legStrength', 'accuracy'],
+            }.get(position_type, [])
+            original_values = {a: getattr(player.attributes, a, 0) for a in tracked}
+
             if position_type == "QB":
-                original_values.update({
-                    'armStrength': player.attributes.armStrength,
-                    'accuracy': player.attributes.accuracy,
-                    'agility': player.attributes.agility
-                })
-                PlayerDevelopment.develop_quarterback_attributes(
-                    player.attributes, x_factor_tier, is_prime, devBias)
-
-            elif position_type in ["RB", "WR", "TE"]:
-                original_values.update({
-                    'speed': player.attributes.speed,
-                    'agility': player.attributes.agility,
-                    'reach': getattr(player.attributes, 'reach', 0),
-                })
-                if position_type == "RB":
-                    original_values['power'] = player.attributes.power
-                else:
-                    original_values['hands'] = player.attributes.hands
-
-                PlayerDevelopment.develop_skill_position_attributes(
-                    player.attributes, x_factor_tier, is_prime, position_type, devBias)
-
+                PlayerDevelopment.develop_quarterback_attributes(player.attributes, ctx)
+            elif position_type in ("RB", "WR", "TE"):
+                PlayerDevelopment.develop_skill_position_attributes(player.attributes, position_type, ctx)
             elif position_type == "K":
-                original_values.update({
-                    'legStrength': player.attributes.legStrength,
-                    'accuracy': player.attributes.accuracy
-                })
-                PlayerDevelopment.develop_kicker_attributes(
-                    player.attributes, x_factor_tier, is_prime, devBias)
-            
-            # Calculate changes for logging
+                PlayerDevelopment.develop_kicker_attributes(player.attributes, ctx)
+
             changes = {}
             for attr, original in original_values.items():
                 new_value = getattr(player.attributes, attr, original)
-                change = new_value - original
-                if change != 0:
-                    changes[attr] = {'from': original, 'to': new_value, 'change': change}
-            
-            logger.info(f"Player {player.name} development: {changes}")
-            
+                if new_value != original:
+                    changes[attr] = {'from': original, 'to': new_value, 'change': new_value - original}
+
+            logger.info(
+                f"Player {getattr(player, 'name', '?')} dev "
+                f"[{ctx.phase.value}{'/prospect' if ctx.isProspect else ''}"
+                f"{f'/int{ctx.intensity}' if ctx.intensity else ''}, bias {devBias}]: {changes}"
+            )
+
             return {
                 'player_name': getattr(player, 'name', 'Unknown'),
                 'position': position_type,
-                'is_prime': is_prime,
-                'x_factor_tier': x_factor_tier.value,
-                'changes': changes
+                'phase': ctx.phase.value,
+                'is_prospect': ctx.isProspect,
+                'dev_bias': devBias,
+                'changes': changes,
             }
-            
+
         except Exception as e:
             logger.error(f"Error in offseason training for player {getattr(player, 'name', 'Unknown')}: {e}")
-            return {
-                'player_name': getattr(player, 'name', 'Unknown'),
-                'error': str(e)
-            }
+            return {'player_name': getattr(player, 'name', 'Unknown'), 'error': str(e)}

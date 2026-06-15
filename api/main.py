@@ -1014,6 +1014,22 @@ async def get_player(player_id: int, response: Response):
         player_dict['ratingValue'] = player.playerRating
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
+        player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
+        player_dict['isHof'] = bool(getattr(player, 'is_hof', False))
+        player_dict['hofSeason'] = getattr(player, 'hof_season', None)
+        # League records this player currently holds (shown on the profile).
+        try:
+            _rm = floosball_app.playerManager.serviceContainer.getService('records_manager')
+            _records = _rm.getRecords() if _rm else None
+        except Exception:
+            _records = None
+        player_dict['recordsHeld'] = _recordsHeldByPlayer(
+            player.id, _records, getattr(floosball_app.playerManager, '_HOF_POSITIVE_RECORD_KEYS', {}))
+        # This-season offense/defense impact tiers (hybrid archetype layer).
+        try:
+            player_dict['seasonImpact'] = floosball_app.playerManager.getPlayerImpact(player.id)
+        except Exception:
+            player_dict['seasonImpact'] = None
         player_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)
         # Build stats history: current live season + past seasons from DB
         sm = floosball_app.seasonManager
@@ -1038,7 +1054,8 @@ async def get_player(player_id: int, response: Response):
                 seasonFilter = DBPlayerSeasonStats.season < currentSeasonNum if currentSeasonNum else True
             pastRows = dbSession.query(DBPlayerSeasonStats).filter(
                 DBPlayerSeasonStats.player_id == player.id,
-                seasonFilter
+                seasonFilter,
+                DBPlayerSeasonStats.games_played > 0,  # skip the empty row the sim persists the year a player retires
             ).order_by(DBPlayerSeasonStats.season.desc()).all()
             for row in pastRows:
                 # Look up team name/color
@@ -1066,8 +1083,13 @@ async def get_player(player_id: int, response: Response):
         except Exception:
             allSeasons = list(player.seasonStatsArchive) if player.seasonStatsArchive else []
 
-        # Only prepend live current-season entry if the season is still in progress
-        if not seasonIsComplete and currentSeasonNum:
+        # Only prepend a live current-season entry if the season is still in
+        # progress AND the player is actually active. A retired player isn't
+        # playing the current season, so prepending their stale seasonStatsDict
+        # produced a phantom "current season · FA" row on their profile.
+        from floosball_player import PlayerServiceTime as _PST
+        isRetired = getattr(player, 'serviceTime', None) == _PST.Retired
+        if not seasonIsComplete and currentSeasonNum and not isRetired:
             currentSeasonEntry = dict(player.seasonStatsDict)
             currentSeasonEntry['season'] = currentSeasonNum
             currentSeasonEntry['team'] = teamName
@@ -2688,13 +2710,15 @@ def _recapFavoriteTeam(session, userId, cache):
 
 
 def _recapAwards(session, sm, target, currentSeason):
-    """Champion / MVP / All-Pro for a season (Season row, with in-memory
-    fallback for the current/just-ended season if the row isn't written yet)."""
+    """Champion / MVP / combined All-Pro team (offense + defense) for a season,
+    rebuilt from the durable Season row."""
     import json
     from database.models import Season as DBSeason, Team as DBTeam
     row = session.get(DBSeason, target)
     champion = mvp = None
     allPro = []
+    # Offense slots first (QB/RB/WR/TE/K), then defense (S/LB/CB/DE).
+    _ORDER = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'K': 4, 'S': 5, 'LB': 6, 'CB': 7, 'DE': 8}
     if row:
         if row.champion_team_id:
             t = session.get(DBTeam, row.champion_team_id)
@@ -2702,21 +2726,48 @@ def _recapAwards(session, sm, target, currentSeason):
                 champion = {"id": t.id, "name": t.name, "abbr": t.abbr, "color": t.color, "city": t.city}
         if row.mvp_player_id:
             mvp = _recapPlayerStub(session, row.mvp_player_id)
-        if row.all_pro_player_ids:
+        # Prefer the rich offense/defense team; fall back to the flat id list
+        # (legacy offense-only seasons) when the rich team isn't stored.
+        team = None
+        if getattr(row, 'all_pro_team', None):
+            try:
+                team = json.loads(row.all_pro_team)
+            except Exception:
+                team = None
+        if team:
+            for e in team:
+                stub = _recapPlayerStub(session, e.get('id'))
+                if not stub:
+                    continue
+                side = e.get('side', 'offense')
+                pos = e.get('position') or stub.get('position')
+                stub['position'] = pos
+                stub['side'] = side
+                if side == 'defense':
+                    stub['defGroup'] = pos
+                stub['value'] = e.get('value')
+                allPro.append(stub)
+            allPro.sort(key=lambda s: _ORDER.get(s.get('position'), 9))
+        elif row.all_pro_player_ids:
             try:
                 ids = json.loads(row.all_pro_player_ids)
                 allPro = [s for s in (_recapPlayerStub(session, pid) for pid in ids) if s]
             except Exception:
                 allPro = []
+
     return {"champion": champion, "mvp": mvp, "allPro": allPro}
 
 
 def _recapStandingsByLeague(session, target):
     """Final regular-season standings for a season, grouped by league."""
-    from database.models import Game as DBGame, Team as DBTeam, League as DBLeague
+    from database.models import (Game as DBGame, Team as DBTeam, League as DBLeague,
+                                 TeamSeasonStats as DBTeamSeasonStats)
     games = session.query(DBGame).filter(
         DBGame.season == target, DBGame.is_playoff == False, DBGame.status == 'final',
     ).all()
+    # Per-season ELO snapshot (falls back to the team's current ELO if missing).
+    eloByTeam = {ts.team_id: ts.elo for ts in session.query(DBTeamSeasonStats).filter(
+        DBTeamSeasonStats.season == target).all()}
     rec = {}
     for g in games:
         for tid in (g.home_team_id, g.away_team_id):
@@ -2741,10 +2792,14 @@ def _recapStandingsByLeague(session, target):
         if getattr(team, 'league_id', None):
             lg = session.get(DBLeague, team.league_id)
             lname = lg.name if lg else f"League {team.league_id}"
+        elo = eloByTeam.get(tid)
+        if elo is None:
+            elo = getattr(team, 'elo', None)
         byLeague.setdefault((team.league_id, lname), []).append({
             "teamId": tid, "teamName": team.name, "teamAbbr": team.abbr, "teamColor": team.color,
             "wins": r["w"], "losses": r["l"], "ties": r["t"],
             "pointsFor": r["pf"], "pointsAgainst": r["pa"], "winPct": round(winPct, 3),
+            "pointDiff": r["pf"] - r["pa"], "elo": int(elo) if elo is not None else None,
         })
     leagues = []
     for (lid, lname), teams in sorted(byLeague.items(), key=lambda kv: (kv[0][0] or 0)):
@@ -3464,6 +3519,169 @@ async def get_stat_leaders(
 
     except Exception as e:
         logger.error(f"Error getting stat leaders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_HOF_SCOPE_LABEL = {'career': 'Career', 'season': 'Season', 'game': 'Game'}
+_HOF_SCOPE_ORDER = {'career': 0, 'season': 1, 'game': 2}
+
+
+def _recordsHeldByPlayer(playerId, records, positiveKeys) -> List[str]:
+    """League records this player currently holds, as scope-prefixed labels
+    (e.g. 'Career Pass Yards'). Only positive records count (not INTs/fumbles).
+    Records nest as records['players'][category][scope][key] -> {record, id, value}."""
+    out = []
+    players = (records or {}).get('players', {}) or {}
+    for category, scopes in players.items():
+        keys = (positiveKeys or {}).get(category, set())
+        if not keys or not isinstance(scopes, dict):
+            continue
+        for scope, entries in scopes.items():
+            if not isinstance(entries, dict):
+                continue
+            for key, entry in entries.items():
+                if key not in keys or not isinstance(entry, dict):
+                    continue
+                if entry.get('id') == playerId and (entry.get('value') or 0) > 0:
+                    label = entry.get('record') or key
+                    out.append((_HOF_SCOPE_ORDER.get(scope, 9),
+                                f"{_HOF_SCOPE_LABEL.get(scope, scope.title())} {label}"))
+    out.sort()
+    return [label for _, label in out]
+
+
+def _hofInducteeDict(player, teamMgr, pm, records=None, positiveKeys=None, seasonsByPlayer=None) -> Dict[str, Any]:
+    """Enriched Hall of Fame inductee: every team they earned an accolade with,
+    awards, induction class, HoF credentials, and the league records they hold."""
+    from api_response_builders import PlayerResponseBuilder
+    from collections import Counter
+    position = player.position.name if hasattr(player.position, 'name') else str(player.position)
+
+    mvps = [a for a in (getattr(player, 'mvpAwards', None) or []) if isinstance(a, dict)]
+    rings = [a for a in (getattr(player, 'leagueChampionships', None) or []) if isinstance(a, dict)]
+    allPros = list(getattr(player, 'allProSeasons', None) or [])
+
+    def _resolveTeam(abbr):
+        return next((t for t in getattr(teamMgr, 'teams', []) if getattr(t, 'abbr', None) == abbr), None) if teamMgr else None
+
+    # Every club where the player earned ANY accolade (MVP, ring, or All-Pro
+    # entry that carries a team), ordered most-decorated first (tiebreak: most
+    # recent). Award entries keep team abbr + color, which survives a retiree
+    # losing team_id on reload, so journeymen show all their teams.
+    awardTeamEntries = [a for a in (mvps + rings + [x for x in allPros if isinstance(x, dict)]) if a.get('team')]
+    teams = []
+    if awardTeamEntries:
+        counts = Counter(a['team'] for a in awardTeamEntries)
+        recent = {}
+        for a in awardTeamEntries:
+            recent[a['team']] = max(recent.get(a['team'], 0), a.get('Season') or 0)
+        for abbr in sorted(counts, key=lambda t: (-counts[t], -recent[t])):
+            color = next((a.get('teamColor') for a in awardTeamEntries if a['team'] == abbr and a.get('teamColor')), None)
+            tobj = _resolveTeam(abbr)
+            teams.append({'abbr': abbr, 'id': getattr(tobj, 'id', None),
+                          'name': getattr(tobj, 'name', None) or abbr,
+                          'color': color or getattr(tobj, 'color', None) or '#334155'})
+    else:
+        # Award-less inductee (records/longevity): show their last team if known.
+        team = getattr(player, 'team', None)
+        tobj = team if (team and not isinstance(team, str)) else None
+        if tobj is None:
+            nm = getattr(player, 'previousTeam', None) or (team if isinstance(team, str) else None)
+            if nm and teamMgr:
+                tobj = next((t for t in getattr(teamMgr, 'teams', []) if getattr(t, 'name', None) == nm), None)
+        if tobj is not None:
+            teams.append({'abbr': tobj.abbr, 'id': tobj.id, 'name': tobj.name, 'color': tobj.color or '#334155'})
+
+    primary = teams[0] if teams else {'abbr': None, 'id': None,
+                                       'name': getattr(player, 'previousTeam', None), 'color': '#334155'}
+
+    try:
+        pts, _breakdown = pm._computeHofPoints(player)
+    except Exception:
+        pts = 0
+
+    # Actual seasons played = number of seasons with stats (the stored
+    # seasons_played overcounts by one — it includes the season the player
+    # retired in, which has no stat line).
+    seasonsPlayed = (seasonsByPlayer or {}).get(player.id) or getattr(player, 'seasonsPlayed', 0)
+
+    # Season lists normalized to ints: legacy data mixes bare ints with
+    # {'Season': n, ...} dicts in the same list (esp. all_pro_seasons).
+    def _seasonNum(x):
+        return x.get('Season') if isinstance(x, dict) else x
+    mvpSeasonNums = sorted(s for s in (_seasonNum(a) for a in mvps) if isinstance(s, int))
+    ringSeasonNums = sorted(s for s in (_seasonNum(a) for a in rings) if isinstance(s, int))
+    allProSeasonNums = sorted(s for s in (_seasonNum(a) for a in allPros) if isinstance(s, int))
+
+    return {
+        'id': player.id, 'name': player.name, 'position': position,
+        'teams': teams,
+        'teamId': primary['id'], 'teamAbbr': primary['abbr'],
+        'teamColor': primary['color'], 'teamName': primary['name'],
+        'playerRating': player.playerRating,
+        'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
+        'seasonsPlayed': seasonsPlayed,
+        'hofSeason': getattr(player, 'hof_season', None),
+        'hofPoints': pts,
+        'awards': {
+            'mvps': len(mvps), 'championships': len(rings), 'allPros': len(allPros),
+            'mvpSeasons': mvpSeasonNums,
+            'championshipSeasons': ringSeasonNums,
+            'allProSeasons': allProSeasonNums,
+        },
+        'recordsHeld': _recordsHeldByPlayer(player.id, records, positiveKeys),
+    }
+
+
+@app.get("/api/hall-of-fame", response_model=Dict[str, Any])
+async def get_hall_of_fame(response: Response):
+    """Enriched Hall of Fame inductees for the plaque gallery — each with every
+    team they earned an accolade with, their awards, induction class, HoF
+    credentials, and the league records they hold. Sorted newest induction class
+    first (null class last), then by credentials. The client groups by `hofSeason`."""
+    response.headers["Cache-Control"] = "public, max-age=120"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    try:
+        pm = floosball_app.playerManager
+        teamMgr = getattr(floosball_app, 'teamManager', None)
+
+        # League records (once) for the records-held line.
+        records = None
+        try:
+            rm = pm.serviceContainer.getService('records_manager')
+            records = rm.getRecords() if rm else None
+        except Exception:
+            records = None
+        positiveKeys = getattr(pm, '_HOF_POSITIVE_RECORD_KEYS', {})
+
+        # Actual seasons played per inductee = count of season stat rows in which
+        # they actually appeared (games_played > 0). This excludes the empty
+        # season row the sim persists for a player the year they retire, which
+        # otherwise overcounts seasons by one.
+        seasonsByPlayer = {}
+        try:
+            from database.connection import get_session
+            from database.models import PlayerSeasonStats as _DBPSS
+            from sqlalchemy import func as _func
+            ids = [p.id for p in pm.hallOfFame]
+            if ids:
+                s = get_session()
+                rows = (s.query(_DBPSS.player_id, _func.count(_DBPSS.season))
+                        .filter(_DBPSS.player_id.in_(ids), _DBPSS.games_played > 0)
+                        .group_by(_DBPSS.player_id).all())
+                seasonsByPlayer = {pid: cnt for pid, cnt in rows}
+                s.close()
+        except Exception:
+            seasonsByPlayer = {}
+
+        inductees = [_hofInducteeDict(p, teamMgr, pm, records, positiveKeys, seasonsByPlayer)
+                     for p in pm.hallOfFame]
+        inductees.sort(key=lambda d: (
+            d['hofSeason'] is None, -(d['hofSeason'] or 0), -d['hofPoints'], -d['playerRating']))
+        return build_success_response({'inductees': inductees, 'count': len(inductees)})
+    except Exception as e:
+        logger.error(f"Error getting hall of fame: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -10743,6 +10961,10 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
         # want a clean feed regardless.
         seenPlayerIds: set = set()
         for p in pm.freeAgents:
+            # A retiring player isn't a signable free agent (defensive — they
+            # should already be off the FA list once retirement processes).
+            if getattr(p, 'willRetire', False):
+                continue
             if p.id in seenPlayerIds:
                 continue
             seenPlayerIds.add(p.id)
@@ -10775,6 +10997,11 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
             """
             termRem = getattr(rp, 'termRemaining', 99)
             pid = rp.id
+            # Retiring players leave the league entirely — they never reach the
+            # FA pool, so they must not be projected as signable free agents
+            # (retirement overrides a walk year or a cut vote).
+            if getattr(rp, 'willRetire', False):
+                return (False, None)
             if likelyCut(teamId, pid):
                 return (True, 'cut_vote')
             if termRem <= 1 and not likelyResigned(teamId, pid):
@@ -11386,6 +11613,72 @@ def get_gm_results(user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 
 
+def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
+    """Build a single pick-em matchup dict (teams, pickability, multipliers)
+    from a live/scheduled game object. Shared by the per-slot and whole-day
+    endpoints. Caller overlays the user's pick afterward."""
+    from constants import (PICKEM_QUARTER_MULTIPLIERS, calculateUnderdogMultiplier,
+                           calculateCertaintyMultiplier, calculateWinProbMultiplier)
+    rawStatus = getattr(liveGame, 'status', None)
+    statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+    homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+    awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+
+    if statusVal == 3:  # Final
+        pickable = False
+        currentMultiplier = 0.0
+    elif statusVal == 2:  # Active
+        pickable = True
+        quarter = getattr(liveGame, 'currentQuarter', 1)
+        homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+        currentMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
+    else:  # Scheduled / pre-game
+        pickable = True
+        currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+
+    if statusVal == 2:
+        liveWp = (getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0) / 100.0
+        underdogInfo = {
+            "homeMultiplier": calculateWinProbMultiplier(liveWp),
+            "awayMultiplier": calculateWinProbMultiplier(1.0 - liveWp),
+        }
+    else:
+        underdogInfo = {
+            "homeMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, True),
+            "awayMultiplier": calculateUnderdogMultiplier(homeElo, awayElo, False),
+        }
+
+    matchup = {
+        "gameIndex": gameIndex,
+        "homeTeam": {
+            "id": liveGame.homeTeam.id,
+            "name": liveGame.homeTeam.name,
+            "abbr": liveGame.homeTeam.abbr,
+            "color": liveGame.homeTeam.color,
+            "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
+            "elo": homeElo,
+        },
+        "awayTeam": {
+            "id": liveGame.awayTeam.id,
+            "name": liveGame.awayTeam.name,
+            "abbr": liveGame.awayTeam.abbr,
+            "color": liveGame.awayTeam.color,
+            "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
+            "elo": awayElo,
+        },
+        "userPick": None,
+        "pointsMultiplier": None,
+        "underdogMultiplier": None,
+        "pickable": pickable,
+        "currentMultiplier": currentMultiplier,
+        "underdogInfo": underdogInfo,
+        "result": None,
+    }
+    if statusVal == 3 and getattr(liveGame, 'winningTeam', None):
+        matchup["result"] = {"winnerId": liveGame.winningTeam.id}
+    return matchup
+
+
 @app.get("/api/pickem/week")
 def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
     """Get this week's matchups with the user's existing picks (if any).
@@ -11776,6 +12069,250 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         raise HTTPException(500, "Failed to submit pick")
     finally:
         session.close()
+
+
+@app.get("/api/pickem/day")
+def get_pickem_day(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
+    """All of the current calendar day's game slots in one payload, so a
+    once-a-day user can prognosticate every game at once. Each slot carries its
+    games (with per-game pickability + multipliers) and the user's existing
+    picks. Slots are labeled by week number. A calendar day = up to 7 slots
+    (sim-weeks sharing `week // 7`). Playoffs collapse to the single active round.
+    (Fantasy modifiers are surfaced separately on the fantasy page — not here.)
+    """
+    response.headers["Cache-Control"] = "public, max-age=10"
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        return build_success_response({"season": 0, "day": None, "currentWeek": 0, "slots": []})
+
+    seasonNum = currentSeason.seasonNumber
+    week = sm._getPickemWeek()
+    schedule = currentSeason.schedule
+    playoffRound = getattr(currentSeason, 'currentPlayoffRound', None)
+
+    slots = []
+    dayNum = None
+    if playoffRound or (isinstance(week, int) and week > 28):
+        # Playoffs: the "day" is a single round — surface it as one slot.
+        displayGames = currentSeason.activeGames or currentSeason.completedWeekGames or []
+        games = [_buildPickemMatchup(g, i) for i, g in enumerate(displayGames)]
+        slots.append({
+            "week": week,
+            "label": sm.playoffRoundLabel(week) if hasattr(sm, 'playoffRoundLabel') else f"Week {week}",
+            "isActive": True, "isPast": False, "isNext": False,
+            "games": games,
+        })
+    elif isinstance(week, int) and 1 <= week <= 28:
+        dayNum = sm._dayOfWeek(week)
+        slotWeeks = sm._slotWeeksForDay(week)
+        nextWeek = next((w for w in slotWeeks if w > week), None)
+        for w in slotWeeks:
+            scheduleGames = schedule[w - 1].get('games', []) if 0 < w <= len(schedule) else []
+            # For the live slot, prefer activeGames (has live status/quarter).
+            activeGames = currentSeason.activeGames if w == week else None
+            games = []
+            for i, g in enumerate(scheduleGames):
+                liveGame = activeGames[i] if (activeGames and i < len(activeGames)) else g
+                games.append(_buildPickemMatchup(liveGame, i))
+            slots.append({
+                "week": w,
+                "label": f"Week {w}",
+                "isActive": (w == week),
+                "isPast": (w < week),
+                "isNext": (w == nextWeek),
+                "games": games,
+            })
+
+    # Overlay the user's existing picks per slot.
+    if user and slots:
+        from database.connection import get_session
+        from database.repositories.pickem_repository import PickEmRepository
+        session = get_session()
+        try:
+            pickemRepo = PickEmRepository(session)
+            for slot in slots:
+                picks = pickemRepo.getUserPicks(user.id, seasonNum, slot["week"])
+                pickMap = {p.game_index: p for p in picks}
+                pickedCount = 0
+                for g in slot["games"]:
+                    pk = pickMap.get(g["gameIndex"])
+                    if pk:
+                        pickedCount += 1
+                        g["userPick"] = pk.picked_team_id
+                        g["pointsMultiplier"] = pk.points_multiplier
+                        g["underdogMultiplier"] = pk.underdog_multiplier
+                        if pk.correct is not None:
+                            g["result"] = g.get("result") or {}
+                            g["result"]["correct"] = pk.correct
+                            g["result"]["pointsEarned"] = pk.points_earned or 0
+                slot["pickedCount"] = pickedCount
+        finally:
+            session.close()
+
+    return build_success_response({
+        "season": seasonNum,
+        "day": dayNum,
+        "currentWeek": week,
+        "slots": slots,
+    })
+
+
+@app.post("/api/pickem/picks")
+def submit_pickem_picks(body: dict, user: _User = Depends(_getCurrentUser)):
+    """Bulk submit/update picks across multiple slots in one call (the whole-day
+    prognostication flow). Body: {"picks": [{"week", "gameIndex", "pickedTeamId"}]}.
+    Per-game lock still applies — Final games are skipped and reported in `skipped`.
+    Multipliers are recomputed server-side per game (same rules as single-pick).
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    from constants import (PICKEM_QUARTER_MULTIPLIERS, calculateUnderdogMultiplier,
+                           calculateCertaintyMultiplier, calculateWinProbMultiplier)
+
+    picks = body.get("picks")
+    if not isinstance(picks, list) or not picks:
+        raise HTTPException(400, "picks (a non-empty list) required")
+    if len(picks) > 200:
+        raise HTTPException(400, "Too many picks in one request (max 200)")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        raise HTTPException(400, "No active season")
+
+    seasonNum = currentSeason.seasonNumber
+    schedule = currentSeason.schedule
+    playoffRound = getattr(currentSeason, 'currentPlayoffRound', None)
+    activeWeek = sm._getPickemWeek()
+
+    from database.connection import get_session
+    from database.repositories.pickem_repository import PickEmRepository
+    session = get_session()
+    saved = []
+    skipped = []
+    try:
+        pickemRepo = PickEmRepository(session)
+        for item in picks:
+            w = item.get("week")
+            gameIndex = item.get("gameIndex")
+            pickedTeamId = item.get("pickedTeamId")
+            if w is None or gameIndex is None or pickedTeamId is None:
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "missing fields"})
+                continue
+
+            # Resolve the live/scheduled game object for this slot+index.
+            if playoffRound and w == activeWeek:
+                displayGames = currentSeason.activeGames or currentSeason.completedWeekGames or []
+                if gameIndex < 0 or gameIndex >= len(displayGames):
+                    skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid gameIndex"})
+                    continue
+                liveGame = displayGames[gameIndex]
+            else:
+                if not isinstance(w, int) or w < 1 or w > len(schedule):
+                    skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid week"})
+                    continue
+                scheduleGames = schedule[w - 1].get('games', [])
+                if gameIndex < 0 or gameIndex >= len(scheduleGames):
+                    skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid gameIndex"})
+                    continue
+                game = scheduleGames[gameIndex]
+                activeGames = currentSeason.activeGames if w == activeWeek else None
+                liveGame = activeGames[gameIndex] if (activeGames and gameIndex < len(activeGames)) else game
+
+            rawStatus = getattr(liveGame, 'status', None)
+            statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
+            if statusVal == 3:  # Final — locked
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "final"})
+                continue
+
+            homeTeamId = liveGame.homeTeam.id
+            awayTeamId = liveGame.awayTeam.id
+            if pickedTeamId not in (homeTeamId, awayTeamId):
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "invalid team"})
+                continue
+
+            pickedIsHome = (pickedTeamId == homeTeamId)
+            if statusVal == 2:  # Active — live quarter + win prob
+                quarter = getattr(liveGame, 'currentQuarter', 1)
+                homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
+                pointsMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
+                pickedWp = (homeWinProb / 100.0) if pickedIsHome else (1.0 - homeWinProb / 100.0)
+                underdogMultiplier = calculateWinProbMultiplier(pickedWp)
+            else:  # Pre-game — full timing multiplier + ELO underdog
+                pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+                homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+                awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+                underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
+
+            pickemRepo.submitPick(
+                user.id, seasonNum, w, gameIndex,
+                homeTeamId, awayTeamId, pickedTeamId,
+                pointsMultiplier=pointsMultiplier,
+                underdogMultiplier=underdogMultiplier,
+            )
+            saved.append({"week": w, "gameIndex": gameIndex, "pickedTeamId": pickedTeamId})
+
+        # Achievement hooks — run once for the whole batch, not per pick.
+        if saved:
+            from managers import achievementManager as _am
+            from database.models import PickEmPick as _PickEmPick
+            from sqlalchemy import func, distinct
+            _am.onPickEmSubmitted(session, user.id, isAutoPick=False)
+            manualWeeks = session.query(func.count(distinct(_PickEmPick.week))).filter(
+                _PickEmPick.user_id == user.id,
+                _PickEmPick.season == seasonNum,
+                _PickEmPick.is_auto.is_(False),
+            ).scalar() or 0
+            for _key in ("dedicated_i", "dedicated_ii", "dedicated_iii", "dedicated_iv", "dedicated_v", "dedicated_vi"):
+                _am.recordProgress(session, user.id, _key, absolute=manualWeeks, currentSeason=seasonNum)
+            favTeamId = getattr(user, "favorite_team_id", None)
+            if favTeamId:
+                againstFav = session.query(func.count(_PickEmPick.id)).filter(
+                    _PickEmPick.user_id == user.id,
+                    _PickEmPick.season == seasonNum,
+                    _PickEmPick.is_auto.is_(False),
+                    ((_PickEmPick.home_team_id == favTeamId) | (_PickEmPick.away_team_id == favTeamId)),
+                    _PickEmPick.picked_team_id != favTeamId,
+                ).scalar() or 0
+                if againstFav >= 5:
+                    _am.unlockSecret(session, user.id, "cold_blooded")
+
+        session.commit()
+        return build_success_response({
+            "saved": saved,
+            "skipped": skipped,
+            "savedCount": len(saved),
+            "skippedCount": len(skipped),
+        })
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Pick-em bulk submit error: {e}")
+        raise HTTPException(500, "Failed to submit picks")
+    finally:
+        session.close()
+
+
+@app.get("/api/fantasy/modifier-schedule")
+def get_fantasy_modifier_schedule(response: Response):
+    """The current calendar day's fantasy-modifier slate (all slots) with the
+    active and 'next up' slots flagged, so users can plan cards/rosters ahead.
+    Number-free, public. Empty during playoffs/offseason (no per-slot modifiers).
+    """
+    response.headers["Cache-Control"] = "public, max-age=15"
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason
+    if currentSeason is None:
+        return build_success_response({"season": 0, "day": None, "slots": []})
+    week = sm._getPickemWeek()
+    sched = sm.getDayModifierSchedule(week if isinstance(week, int) else 0)
+    return build_success_response({"season": currentSeason.seasonNumber, **sched})
 
 
 @app.get("/api/pickem/leaderboard")

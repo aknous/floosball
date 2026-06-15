@@ -45,6 +45,7 @@ from constants import (
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
     MOMENTUM_PUNT,
+    WPA_PASS_QB_SHARE, DEF_PLAYMAKER_BONUS,
 )
 
 # Import TimingManager for game-level timing control
@@ -3376,7 +3377,36 @@ class Game:
                 play.insights['players'].append(playerEntry)
 
         text = None
-        if self.play.playType is PlayType.Run:
+        if getattr(self.play, 'isScramble', False):
+            # QB ran instead of passing (resolves as a run, narrated as a scramble).
+            # Phrasing matches the trigger: 'pressure' = escaped a would-be sack,
+            # 'coverage' = no one open, pulled it down and ran.
+            yds = self.play.yardage
+            reason = getattr(self.play, 'scrambleReason', 'pressure')
+            if reason == 'coverage':
+                runPhrases = ['finds no one open and takes off for', 'pulls it down and runs for',
+                              'can\'t find a target, tucks it and runs for', 'scans, nobody open, scrambles for',
+                              'holds it, then takes off for']
+                noGain = '{} pulls it down and runs but is stopped for no gain'.format(self.play.runner.name)
+            else:
+                runPhrases = ['escapes the pocket and scrambles for', 'slips the rush and takes off for',
+                              'spins free of pressure and scrambles for', 'dodges the sack and runs for',
+                              'sidesteps the rush and scrambles for']
+                noGain = '{} escapes the rush but is dragged down for no gain'.format(self.play.runner.name)
+            if yds <= 0:
+                text = noGain
+            else:
+                text = '{} {} {} yards'.format(self.play.runner.name, choice(runPhrases), yds)
+            if self.play.isFumble:
+                forcedBy = self.play.forcedFumbleBy
+                if self.play.isFumbleLost:
+                    text += (', {} forces the fumble, {} recover'.format(forcedBy.name, self.play.defense.abbr)
+                             if forcedBy else ', fumbles, {} recover'.format(self.play.defense.abbr))
+                else:
+                    text += ', fumbles but recovers it'
+            elif self.play.tackledBy and not self.play.isTd:
+                text += ', tackled by {}'.format(self.play.tackledBy.name)
+        elif self.play.playType is PlayType.Run:
             # Select description list based on gap type
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
@@ -3913,6 +3943,23 @@ class Game:
             # (which sums season + game) doesn't double-count between games
             gd['fantasyPoints'] = 0
 
+        # WPA: preserve this game's per-player value for the DB row, roll it into
+        # the season total (regular season only — playoff WPA is a separate track),
+        # then reset the per-game accumulators. Mirrors the fantasy-points flow.
+        player._lastGameWpa = float(getattr(player, '_gameWpa', 0.0))
+        player._lastGameDefWpa = float(getattr(player, '_gameDefWpa', 0.0))
+        player._lastGameWpaSnaps = int(getattr(player, '_gameWpaSnaps', 0))
+        player._lastGameDefWpaSnaps = int(getattr(player, '_gameDefWpaSnaps', 0))
+        if self.isRegularSeasonGame:
+            player.seasonWpa = float(getattr(player, 'seasonWpa', 0.0)) + player._lastGameWpa
+            player.seasonDefWpa = float(getattr(player, 'seasonDefWpa', 0.0)) + player._lastGameDefWpa
+            player.seasonWpaSnaps = int(getattr(player, 'seasonWpaSnaps', 0)) + player._lastGameWpaSnaps
+            player.seasonDefWpaSnaps = int(getattr(player, 'seasonDefWpaSnaps', 0)) + player._lastGameDefWpaSnaps
+        player._gameWpa = 0.0
+        player._gameDefWpa = 0.0
+        player._gameWpaSnaps = 0
+        player._gameDefWpaSnaps = 0
+
         # Game-level derived stats (always computed)
         if gd['passing']['att'] > 0 and gd['passing']['comp'] > 0:
             gd['passing']['ypc'] = round(gd['passing']['yards'] / gd['passing']['comp'], 2)
@@ -4062,6 +4109,15 @@ class Game:
             player: FloosPlayer.Player
             player.gameAttributes = copy.deepcopy(player.attributes)
             player.reset_game_stats()
+
+        # Reset team-level defensive accumulators for this game. Players'
+        # gameStatsDict is reset above, but gameDefenseStats (interceptions,
+        # sacks, fumble recoveries, ...) was only ever reset in the dead
+        # postgame() path — so it carried over across every game the team object
+        # lived through, inflating the box score and the DB-stored per-game team
+        # INTs that feed the pre-game matchup averages.
+        self.homeTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
+        self.awayTeam.gameDefenseStats = copy.deepcopy(FloosTeam.teamStatsDict['Defense'])
 
         # League compression — pull every player's leaf attributes
         # toward the league mean so the 95-vs-65 gap doesn't auto-win
@@ -6056,7 +6112,10 @@ class Game:
                     rushCarries += p.gameStatsDict['rushing']['carries']
                     fumbleLost  += p.gameStatsDict['rushing']['fumblesLost']
 
-            turnovers = passInts + fumbleLost
+            # QB lost fumbles (sack-strips / scramble fumbles) count as turnovers
+            # too — the loop above only covers the skill positions.
+            qbFumblesLost = qb.gameStatsDict['rushing']['fumblesLost'] if qb else 0
+            turnovers = passInts + fumbleLost + qbFumblesLost
             defense   = team.gameDefenseStats
 
             def playerDict(p, statsKey):
@@ -6094,6 +6153,14 @@ class Game:
                     'totalTds': totalTds,
                     **stats,
                 }
+                # QB scrambles: the QB flattens 'passing', so its rushing line
+                # would otherwise be invisible. Attach it as a nested block so
+                # the box score can list a scrambling QB in the rushing section.
+                if statsKey == 'passing':
+                    qbRush = dict(p.gameStatsDict['rushing'])
+                    qbCarries = qbRush.get('carries', 0)
+                    qbRush['ypc'] = round(qbRush.get('yards', 0) / qbCarries, 1) if qbCarries > 0 else 0.0
+                    result['rushing'] = qbRush
                 # Per-player pre-game mental modifier breakdown — always
                 # included when snapshots exist, even if every stage netted
                 # zero. "Nothing is dragging this player" is itself useful
@@ -6489,6 +6556,112 @@ class Game:
         self._sidelineCutawaysFired += 1
         return eventDict
 
+    def _resolvePlayWpa(self):
+        """Compute win-probability + WPA for the just-resolved play, store it on the
+        play, fire the WPA-derived momentum/clutch effects, attribute the WPA to the
+        players involved, and advance the WP baseline. Runs ONCE per play, BEFORE the
+        broadcast early-returns, so WPA + player attribution are independent of timing
+        mode (TURBO / silent modes previously skipped this). Idempotent per play.
+        Returns (newHomeWp, newAwayWp, homeWpa, awayWpa)."""
+        if getattr(self.play, '_wpaResolved', False):
+            return (self.homeTeamWinProbability, self.awayTeamWinProbability,
+                    getattr(self.play, 'homeWpa', 0.0), getattr(self.play, 'awayWpa', 0.0))
+
+        winProb = self.calculateWinProbability()
+        newHomeWp = winProb['home']
+        newAwayWp = winProb['away']
+        homeWpa = float(newHomeWp - self.previousHomeWinProbability)
+        awayWpa = float(newAwayWp - self.previousAwayWinProbability)
+
+        # Persist WP/WPA on the play (gameFeed holds the play by reference)
+        self.play.homeWinProbability = newHomeWp
+        self.play.awayWinProbability = newAwayWp
+        self.play.homeWpa = round(homeWpa, 2)
+        self.play.awayWpa = round(awayWpa, 2)
+        self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
+
+        # Momentum: big-play bonus to the team that benefited from the swing
+        if self.play.isBigPlay:
+            benefitingTeam = self.homeTeam if homeWpa > 0 else self.awayTeam
+            self._applyMomentumEvent(MOMENTUM_BIG_PLAY_BONUS, benefitingTeam)
+
+        # Keep clutch/choke tags only if the play had meaningful WP impact
+        wpImpact = max(abs(homeWpa), abs(awayWpa))
+        if self.play.isClutchPlay and wpImpact < CLUTCH_WPA_THRESHOLD:
+            self.play.isClutchPlay = False
+        if self.play.isChokePlay and wpImpact < CHOKE_WPA_THRESHOLD:
+            self.play.isChokePlay = False
+
+        # Attribute this play's WP swing to the players involved (offense + defense unit)
+        try:
+            self._attributeWpa(self.play, homeWpa, awayWpa)
+        except Exception as e:
+            logging.debug(f"WPA attribution skipped on play {getattr(self.play, 'playNumber', '?')}: {e}")
+
+        # Advance the WP baseline (next play's delta + API display). Events between
+        # plays do NOT call this, so the next play's WPA is measured from this play's
+        # WP, not from intervening clock/possession drift.
+        self.homeTeamWinProbability = newHomeWp
+        self.awayTeamWinProbability = newAwayWp
+        self.previousHomeWinProbability = newHomeWp
+        self.previousAwayWinProbability = newAwayWp
+        self.play._wpaResolved = True
+        return (newHomeWp, newAwayWp, homeWpa, awayWpa)
+
+    def _attributeWpa(self, play, homeWpa, awayWpa):
+        """Credit this play's win-probability swing to the players involved and
+        accumulate it onto in-memory season totals (offense: `seasonWpa`/`wpaSnaps`;
+        defense: `seasonDefWpa`/`defWpaSnaps`). Persistence is wired in a later phase.
+        See docs/WPA_MVP_PLAN.md for the attribution table."""
+        offense = getattr(play, 'offense', None) or self.offensiveTeam
+        defense = getattr(play, 'defense', None) or self.defensiveTeam
+        if offense is None:
+            return
+        # Signed WPA from the offense's perspective (zero-sum: defense gets the mirror)
+        offenseWpa = homeWpa if offense is self.homeTeam else awayWpa
+
+        def creditOff(pl, amt):
+            if pl is None:
+                return
+            # Per-game accumulators; rolled into the season total + persisted at
+            # postgame (mirrors _lastGameFantasyPoints). Reset each game.
+            pl._gameWpa = float(getattr(pl, '_gameWpa', 0.0)) + amt
+            pl._gameWpaSnaps = int(getattr(pl, '_gameWpaSnaps', 0)) + 1
+
+        pt = getattr(play, 'playType', None)
+        # ── Offense ──
+        if pt is PlayType.Run:
+            creditOff(getattr(play, 'runner', None), offenseWpa)
+        elif pt is PlayType.Pass:
+            if getattr(play, 'isPassCompletion', False) and getattr(play, 'receiver', None) is not None:
+                creditOff(getattr(play, 'passer', None), offenseWpa * WPA_PASS_QB_SHARE)
+                creditOff(play.receiver, offenseWpa * (1.0 - WPA_PASS_QB_SHARE))
+            else:
+                # incompletion / sack / throwaway → all on the QB
+                creditOff(getattr(play, 'passer', None), offenseWpa)
+        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint):
+            creditOff(getattr(play, 'kicker', None), offenseWpa)
+        # Punt / Spike / Kneel / penalty: no single offensive actor — uncredited.
+
+        # ── Defense (unit-share) — scrimmage downs only ──
+        if pt in (PlayType.Run, PlayType.Pass) and defense is not None:
+            defWpa = -offenseWpa
+            defenders = [p for p in defense.rosterDict.values()
+                         if p is not None and getattr(p, 'defensivePosition', None) is not None]
+            if defenders:
+                playMaker = (getattr(play, 'sackedBy', None) or getattr(play, 'interceptedBy', None)
+                             or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
+                weights = {}
+                for d in defenders:
+                    w = max(1.0, float(getattr(d, 'defensiveRating', 60) or 60))
+                    if d is playMaker:
+                        w *= DEF_PLAYMAKER_BONUS
+                    weights[d] = w
+                totalW = sum(weights.values()) or 1.0
+                for d in defenders:
+                    d._gameDefWpa = float(getattr(d, '_gameDefWpa', 0.0)) + defWpa * (weights[d] / totalW)
+                    d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
+
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """
         Broadcast comprehensive game state after a play or game event.
@@ -6506,6 +6679,19 @@ class Game:
         if includeLastPlay and hasattr(self, 'play') and self.play and eventMessage is None:
             self._buildPersonalityEvent()
 
+        # Resolve WP + WPA + player attribution BEFORE the broadcast early-returns, so
+        # they run on every play regardless of timing mode (TURBO / silent previously
+        # skipped them). Real-play broadcasts only — standalone event broadcasts keep
+        # the last play's WP and contribute no WPA.
+        isRealPlay = includeLastPlay and hasattr(self, 'play') and self.play and eventMessage is None
+        if isRealPlay:
+            newHomeWp, newAwayWp, homeWpa, awayWpa = self._resolvePlayWpa()
+        else:
+            newHomeWp = self.homeTeamWinProbability
+            newAwayWp = self.awayTeamWinProbability
+            homeWpa = 0.0
+            awayWpa = 0.0
+
         if not BROADCASTING_AVAILABLE or not broadcaster.is_enabled():
             return
 
@@ -6519,12 +6705,8 @@ class Game:
         if self.status != GameStatus.Final and self.isGameOver():
             self.status = GameStatus.Final
 
-        # Calculate win probabilities
-        winProb = self.calculateWinProbability()
-        newHomeWp = winProb['home']
-        newAwayWp = winProb['away']
-        homeWpa = float(newHomeWp - self.previousHomeWinProbability)
-        awayWpa = float(newAwayWp - self.previousAwayWinProbability)
+        # (WP/WPA computed above in _resolvePlayWpa for real plays; newHomeWp/newAwayWp/
+        # homeWpa/awayWpa are already set.)
 
         # Compute upset alert: pre-game underdog (35% or less) is now favored by 65%+, starting Q2.
         # Only qualifies as an upset if the pre-game favorite is currently in a playoff spot
@@ -6590,27 +6772,10 @@ class Game:
                     'insights': getattr(playObj, 'insights', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
-            # Store WP data on the Play object so it persists in gameFeed references
-            # (gameFeed stores {'play': self.play} by reference)
-            self.play.homeWinProbability = newHomeWp
-            self.play.awayWinProbability = newAwayWp
-            self.play.homeWpa = round(homeWpa, 2)
-            self.play.awayWpa = round(awayWpa, 2)
-            self.play.isBigPlay = bool(abs(homeWpa) >= 7.0 or abs(awayWpa) >= 7.0)
-
-            # Momentum: big play bonus (team that benefited from WPA swing)
-            if self.play.isBigPlay:
-                benefitingTeam = self.homeTeam if homeWpa > 0 else self.awayTeam
-                self._applyMomentumEvent(MOMENTUM_BIG_PLAY_BONUS, benefitingTeam)
-
-            # Only keep clutch/choke tags if the play had meaningful WP impact
-            # Asymmetric: clutch needs bigger WPA swing than choke
-            wpImpact = max(abs(homeWpa), abs(awayWpa))
-            if self.play.isClutchPlay and wpImpact < CLUTCH_WPA_THRESHOLD:
-                self.play.isClutchPlay = False
-            if self.play.isChokePlay and wpImpact < CHOKE_WPA_THRESHOLD:
-                self.play.isChokePlay = False
-
+            # WP/WPA, the momentum big-play bonus, and the clutch/choke WP-impact
+            # filter were already applied in _resolvePlayWpa() above (runs in all
+            # timing modes). The play already carries homeWpa/awayWpa/isBigPlay; just
+            # build the broadcast payload here.
             lastPlayData = {
                 'playNumber': self.totalPlays,
                 'quarter': self.play.quarter if hasattr(self.play, 'quarter') else self.currentQuarter,
@@ -6746,12 +6911,10 @@ class Game:
         # Create and broadcast event
         event = GameEvent.gameState(gameId=self.id, gameState=gameStateData)
         broadcaster.broadcast_sync(self.id, event)
-        
-        # Update win probabilities for API access and next WPA calculation
-        self.homeTeamWinProbability = newHomeWp
-        self.awayTeamWinProbability = newAwayWp
-        self.previousHomeWinProbability = newHomeWp
-        self.previousAwayWinProbability = newAwayWp
+
+        # (WP baseline already advanced in _resolvePlayWpa for real plays; event
+        # broadcasts intentionally do not advance it, so the next play's WPA is
+        # measured from the prior play rather than from intervening clock drift.)
 
         # Store WP and WPA in the most recent gameFeed play entry so the REST API can return it
         if self.gameFeed and 'play' in self.gameFeed[0]:
@@ -7283,6 +7446,13 @@ class Game:
         totalGameTime = 3600
         timeElapsed = totalGameTime - total_seconds
         gameProgress = min(1.0, timeElapsed / totalGameTime)
+        # Overtime is past regulation: force full progress so the ELO prior floors
+        # (eloWeight → 0.05) and the score logistic maxes (k → ~0.40). Without this
+        # the regulation 3600s math leaves gameProgress ~0.83 in OT, leaking a ~21%
+        # ELO prior into the implicit-else OT path (first team scored, second
+        # responding). total_seconds stays = OT clock remaining for the EP/possession math.
+        if self.currentQuarter >= 5:
+            gameProgress = 1.0
 
         # ELO weight: 1.0 pre-game (pure ELO baseline), decays smoothly to 0.05 by end
         # Stays meaningful through the first half, minor effect in Q4
@@ -7381,7 +7551,9 @@ class Game:
 
         # Overtime win probability — replaces generic formula above
         if self.currentQuarter >= 5:
-            isSuddenDeath = self.otSecondPossComplete
+            # Match checkOvertimeEnd: 2nd+ OT is sudden death outright; 1st OT becomes
+            # sudden death once both guaranteed possessions are done.
+            isSuddenDeath = self.otPeriod >= 2 or self.otSecondPossComplete
             homeHasBall = self.offensiveTeam == self.homeTeam
 
             if isSuddenDeath and scoreDiff != 0:
@@ -7403,15 +7575,17 @@ class Game:
                 # In FG range, WP should reflect the near-certainty of a made kick.
                 yte = self.yardsToEndzone
                 fgDist = yte + 17
-                # Estimate FG make probability using same formula as fieldGoalTry
-                baseFgProb = 1 / (1 + math.exp(0.12 * (fgDist - 52)))
+                # Estimate FG make probability using the SAME constants as fieldGoalTry()
+                # (slope 0.18, skill 0.52 + ×0.85, chip +0.10 under 30, cap 0.96) so OT-tied
+                # WP matches the kick the engine will actually roll.
+                baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 if kicker:
                     normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-                    fgProb = baseFgProb * (0.4 + normalizedSkill * 1.5)
+                    fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
                     if fgDist < 30:
-                        fgProb = min(1.0, fgProb + 0.15)
-                    fgProb = max(0.05, min(1.0, fgProb))
+                        fgProb = min(0.96, fgProb + 0.10)
+                    fgProb = max(0.05, min(0.96, fgProb))
                 else:
                     fgProb = baseFgProb
                 # Continuous scoring probability: union of two paths —
@@ -7965,6 +8139,8 @@ class Play():
         self.kicker: FloosPlayer.PlayerK = None
         self.isPassCompletion = False
         self.isSack = False
+        self.isScramble = False          # QB ran instead of passing
+        self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
@@ -8673,7 +8849,96 @@ class Play():
         # the play before it leaves the QB's hand.
         capMax = 28 if dropbackDepth >= 6 else 15
         return max(0.5, min(capMax, probability))
-    
+
+    def _qbEscapesSack(self) -> bool:
+        """A pressured QB escapes a would-be sack (and then scrambles). AGILITY
+        gates it — a pocket QB almost never gets out. Speed is irrelevant here;
+        it only drives the scramble yardage once they're loose."""
+        from constants import (QB_SCRAMBLE_ENABLED, QB_SCRAMBLE_AGILITY_THRESHOLD,
+                               QB_SCRAMBLE_CHANCE_PER_AGILITY, QB_SCRAMBLE_MAX_CHANCE)
+        if not QB_SCRAMBLE_ENABLED:
+            return False
+        agility = self.passer.gameAttributes.agility
+        escapePct = min(QB_SCRAMBLE_MAX_CHANCE,
+                        max(0.0, (agility - QB_SCRAMBLE_AGILITY_THRESHOLD) * QB_SCRAMBLE_CHANCE_PER_AGILITY))
+        return batched_randint(1, 100) <= escapePct
+
+    def _qbTucksAndRuns(self) -> bool:
+        """No one is open. A mobile QB tucks and runs instead of throwing it away.
+        This is the primary scramble path (sacks are too rare to matter). AGILITY
+        gates the decision; a pocket QB just throws it away."""
+        from constants import (QB_SCRAMBLE_ENABLED, QB_SCRAMBLE_AGILITY_THRESHOLD,
+                               QB_SCRAMBLE_OPEN_RUN_PER_AGILITY, QB_SCRAMBLE_OPEN_RUN_MAX)
+        if not QB_SCRAMBLE_ENABLED:
+            return False
+        agility = self.passer.gameAttributes.agility
+        runPct = min(QB_SCRAMBLE_OPEN_RUN_MAX,
+                     max(0.0, (agility - QB_SCRAMBLE_AGILITY_THRESHOLD) * QB_SCRAMBLE_OPEN_RUN_PER_AGILITY))
+        return batched_randint(1, 100) <= runPct
+
+    def _pickScrambleTackler(self, coverageAssignments):
+        """The defender who brings down a tuck-and-run scramble. Prefer the LB
+        (the te-slot assignment), then the safety (rb slot), then any defender."""
+        tackler = coverageAssignments.get('te') or coverageAssignments.get('rb')
+        if tackler is None:
+            for d in coverageAssignments.values():
+                if d is not None:
+                    tackler = d
+                    break
+        return tackler
+
+    def _resolveQbScramble(self, tackler, reason='pressure') -> None:
+        """The QB runs instead of passing. Resolves as a run with the QB as
+        the carrier, so clock / TD / WPA / box-score / fantasy all flow through
+        the existing run paths. SPEED drives the yardage (small agility bonus for
+        shaking the first defender). Not a sack and not a pass attempt.
+
+        `reason` distinguishes the two triggers so the play-by-play is accurate:
+        'pressure' = escaped a would-be sack, 'coverage' = no one open, tucked it."""
+        from constants import (QB_SCRAMBLE_BASE_YARDS, QB_SCRAMBLE_SPEED_PIVOT,
+                               QB_SCRAMBLE_YARDS_PER_SPEED, QB_SCRAMBLE_OOB_CHANCE,
+                               QB_SCRAMBLE_FUMBLE_CHANCE)
+        isReg = self.game.isRegularSeasonGame
+        self.playType = PlayType.Run
+        self.runner = self.passer
+        self.isScramble = True
+        self.scrambleReason = reason
+        self.insights.setdefault('pass', {})['scrambled'] = True
+
+        spd = self.passer.gameAttributes.speed
+        agi = self.passer.gameAttributes.agility
+        mean = max(1.5, QB_SCRAMBLE_BASE_YARDS + (spd - QB_SCRAMBLE_SPEED_PIVOT) * QB_SCRAMBLE_YARDS_PER_SPEED)
+        yds = int(round(np.random.exponential(mean))) + int(round((agi - 80) / 20.0))
+        yds = max(0, yds)
+        if yds > self.yardsToEndzone:
+            yds = self.yardsToEndzone
+        self.yardage = yds
+        self.isInBounds = batched_randint(1, 100) > QB_SCRAMBLE_OOB_CHANCE
+        self.tackledBy = tackler
+
+        # Credit the QB's rush via the same methods the run path uses.
+        self.passer.addRushYards(yds, isReg)
+        self.passer.addCarry(isReg)
+        self.defense.gameDefenseStats['runYardsAlwd'] += yds
+        self.defense.gameDefenseStats['totalYardsAlwd'] += yds
+        if yds >= 20:
+            self.passer.gameStatsDict['rushing']['20+'] += 1
+        if yds > self.passer.gameStatsDict['rushing']['longest']:
+            self.passer.gameStatsDict['rushing']['longest'] = yds
+        if tackler and hasattr(tackler, 'stat_tracker'):
+            tackler.stat_tracker.add_tackle(isReg)
+
+        # Small fumble chance on the scramble (credit the tackler if lost).
+        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE):
+            self.isFumble = True
+            if batched_randint(1, 100) <= 50:
+                self.isFumbleLost = True
+                self.forcedFumbleBy = tackler
+                self.defense.gameDefenseStats['fumRec'] += 1
+                self.playResult = PlayResult.Fumble
+                if tackler and hasattr(tackler, 'stat_tracker'):
+                    tackler.stat_tracker.add_forced_fumble(isReg)
+
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
         Calculate throw quality degradation from defensive pressure.
@@ -9160,7 +9425,14 @@ class Play():
             'blitzPackage': scheme.get('blitzPackage', {}).value if hasattr(scheme.get('blitzPackage', {}), 'value') else None,
         }
 
-        if sackRoll <= sackProbability:
+        # A would-be sack: an agile QB can escape the pocket and scramble
+        # (agility gates the escape; speed drives the yardage). The would-be
+        # sacker (passRusher) becomes the tackler on the run.
+        wouldBeSacked = sackRoll <= sackProbability
+        qbScrambles = wouldBeSacked and self._qbEscapesSack()
+        if qbScrambles:
+            self._resolveQbScramble(passRusher, reason='pressure')
+        elif wouldBeSacked:
             self.insights['pass']['wasSacked'] = True
             # Name the sacker based on blitz package
             coverageAssignmentsForSack = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
@@ -9369,7 +9641,13 @@ class Play():
                             self.targetSideline = False  # 30% chance to freelance
 
             # Handle throw away
-            if self.passType == PassType.throwAway:
+            if self.passType == PassType.throwAway and not mustThrow and self._qbTucksAndRuns():
+                # No one open: a mobile QB tucks and runs instead of throwing it
+                # away. The dropback became a rush, so un-charge the pass attempt
+                # booked at the top of this branch.
+                self.passer.stat_tracker.remove_pass_attempt(self.game.isRegularSeasonGame)
+                self._resolveQbScramble(self._pickScrambleTackler(coverageAssignments), reason='coverage')
+            elif self.passType == PassType.throwAway:
                 self.insights['pass']['wasSacked'] = False
                 self.insights['pass']['throwAway'] = True
                 self.insights['pass']['targets'] = [

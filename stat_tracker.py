@@ -86,6 +86,11 @@ class StatTracker:
     def add_pass_attempt(self, is_regular_season: bool = True):
         """Add pass attempt"""
         self.add_stat(StatCategory.PASSING, 'att', 1, is_regular_season)
+
+    def remove_pass_attempt(self, is_regular_season: bool = True):
+        """Reverse a pass attempt (a dropback that became a QB scramble — it's a
+        rush, not a pass attempt)."""
+        self.add_stat(StatCategory.PASSING, 'att', -1, is_regular_season)
     
     def add_pass_yards(self, yards: int, is_regular_season: bool = True):
         """Add passing yards"""
