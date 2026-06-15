@@ -126,6 +126,17 @@ class AwardsManager:
         if not active:
             return []
         byId = {e.player_id: self.playerManager.getPlayerById(e.player_id) for e in active}
+        # Never count an already-enshrined player as a candidate: they'd waste a
+        # class-cap slot and re-"induct" as a no-op. (The seed already skips
+        # is_hof; this guards stale/edge entries.) Resolve their ballot status so
+        # they fall off the active list.
+        already = [e for e in active if byId.get(e.player_id) is not None
+                   and getattr(byId.get(e.player_id), 'is_hof', False)]
+        for e in already:
+            self.ballotRepo.markInducted(e.player_id, getattr(byId.get(e.player_id), 'hof_season', season) or season)
+        active = [e for e in active if e not in already]
+        if not active:
+            return []
         voters = self.voteRepo.getVoterCount(season, 'hof')
         tally = self.voteRepo.getTally(season, 'hof')
 
