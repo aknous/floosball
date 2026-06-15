@@ -1912,12 +1912,26 @@ class CardManager:
                 .all()
             )
 
+        # Count how many of each EFFECT the user already owns (non-vaulted —
+        # vaulted cards can't be fed/upgraded), mirroring the pack-reveal flow so
+        # the shop flags duplicates the same way the reveal UI does.
+        from collections import Counter as _Counter
+        from database.repositories.card_repositories import UserCardRepository as _UCRepo
+        ownedCounts: _Counter = _Counter()
+        for c in _UCRepo(session).getByUser(userId):
+            if getattr(c, "vaulted", False):
+                continue
+            en = self._effectName(c)
+            if en:
+                ownedCounts[en] += 1
+
         # Build response from persisted rows
         result = []
         for row in existing:
             t = row.card_template
             markup = self.SHOP_MARKUP.get(t.edition, 3.0)
             buyPrice = max(10, int(t.sell_value * markup))
+            effName = (t.effect_config or {}).get("effectName") or ""
             result.append({
                 "templateId": t.id,
                 "playerId": t.player_id,
@@ -1931,6 +1945,7 @@ class CardManager:
                 "effectConfig": t.effect_config,
                 "sellValue": t.sell_value,
                 "buyPrice": buyPrice,
+                "ownedEffectCount": ownedCounts.get(effName, 0),
                 "isActive": True,
             })
 
