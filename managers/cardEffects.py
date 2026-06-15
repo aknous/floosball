@@ -889,14 +889,14 @@ EFFECT_DETAIL_TEMPLATES = {
     "walk_off": "+{perScoreFP} FP per Q4 or OT TD or FG by a roster player, +{floobitsOnTrigger}F if your favorite team has a walk-off win",
     # ── Card-to-Card Interaction Effects ──
     "full_roster": "+{rewardDelta} FPx when hand has all 5 positions",
-    "all_in": "+{baseXDelta} FPx base, +{perDuplicateXMult} FPx per duplicate position card in your hand",
+    "all_in": "+{baseXDelta} FPx base, plus +{perDuplicateXMult} FPx for each card of your most-equipped position after the first.",
     "diversified": "+{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits)",
     "gold_rush": "{perCardFloobits} Floobits per other Floobits card in your hand",
     "stacked_deck": "Self-compounds: each other FPx card in your hand stacks +{perCardMult} on this card's own delta",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "+{perCardXMult} FPx for every card in your hand that produced a non-zero bonus this week",
     "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
-    "double_down": "Multiplies your lowest-earning card's FP this week",
+    "double_down": "Multiplies your lowest-earning card's FP by {rewardValue} this week",
     "last_resort": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 15% per card that produced no bonus this week, up to 70%",
     "high_roller": "+{perCardMult} FPx per chance card that triggered enhanced bonuses this week",
     "fortitude": "+{perCardMult} FPx per active streak card in your hand",
@@ -928,7 +928,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "quiet_storm": "+{baseReward} FP, +{growthPerTick} per consecutive week no roster player scored 15 or more FP. Needs a full 6-player roster.",
     "drought": "+{baseReward} FP, +{growthPerTick} per consecutive week your roster scored under 35 FP. Needs a full 6-player roster.",
     # ── Prognostication cards ──
-    "nose_picker": "+{baseReward} FP base. Bonus grows each week your manual-pick streak holds.",
+    "nose_picker": "+{baseReward} FP base. Grows every week you submit manual picks. Growth starts at +{firstWeekGrowth} FP and tapers off as the streak continues.",
     "medium": "+{lowFP} FP at 50%+ Prognostication accuracy, +{midFP} FP at 65%+, +{highFP} FP at 85%+. Counts auto-picks",
     "parlay": "FPx that grows with your weekly Prognostication points. Counts auto-picks",
     # ── Roster-construction-driven ──
@@ -1659,10 +1659,16 @@ def _buildStreakParams(effectName, playerRating, editionScale):
     if effectName == "nose_picker":
         # Log-tapered streak — pays for showing up to Prognostications each
         # week. Trigger is fully under user control (no luck/skill).
+        import math as _math
+        coef = round((48.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 2)
+        kStreak = 4
         return {"rewardType": "fp",
                 "baseReward": round((30.0 + rn * 0.72) * editionScale * _BAL_FP_MULT, 1),
-                "coef": round((48.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 2),
-                "kStreak": 4,
+                "coef": coef,
+                "kStreak": kStreak,
+                # First held week's growth over base (the steepest step); each
+                # later week adds less. Display-only, for the detail template.
+                "firstWeekGrowth": round(coef * _math.log(1 + 1 / kStreak), 1),
                 # growthPerTick kept for legacy callers / detail template
                 "growthPerTick": 0}
     # ── Strategy-Warping: Cultivation (performance-driven growth)
