@@ -11656,6 +11656,19 @@ def _awardsManager(session):
     return AwardsManager(session, pm, lowQuorum=lowQuorum)
 
 
+@app.get("/api/awards/status")
+def get_awards_status():
+    """Lightweight window state for the nav — is MVP or HoF voting open? Lets the
+    frontend surface the Awards entry only when a window is live."""
+    season, mvpOpen, hofOpen = _awardWindows()
+    return build_success_response({
+        "season": season,
+        "mvpOpen": mvpOpen,
+        "hofOpen": hofOpen,
+        "anyOpen": bool(mvpOpen or hofOpen),
+    })
+
+
 @app.get("/api/awards/mvp/ballot")
 def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
     """MVP ballot: top-N-per-position candidates, the user's current vote, and
